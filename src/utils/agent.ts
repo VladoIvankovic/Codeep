@@ -21,6 +21,7 @@ import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools } from '
 import { startSession, endSession, undoLastAction, undoAllActions, getCurrentSession, getRecentSessions, formatSession, ActionSession } from './history';
 import { runAllVerifications, formatErrorsForAgent, hasVerificationErrors, getVerificationSummary, VerifyResult } from './verify';
 import { gatherSmartContext, formatSmartContext, extractTargetFile } from './smartContext';
+import { planTasks, getNextTask, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
 
 export interface AgentOptions {
   maxIterations: number;
@@ -30,10 +31,13 @@ export interface AgentOptions {
   onIteration?: (iteration: number, message: string) => void;
   onThinking?: (text: string) => void;
   onVerification?: (results: VerifyResult[]) => void;
+  onTaskPlan?: (plan: TaskPlan) => void;
+  onTaskUpdate?: (task: SubTask) => void;
   abortSignal?: AbortSignal;
   dryRun?: boolean;
   autoVerify?: boolean;
   maxFixAttempts?: number;
+  usePlanning?: boolean; // Enable task planning for complex tasks
 }
 
 export interface AgentResult {
@@ -48,6 +52,7 @@ export interface AgentResult {
 const DEFAULT_OPTIONS: AgentOptions = {
   maxIterations: 100, // Increased for large tasks
   maxDuration: 20 * 60 * 1000, // 20 minutes
+  usePlanning: true, // Enable task planning by default
 };
 
 /**
@@ -475,6 +480,28 @@ export async function runAgent(
   // Start history session for undo support
   const sessionId = startSession(prompt, projectContext.root || process.cwd());
   
+  // Task planning phase (if enabled and prompt is complex enough)
+  let taskPlan: TaskPlan | null = null;
+  if (opts.usePlanning && prompt.split(' ').length > 5) {
+    try {
+      opts.onIteration?.(0, 'Planning tasks...');
+      taskPlan = await planTasks(prompt, {
+        name: projectContext.name,
+        type: projectContext.type,
+        structure: projectContext.structure,
+      });
+      
+      if (taskPlan.tasks.length > 1) {
+        opts.onTaskPlan?.(taskPlan);
+      } else {
+        taskPlan = null; // Single task, no need for planning
+      }
+    } catch (error) {
+      // Planning failed, continue without it
+      taskPlan = null;
+    }
+  }
+  
   // Gather smart context based on the task
   const targetFile = extractTargetFile(prompt);
   const smartContext = gatherSmartContext(targetFile, projectContext, prompt);
@@ -493,8 +520,12 @@ export async function runAgent(
     systemPrompt += '\n\n' + smartContextStr;
   }
   
-  // Initial user message
-  messages.push({ role: 'user', content: prompt });
+  // Initial user message with optional task plan
+  let initialPrompt = prompt;
+  if (taskPlan) {
+    initialPrompt = `${prompt}\n\n## Task Breakdown\nI've broken this down into subtasks. Complete them in order:\n\n${formatTaskPlan(taskPlan)}\n\nStart with task 1.`;
+  }
+  messages.push({ role: 'user', content: initialPrompt });
   
   let iteration = 0;
   let finalResponse = '';
