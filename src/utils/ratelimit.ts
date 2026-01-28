@@ -2,7 +2,7 @@
  * Rate limiting utility to prevent API abuse
  */
 
-import { config } from '../config';
+import { config } from '../config/index';
 
 interface RateLimitConfig {
   maxRequests: number;
