@@ -1,0 +1,60 @@
+{
+  "name": "codeep",
+  "version": "1.0.0",
+  "description": "AI-powered coding assistant built for the terminal. Multiple LLM providers, project-aware context, and a seamless development workflow.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "codeep": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "node --import tsx src/index.tsx",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "build:binary": "npm run build && pkg dist/index.js --targets node18-macos-arm64,node18-macos-x64,node18-linux-x64 --output bin/codeep",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VladoIvankovic/Codeep.git"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "tui",
+    "glm",
+    "z.ai",
+    "coding",
+    "assistant"
+  ],
+  "author": "Vlado Ivankovic",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/VladoIvankovic/Codeep/issues"
+  },
+  "homepage": "https://codeep.dev",
+  "dependencies": {
+    "clipboardy": "^4.0.0",
+    "conf": "^12.0.0",
+    "ink": "^4.4.1",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^5.0.1",
+    "keytar": "^7.9.0",
+    "open": "^10.0.0",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/react": "^18.2.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "pkg": "^5.8.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
