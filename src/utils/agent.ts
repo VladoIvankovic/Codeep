@@ -46,8 +46,8 @@ export interface AgentResult {
 }
 
 const DEFAULT_OPTIONS: AgentOptions = {
-  maxIterations: 50, // Increased for complex tasks like website creation
-  maxDuration: 10 * 60 * 1000, // 10 minutes
+  maxIterations: 100, // Increased for large tasks
+  maxDuration: 20 * 60 * 1000, // 20 minutes
 };
 
 /**
@@ -458,7 +458,16 @@ export async function runAgent(
   projectContext: ProjectContext,
   options: Partial<AgentOptions> = {}
 ): Promise<AgentResult> {
-  const opts: AgentOptions = { ...DEFAULT_OPTIONS, ...options };
+  // Load limits from config
+  const configMaxIterations = config.get('agentMaxIterations');
+  const configMaxDuration = config.get('agentMaxDuration') * 60 * 1000; // convert minutes to ms
+  
+  const opts: AgentOptions = { 
+    ...DEFAULT_OPTIONS, 
+    maxIterations: configMaxIterations,
+    maxDuration: configMaxDuration,
+    ...options 
+  };
   const startTime = Date.now();
   const actions: ActionLog[] = [];
   const messages: Message[] = [];

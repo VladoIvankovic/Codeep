@@ -53,6 +53,8 @@ interface ConfigSchema {
   agentAutoCommitBranch: boolean; // Create new branch for commits
   agentAutoVerify: boolean; // Auto-run build/test after changes
   agentMaxFixAttempts: number; // Max attempts to fix errors (default: 3)
+  agentMaxIterations: number; // Max agent iterations (default: 100)
+  agentMaxDuration: number; // Max agent duration in minutes (default: 20)
   projectPermissions: ProjectPermission[];
   providerApiKeys: ProviderApiKey[];
 }
@@ -128,6 +130,8 @@ export const config = new Conf<ConfigSchema>({
     agentAutoCommitBranch: false,
     agentAutoVerify: true, // Auto-verify by default
     agentMaxFixAttempts: 3,
+    agentMaxIterations: 100,
+    agentMaxDuration: 20, // minutes
     protocol: 'openai',
     plan: 'lite',
     language: 'en',
