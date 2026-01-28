@@ -1378,10 +1378,8 @@ export const App: React.FC = () => {
       }
       setProjectContext(ctx);
       if (permanent) {
-        // Save permission to local .codeep/config.json (already saved by component if write granted)
-        if (!writeGranted) {
-          setProjectPermission(projectPath, true, false); // read only
-        }
+        // Save permission to local .codeep/config.json
+        setProjectPermission(projectPath, true, writeGranted);
         notify(writeGranted 
           ? 'Project access granted (read + write, permanent)' 
           : 'Project access granted (read-only, permanent)');
