@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Static } from 'ink';
 import { MessageView } from './Message';
-import { Message } from '../config';
+import { Message } from '../config/index';
 
 interface MessageListProps {
   messages: Message[];

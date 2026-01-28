@@ -1,4 +1,4 @@
-import { Message } from '../config';
+import { Message } from '../config/index';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 
