@@ -1,0 +1,1816 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import clipboardy from 'clipboardy';
+import { logger } from './utils/logger';
+import { Logo, IntroAnimation } from './components/Logo';
+import { Loading } from './components/Loading';
+import { MessageView, getCodeBlock, clearCodeBlocks } from './components/Message';
+import { ChatInput } from './components/Input';
+import { Help } from './components/Help';
+import { Status } from './components/Status';
+import { Login } from './components/Login';
+import { Sessions } from './components/Sessions';
+import { SessionPicker } from './components/SessionPicker';
+import { LogoutPicker } from './components/LogoutPicker';
+import { Settings } from './components/Settings';
+import { ProjectPermission } from './components/ProjectPermission';
+import { Search } from './components/Search';
+import { Export } from './components/Export';
+import { MessageList } from './components/MessageList';
+import { chat } from './api/index';
+import { 
+  Message, 
+  config, 
+  isConfigured,
+  isConfiguredAsync,
+  loadApiKey,
+  loadAllApiKeys,
+  setApiKey,
+  PROTOCOLS,
+  LANGUAGES,
+  LanguageCode,
+  autoSaveSession,
+  startNewSession,
+  getCurrentSessionId,
+  loadSession,
+  renameSession,
+  deleteSession,
+  hasReadPermission,
+  hasWritePermission,
+  setProjectPermission,
+  setProvider,
+  getCurrentProvider,
+  getModelsForCurrentProvider,
+  PROVIDERS
+} from './config/index';
+import { getProviderList } from './config/providers';
+import { 
+  isProjectDirectory, 
+  getProjectContext, 
+  detectFilePaths, 
+  readProjectFile,
+  parseFileChanges,
+  writeProjectFile,
+  deleteProjectFile,
+  ProjectContext
+} from './utils/project';
+import { logStartup, logAppError, setLogProjectPath } from './utils/logger';
+import { searchMessages, SearchResult } from './utils/search';
+import { exportMessages, saveExport, ExportFormat } from './utils/export';
+import { checkForUpdates, formatVersionInfo, getCurrentVersion, VersionInfo } from './utils/update';
+import { getGitDiff, getGitStatus, getChangedFiles, suggestCommitMessage, createCommit, formatDiffForDisplay } from './utils/git';
+import { validateInput } from './utils/validation';
+import { checkApiRateLimit, checkCommandRateLimit } from './utils/ratelimit';
+import { runAgent, formatAgentResult, AgentResult, undoLastAction, undoAllActions, getRecentSessions } from './utils/agent';
+import { autoCommitAgentChanges } from './utils/git';
+import { saveContext, loadContext, clearContext, mergeContext } from './utils/context';
+import { performCodeReview, formatReviewResult } from './utils/codeReview';
+import { loadProjectPreferences, learnFromProject, formatPreferencesForPrompt, addCustomRule, getLearningStatus } from './utils/learning';
+import { getAllSkills, findSkill, formatSkillsList, formatSkillHelp, generateSkillPrompt, saveCustomSkill, deleteCustomSkill, parseSkillDefinition, parseSkillChain, parseSkillArgs, searchSkills, trackSkillUsage, getSkillStats, Skill } from './utils/skills';
+import { AgentProgress, AgentSummary, ChangesList } from './components/AgentProgress';
+import { ActionLog, ToolCall, ToolResult } from './utils/tools';
+
+type Screen = 'chat' | 'login' | 'help' | 'status' | 'sessions' | 'sessions-delete' | 'model' | 'protocol' | 'language' | 'settings' | 'permission' | 'provider' | 'search' | 'export' | 'session-picker' | 'logout';
+
+export const App: React.FC = () => {
+  const { exit } = useApp();
+  const { stdout } = useStdout();
+  
+  // Start with 'chat' screen, will switch to login if needed after loading API key
+  const [screen, setScreen] = useState<Screen>('chat');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputHistory, setInputHistory] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [streamingContent, setStreamingContent] = useState('');
+  const [notification, setNotification] = useState('');
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
+  const [sessionId, setSessionId] = useState(getCurrentSessionId());
+  const [showIntro, setShowIntro] = useState(true);
+  const [clearInputTrigger, setClearInputTrigger] = useState(0);
+
+  // Project context
+  const [projectPath] = useState(process.cwd());
+  
+  // Log application startup and set project path for logging
+  useEffect(() => {
+    logStartup('1.0.0');
+    setLogProjectPath(projectPath);
+  }, [projectPath]);
+  const [projectContext, setProjectContext] = useState<ProjectContext | null>(null);
+  const [hasProjectAccess, setHasProjectAccess] = useState(false);
+  const [hasWriteAccess, setHasWriteAccess] = useState(false);
+  const [permissionChecked, setPermissionChecked] = useState(false);
+
+  // Load previous session on startup (after intro)
+  const [sessionLoaded, setSessionLoaded] = useState(false);
+
+
+  // Search state
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [exportFormat, setExportFormat] = useState<ExportFormat>('md');
+  
+  // Removed pagination state - terminal handles scrolling natively
+  
+  // Update check state
+  const [updateInfo, setUpdateInfo] = useState<VersionInfo | null>(null);
+  
+  // File changes prompt state
+  const [pendingFileChanges, setPendingFileChanges] = useState<Array<{ path: string; content: string; action?: 'create' | 'edit' | 'delete' }>>([]);
+  
+  // Agent mode state
+  const [isAgentRunning, setIsAgentRunning] = useState(false);
+  const [agentIteration, setAgentIteration] = useState(0);
+  const [agentActions, setAgentActions] = useState<ActionLog[]>([]);
+  const [agentThinking, setAgentThinking] = useState('');
+  const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
+  const [agentDryRun, setAgentDryRun] = useState(false);
+  
+  // Load API keys for ALL providers on startup and check if current provider is configured
+  useEffect(() => {
+    loadAllApiKeys().then(() => {
+      // After loading all keys, check if current provider has an API key
+      return loadApiKey();
+    }).then(key => {
+      if (!key || key.length === 0) {
+        setScreen('login');
+      }
+      // else: stay on chat screen (default)
+    }).catch(() => {
+      setScreen('login');
+    });
+  }, []);
+  
+  // Check project permission after intro
+  useEffect(() => {
+    if (!showIntro && !permissionChecked && screen !== 'login') {
+      const isProject = isProjectDirectory(projectPath);
+      
+      if (isProject) {
+        const hasRead = hasReadPermission(projectPath);
+        if (hasRead) {
+          // Already has permission, load context
+          setHasProjectAccess(true);
+          const hasWrite = hasWritePermission(projectPath);
+          setHasWriteAccess(hasWrite);
+          
+          const ctx = getProjectContext(projectPath);
+          if (ctx) {
+            ctx.hasWriteAccess = hasWrite;
+          }
+          setProjectContext(ctx);
+          setPermissionChecked(true);
+        } else {
+          // Need to ask for permission
+          setScreen('permission');
+          setPermissionChecked(true);
+        }
+      } else {
+        setPermissionChecked(true);
+      }
+    }
+  }, [showIntro, permissionChecked, projectPath, screen]);
+
+  // Show session picker after permission is handled (instead of auto-loading)
+  useEffect(() => {
+    if (!showIntro && permissionChecked && !sessionLoaded && screen !== 'permission' && screen !== 'login') {
+      // If we already have messages (e.g., from a previous action), skip picker
+      if (messages.length > 0) {
+        setSessionLoaded(true);
+        return;
+      }
+      
+      // Show session picker instead of auto-loading
+      setScreen('session-picker');
+    }
+  }, [showIntro, permissionChecked, sessionLoaded, screen, messages.length]);
+
+  // Check for updates on startup (once per session, after intro)
+  useEffect(() => {
+    if (!showIntro && sessionLoaded && !updateInfo) {
+      checkForUpdates()
+        .then((info) => {
+          setUpdateInfo(info);
+          if (info.hasUpdate) {
+            setNotification(`Update available: ${info.current} → ${info.latest}. Type /update for info.`);
+          }
+        })
+        .catch(() => {
+          // Silent fail - update check is non-critical
+        });
+    }
+  }, [showIntro, sessionLoaded, updateInfo]);
+
+  // Clear notification after delay
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => setNotification(''), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
+
+  // Handle keyboard shortcuts
+  useInput((input, key) => {
+    // Ctrl+L to clear chat (F5 doesn't work reliably in all terminals)
+    if (key.ctrl && input === 'l') {
+      if (!isLoading && screen === 'chat') {
+        // Clear terminal screen
+        stdout?.write('\x1b[2J\x1b[H');
+        setMessages([]);
+        clearCodeBlocks();
+        const newSessId = startNewSession();
+        setSessionId(newSessId);
+        setClearInputTrigger(prev => prev + 1); // Trigger input clear
+        notify('Chat cleared, new session started');
+      }
+      return; // Prevent further processing
+    }
+    
+    // Escape to cancel agent or request
+    if (key.escape && isAgentRunning) {
+      abortController?.abort();
+      return;
+    }
+    
+    // Escape to cancel request
+    if (key.escape && isLoading) {
+      abortController?.abort();
+      setIsLoading(false);
+      setAbortController(null);
+      setClearInputTrigger(prev => prev + 1); // Clear input after cancel
+      
+      // Save partial response if there is any
+      if (streamingContent && streamingContent.trim().length > 0) {
+        const partialMessage: Message = {
+          role: 'assistant',
+          content: streamingContent.trim() + '\n\n*(Response cancelled - partial)*',
+        };
+        setMessages(prev => [...prev, partialMessage]);
+        setStreamingContent('');
+        notify('Request cancelled - partial response saved');
+      } else {
+        // No content yet, remove the user message
+        setMessages(prev => prev.slice(0, -1));
+        setStreamingContent('');
+        notify('Request cancelled');
+      }
+    }
+    
+    // Escape to close modals
+    if (key.escape && screen !== 'chat' && screen !== 'login') {
+      setScreen('chat');
+    }
+    
+    // Handle file changes prompt (Y/n)
+    if (pendingFileChanges.length > 0 && !isLoading) {
+      if (input.toLowerCase() === 'y' || key.return) {
+        // Apply changes
+        let applied = 0;
+        for (const change of pendingFileChanges) {
+          let result;
+          if (change.action === 'delete') {
+            result = deleteProjectFile(change.path);
+          } else {
+            result = writeProjectFile(change.path, change.content);
+          }
+          
+          if (result.success) {
+            applied++;
+          } else {
+            notify(`Error: ${result.error || 'Failed to apply change'}`);
+          }
+        }
+        notify(`Applied ${applied}/${pendingFileChanges.length} file change(s)`);
+        setPendingFileChanges([]);
+        return;
+      }
+      if (input.toLowerCase() === 'n' || key.escape) {
+        // Reject changes
+        notify('File changes rejected');
+        setPendingFileChanges([]);
+        return;
+      }
+    }
+  });
+
+  const notify = useCallback((msg: string) => {
+    setNotification(msg);
+  }, []);
+
+  // Start agent execution
+  const startAgent = useCallback(async (prompt: string, dryRun: boolean = false) => {
+    if (!projectContext) {
+      notify('Agent mode requires project context. Run in a project directory.');
+      return;
+    }
+    
+    if (!hasWriteAccess && !dryRun) {
+      notify('Agent mode requires write access. Grant permission first or use /agent-dry');
+      return;
+    }
+    
+    // Reset agent state
+    setIsAgentRunning(true);
+    setAgentIteration(0);
+    setAgentActions([]);
+    setAgentThinking('');
+    setAgentResult(null);
+    setAgentDryRun(dryRun);
+    
+    // Add user message
+    const userMessage: Message = { 
+      role: 'user', 
+      content: dryRun ? `[DRY RUN] ${prompt}` : `[AGENT] ${prompt}` 
+    };
+    setMessages(prev => [...prev, userMessage]);
+    
+    const controller = new AbortController();
+    setAbortController(controller);
+    
+    try {
+      const result = await runAgent(prompt, projectContext, {
+        maxIterations: 20,
+        maxDuration: 5 * 60 * 1000, // 5 minutes
+        dryRun,
+        onIteration: (iteration, message) => {
+          setAgentIteration(iteration);
+        },
+        onToolCall: (tool: ToolCall) => {
+          setAgentActions(prev => [...prev, {
+            type: tool.tool as any,
+            target: (tool.parameters.path as string) || (tool.parameters.command as string) || 'unknown',
+            result: 'success', // Will be updated by onToolResult
+            timestamp: Date.now(),
+          }]);
+        },
+        onToolResult: (result: ToolResult) => {
+          setAgentActions(prev => {
+            const updated = [...prev];
+            if (updated.length > 0) {
+              updated[updated.length - 1].result = result.success ? 'success' : 'error';
+              updated[updated.length - 1].details = result.success ? result.output.slice(0, 100) : result.error;
+            }
+            return updated;
+          });
+        },
+        onThinking: (text: string) => {
+          setAgentThinking(prev => prev + text);
+        },
+        abortSignal: controller.signal,
+      });
+      
+      setAgentResult(result);
+      
+      // Add agent summary as assistant message
+      const summaryMessage: Message = {
+        role: 'assistant',
+        content: result.finalResponse || formatAgentResult(result),
+      };
+      setMessages(prev => [...prev, summaryMessage]);
+      
+      // Auto-save session
+      autoSaveSession([...messages, userMessage, summaryMessage], projectPath);
+      
+      if (result.success) {
+        notify(`Agent completed: ${result.actions.length} action(s)`);
+      } else if (result.aborted) {
+        notify('Agent stopped by user');
+      } else {
+        notify(`Agent failed: ${result.error}`);
+      }
+    } catch (error) {
+      const err = error as Error;
+      notify(`Agent error: ${err.message}`);
+    } finally {
+      setIsAgentRunning(false);
+      setAbortController(null);
+      setAgentThinking('');
+    }
+  }, [projectContext, hasWriteAccess, messages, projectPath, notify]);
+
+  const handleSubmit = async (input: string) => {
+    logger.debug(`[handleSubmit] Called with input, current messages.length: ${messages.length}`);
+    
+    // Clear previous agent result when user sends new message
+    if (agentResult) {
+      setAgentResult(null);
+      setAgentActions([]);
+    }
+    
+    // Validate input
+    const validation = validateInput(input);
+    if (!validation.valid) {
+      notify(`Invalid input: ${validation.error}`);
+      return;
+    }
+    
+    // Use sanitized input
+    const sanitizedInput = validation.sanitized || input;
+    
+    // Add to input history (limit to last 100 entries to prevent memory leak)
+    const MAX_HISTORY = 100;
+    setInputHistory(h => [...h.slice(-(MAX_HISTORY - 1)), sanitizedInput]);
+    
+    // Check for commands
+    if (sanitizedInput.startsWith('/')) {
+      // Rate limit commands
+      const commandLimit = checkCommandRateLimit();
+      if (!commandLimit.allowed) {
+        notify(commandLimit.message || 'Too many commands');
+        return;
+      }
+      
+      handleCommand(sanitizedInput);
+      return;
+    }
+    
+    // Rate limit API calls
+    const apiLimit = checkApiRateLimit();
+    if (!apiLimit.allowed) {
+      notify(apiLimit.message || 'Rate limit exceeded');
+      return;
+    }
+
+    // Auto-agent mode: if enabled and we have write access, use agent
+    const agentMode = config.get('agentMode');
+    logger.debug(`[handleSubmit] agentMode=${agentMode}, hasWriteAccess=${hasWriteAccess}, hasProjectContext=${!!projectContext}`);
+    if (agentMode === 'auto' && hasWriteAccess && projectContext) {
+      notify('Using agent mode (change in /settings)');
+      startAgent(sanitizedInput, false);
+      return;
+    }
+
+    // Auto-detect file paths and enrich message
+    let enrichedInput = sanitizedInput;
+    if (hasProjectAccess) {
+      const detectedPaths = detectFilePaths(sanitizedInput, projectPath);
+      
+      if (detectedPaths.length > 0) {
+        const fileContents: string[] = [];
+        
+        for (const filePath of detectedPaths) {
+          const file = readProjectFile(filePath);
+          if (file) {
+            const ext = filePath.split('.').pop() || '';
+            fileContents.push(`\n\n--- File: ${filePath} ---\n\`\`\`${ext}\n${file.content}\n\`\`\``);
+            if (file.truncated) {
+              notify(`Note: ${filePath} was truncated (too large)`);
+            }
+          }
+        }
+        
+        if (fileContents.length > 0) {
+          enrichedInput = input + fileContents.join('');
+          notify(`Attached ${fileContents.length} file(s)`);
+        }
+      }
+    }
+
+    // Regular message
+    const userMessage: Message = { role: 'user', content: enrichedInput };
+    // Display sanitized input to user, but send enriched
+    const displayMessage: Message = { role: 'user', content: sanitizedInput };
+    
+    // Create updated messages array with user message
+    const messagesWithUser = [...messages, displayMessage];
+    
+    logger.debug(`[handleSubmit] Current messages: ${messages.length}`);
+    logger.debug(`[handleSubmit] Messages with user: ${messagesWithUser.length}`);
+    
+    setMessages(messagesWithUser);
+    setIsLoading(true);
+    setStreamingContent('');
+
+    const controller = new AbortController();
+    setAbortController(controller);
+
+    try {
+      // Clean agent markers from history to prevent model confusion
+      // When switching from agent to manual mode, history may contain [AGENT] prefixes
+      const cleanedHistory = messages.map(msg => {
+        if (msg.role === 'user' && (msg.content.startsWith('[AGENT] ') || msg.content.startsWith('[DRY RUN] '))) {
+          return {
+            ...msg,
+            content: msg.content.replace(/^\[(AGENT|DRY RUN)\] /, ''),
+          };
+        }
+        return msg;
+      });
+      
+      logger.debug(`[handleSubmit] Calling chat API with messages.length: ${cleanedHistory.length}`);
+      const response = await chat(
+        enrichedInput,
+        cleanedHistory, // Send cleaned conversation history WITHOUT the user message we just added
+        (chunk) => {
+          // Don't update streaming content if request was aborted
+          if (!controller.signal.aborted) {
+            setStreamingContent(c => c + chunk);
+          }
+        },
+        undefined,
+        projectContext,
+        controller.signal
+      );
+
+      logger.debug(`[handleSubmit] Response received, length: ${response?.length || 0}`);
+      logger.debug(`[handleSubmit] Controller aborted? ${controller.signal.aborted}`);
+
+      // Check if request was aborted before updating messages
+      if (!controller.signal.aborted) {
+        const finalMessages = [...messagesWithUser, { role: 'assistant' as const, content: response }];
+        logger.debug(`[handleSubmit] Final messages array length: ${finalMessages.length}`);
+        setMessages(finalMessages);
+        
+        // Check for file changes in response if write access enabled
+        if (hasWriteAccess && response) {
+          const fileChanges = parseFileChanges(response);
+          if (fileChanges.length > 0) {
+            setPendingFileChanges(fileChanges);
+          }
+        }
+        
+        // Auto-save session
+        autoSaveSession(finalMessages, projectPath);
+      } else {
+        // Revert to messages without user input on abort
+        setMessages(messages);
+      }
+    } catch (error: unknown) {
+      // Revert to messages without user input on error
+      setMessages(messages);
+      
+      // Don't show error if request was aborted by user
+      const err = error as Error;
+      const isAborted = err.name === 'AbortError' || 
+                       err.message?.includes('aborted') || 
+                       err.message?.includes('abort') ||
+                       controller.signal.aborted;
+      
+      if (!isAborted) {
+        notify(`Error: ${err.message || 'Unknown error'}`);
+      }
+    } finally {
+      setIsLoading(false);
+      setStreamingContent('');
+      setAbortController(null);
+    }
+  };
+
+  const handleCommand = (cmd: string) => {
+    const parts = cmd.split(' ');
+    const command = parts[0].toLowerCase();
+    const args = parts.slice(1);
+
+    switch (command) {
+      case '/exit':
+      case '/quit':
+        exit();
+        break;
+
+      case '/help':
+        setScreen('help');
+        break;
+
+      case '/status':
+        setScreen('status');
+        break;
+
+      case '/version': {
+        const version = getCurrentVersion();
+        const provider = getCurrentProvider();
+        const providers = getProviderList();
+        const providerInfo = providers.find(p => p.id === provider.id);
+        const providerName = providerInfo?.name || 'Unknown';
+        notify(`Codeep v${version} • Provider: ${providerName} • Model: ${config.get('model')}`);
+        break;
+      }
+
+      case '/update': {
+        // Check for updates
+        notify('Checking for updates...');
+        checkForUpdates()
+          .then((info) => {
+            setUpdateInfo(info);
+            const message = formatVersionInfo(info);
+            // Split into multiple notifications for better display
+            message.split('\n').forEach((line, i) => {
+              setTimeout(() => notify(line), i * 100);
+            });
+          })
+          .catch(() => {
+            notify('Failed to check for updates. Please try again later.');
+          });
+        break;
+      }
+
+      case '/clear':
+        setMessages([]);
+        clearCodeBlocks();
+        const newId = startNewSession();
+        setSessionId(newId);
+        notify('Chat cleared, new session started');
+        break;
+
+      case '/model': {
+        const models = getModelsForCurrentProvider();
+        if (args[0] && models[args[0]]) {
+          config.set('model', args[0]);
+          notify(`Model: ${args[0]}`);
+        } else {
+          setScreen('model');
+        }
+        break;
+      }
+
+      case '/provider':
+        if (args[0] && PROVIDERS[args[0].toLowerCase()]) {
+          if (setProvider(args[0].toLowerCase())) {
+            notify(`Provider: ${getCurrentProvider().name}`);
+          }
+        } else {
+          setScreen('provider');
+        }
+        break;
+
+      case '/protocol':
+        if (args[0] && PROTOCOLS[args[0].toLowerCase()]) {
+          config.set('protocol', args[0].toLowerCase() as 'openai' | 'anthropic');
+          notify(`Protocol: ${args[0]}`);
+        } else {
+          setScreen('protocol');
+        }
+        break;
+
+      case '/sessions':
+        // Handle /sessions delete
+        if (args[0]?.toLowerCase() === 'delete') {
+          if (args[1]) {
+            // Delete specific session by name
+            const sessionName = args.slice(1).join(' ');
+            if (deleteSession(sessionName, projectPath)) {
+              notify(`Deleted: ${sessionName}`);
+            } else {
+              notify(`Session not found: ${sessionName}`);
+            }
+          } else {
+            // Open delete picker
+            setScreen('sessions-delete');
+          }
+        } else {
+          setScreen('sessions');
+        }
+        break;
+
+      case '/settings':
+        setScreen('settings');
+        break;
+
+      case '/login':
+        setScreen('login');
+        break;
+
+      case '/lang':
+      case '/language':
+        if (args[0] && LANGUAGES[args[0].toLowerCase()]) {
+          config.set('language', args[0].toLowerCase() as LanguageCode);
+          notify(`Language: ${LANGUAGES[args[0].toLowerCase()]}`);
+        } else {
+          setScreen('language');
+        }
+        break;
+
+      case '/logout':
+        setScreen('logout');
+        break;
+
+      case '/rename': {
+        const newName = args.join(' ').trim();
+        if (!newName) {
+          notify('Usage: /rename <new-name>');
+          break;
+        }
+        // Validate name (no special characters that could cause file issues)
+        if (!/^[\w\s-]+$/.test(newName)) {
+          notify('Invalid name. Use only letters, numbers, spaces, and hyphens.');
+          break;
+        }
+        const currentId = getCurrentSessionId();
+        if (renameSession(currentId, newName, projectPath)) {
+          setSessionId(newName);
+          notify(`Session renamed to: ${newName}`);
+        } else {
+          notify('Failed to rename session');
+        }
+        break;
+      }
+
+      case '/apply': {
+        // Apply file changes from last AI response
+        if (!hasWriteAccess) {
+          notify('Write access not granted. Enable it in project permissions.');
+          break;
+        }
+        
+        const lastMessage = messages[messages.length - 1];
+        if (!lastMessage || lastMessage.role !== 'assistant') {
+          notify('No AI response to apply changes from.');
+          break;
+        }
+        
+        const fileChanges = parseFileChanges(lastMessage.content);
+        if (fileChanges.length === 0) {
+          notify('No file changes found in last response.');
+          break;
+        }
+        
+        // Apply all changes
+        let successCount = 0;
+        let errorCount = 0;
+        
+        for (const change of fileChanges) {
+          const result = writeProjectFile(change.path, change.content);
+          if (result.success) {
+            successCount++;
+          } else {
+            errorCount++;
+            notify(`Failed to write ${change.path}: ${result.error}`);
+          }
+        }
+        
+        if (successCount > 0) {
+          notify(`Applied ${successCount} file change(s)${errorCount > 0 ? `, ${errorCount} failed` : ''}`);
+        }
+        break;
+      }
+
+      case '/search': {
+        const term = args.join(' ').trim();
+        if (!term) {
+          notify('Usage: /search <term>');
+          break;
+        }
+        
+        if (messages.length === 0) {
+          notify('No messages to search');
+          break;
+        }
+        
+        const results = searchMessages(messages, term);
+        setSearchResults(results);
+        setSearchTerm(term);
+        setScreen('search');
+        break;
+      }
+
+      case '/export': {
+        if (messages.length === 0) {
+          notify('No messages to export');
+          break;
+        }
+        setScreen('export');
+        break;
+      }
+
+      case '/diff': {
+        const staged = args.includes('--staged') || args.includes('-s');
+        const result = getGitDiff(staged, projectPath);
+        
+        if (!result.success) {
+          notify(result.error || 'Failed to get diff');
+          break;
+        }
+        
+        if (!result.diff) {
+          notify(staged ? 'No staged changes' : 'No unstaged changes');
+          break;
+        }
+        
+        // Add a clean user message first
+        const userMessage: Message = {
+          role: 'user',
+          content: `/diff ${staged ? '--staged' : ''}\nRequesting review of ${staged ? 'staged' : 'unstaged'} changes`,
+        };
+        setMessages(prev => [...prev, userMessage]);
+        
+        // Format and send to AI with full diff in background
+        const diffPreview = formatDiffForDisplay(result.diff, 100);
+        const aiPrompt = `Review this git diff:\n\n\`\`\`diff\n${diffPreview}\n\`\`\`\n\nPlease provide feedback and suggestions.`;
+        
+        // Send to AI without adding another user message
+        setIsLoading(true);
+        setStreamingContent('');
+
+        const controller = new AbortController();
+        setAbortController(controller);
+
+        (async () => {
+          try {
+            const response = await chat(
+              aiPrompt,
+              messages,
+              (chunk) => {
+                if (!controller.signal.aborted) {
+                  setStreamingContent(c => c + chunk);
+                }
+              },
+              undefined,
+              projectContext,
+              controller.signal
+            );
+
+            if (!controller.signal.aborted) {
+              const finalMessages = [...messages, userMessage, { role: 'assistant' as const, content: response }];
+              setMessages(finalMessages);
+              autoSaveSession(finalMessages, projectPath);
+            }
+          } catch (error: unknown) {
+            const err = error as Error;
+            const isAborted = err.name === 'AbortError' || 
+                             err.message?.includes('aborted') || 
+                             err.message?.includes('abort') ||
+                             controller.signal.aborted;
+            
+            if (!isAborted) {
+              notify(`Error: ${err.message || 'Unknown error'}`);
+            }
+          } finally {
+            setIsLoading(false);
+            setStreamingContent('');
+            setAbortController(null);
+          }
+        })();
+        break;
+      }
+
+      case '/commit': {
+        const status = getGitStatus(projectPath);
+        
+        if (!status.isRepo) {
+          notify('Not a git repository');
+          break;
+        }
+        
+        const diff = getGitDiff(true, projectPath); // Get staged diff
+        
+        if (!diff.success || !diff.diff) {
+          notify('No staged changes. Use `git add` first.');
+          break;
+        }
+        
+        // Ask AI to generate commit message
+        const suggestion = suggestCommitMessage(diff.diff);
+        const commitPrompt = `Generate a conventional commit message for these changes:\n\n\`\`\`diff\n${formatDiffForDisplay(diff.diff, 50)}\n\`\`\`\n\nSuggested: "${suggestion}"\n\nProvide an improved commit message following conventional commits format.`;
+        
+        notify('Generating commit message...');
+        handleSubmit(commitPrompt);
+        break;
+      }
+
+      case '/copy': {
+        // Copy code block to clipboard
+        const blockIndex = args[0] ? parseInt(args[0], 10) : -1;
+        const code = getCodeBlock(blockIndex);
+        if (code) {
+          try {
+            clipboardy.writeSync(code);
+            notify(`Code block ${blockIndex === -1 ? '(last)' : `[${blockIndex}]`} copied to clipboard`);
+          } catch {
+            notify('Failed to copy to clipboard');
+          }
+        } else {
+          notify('No code block found');
+        }
+        break;
+      }
+
+      case '/agent': {
+        const prompt = args.join(' ').trim();
+        if (!prompt) {
+          notify('Usage: /agent <task description>');
+          break;
+        }
+        
+        if (isAgentRunning) {
+          notify('Agent is already running. Press Escape to stop it first.');
+          break;
+        }
+        
+        startAgent(prompt, false);
+        break;
+      }
+
+      case '/agent-dry': {
+        const prompt = args.join(' ').trim();
+        if (!prompt) {
+          notify('Usage: /agent-dry <task description>');
+          break;
+        }
+        
+        if (isAgentRunning) {
+          notify('Agent is already running. Press Escape to stop it first.');
+          break;
+        }
+        
+        startAgent(prompt, true);
+        break;
+      }
+
+      case '/agent-stop': {
+        if (!isAgentRunning) {
+          notify('No agent is running');
+          break;
+        }
+        abortController?.abort();
+        notify('Stopping agent...');
+        break;
+      }
+
+      case '/undo': {
+        const result = undoLastAction();
+        if (result.success) {
+          notify(`Undo: ${result.message}`);
+        } else {
+          notify(`Cannot undo: ${result.message}`);
+        }
+        break;
+      }
+
+      case '/undo-all': {
+        const result = undoAllActions();
+        if (result.success) {
+          notify(`Undone ${result.results.length} action(s)`);
+        } else {
+          notify(result.results.join('\n'));
+        }
+        break;
+      }
+
+      case '/history': {
+        const sessions = getRecentSessions(5);
+        if (sessions.length === 0) {
+          notify('No agent history');
+        } else {
+          const formatted = sessions.map(s => {
+            const date = new Date(s.startTime).toLocaleString();
+            return `${date}: ${s.prompt.slice(0, 40)}... (${s.actions.length} actions)`;
+          }).join('\n');
+          notify(`Recent agent sessions:\n${formatted}`);
+        }
+        break;
+      }
+
+      case '/changes': {
+        // Show all file changes from current agent session
+        if (agentActions.length === 0) {
+          notify('No changes in current session. Run an agent task first.');
+        } else {
+          // Filter to only file changes
+          const fileChanges = agentActions.filter(a => 
+            ['write', 'edit', 'delete', 'mkdir'].includes(a.type) && 
+            a.result === 'success'
+          );
+          
+          if (fileChanges.length === 0) {
+            notify('No file changes in current session.');
+          } else {
+            // Format changes for display
+            const writes = fileChanges.filter(a => a.type === 'write');
+            const edits = fileChanges.filter(a => a.type === 'edit');
+            const deletes = fileChanges.filter(a => a.type === 'delete');
+            const mkdirs = fileChanges.filter(a => a.type === 'mkdir');
+            
+            let changesText = '# Session Changes\n\n';
+            
+            if (writes.length > 0) {
+              changesText += `## Created (${writes.length})\n`;
+              writes.forEach(w => changesText += `+ ${w.target}\n`);
+              changesText += '\n';
+            }
+            
+            if (edits.length > 0) {
+              changesText += `## Modified (${edits.length})\n`;
+              edits.forEach(e => changesText += `~ ${e.target}\n`);
+              changesText += '\n';
+            }
+            
+            if (deletes.length > 0) {
+              changesText += `## Deleted (${deletes.length})\n`;
+              deletes.forEach(d => changesText += `- ${d.target}\n`);
+              changesText += '\n';
+            }
+            
+            if (mkdirs.length > 0) {
+              changesText += `## Directories (${mkdirs.length})\n`;
+              mkdirs.forEach(m => changesText += `+ ${m.target}/\n`);
+            }
+            
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: changesText,
+            }]);
+          }
+        }
+        break;
+      }
+
+      case '/git-commit': {
+        if (!projectContext) {
+          notify('No project context');
+          break;
+        }
+        const commitResult = autoCommitAgentChanges(
+          args.join(' ') || 'Agent changes',
+          [],
+          projectContext.root
+        );
+        if (commitResult.success) {
+          notify(`Committed: ${commitResult.hash}`);
+        } else {
+          notify(`Commit failed: ${commitResult.error}`);
+        }
+        break;
+      }
+
+      case '/context-save': {
+        if (!projectContext) {
+          notify('No project context');
+          break;
+        }
+        const saved = saveContext(projectContext.root, messages);
+        notify(saved ? 'Context saved' : 'Failed to save context');
+        break;
+      }
+
+      case '/context-load': {
+        if (!projectContext) {
+          notify('No project context');
+          break;
+        }
+        const loaded = loadContext(projectContext.root);
+        if (loaded) {
+          setMessages(mergeContext(loaded, []));
+          notify(`Loaded context with ${loaded.messages.length} messages`);
+        } else {
+          notify('No saved context for this project');
+        }
+        break;
+      }
+
+      case '/context-clear': {
+        if (!projectContext) {
+          notify('No project context');
+          break;
+        }
+        clearContext(projectContext.root);
+        notify('Context cleared');
+        break;
+      }
+
+      case '/review': {
+        if (!projectContext) {
+          notify('No project context');
+          break;
+        }
+        const reviewFiles = args.length > 0 ? args : undefined;
+        const reviewResult = performCodeReview(projectContext, reviewFiles);
+        const formatted = formatReviewResult(reviewResult);
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: formatted,
+        }]);
+        break;
+      }
+
+      case '/learn': {
+        if (!projectContext) {
+          notify('No project context');
+          break;
+        }
+        if (args[0] === 'status') {
+          const status = getLearningStatus(projectContext.root);
+          notify(status);
+        } else if (args[0] === 'rule' && args.length > 1) {
+          const rule = args.slice(1).join(' ');
+          addCustomRule(rule, projectContext.root);
+          notify(`Added rule: ${rule}`);
+        } else {
+          // Trigger learning from project files
+          const prefs = learnFromProject(projectContext.root, projectContext.keyFiles);
+          notify(`Learned from ${prefs.sampleCount} files. Use /learn status to see preferences.`);
+        }
+        break;
+      }
+
+      case '/skills': {
+        // Show all available skills, search, or stats
+        if (args[0] === 'stats') {
+          // Show skill usage statistics
+          const stats = getSkillStats();
+          const statsMessage = `# Skill Usage Statistics
+
+- **Total skill executions:** ${stats.totalUsage}
+- **Unique skills used:** ${stats.uniqueSkills}
+- **Success rate:** ${stats.successRate}%`;
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: statsMessage,
+          }]);
+        } else if (args.length > 0) {
+          // Search skills
+          const query = args.join(' ');
+          const results = searchSkills(query);
+          if (results.length === 0) {
+            notify(`No skills found matching: ${query}`);
+          } else {
+            const formatted = formatSkillsList(results);
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: `# Search Results for "${query}"\n\n${formatted}`,
+            }]);
+          }
+        } else {
+          const skills = getAllSkills();
+          const formatted = formatSkillsList(skills);
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: formatted,
+          }]);
+        }
+        break;
+      }
+
+      case '/skill': {
+        // Execute or show info about a specific skill
+        if (args.length === 0) {
+          notify('Usage: /skill <name> [args] or /skills to list all');
+          break;
+        }
+        
+        const skillName = args[0];
+        const skillArgs = args.slice(1).join(' ');
+        
+        // Special subcommands
+        if (skillName === 'create' && args.length > 1) {
+          // Create a new custom skill template
+          const newSkillName = args[1];
+          const template = {
+            name: newSkillName,
+            description: 'Add description here',
+            shortcut: '',
+            category: 'custom',
+            steps: [
+              { type: 'prompt', content: 'Add your prompt here' },
+            ],
+          };
+          try {
+            saveCustomSkill(template as Skill);
+            notify(`Created skill template: ~/.codeep/skills/${newSkillName}.json\nEdit it to customize.`);
+          } catch (e) {
+            notify(`Failed to create skill: ${(e as Error).message}`);
+          }
+          break;
+        }
+        
+        if (skillName === 'delete' && args.length > 1) {
+          const toDelete = args[1];
+          if (deleteCustomSkill(toDelete)) {
+            notify(`Deleted skill: ${toDelete}`);
+          } else {
+            notify(`Skill not found or is built-in: ${toDelete}`);
+          }
+          break;
+        }
+        
+        if (skillName === 'help' && args.length > 1) {
+          const helpSkill = findSkill(args[1]);
+          if (helpSkill) {
+            const help = formatSkillHelp(helpSkill);
+            setMessages(prev => [...prev, { role: 'assistant', content: help }]);
+          } else {
+            notify(`Skill not found: ${args[1]}`);
+          }
+          break;
+        }
+        
+        // Find and execute skill
+        const skill = findSkill(skillName);
+        if (!skill) {
+          notify(`Skill not found: ${skillName}. Use /skills to list all.`);
+          break;
+        }
+        
+        // Parse parameters
+        const params = parseSkillArgs(skillArgs, skill);
+        
+        // Check required parameters
+        if (skill.parameters) {
+          for (const param of skill.parameters) {
+            if (param.required && !params[param.name]) {
+              notify(`Missing required parameter: ${param.name}. Usage: /skill ${skill.name} <${param.name}>`);
+              break;
+            }
+          }
+        }
+        
+        // Check requirements
+        if (skill.requiresWriteAccess && !hasWriteAccess) {
+          notify(`Skill "${skill.name}" requires write access. Grant permission first.`);
+          break;
+        }
+        
+        if (skill.requiresGit) {
+          const status = getGitStatus(projectPath);
+          if (!status.isRepo) {
+            notify(`Skill "${skill.name}" requires a git repository.`);
+            break;
+          }
+        }
+        
+        // Execute skill based on step types
+        const hasAgentStep = skill.steps.some(s => s.type === 'agent');
+        
+        // Track skill usage
+        trackSkillUsage(skill.name);
+        
+        if (hasAgentStep && projectContext) {
+          // Use agent mode for skills with agent steps
+          const prompt = generateSkillPrompt(skill, projectContext, skillArgs, params);
+          startAgent(prompt, false);
+        } else if (projectContext) {
+          // Use regular chat for prompt-only skills
+          const prompt = generateSkillPrompt(skill, projectContext, skillArgs, params);
+          handleSubmit(prompt);
+        } else {
+          notify('Skill requires project context');
+        }
+        break;
+      }
+
+      default: {
+        // Check for skill chaining (e.g., /commit+push)
+        const commandWithoutSlash = command.slice(1);
+        const chain = parseSkillChain(commandWithoutSlash);
+        
+        if (chain) {
+          // Execute skill chain
+          if (!projectContext) {
+            notify('Skill chain requires project context');
+            break;
+          }
+          
+          // Build combined prompt for all skills in chain
+          const chainPrompt: string[] = [];
+          chainPrompt.push('# Skill Chain');
+          chainPrompt.push(`Execute the following skills in order. Stop if any fails.`);
+          chainPrompt.push('');
+          
+          for (const skillName of chain.skills) {
+            const skill = findSkill(skillName);
+            if (!skill) continue;
+            
+            // Check requirements
+            if (skill.requiresWriteAccess && !hasWriteAccess) {
+              notify(`Skill chain requires write access (${skill.name})`);
+              break;
+            }
+            
+            if (skill.requiresGit) {
+              const status = getGitStatus(projectPath);
+              if (!status.isRepo) {
+                notify(`Skill chain requires git repository (${skill.name})`);
+                break;
+              }
+            }
+            
+            chainPrompt.push(`## Step: ${skill.name}`);
+            chainPrompt.push(skill.description);
+            for (const step of skill.steps) {
+              if (step.type === 'prompt' || step.type === 'agent') {
+                chainPrompt.push(step.content);
+              }
+            }
+            chainPrompt.push('');
+          }
+          
+          // Track all skills in chain
+          for (const skillName of chain.skills) {
+            trackSkillUsage(skillName);
+          }
+          
+          // Execute chain as agent
+          const fullPrompt = chainPrompt.join('\n');
+          startAgent(fullPrompt, false);
+          break;
+        }
+        
+        // Check if it's a skill shortcut (e.g., /c for commit)
+        const skillByShortcut = findSkill(commandWithoutSlash);
+        if (skillByShortcut) {
+          const skillArgs = args.join(' ');
+          const params = parseSkillArgs(skillArgs, skillByShortcut);
+          
+          // Check required parameters
+          if (skillByShortcut.parameters) {
+            let missingParam = false;
+            for (const param of skillByShortcut.parameters) {
+              if (param.required && !params[param.name]) {
+                notify(`Missing required parameter: ${param.name}. Usage: /${skillByShortcut.name} <${param.name}>`);
+                missingParam = true;
+                break;
+              }
+            }
+            if (missingParam) break;
+          }
+          
+          // Check requirements
+          if (skillByShortcut.requiresWriteAccess && !hasWriteAccess) {
+            notify(`Skill "${skillByShortcut.name}" requires write access.`);
+            break;
+          }
+          
+          if (skillByShortcut.requiresGit) {
+            const status = getGitStatus(projectPath);
+            if (!status.isRepo) {
+              notify(`Skill "${skillByShortcut.name}" requires a git repository.`);
+              break;
+            }
+          }
+          
+          const hasAgentStep = skillByShortcut.steps.some(s => s.type === 'agent');
+          
+          // Track skill usage
+          trackSkillUsage(skillByShortcut.name);
+          
+          if (hasAgentStep && projectContext) {
+            const prompt = generateSkillPrompt(skillByShortcut, projectContext, skillArgs, params);
+            startAgent(prompt, false);
+          } else if (projectContext) {
+            const prompt = generateSkillPrompt(skillByShortcut, projectContext, skillArgs, params);
+            handleSubmit(prompt);
+          } else {
+            notify('Skill requires project context');
+          }
+        } else {
+          notify(`Unknown command: ${command}`);
+        }
+      }
+    }
+  };
+
+  const handleLogin = () => {
+    setScreen('chat');
+    notify('Logged in successfully!');
+  };
+
+  const handleSessionLoad = (history: Message[], name: string) => {
+    setMessages(history);
+    setScreen('chat');
+    notify(`Loaded: ${name}`);
+  };
+
+  const handlePermissionComplete = (granted: boolean, permanent: boolean, writeGranted: boolean = false) => {
+    if (granted) {
+      setHasProjectAccess(true);
+      setHasWriteAccess(writeGranted);
+      const ctx = getProjectContext(projectPath);
+      if (ctx) {
+        ctx.hasWriteAccess = writeGranted;
+      }
+      setProjectContext(ctx);
+      if (permanent) {
+        // Save permission to local .codeep/config.json (already saved by component if write granted)
+        if (!writeGranted) {
+          setProjectPermission(projectPath, true, false); // read only
+        }
+        notify(writeGranted 
+          ? 'Project access granted (read + write, permanent)' 
+          : 'Project access granted (read-only, permanent)');
+      } else {
+        notify(writeGranted 
+          ? 'Project access granted (read + write, this session)' 
+          : 'Project access granted (read-only, this session)');
+      }
+    } else {
+      notify('Project access denied');
+    }
+    setScreen('chat');
+  };
+
+  // Render based on screen
+  // Show intro only once on first load (not when messages are cleared)
+  if (showIntro && screen === 'chat' && messages.length === 0 && !sessionLoaded) {
+    return (
+      <Box flexDirection="column" alignItems="center" justifyContent="center">
+        <IntroAnimation onComplete={() => setShowIntro(false)} />
+      </Box>
+    );
+  }
+
+  if (screen === 'login') {
+    return <Login onLogin={handleLogin} onCancel={() => setScreen('chat')} />;
+  }
+
+  if (screen === 'permission') {
+    return (
+      <ProjectPermission 
+        projectPath={projectPath}
+        onComplete={handlePermissionComplete}
+      />
+    );
+  }
+
+  if (screen === 'help') {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Help />
+        <Text>Press Escape to close</Text>
+      </Box>
+    );
+  }
+
+  if (screen === 'status') {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Status />
+        <Text>Press Escape to close</Text>
+      </Box>
+    );
+  }
+
+  if (screen === 'session-picker') {
+    return (
+      <SessionPicker
+        projectPath={projectPath}
+        onSelect={(loadedMessages, sessionName) => {
+          setMessages(loadedMessages);
+          setSessionId(sessionName);
+          setSessionLoaded(true);
+          setScreen('chat');
+          setNotification(`Loaded: ${sessionName}`);
+        }}
+        onNewSession={() => {
+          setSessionLoaded(true);
+          setScreen('chat');
+        }}
+      />
+    );
+  }
+
+  if (screen === 'sessions') {
+    return (
+      <Sessions 
+        history={messages} 
+        onLoad={handleSessionLoad}
+        onClose={() => setScreen('chat')}
+        projectPath={projectPath}
+      />
+    );
+  }
+
+  if (screen === 'sessions-delete') {
+    return (
+      <Sessions 
+        history={messages} 
+        onLoad={handleSessionLoad}
+        onClose={() => setScreen('chat')}
+        onDelete={(name) => {
+          notify(`Deleted: ${name}`);
+          setScreen('chat');
+        }}
+        deleteMode={true}
+        projectPath={projectPath}
+      />
+    );
+  }
+
+  if (screen === 'logout') {
+    return (
+      <LogoutPicker
+        onLogout={(providerId) => {
+          notify(`Logged out from ${providerId}`);
+          // If logged out from current provider, go to login
+          if (providerId === config.get('provider')) {
+            setMessages([]);
+            setScreen('login');
+          } else {
+            setScreen('chat');
+          }
+        }}
+        onLogoutAll={() => {
+          notify('Logged out from all providers');
+          setMessages([]);
+          setScreen('login');
+        }}
+        onCancel={() => setScreen('chat')}
+      />
+    );
+  }
+
+  if (screen === 'settings') {
+    return (
+      <Settings 
+        onClose={() => setScreen('chat')}
+        notify={notify}
+      />
+    );
+  }
+
+  if (screen === 'search') {
+    return (
+      <Search 
+        results={searchResults}
+        searchTerm={searchTerm}
+        onClose={() => setScreen('chat')}
+        onSelectMessage={(index) => {
+          // Just close search for now - message is already in chat history
+          notify(`Message #${index + 1}`);
+        }}
+      />
+    );
+  }
+
+  if (screen === 'export') {
+    return (
+      <Export
+        onExport={(format) => {
+          const content = exportMessages(messages, {
+            format,
+            sessionName: sessionId || 'chat',
+          });
+          
+          const result = saveExport(content, format, process.cwd(), sessionId || undefined);
+          
+          if (result.success) {
+            notify(`Exported to ${result.filePath}`);
+          } else {
+            notify(`Export failed: ${result.error}`);
+          }
+          
+          setScreen('chat');
+        }}
+        onCancel={() => setScreen('chat')}
+      />
+    );
+  }
+
+  if (screen === 'model') {
+    return (
+      <ModelSelect onClose={() => setScreen('chat')} notify={notify} />
+    );
+  }
+
+  if (screen === 'provider') {
+    return (
+      <ProviderSelect onClose={() => setScreen('chat')} notify={notify} />
+    );
+  }
+
+  if (screen === 'protocol') {
+    return (
+      <ProtocolSelect onClose={() => setScreen('chat')} notify={notify} />
+    );
+  }
+
+  if (screen === 'language') {
+    return (
+      <LanguageSelect onClose={() => setScreen('chat')} notify={notify} />
+    );
+  }
+
+  // Main chat screen
+  return (
+    <Box flexDirection="column">
+      {/* Header - show logo only when no messages and not loading */}
+      {messages.length === 0 && !isLoading && <Logo />}
+      
+      {/* Show "Connected to" only when no messages */}
+      {messages.length === 0 && !isLoading && (
+        <Box justifyContent="center">
+          <Text>
+            Connected to <Text color="#f02a30">{config.get('model')}</Text>. Type <Text color="#f02a30">/help</Text> for commands.
+          </Text>
+        </Box>
+      )}
+
+      {/* Messages with pagination */}
+      <MessageList
+        key={sessionId}
+        messages={messages}
+        streamingContent={streamingContent}
+        scrollOffset={0}
+        terminalHeight={stdout.rows || 24}
+      />
+
+      {/* Loading - show while waiting or streaming */}
+      {isLoading && !isAgentRunning && <Loading isStreaming={!!streamingContent} />}
+      
+      {/* Agent progress - show while running */}
+      {isAgentRunning && (
+        <AgentProgress
+          isRunning={true}
+          iteration={agentIteration}
+          maxIterations={20}
+          actions={agentActions}
+          currentThinking={agentThinking}
+          dryRun={agentDryRun}
+        />
+      )}
+      
+      {/* Agent summary - show after completion */}
+      {!isAgentRunning && agentResult && (
+        <AgentSummary
+          success={agentResult.success}
+          iterations={agentResult.iterations}
+          actions={agentActions}
+          error={agentResult.error}
+          aborted={agentResult.aborted}
+        />
+      )}
+
+      {/* File changes prompt */}
+      {pendingFileChanges.length > 0 && !isLoading && (
+        <Box flexDirection="column" borderStyle="round" borderColor="#f02a30" padding={1} marginY={1}>
+          <Text color="#f02a30" bold>✓ Detected {pendingFileChanges.length} file change(s):</Text>
+          {pendingFileChanges.map((change, i) => {
+            const actionColor = change.action === 'delete' ? 'red' : change.action === 'edit' ? 'yellow' : 'green';
+            const actionLabel = change.action === 'delete' ? 'DELETE' : change.action === 'edit' ? 'EDIT' : 'CREATE';
+            return (
+              <Text key={i}>
+                  • <Text color={actionColor}>[{actionLabel}]</Text> {change.path}
+                  {change.action !== 'delete' && change.content.includes('\n') && ` (${change.content.split('\n').length} lines)`}
+              </Text>
+            );
+          })}
+          <Text> </Text>
+          <Text>Apply changes? <Text color="#f02a30" bold>[Y/n]</Text></Text>
+          <Text color="gray">Press Y to apply, N or Esc to reject</Text>
+        </Box>
+      )}
+
+      {/* Notification */}
+      {notification && (
+        <Box justifyContent="center">
+          <Text color="cyan">{notification}</Text>
+        </Box>
+      )}
+
+      {/* Input */}
+      <Box borderStyle="single" borderColor="gray" paddingX={1}>
+        <ChatInput 
+          onSubmit={handleSubmit} 
+          disabled={isLoading || pendingFileChanges.length > 0}
+          history={inputHistory}
+          clearTrigger={clearInputTrigger}
+        />
+      </Box>
+
+      {/* Footer */}
+      <Box>
+        <Text>
+          <Text color="#f02a30">Ctrl+L</Text> Clear  
+          <Text color="#f02a30"> Esc</Text> Cancel  
+          <Text color="#f02a30"> /help</Text> Commands
+        </Text>
+      </Box>
+    </Box>
+  );
+};
+
+// Model selection component
+const ModelSelect: React.FC<{ onClose: () => void; notify: (msg: string) => void }> = ({ onClose, notify }) => {
+  const [selected, setSelected] = useState(0);
+  const models = Object.entries(getModelsForCurrentProvider());
+  const provider = getCurrentProvider();
+
+  useInput((input, key) => {
+    if (key.escape) onClose();
+    if (key.upArrow) setSelected(s => Math.max(0, s - 1));
+    if (key.downArrow) setSelected(s => Math.min(models.length - 1, s + 1));
+    if (key.return) {
+      config.set('model', models[selected][0]);
+      notify(`Model: ${models[selected][0]}`);
+      onClose();
+    }
+  });
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="#f02a30" padding={1}>
+      <Text color="#f02a30" bold>Select Model</Text>
+      <Text>Provider: {provider.name}</Text>
+      <Text> </Text>
+      {models.map(([key, desc], i) => (
+        <Text key={key}>
+          {i === selected ? <Text color="#f02a30">▸ </Text> : '  '}
+          <Text color={i === selected ? '#f02a30' : undefined}>{key}</Text>
+          <Text> - {desc}</Text>
+          {key === config.get('model') && <Text color="green"> ●</Text>}
+        </Text>
+      ))}
+      <Text> </Text>
+      <Text>Enter to select, Escape to close</Text>
+    </Box>
+  );
+};
+
+// Provider selection component
+const ProviderSelect: React.FC<{ onClose: () => void; notify: (msg: string) => void }> = ({ onClose, notify }) => {
+  const [selected, setSelected] = useState(0);
+  const providers = getProviderList();
+  const currentProvider = getCurrentProvider();
+
+  useInput((input, key) => {
+    if (key.escape) onClose();
+    if (key.upArrow) setSelected(s => Math.max(0, s - 1));
+    if (key.downArrow) setSelected(s => Math.min(providers.length - 1, s + 1));
+    if (key.return) {
+      setProvider(providers[selected].id);
+      notify(`Provider: ${providers[selected].name}`);
+      onClose();
+    }
+  });
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="#f02a30" padding={1}>
+      <Text color="#f02a30" bold>Select AI Provider</Text>
+      <Text> </Text>
+      {providers.map((provider, i) => (
+        <Text key={provider.id}>
+          {i === selected ? <Text color="#f02a30">▸ </Text> : '  '}
+          <Text color={i === selected ? '#f02a30' : undefined}>{provider.name}</Text>
+          <Text> - {provider.description}</Text>
+          {provider.id === currentProvider.id && <Text color="green"> ●</Text>}
+        </Text>
+      ))}
+      <Text> </Text>
+      <Text>Enter to select, Escape to close</Text>
+      <Text color="#f02a30">Note: You may need to /login with a new API key</Text>
+    </Box>
+  );
+};
+
+// Protocol selection component
+const ProtocolSelect: React.FC<{ onClose: () => void; notify: (msg: string) => void }> = ({ onClose, notify }) => {
+  const [selected, setSelected] = useState(0);
+  const protocols = Object.entries(PROTOCOLS);
+
+  useInput((input, key) => {
+    if (key.escape) onClose();
+    if (key.upArrow) setSelected(s => Math.max(0, s - 1));
+    if (key.downArrow) setSelected(s => Math.min(protocols.length - 1, s + 1));
+    if (key.return) {
+      config.set('protocol', protocols[selected][0] as 'openai' | 'anthropic');
+      notify(`Protocol: ${protocols[selected][0]}`);
+      onClose();
+    }
+  });
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="#f02a30" padding={1}>
+      <Text color="#f02a30" bold>Select Protocol</Text>
+      <Text> </Text>
+      {protocols.map(([key, desc], i) => (
+        <Text key={key}>
+          {i === selected ? <Text color="#f02a30">▸ </Text> : '  '}
+          <Text color={i === selected ? '#f02a30' : undefined}>{key}</Text>
+          <Text> - {desc}</Text>
+          {key === config.get('protocol') && <Text color="green"> ●</Text>}
+        </Text>
+      ))}
+      <Text> </Text>
+      <Text>Enter to select, Escape to close</Text>
+    </Box>
+  );
+};
+
+// Language selection component
+const LanguageSelect: React.FC<{ onClose: () => void; notify: (msg: string) => void }> = ({ onClose, notify }) => {
+  const [selected, setSelected] = useState(0);
+  const languages = Object.entries(LANGUAGES);
+
+  useInput((input, key) => {
+    if (key.escape) onClose();
+    if (key.upArrow) setSelected(s => Math.max(0, s - 1));
+    if (key.downArrow) setSelected(s => Math.min(languages.length - 1, s + 1));
+    if (key.return) {
+      config.set('language', languages[selected][0] as LanguageCode);
+      notify(`Language: ${languages[selected][1]}`);
+      onClose();
+    }
+  });
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="#f02a30" padding={1}>
+      <Text color="#f02a30" bold>Select Response Language</Text>
+      <Text> </Text>
+      {languages.map(([key, name], i) => (
+        <Text key={key}>
+          {i === selected ? <Text color="#f02a30">▸ </Text> : '  '}
+          <Text color={i === selected ? '#f02a30' : undefined}>{name}</Text>
+          {key === config.get('language') && <Text color="green"> ●</Text>}
+        </Text>
+      ))}
+      <Text> </Text>
+      <Text>Enter to select, Escape to close</Text>
+    </Box>
+  );
+};

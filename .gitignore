@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+bin/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+
+# Test
+coverage/
+.vitest-cache/
+*.snap
+
+# Codeep
+.claude/
+.codeep/
+codeep-debug.log
+
+# Package manager
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
