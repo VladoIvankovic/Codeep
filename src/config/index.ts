@@ -96,10 +96,24 @@ function getLocalConfigPath(projectPath: string): string | null {
 }
 
 /**
- * Check if directory is a project (has package.json)
+ * Check if directory is a project
+ * Looks for common project indicators: package.json, pyproject.toml, Cargo.toml, go.mod, composer.json, etc.
  */
 function isProjectDirectory(path: string): boolean {
-  return existsSync(join(path, 'package.json'));
+  const projectFiles = [
+    'package.json',      // Node.js
+    'pyproject.toml',    // Python (Poetry)
+    'requirements.txt',  // Python (pip)
+    'setup.py',          // Python
+    'Cargo.toml',        // Rust
+    'go.mod',            // Go
+    'composer.json',     // PHP
+    'pom.xml',           // Java (Maven)
+    'build.gradle',      // Java (Gradle)
+    '.git',              // Git repository
+  ];
+  
+  return projectFiles.some(file => existsSync(join(path, file)));
 }
 
 export const config = new Conf<ConfigSchema>({
