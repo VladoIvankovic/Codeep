@@ -59,15 +59,32 @@ export const Sessions: React.FC<SessionsProps> = ({ history, onLoad, onClose, on
       return;
     }
 
-    // S = Save, L = Load, D = Delete
-    if (!deleteMode && (input === 's' || input === 'S')) {
+    // Ctrl+S = Save, Ctrl+L = Load, Ctrl+D = Delete, Enter = Save/Load depending on context
+    if (!deleteMode && key.ctrl && input === 's') {
       handleSave();
+      return;
     }
-    if (!deleteMode && (input === 'l' || input === 'L')) {
+    if (!deleteMode && key.ctrl && input === 'l') {
       handleLoad();
+      return;
     }
-    if (input === 'd' || input === 'D') {
+    if (key.ctrl && input === 'd') {
       handleDelete();
+      return;
+    }
+    
+    // Enter key behavior
+    if (!deleteMode && key.return) {
+      // If name is filled, try to save or load
+      if (name.trim()) {
+        // Check if session exists - if yes, load it, if no, save current
+        if (sessions.includes(name.trim())) {
+          handleLoad();
+        } else {
+          handleSave();
+        }
+      }
+      return;
     }
   });
 
@@ -129,13 +146,13 @@ export const Sessions: React.FC<SessionsProps> = ({ history, onLoad, onClose, on
           </Box>
 
           <Text> </Text>
-          <Text>Actions: <Text color="#f02a30">S</Text>=Save  <Text color="#f02a30">L</Text>=Load  <Text color="#f02a30">D</Text>=Delete  <Text color="#f02a30">Esc</Text>=Close</Text>
+          <Text>Actions: <Text color="#f02a30">Ctrl+S</Text>=Save  <Text color="#f02a30">Ctrl+L</Text>=Load  <Text color="#f02a30">Ctrl+D</Text>=Delete  <Text color="#f02a30">Enter</Text>=Save/Load  <Text color="#f02a30">Esc</Text>=Close</Text>
         </>
       )}
 
       {deleteMode && (
         <>
-          <Text>Actions: <Text color="#f02a30">Enter/D</Text>=Delete  <Text color="#f02a30">Esc</Text>=Cancel</Text>
+          <Text>Actions: <Text color="#f02a30">Enter/Ctrl+D</Text>=Delete  <Text color="#f02a30">Esc</Text>=Cancel</Text>
         </>
       )}
 

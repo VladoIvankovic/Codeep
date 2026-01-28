@@ -5,6 +5,7 @@ node_modules/
 dist/
 bin/
 homebrew-codeep/
+Codeep-web/
 
 # IDE
 .idea/
