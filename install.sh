@@ -1,19 +1,11 @@
 #!/bin/bash
 # Codeep Installer
-# Install the latest version of Codeep AI coding assistant
+# Install the latest version of Codeep AI coding assistant via npm
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/VladoIvankovic/Codeep/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/VladoIvankovic/Codeep/main/install.sh | VERSION=1.0.0 bash
-#   curl -fsSL https://raw.githubusercontent.com/VladoIvankovic/Codeep/main/install.sh | INSTALL_DIR=~/.local/bin bash
 
 set -e
-
-# Configuration
-VERSION="${VERSION:-latest}"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
-REPO="VladoIvankovic/Codeep"
-BINARY_NAME="codeep"
 
 # Colors
 RED='\033[0;31m'
@@ -40,132 +32,62 @@ warning() {
     echo -e "${YELLOW}⚠${NC} $1"
 }
 
-# Detect OS and Architecture
-detect_platform() {
-    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-    ARCH=$(uname -m)
+# Check if Node.js and npm are installed
+check_dependencies() {
+    if ! command -v node >/dev/null 2>&1; then
+        error "Node.js is required but not installed. Install from: https://nodejs.org/"
+    fi
     
-    case "$ARCH" in
-        x86_64)
-            ARCH="x64"
-            ;;
-        aarch64|arm64)
-            ARCH="arm64"
-            ;;
-        *)
-            error "Unsupported architecture: $ARCH"
-            ;;
-    esac
+    if ! command -v npm >/dev/null 2>&1; then
+        error "npm is required but not installed. Install from: https://nodejs.org/"
+    fi
     
-    case "$OS" in
-        darwin)
-            OS="macos"
-            ;;
-        linux)
-            OS="linux"
-            ;;
-        *)
-            error "Unsupported operating system: $OS"
-            ;;
-    esac
+    NODE_VERSION=$(node -v | sed 's/v//')
+    REQUIRED_VERSION="18.0.0"
     
-    info "Detected platform: ${OS}-${ARCH}"
+    if [ "$(printf '%s\n' "$REQUIRED_VERSION" "$NODE_VERSION" | sort -V | head -n1)" != "$REQUIRED_VERSION" ]; then
+        error "Node.js >= 18.0.0 is required. Current version: v${NODE_VERSION}"
+    fi
+    
+    success "Node.js v${NODE_VERSION} detected"
 }
 
-# Get latest version from GitHub
-get_latest_version() {
-    if [ "$VERSION" = "latest" ]; then
-        info "Fetching latest version..."
-        VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')
-        
-        if [ -z "$VERSION" ]; then
-            error "Failed to fetch latest version from GitHub"
-        fi
-        
-        info "Latest version: v${VERSION}"
+# Install Codeep via npm
+install_codeep() {
+    info "Installing Codeep globally via npm..."
+    
+    if npm install -g codeep; then
+        success "Codeep installed successfully!"
     else
-        info "Installing version: v${VERSION}"
+        error "Failed to install Codeep. Try running with sudo: sudo npm install -g codeep"
     fi
-}
-
-# Download binary
-download_binary() {
-    PLATFORM_BINARY="${BINARY_NAME}-${OS}-${ARCH}"
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${PLATFORM_BINARY}"
-    
-    info "Downloading from ${DOWNLOAD_URL}..."
-    
-    TEMP_FILE="/tmp/${BINARY_NAME}-$$"
-    
-    if ! curl -fsSL "$DOWNLOAD_URL" -o "$TEMP_FILE"; then
-        error "Failed to download binary. Check if version v${VERSION} exists and has binaries for ${OS}-${ARCH}"
-    fi
-    
-    success "Download complete"
-}
-
-# Install binary
-install_binary() {
-    # Expand tilde in INSTALL_DIR
-    INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
-    
-    # Create install directory if it doesn't exist
-    if [ ! -d "$INSTALL_DIR" ]; then
-        info "Creating directory: $INSTALL_DIR"
-        mkdir -p "$INSTALL_DIR" || error "Failed to create directory: $INSTALL_DIR"
-    fi
-    
-    # Check if we need sudo
-    NEED_SUDO=false
-    if [ ! -w "$INSTALL_DIR" ]; then
-        NEED_SUDO=true
-        warning "Need sudo permissions to install to $INSTALL_DIR"
-    fi
-    
-    # Make executable
-    chmod +x "$TEMP_FILE"
-    
-    # Install
-    INSTALL_PATH="${INSTALL_DIR}/${BINARY_NAME}"
-    
-    if [ "$NEED_SUDO" = true ]; then
-        info "Installing to ${INSTALL_PATH} (requires sudo)..."
-        sudo mv "$TEMP_FILE" "$INSTALL_PATH" || error "Failed to install binary"
-    else
-        info "Installing to ${INSTALL_PATH}..."
-        mv "$TEMP_FILE" "$INSTALL_PATH" || error "Failed to install binary"
-    fi
-    
-    success "Installed to ${INSTALL_PATH}"
 }
 
 # Verify installation
 verify_installation() {
     if command -v codeep >/dev/null 2>&1; then
         INSTALLED_VERSION=$(codeep --version 2>/dev/null || echo "unknown")
-        success "Codeep is installed and ready!"
+        success "Codeep is ready!"
         info "Version: ${INSTALLED_VERSION}"
     else
         warning "Codeep installed but not in PATH"
-        warning "Add ${INSTALL_DIR} to your PATH:"
-        echo ""
-        echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
-        echo ""
-        echo "Add this to your ~/.bashrc, ~/.zshrc, or ~/.profile"
+        warning "You may need to restart your terminal or add npm global bin to PATH"
     fi
 }
 
 # Print usage instructions
 print_usage() {
     echo ""
-    echo -e "${GREEN}🚀 Codeep installed successfully!${NC}"
+    echo -e "${GREEN}🚀 Get started with Codeep:${NC}"
     echo ""
-    echo "Get started:"
     echo "  codeep              # Start chatting"
     echo "  codeep --help       # Show help"
     echo ""
     echo "Update Codeep:"
-    echo "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash"
+    echo "  npm update -g codeep"
+    echo ""
+    echo "Uninstall Codeep:"
+    echo "  npm uninstall -g codeep"
     echo ""
 }
 
@@ -178,10 +100,8 @@ main() {
     echo "╚═══════════════════════════════════╝"
     echo ""
     
-    detect_platform
-    get_latest_version
-    download_binary
-    install_binary
+    check_dependencies
+    install_codeep
     verify_installation
     print_usage
 }
