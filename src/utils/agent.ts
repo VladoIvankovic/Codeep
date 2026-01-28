@@ -69,13 +69,15 @@ function getAgentSystemPrompt(projectContext: ProjectContext): string {
 - List directory contents
 
 ## IMPORTANT: Follow User Instructions Exactly
-- Do EXACTLY what the user asks, nothing more
+- Do EXACTLY what the user asks - complete the ENTIRE task
+- If user says "create a website" -> create ALL necessary files (HTML, CSS, JS, etc.)
 - If user says "create folder X" -> use create_directory tool to create folder X
 - If user says "delete file X" -> use delete_file tool to delete file X
-- Do NOT interpret or expand simple requests into complex tasks
-- Simple tasks should be completed in 1-2 tool calls
+- Do NOT stop after just 1-2 tool calls unless the task is trivially simple
+- Complex tasks (like creating websites) require MANY tool calls to complete
 - The user may write in any language - understand their request and execute it
 - Tool names and parameters must ALWAYS be in English (e.g., "create_directory", not "kreiraj_direktorij")
+- KEEP WORKING until the entire task is finished - do not stop prematurely
 
 ## Rules
 1. Always read files before editing them to understand the current content
@@ -113,12 +115,15 @@ function getFallbackSystemPrompt(projectContext: ProjectContext): string {
   return `You are an AI coding agent with FULL autonomous access to this project.
 
 ## IMPORTANT: Follow User Instructions Exactly
-- Do EXACTLY what the user asks, nothing more
+- Do EXACTLY what the user asks - complete the ENTIRE task
+- If user says "create a website" -> create ALL necessary files (HTML, CSS, JS, etc.)
 - If user says "create folder X" -> use create_directory tool
-- If user says "delete file X" -> use delete_file tool  
-- Do NOT interpret or expand simple requests into complex tasks
+- If user says "delete file X" -> use delete_file tool
+- Do NOT stop after just 1-2 tool calls unless the task is trivially simple
+- Complex tasks (like creating websites) require MANY tool calls to complete
 - The user may write in any language - understand and execute
 - Tool names and parameters must ALWAYS be in English
+- KEEP WORKING until the entire task is finished - do not stop prematurely
 
 ## Available Tools
 ${formatToolDefinitions()}
@@ -595,19 +600,40 @@ export async function runAgent(
         }
       }
       
-      // If no tool calls, this is the final response
+      // If no tool calls, check if this is really the final response
+      // Don't exit on first iteration without tool calls - agent might be thinking
       if (toolCalls.length === 0) {
-        // Remove <think>...</think> tags from response (some models include thinking)
-        finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-        break;
-      }
-      
-      // Also check if response indicates completion (even with tool calls)
-      const completionIndicators = ['task completed', 'finished', 'done with', 'successfully created', 'all set'];
-      const lowerContent = content.toLowerCase();
-      if (completionIndicators.some(indicator => lowerContent.includes(indicator))) {
-        // Agent thinks task is complete, but included tool calls - execute them and finish
-        // Continue with tool execution but mark this as potentially the last iteration
+        // Only accept as final response if:
+        // 1. We've done at least some work (iteration > 2)
+        // 2. Agent explicitly indicates completion
+        const completionIndicators = [
+          'task is complete',
+          'all files have been created',
+          'website has been created',
+          'successfully completed',
+          'everything is ready',
+          'all done'
+        ];
+        const lowerContent = content.toLowerCase();
+        const indicatesCompletion = completionIndicators.some(indicator => lowerContent.includes(indicator));
+        
+        if (iteration > 2 && indicatesCompletion) {
+          // Remove <think>...</think> tags from response
+          finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+          break;
+        } else if (iteration <= 2) {
+          // Too early to quit - remind agent to continue
+          messages.push({ role: 'assistant', content });
+          messages.push({ 
+            role: 'user', 
+            content: 'Continue with the task. Use the tools to complete what was requested. Do not stop until all files are created and the task is fully complete.' 
+          });
+          continue;
+        } else {
+          // Later iteration without completion indicator - accept as final
+          finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+          break;
+        }
       }
       
       // Add assistant response to history
@@ -649,9 +675,13 @@ export async function runAgent(
       }
       
       // Add tool results to messages
+      const nextStepPrompt = iteration < 5 
+        ? `Tool results:\n\n${toolResults.join('\n\n')}\n\nGood progress! Continue working on the task. Use more tools to complete what was requested. Only stop when EVERYTHING is finished and working.`
+        : `Tool results:\n\n${toolResults.join('\n\n')}\n\nContinue with the task. If the task is fully complete, provide a final summary without any tool calls.`;
+      
       messages.push({
         role: 'user',
-        content: `Tool results:\n\n${toolResults.join('\n\n')}\n\nContinue with the task. If done, provide a final summary without any tool calls.`,
+        content: nextStepPrompt,
       });
     }
     
