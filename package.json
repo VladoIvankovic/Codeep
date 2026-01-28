@@ -1,11 +1,11 @@
 {
   "name": "codeep",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI-powered coding assistant built for the terminal. Multiple LLM providers, project-aware context, and a seamless development workflow.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "codeep": "dist/index.js"
+    "codeep": "bin/codeep.js"
   },
   "scripts": {
     "dev": "node --import tsx src/index.tsx",
@@ -58,6 +58,7 @@
     "node": ">=18.0.0"
   },
   "files": [
+    "bin/**/*",
     "dist/**/*",
     "README.md",
     "LICENSE"
