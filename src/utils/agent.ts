@@ -46,8 +46,8 @@ export interface AgentResult {
 }
 
 const DEFAULT_OPTIONS: AgentOptions = {
-  maxIterations: 20,
-  maxDuration: 5 * 60 * 1000, // 5 minutes
+  maxIterations: 50, // Increased for complex tasks like website creation
+  maxDuration: 10 * 60 * 1000, // 10 minutes
 };
 
 /**
@@ -77,7 +77,8 @@ function getAgentSystemPrompt(projectContext: ProjectContext): string {
 2. Use edit_file for modifications to existing files (preserves other content)
 3. Use write_file only for creating new files or complete overwrites
 4. Use create_directory to create new folders/directories
-5. When the task is complete, respond with a summary of what you did
+5. When the task is complete, respond with a summary WITHOUT any tool calls
+6. IMPORTANT: After finishing, your response must NOT include any tool calls - just provide a summary
 
 ## Self-Verification
 After you make changes, the system will automatically run build and tests.
@@ -559,6 +560,14 @@ export async function runAgent(
         // Remove <think>...</think> tags from response (some models include thinking)
         finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
         break;
+      }
+      
+      // Also check if response indicates completion (even with tool calls)
+      const completionIndicators = ['task completed', 'finished', 'done with', 'successfully created', 'all set'];
+      const lowerContent = content.toLowerCase();
+      if (completionIndicators.some(indicator => lowerContent.includes(indicator))) {
+        // Agent thinks task is complete, but included tool calls - execute them and finish
+        // Continue with tool execution but mark this as potentially the last iteration
       }
       
       // Add assistant response to history
