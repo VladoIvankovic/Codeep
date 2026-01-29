@@ -44,8 +44,20 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
     return null;
   }
   
-  // Show last 8 actions
-  const recentActions = actions.slice(-8);
+  // Show last 5 actions (more compact)
+  const recentActions = actions.slice(-5);
+  
+  // Get current/last action for prominent display
+  const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
+  
+  // Count actions by type
+  const actionCounts = {
+    reads: actions.filter(a => a.type === 'read').length,
+    writes: actions.filter(a => a.type === 'write').length,
+    edits: actions.filter(a => a.type === 'edit').length,
+    commands: actions.filter(a => a.type === 'command').length,
+    searches: actions.filter(a => a.type === 'search').length,
+  };
   
   // Count file changes
   const fileChanges = {
@@ -76,7 +88,12 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
             <Text color="gray">|</Text>
             <Text color="cyan"> step {iteration}</Text>
             <Text color="gray"> | </Text>
-            <Text color="white">{actions.length} actions</Text>
+            {actionCounts.reads > 0 && <Text color="blue">{actionCounts.reads}R </Text>}
+            {actionCounts.writes > 0 && <Text color="green">{actionCounts.writes}W </Text>}
+            {actionCounts.edits > 0 && <Text color="yellow">{actionCounts.edits}E </Text>}
+            {actionCounts.commands > 0 && <Text color="magenta">{actionCounts.commands}C </Text>}
+            {actionCounts.searches > 0 && <Text color="cyan">{actionCounts.searches}S </Text>}
+            {actions.length === 0 && <Text color="gray">0 actions</Text>}
           </>
         ) : (
           <>
@@ -88,13 +105,23 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
         )}
       </Box>
       
+      {/* Current action - prominent display */}
+      {isRunning && currentAction && (
+        <Box marginTop={1}>
+          <Text color="white" bold>Now: </Text>
+          <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
+          <Text color="white">{formatTarget(currentAction.target)}</Text>
+        </Box>
+      )}
+      
       {/* Divider */}
       <Text color="gray">{'─'.repeat(50)}</Text>
       
-      {/* Recent actions list */}
-      {recentActions.length > 0 && (
+      {/* Recent actions list - show previous actions */}
+      {recentActions.length > 1 && (
         <Box flexDirection="column">
-          {recentActions.map((action, i) => (
+          <Text color="gray" dimColor>Recent:</Text>
+          {recentActions.slice(0, -1).map((action, i) => (
             <ActionItem key={i} action={action} />
           ))}
         </Box>
@@ -147,6 +174,50 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   );
 };
 
+// Helper functions for action display
+const getActionColor = (type: string): string => {
+  switch (type) {
+    case 'read': return 'blue';
+    case 'write': return 'green';
+    case 'edit': return 'yellow';
+    case 'delete': return 'red';
+    case 'command': return 'magenta';
+    case 'search': return 'cyan';
+    case 'list': return 'white';
+    case 'mkdir': return 'blue';
+    case 'fetch': return 'cyan';
+    default: return 'white';
+  }
+};
+
+const getActionLabel = (type: string): string => {
+  switch (type) {
+    case 'read': return 'Reading';
+    case 'write': return 'Creating';
+    case 'edit': return 'Editing';
+    case 'delete': return 'Deleting';
+    case 'command': return 'Running';
+    case 'search': return 'Searching';
+    case 'list': return 'Listing';
+    case 'mkdir': return 'Creating dir';
+    case 'fetch': return 'Fetching';
+    default: return type.toUpperCase();
+  }
+};
+
+const formatTarget = (target: string): string => {
+  // For file paths, show just the filename or last part
+  if (target.includes('/')) {
+    const parts = target.split('/');
+    const filename = parts[parts.length - 1];
+    if (parts.length > 2) {
+      return `.../${parts[parts.length - 2]}/${filename}`;
+    }
+    return target.length > 50 ? '...' + target.slice(-47) : target;
+  }
+  return target.length > 50 ? target.slice(0, 47) + '...' : target;
+};
+
 /**
  * Single action item display
  */
@@ -154,46 +225,19 @@ const ActionItem: React.FC<{ action: ActionLog }> = ({ action }) => {
   const getStatusIndicator = () => {
     switch (action.result) {
       case 'success':
-        return <Text color="green">[ok]</Text>;
+        return <Text color="green">✓</Text>;
       case 'error':
-        return <Text color="red">[err]</Text>;
+        return <Text color="red">✗</Text>;
       default:
-        return <Text color="yellow">[..]</Text>;
+        return <Text color="yellow">·</Text>;
     }
   };
-  
-  const getTypeInfo = (): { color: string; label: string } => {
-    switch (action.type) {
-      case 'read':
-        return { color: 'blue', label: 'READ' };
-      case 'write':
-        return { color: 'green', label: 'CREATE' };
-      case 'edit':
-        return { color: 'yellow', label: 'EDIT' };
-      case 'delete':
-        return { color: 'red', label: 'DELETE' };
-      case 'command':
-        return { color: 'magenta', label: 'EXEC' };
-      case 'search':
-        return { color: 'cyan', label: 'SEARCH' };
-      case 'list':
-        return { color: 'white', label: 'LIST' };
-      case 'mkdir':
-        return { color: 'blue', label: 'MKDIR' };
-      case 'fetch':
-        return { color: 'cyan', label: 'FETCH' };
-      default:
-        return { color: 'white', label: String(action.type).toUpperCase() };
-    }
-  };
-  
-  const typeInfo = getTypeInfo();
   
   return (
     <Text>
       {getStatusIndicator()}{' '}
-      <Text color={typeInfo.color}>{typeInfo.label.padEnd(6)}</Text>{' '}
-      <Text>{action.target.slice(0, 40)}{action.target.length > 40 ? '...' : ''}</Text>
+      <Text color={getActionColor(action.type)}>{getActionLabel(action.type).padEnd(10)}</Text>{' '}
+      <Text color="gray">{formatTarget(action.target)}</Text>
     </Text>
   );
 };
