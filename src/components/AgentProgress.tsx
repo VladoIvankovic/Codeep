@@ -107,10 +107,22 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
       
       {/* Current action - prominent display */}
       {isRunning && currentAction && (
-        <Box marginTop={1}>
-          <Text color="white" bold>Now: </Text>
-          <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
-          <Text color="white">{formatTarget(currentAction.target)}</Text>
+        <Box flexDirection="column" marginTop={1}>
+          <Box>
+            <Text color="white" bold>Now: </Text>
+            <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
+            <Text color="white">{formatTarget(currentAction.target)}</Text>
+          </Box>
+          {/* Show content preview for write/edit actions */}
+          {(currentAction.type === 'write' || currentAction.type === 'edit') && currentAction.details && (
+            <Box flexDirection="column" marginLeft={2} marginTop={0}>
+              <Text color="gray" dimColor>{'┌' + '─'.repeat(40)}</Text>
+              {currentAction.details.split('\n').slice(0, 5).map((line, i) => (
+                <Text key={i} color="gray" dimColor>{'│ '}{line.slice(0, 60)}{line.length > 60 ? '...' : ''}</Text>
+              ))}
+              <Text color="gray" dimColor>{'└' + '─'.repeat(40)}</Text>
+            </Box>
+          )}
         </Box>
       )}
       
