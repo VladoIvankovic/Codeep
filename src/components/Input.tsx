@@ -38,17 +38,17 @@ interface InputProps {
 
 export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = [], clearTrigger = 0 }) => {
   const [value, setValue] = useState('');
-  const [displayValue, setDisplayValue] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isSelectingCommand, setIsSelectingCommand] = useState(false);
+  const [pasteInfo, setPasteInfo] = useState<string | null>(null);
 
   // Clear input when clearTrigger changes
   useEffect(() => {
     if (clearTrigger > 0) {
       setValue('');
-      setDisplayValue('');
       setSelectedIndex(0);
       setIsSelectingCommand(false);
+      setPasteInfo(null);
     }
   }, [clearTrigger]);
 
@@ -79,15 +79,14 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
         // Replace newlines with spaces to prevent multi-line issues
         const sanitized = clipboardText.replace(/\r?\n/g, ' ').trim();
         
-        // Store full text in value (for submission)
+        // Store full text
         setValue(prev => prev + sanitized);
         
-        // If text is longer than 100 chars, show "pasted -X" in display
+        // Show paste info if long text
         if (sanitized.length > 100) {
-          const hiddenChars = sanitized.length - 100;
-          setDisplayValue(prev => prev + sanitized.substring(0, 100) + ` [pasted -${hiddenChars}]`);
-        } else {
-          setDisplayValue(prev => prev + sanitized);
+          setPasteInfo(`[pasted ${sanitized.length} chars]`);
+          // Clear info after 2 seconds
+          setTimeout(() => setPasteInfo(null), 2000);
         }
       } catch (error) {
         // Clipboard read failed, ignore
@@ -117,14 +116,13 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
 
   const handleChange = (newValue: string) => {
     setValue(newValue);
-    setDisplayValue(newValue);
   };
 
   const handleSubmit = () => {
     if (value.trim() && !disabled) {
       onSubmit(value.trim());
       setValue('');
-      setDisplayValue('');
+      setPasteInfo(null);
       setIsSelectingCommand(false);
     }
   };
@@ -150,17 +148,24 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
       )}
       
       {/* Input line */}
-      <Box>
-        <Text color="#f02a30" bold>{'> '}</Text>
-        {disabled ? (
-          <Text>...</Text>
-        ) : (
-          <TextInput
-            value={displayValue || value}
-            onChange={handleChange}
-            onSubmit={handleSubmit}
-            placeholder="Type a message or /command..."
-          />
+      <Box flexDirection="column">
+        <Box>
+          <Text color="#f02a30" bold>{'> '}</Text>
+          {disabled ? (
+            <Text>...</Text>
+          ) : (
+            <TextInput
+              value={value}
+              onChange={handleChange}
+              onSubmit={handleSubmit}
+              placeholder="Type a message or /command..."
+            />
+          )}
+        </Box>
+        {pasteInfo && (
+          <Box marginLeft={2}>
+            <Text color="green">{pasteInfo}</Text>
+          </Box>
         )}
       </Box>
     </Box>
