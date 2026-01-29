@@ -1,6 +1,5 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Text, Box, useInput, useStdin } from 'ink';
-import clipboard from 'clipboardy';
 
 const COMMANDS = [
   { cmd: '/help', desc: 'Show help' },
@@ -48,8 +47,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [pasteInfo, setPasteInfo] = useState<PasteInfo | null>(null);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const lastInputTime = useRef<number>(0);
-  const inputBuffer = useRef<string>('');
+  const { stdin } = useStdin();
 
   // Clear input when clearTrigger changes
   useEffect(() => {
@@ -75,31 +73,26 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     }
   }, [suggestions.length]);
 
-  // Detect paste by checking for rapid input (multiple chars in < 50ms)
-  const detectPaste = (newChars: string): boolean => {
-    const now = Date.now();
-    const timeDiff = now - lastInputTime.current;
+  // Listen for raw stdin data to detect paste (multiple chars at once)
+  useEffect(() => {
+    if (disabled || !stdin) return;
     
-    // If multiple characters arrive very quickly, it's likely a paste
-    if (timeDiff < 50 && newChars.length > 0) {
-      inputBuffer.current += newChars;
-      return true;
-    }
+    const handleData = (data: Buffer) => {
+      const str = data.toString();
+      
+      // Detect paste: multiple printable characters arriving at once
+      // Exclude control sequences (start with ESC)
+      if (str.length > 1 && !str.startsWith('\x1b') && !str.startsWith('\x16')) {
+        // This is likely a paste - multiple chars at once
+        handlePastedText(str, true);
+      }
+    };
     
-    // Process any buffered paste
-    if (inputBuffer.current.length > 5) {
-      // This was a paste that just finished
-      const pastedText = inputBuffer.current;
-      inputBuffer.current = '';
-      handlePastedText(pastedText);
-      lastInputTime.current = now;
-      return true;
-    }
-    
-    inputBuffer.current = newChars;
-    lastInputTime.current = now;
-    return false;
-  };
+    stdin.on('data', handleData);
+    return () => {
+      stdin.off('data', handleData);
+    };
+  }, [disabled, stdin]);
 
   const handlePastedText = (text: string, fromCtrlV: boolean = false) => {
     const trimmed = text.trim();
@@ -137,16 +130,6 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
   // Main input handler
   useInput((input, key) => {
     if (disabled) return;
-
-    // Handle Ctrl+V paste
-    if (key.ctrl && input === 'v') {
-      clipboard.read().then(text => {
-        if (text) {
-          handlePastedText(text, true);
-        }
-      }).catch(() => {});
-      return;
-    }
 
     // Handle Enter - submit
     if (key.return) {
@@ -292,24 +275,6 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     }
   }, { isActive: !disabled });
 
-  // Process any remaining buffered input after a delay
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (inputBuffer.current.length > 0) {
-        const buffered = inputBuffer.current;
-        inputBuffer.current = '';
-        
-        if (buffered.length > 5) {
-          handlePastedText(buffered);
-        } else {
-          setValue(prev => prev + buffered);
-          setCursorPos(prev => prev + buffered.length);
-        }
-      }
-    }, 100);
-    
-    return () => clearTimeout(timer);
-  }, [value]);
 
   // Render input with cursor
   const renderInput = () => {
