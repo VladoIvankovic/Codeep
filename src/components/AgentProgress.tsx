@@ -107,19 +107,10 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
       
       {/* Current action - prominent display */}
       {isRunning && currentAction && (
-        <Box flexDirection="column" marginTop={1}>
-          <Box>
-            <Text color="white" bold>Now: </Text>
-            <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
-            <Text color="white">{formatTarget(currentAction.target)}</Text>
-          </Box>
-          {/* Show live code preview for write/edit actions - last 15 lines */}
-          {(currentAction.type === 'write' || currentAction.type === 'edit') && currentAction.details && (
-            <LiveCodePreview 
-              code={currentAction.details} 
-              filename={currentAction.target.split('/').pop() || ''}
-            />
-          )}
+        <Box marginTop={1}>
+          <Text color="white" bold>Now: </Text>
+          <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
+          <Text color="white">{formatTarget(currentAction.target)}</Text>
         </Box>
       )}
       
@@ -206,44 +197,46 @@ const getCodeColor = (line: string): string => {
 };
 
 /**
- * Live code preview component - shows last N lines of code being written
- * Creates a "streaming" effect without taking up the whole screen
+ * Live Code Stream component - shows ALL code being written/edited by agent
+ * Displayed ABOVE the AgentProgress component
  */
-const MAX_PREVIEW_LINES = 12;
+interface LiveCodeStreamProps {
+  actions: ActionLog[];
+  isRunning: boolean;
+}
 
-const LiveCodePreview: React.FC<{ code: string; filename: string }> = ({ code, filename }) => {
+export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunning }) => {
+  // Find the current write/edit action with code content
+  const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
+  
+  // Only show for write/edit actions with content
+  if (!isRunning || !currentAction) return null;
+  if (currentAction.type !== 'write' && currentAction.type !== 'edit') return null;
+  if (!currentAction.details) return null;
+  
+  const code = currentAction.details;
+  const filename = currentAction.target.split('/').pop() || currentAction.target;
   const allLines = code.split('\n');
   const totalLines = allLines.length;
-  
-  // Show last N lines for streaming effect
-  const startLine = Math.max(0, totalLines - MAX_PREVIEW_LINES);
-  const visibleLines = allLines.slice(startLine);
+  const actionLabel = currentAction.type === 'write' ? 'Creating' : 'Editing';
   
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column" marginY={1}>
+      {/* Header */}
       <Box>
-        <Text color="cyan" bold>📝 </Text>
+        <Text color="cyan" bold>📝 {actionLabel}: </Text>
         <Text color="white" bold>{filename}</Text>
-        <Text color="gray"> • </Text>
-        <Text color="cyan">{totalLines}</Text>
-        <Text color="gray"> lines</Text>
-        {startLine > 0 && (
-          <>
-            <Text color="gray"> • showing </Text>
-            <Text color="yellow">{startLine + 1}-{totalLines}</Text>
-          </>
-        )}
+        <Text color="gray"> ({totalLines} lines)</Text>
       </Box>
-      <Box flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1} marginTop={0}>
-        {startLine > 0 && (
-          <Text color="gray" dimColor>    ⋮ ({startLine} lines above)</Text>
-        )}
-        {visibleLines.map((line, i) => {
-          const lineNum = startLine + i + 1;
+      
+      {/* Code content - ALL lines with syntax highlighting */}
+      <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+        {allLines.map((line, i) => {
+          const lineNum = i + 1;
           return (
             <Text key={i}>
-              <Text color="gray" dimColor>{String(lineNum).padStart(3, ' ')} │ </Text>
-              <Text color={getCodeColor(line)}>{line.length > 80 ? line.slice(0, 77) + '...' : line}</Text>
+              <Text color="gray" dimColor>{String(lineNum).padStart(4, ' ')} │ </Text>
+              <Text color={getCodeColor(line)}>{line}</Text>
             </Text>
           );
         })}
