@@ -277,7 +277,7 @@ async function agentChat(
         tools: getOpenAITools(),
         tool_choice: 'auto',
         temperature: config.get('temperature'),
-        max_tokens: config.get('maxTokens'),
+        max_tokens: Math.max(config.get('maxTokens'), 16384), // Ensure enough tokens for large file generation
       };
     } else {
       endpoint = `${baseUrl}/v1/messages`;
@@ -287,7 +287,7 @@ async function agentChat(
         messages: messages,
         tools: getAnthropicTools(),
         temperature: config.get('temperature'),
-        max_tokens: config.get('maxTokens'),
+        max_tokens: Math.max(config.get('maxTokens'), 16384), // Ensure enough tokens for large file generation
       };
     }
     
