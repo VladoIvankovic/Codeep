@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Text, Box, useInput } from 'ink';
 import TextInput from 'ink-text-input';
+import clipboard from 'clipboardy';
 
 const COMMANDS = [
   { cmd: '/help', desc: 'Show help' },
@@ -65,9 +66,24 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     }
   }, [suggestions.length]);
 
-  // Handle keyboard navigation for command suggestions
-  useInput((input, key) => {
-    if (disabled || suggestions.length === 0) return;
+  // Handle keyboard navigation for command suggestions and paste
+  useInput(async (input, key) => {
+    if (disabled) return;
+    
+    // Handle paste (Ctrl+V) - read from clipboard and insert
+    if (key.ctrl && input === 'v') {
+      try {
+        const clipboardText = await clipboard.read();
+        // Replace newlines with spaces to prevent multi-line issues
+        const sanitized = clipboardText.replace(/\r?\n/g, ' ').trim();
+        setValue(prev => prev + sanitized);
+      } catch (error) {
+        // Clipboard read failed, ignore
+      }
+      return;
+    }
+    
+    if (suggestions.length === 0) return;
 
     // Navigate suggestions with up/down arrows
     if (key.upArrow) {
@@ -85,7 +101,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
       setIsSelectingCommand(false);
       return;
     }
-  }, { isActive: isSelectingCommand });
+  }, { isActive: !disabled });
 
   const handleChange = (newValue: string) => {
     setValue(newValue);
