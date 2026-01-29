@@ -552,7 +552,9 @@ function validatePath(path: string, projectRoot: string): { valid: boolean; abso
  * Execute a tool call
  */
 export function executeTool(toolCall: ToolCall, projectRoot: string): ToolResult {
-  const { tool, parameters } = toolCall;
+  // Normalize tool name to handle case variations (WRITE_FILE -> write_file)
+  const tool = normalizeToolName(toolCall.tool);
+  const parameters = toolCall.parameters;
   
   try {
     switch (tool) {
@@ -881,6 +883,9 @@ function listDirectory(dir: string, projectRoot: string, recursive: boolean, pre
  * Create action log from tool result
  */
 export function createActionLog(toolCall: ToolCall, result: ToolResult): ActionLog {
+  // Normalize tool name to handle case variations
+  const normalizedTool = normalizeToolName(toolCall.tool);
+  
   const typeMap: Record<string, ActionLog['type']> = {
     read_file: 'read',
     write_file: 'write',
@@ -900,7 +905,7 @@ export function createActionLog(toolCall: ToolCall, result: ToolResult): ActionL
                  'unknown';
   
   return {
-    type: typeMap[toolCall.tool] || 'command',
+    type: typeMap[normalizedTool] || 'command',
     target,
     result: result.success ? 'success' : 'error',
     details: result.success ? result.output.slice(0, 200) : result.error,

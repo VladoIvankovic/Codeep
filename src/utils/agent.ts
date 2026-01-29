@@ -783,102 +783,15 @@ export async function runAgent(
         }
       }
       
-      // If no tool calls, check if agent is really done
+      // If no tool calls, agent is done - simple and clean like Claude Code/Aider
       if (toolCalls.length === 0) {
-        console.error(`[DEBUG] No tool calls at iteration ${iteration}, content length: ${content.length}, actions so far: ${actions.length}`);
-        console.error(`[DEBUG] Response preview:`, content.substring(0, 200));
+        console.error(`[DEBUG] No tool calls at iteration ${iteration}, agent finished`);
         
         // Remove <think>...</think> tags from response (some models include thinking)
         finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
         
-        // CRITICAL: Don't stop prematurely if we haven't done much work yet
-        // Check if prompt contains "create", "build", "make", "implement", "add" etc.
-        const taskKeywords = ['create', 'build', 'make', 'implement', 'add', 'generate', 'write', 'setup', 'develop', 'kreiraj', 'napravi', 'dodaj', 'website', 'app', 'feature'];
-        const promptLowerCase = prompt.toLowerCase();
-        const isCreationTask = taskKeywords.some(kw => promptLowerCase.includes(kw));
-        
-        // Only count actual FILE writes, not directories
-        const hasCreatedFiles = actions.some(a => a.type === 'write');
-        const writeFileCount = actions.filter(a => a.type === 'write').length;
-        const hasMkdir = actions.some(a => a.type === 'mkdir');
-        const isVeryEarlyIteration = iteration <= 5; // Extended to 5 iterations
-        
-        console.error(`[DEBUG] Task check: isCreationTask=${isCreationTask}, hasCreatedFiles=${hasCreatedFiles}, writeFileCount=${writeFileCount}, hasMkdir=${hasMkdir}, iteration=${iteration}`);
-        console.error(`[DEBUG] Actions breakdown:`, actions.map(a => `${a.type}:${a.target}`).join(', '));
-        
-        // STRICT RULE: If it's a creation task, agent MUST create FILES (not just directories)
-        // Creating a directory is not enough - we need actual file content
-        if (isCreationTask && !hasCreatedFiles && iteration <= 10) {
-          console.error(`[DEBUG] BLOCKING early stop - creation task detected but NO files created yet (iteration ${iteration}, ${actions.length} actions)`);
-          
-          // Force agent to create files
-          messages.push({ role: 'assistant', content: finalResponse });
-          messages.push({ 
-            role: 'user', 
-            content: `❌ STOP. You have NOT created any files yet!\n\nYou MUST use write_file and create_directory tools to create the actual files I asked for.\n\nDo NOT respond with explanations. Execute the tools NOW:\n1. Use create_directory if needed\n2. Use write_file to create EACH file\n3. Only after creating ALL files, respond with a summary.` 
-          });
-          
-          finalResponse = ''; // Reset
-          continue;
-        }
-        
-        // If creation task but not enough files created, keep pushing
-        if (isCreationTask && writeFileCount < 2 && iteration <= 10) {
-          console.error(`[DEBUG] BLOCKING early stop - only ${writeFileCount} files created, need more (iteration ${iteration})`);
-          
-          messages.push({ role: 'assistant', content: finalResponse });
-          messages.push({ 
-            role: 'user', 
-            content: `You've only created ${writeFileCount} file(s). The task requires creating multiple files. Continue creating the remaining files now.` 
-          });
-          
-          finalResponse = ''; // Reset
-          continue;
-        }
-        
-        // General safety: very few actions in early iterations
-        if (isVeryEarlyIteration && actions.length < 2) {
-          console.error(`[DEBUG] BLOCKING early stop - very few actions (iteration ${iteration}, only ${actions.length} actions)`);
-          
-          messages.push({ role: 'assistant', content: finalResponse });
-          messages.push({ 
-            role: 'user', 
-            content: `Continue working on the task. Use the available tools to complete what I asked for.` 
-          });
-          
-          finalResponse = ''; // Reset
-          continue;
-        }
-        
-        // Check if we're using task planning and there are more tasks
-        if (taskPlan && taskPlan.tasks.some(t => t.status === 'pending')) {
-          const nextTask = getNextTask(taskPlan.tasks);
-          if (nextTask) {
-            // Mark previous task as completed
-            const prevTask = taskPlan.tasks.find(t => t.status === 'in_progress' && t.id !== nextTask.id);
-            if (prevTask) {
-              prevTask.status = 'completed';
-            }
-            
-            // Move to next task
-            nextTask.status = 'in_progress';
-            opts.onTaskUpdate?.(nextTask);
-            
-            // Build progress summary
-            const completedTasks = taskPlan.tasks.filter(t => t.status === 'completed');
-            const progressSummary = completedTasks.map(t => `✓ ${t.id}. ${t.description}`).join('\n');
-            
-            messages.push({ role: 'assistant', content: finalResponse });
-            messages.push({ 
-              role: 'user', 
-              content: `Good! Task ${prevTask?.id} done.\n\nCompleted:\n${progressSummary}\n\nNEXT TASK (do it now):\n${nextTask.id}. ${nextTask.description}\n\nUse your tools immediately to complete this task. Do NOT ask for permission or confirmation.` 
-            });
-            
-            finalResponse = ''; // Reset for next task
-            continue;
-          }
-        }
-        
+        // Trust the model - if it says it's done, it's done
+        // No forcing, no blocking, no artificial requirements
         break;
       }
       
