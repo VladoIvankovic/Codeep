@@ -70,11 +70,13 @@ function getAgentSystemPrompt(projectContext: ProjectContext): string {
 
 ## IMPORTANT: Follow User Instructions Exactly
 - Do EXACTLY what the user asks
+- If user says "create a website" -> create ALL necessary files (HTML, CSS, JS, images, etc.)
 - If user says "create folder X" -> use create_directory tool to create folder X
 - If user says "delete file X" -> use delete_file tool to delete file X
 - The user may write in any language - understand their request and execute it
 - Tool names and parameters must ALWAYS be in English (e.g., "create_directory", not "kreiraj_direktorij")
-- When you finish a subtask, provide a clear summary and I will give you the next subtask
+- KEEP WORKING until the ENTIRE task is finished - do NOT stop after creating just directories or partial files
+- Only stop when you have created ALL files needed for a complete, working solution
 
 ## Rules
 1. Always read files before editing them to understand the current content
@@ -117,11 +119,13 @@ function getFallbackSystemPrompt(projectContext: ProjectContext): string {
 
 ## IMPORTANT: Follow User Instructions Exactly
 - Do EXACTLY what the user asks
+- If user says "create a website" -> create ALL necessary files (HTML, CSS, JS, images, etc.)
 - If user says "create folder X" -> use create_directory tool
 - If user says "delete file X" -> use delete_file tool
 - The user may write in any language - understand and execute
 - Tool names and parameters must ALWAYS be in English
-- When you finish a subtask, provide a clear summary and I will give you the next subtask
+- KEEP WORKING until the ENTIRE task is finished - do NOT stop after creating just directories or partial files
+- Only stop when you have created ALL files needed for a complete, working solution
 
 ## Available Tools
 ${formatToolDefinitions()}
