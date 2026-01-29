@@ -427,14 +427,6 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
         )}
       </Box>
 
-      {/* Hint for shortcuts - show only when not disabled and no suggestions */}
-      {!disabled && suggestions.length === 0 && !pasteInfo && (
-        <Box marginTop={0}>
-          <Text color="gray" dimColor>
-            Ctrl+V paste • /help commands • ↑↓ history
-          </Text>
-        </Box>
-      )}
     </Box>
   );
 };

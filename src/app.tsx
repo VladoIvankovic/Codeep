@@ -1661,7 +1661,7 @@ export const App: React.FC = () => {
 
       {/* Input */}
       <Box flexDirection="column">
-        <Text color="#f02a30">{'─'.repeat(60)}</Text>
+        <Text color="#f02a30">{'─'.repeat(Math.max(20, (stdout?.columns || 80) - 2))}</Text>
         <Box paddingX={1}>
           <ChatInput 
             onSubmit={handleSubmit} 
@@ -1672,12 +1672,15 @@ export const App: React.FC = () => {
         </Box>
       </Box>
 
-      {/* Footer */}
+      {/* Footer with shortcuts */}
       <Box>
         <Text>
-          <Text color="#f02a30">Ctrl+L</Text> Clear  
-          <Text color="#f02a30"> Esc</Text> Cancel  
-          <Text color="#f02a30"> /help</Text> Commands
+          <Text color="#f02a30" bold>Ctrl+L</Text>
+          <Text> Clear  </Text>
+          <Text color="#f02a30" bold>Esc</Text>
+          <Text> Cancel  </Text>
+          <Text color="#f02a30" bold>/help</Text>
+          <Text> Commands</Text>
         </Text>
       </Box>
     </Box>
