@@ -773,15 +773,38 @@ export async function runAgent(
         }
       }
       
-      // If no tool calls, agent is done - simple and clean like Claude Code/Aider
+      // If no tool calls, check if model wants to continue or is really done
       if (toolCalls.length === 0) {
-        console.error(`[DEBUG] No tool calls at iteration ${iteration}, agent finished`);
+        console.error(`[DEBUG] No tool calls at iteration ${iteration}`);
         
         // Remove <think>...</think> tags from response (some models include thinking)
         finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
         
-        // Trust the model - if it says it's done, it's done
-        // No forcing, no blocking, no artificial requirements
+        // Check if model indicates it wants to continue (incomplete response)
+        const continueIndicators = [
+          'let me', 'i will', 'i\'ll', 'now i', 'next i', 
+          'creating', 'writing', 'generating',
+          'let\'s', 'going to', 'need to create', 'need to write'
+        ];
+        const lowerResponse = finalResponse.toLowerCase();
+        const wantsToContinue = continueIndicators.some(indicator => lowerResponse.includes(indicator));
+        
+        // Also check if there were tool call parsing failures in this iteration
+        // by looking for incomplete actions (e.g., write_file without content)
+        const hasIncompleteWork = iteration < 10 && wantsToContinue && finalResponse.length < 500;
+        
+        if (hasIncompleteWork) {
+          console.error(`[DEBUG] Model wants to continue, prompting for next action`);
+          messages.push({ role: 'assistant', content });
+          messages.push({ 
+            role: 'user', 
+            content: 'Continue. Execute the tool calls now.' 
+          });
+          continue;
+        }
+        
+        // Model is done
+        console.error(`[DEBUG] Agent finished at iteration ${iteration}`);
         break;
       }
       
