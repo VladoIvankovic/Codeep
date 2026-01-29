@@ -1,6 +1,6 @@
 {
   "name": "codeep",
-  "version": "1.0.43",
+  "version": "1.0.44",
   "description": "AI-powered coding assistant built for the terminal. Multiple LLM providers, project-aware context, and a seamless development workflow.",
   "type": "module",
   "main": "dist/index.js",
