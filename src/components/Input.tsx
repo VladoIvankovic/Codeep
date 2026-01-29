@@ -69,6 +69,8 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
 
   // Filter commands based on input
   const suggestions = useMemo(() => {
+    // Show all commands when user types just '/'
+    if (value === '/') return COMMANDS;
     if (!value.startsWith('/') || value.includes(' ')) return [];
     return COMMANDS.filter(c => c.cmd.startsWith(value.toLowerCase()));
   }, [value]);
