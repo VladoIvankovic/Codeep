@@ -1663,7 +1663,7 @@ export const App: React.FC = () => {
       <Box borderStyle="single" borderColor="gray" paddingX={1}>
         <ChatInput 
           onSubmit={handleSubmit} 
-          disabled={isLoading || pendingFileChanges.length > 0}
+          disabled={isLoading || isAgentRunning || pendingFileChanges.length > 0}
           history={inputHistory}
           clearTrigger={clearInputTrigger}
         />
