@@ -101,7 +101,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     return false;
   };
 
-  const handlePastedText = (text: string) => {
+  const handlePastedText = (text: string, fromCtrlV: boolean = false) => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
@@ -109,8 +109,8 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     const lineCount = lines.length;
     const charCount = trimmed.length;
 
-    // For multi-line or long pastes, store info
-    if (lineCount > 1 || charCount > 100) {
+    // For multi-line, long pastes, or explicit Ctrl+V - show indicator
+    if (lineCount > 1 || charCount > 100 || (fromCtrlV && charCount > 20)) {
       const firstLine = lines[0].substring(0, 60);
       const preview = firstLine + (lines[0].length > 60 ? '...' : '');
       
@@ -122,7 +122,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
       });
       
       // Show only indicator in input field, NOT the actual pasted text
-      const indicator = `📋 [${lineCount} lines, ${charCount} chars]`;
+      const indicator = `📋 Paste: ${charCount} chars`;
       // Replace entire value with just the indicator (don't append pasted text)
       setValue(indicator);
       setCursorPos(indicator.length);
@@ -142,7 +142,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     if (key.ctrl && input === 'v') {
       clipboard.read().then(text => {
         if (text) {
-          handlePastedText(text);
+          handlePastedText(text, true);
         }
       }).catch(() => {});
       return;
@@ -154,8 +154,8 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
         let submitValue = value.trim();
         
         // Replace paste indicator with actual content
-        if (pasteInfo && submitValue.includes('📋 [')) {
-          submitValue = submitValue.replace(/📋 \[\d+ lines, \d+ chars\]/, pasteInfo.fullText);
+        if (pasteInfo && submitValue.includes('📋 Paste:')) {
+          submitValue = submitValue.replace(/📋 Paste: \d+ chars/, pasteInfo.fullText);
         }
         
         onSubmit(submitValue);
@@ -171,7 +171,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     if (key.escape) {
       if (pasteInfo) {
         // Remove paste indicator from value
-        setValue(prev => prev.replace(/📋 \[\d+ lines, \d+ chars\]/, ''));
+        setValue(prev => prev.replace(/📋 Paste: \d+ chars/, ''));
         setPasteInfo(null);
       } else if (value) {
         setValue('');
@@ -187,7 +187,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
         setCursorPos(prev => prev - 1);
         
         // Clear paste info if we deleted the indicator
-        if (pasteInfo && !value.includes('📋 [')) {
+        if (pasteInfo && !value.includes('📋 Paste:')) {
           setPasteInfo(null);
         }
       }
