@@ -619,13 +619,32 @@ export async function runAgent(
         }
       }
       
-      // If no tool calls, this is the final response
+      // If no tool calls, check if agent is really done
       if (toolCalls.length === 0) {
         console.error(`[DEBUG] No tool calls at iteration ${iteration}, content length: ${content.length}, actions so far: ${actions.length}`);
         console.error(`[DEBUG] Response preview:`, content.substring(0, 200));
         
         // Remove <think>...</think> tags from response (some models include thinking)
         finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+        
+        // CRITICAL: Don't stop prematurely if we haven't done much work yet
+        // Agent should create files, not just respond with text
+        const hasCreatedFiles = actions.some(a => a.type === 'write' || a.type === 'mkdir');
+        const isVeryEarlyIteration = iteration <= 2 && actions.length < 3;
+        
+        if (isVeryEarlyIteration && !hasCreatedFiles) {
+          console.error(`[DEBUG] Agent trying to stop too early (iteration ${iteration}, ${actions.length} actions, no files created)`);
+          
+          // Push agent to actually do the work
+          messages.push({ role: 'assistant', content: finalResponse });
+          messages.push({ 
+            role: 'user', 
+            content: `You haven't completed the task yet. You need to use the tools to actually CREATE the files and folders I asked for. Don't just plan - execute! Use create_directory, write_file, and other tools NOW.` 
+          });
+          
+          finalResponse = ''; // Reset
+          continue;
+        }
         
         // Check if we're using task planning and there are more tasks
         if (taskPlan && taskPlan.tasks.some(t => t.status === 'pending')) {

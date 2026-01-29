@@ -329,7 +329,7 @@ export const App: React.FC = () => {
     
     try {
       const result = await runAgent(prompt, projectContext, {
-        maxIterations: 20,
+        maxIterations: 50, // Increased for complex tasks
         maxDuration: 5 * 60 * 1000, // 5 minutes
         dryRun,
         onIteration: (iteration, message) => {
@@ -1607,7 +1607,7 @@ export const App: React.FC = () => {
         <AgentProgress
           isRunning={true}
           iteration={agentIteration}
-          maxIterations={20}
+          maxIterations={50}
           actions={agentActions}
           currentThinking={agentThinking}
           dryRun={agentDryRun}
