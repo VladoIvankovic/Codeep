@@ -68,7 +68,7 @@ import { performCodeReview, formatReviewResult } from './utils/codeReview';
 import { loadProjectPreferences, learnFromProject, formatPreferencesForPrompt, addCustomRule, getLearningStatus } from './utils/learning';
 import { getAllSkills, findSkill, formatSkillsList, formatSkillHelp, generateSkillPrompt, saveCustomSkill, deleteCustomSkill, parseSkillDefinition, parseSkillChain, parseSkillArgs, searchSkills, trackSkillUsage, getSkillStats, Skill } from './utils/skills';
 import { AgentProgress, AgentSummary, ChangesList } from './components/AgentProgress';
-import { ActionLog, ToolCall, ToolResult } from './utils/tools';
+import { ActionLog, ToolCall, ToolResult, createActionLog } from './utils/tools';
 
 type Screen = 'chat' | 'login' | 'help' | 'status' | 'sessions' | 'sessions-delete' | 'model' | 'protocol' | 'language' | 'settings' | 'permission' | 'provider' | 'search' | 'export' | 'session-picker' | 'logout';
 
@@ -335,19 +335,23 @@ export const App: React.FC = () => {
           setAgentIteration(iteration);
         },
         onToolCall: (tool: ToolCall) => {
-          setAgentActions(prev => [...prev, {
-            type: tool.tool as any,
-            target: (tool.parameters.path as string) || (tool.parameters.command as string) || 'unknown',
-            result: 'success', // Will be updated by onToolResult
-            timestamp: Date.now(),
-          }]);
+          // Create a placeholder action - will be updated by onToolResult
+          const placeholderResult: ToolResult = {
+            success: true,
+            output: '',
+            tool: tool.tool,
+            parameters: tool.parameters,
+          };
+          const actionLog = createActionLog(tool, placeholderResult);
+          setAgentActions(prev => [...prev, actionLog]);
         },
-        onToolResult: (result: ToolResult) => {
+        onToolResult: (result: ToolResult, toolCall: ToolCall) => {
+          // Replace the last action with the complete one
+          const actionLog = createActionLog(toolCall, result);
           setAgentActions(prev => {
             const updated = [...prev];
             if (updated.length > 0) {
-              updated[updated.length - 1].result = result.success ? 'success' : 'error';
-              updated[updated.length - 1].details = result.success ? result.output.slice(0, 100) : result.error;
+              updated[updated.length - 1] = actionLog;
             }
             return updated;
           });
