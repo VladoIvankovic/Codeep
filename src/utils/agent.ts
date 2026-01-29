@@ -313,29 +313,16 @@ async function agentChat(
     
     const data = await response.json();
     
-    // Debug: log raw API response
-    console.error(`[DEBUG] Raw API response:`, JSON.stringify(data, null, 2).substring(0, 1000));
-    
     if (protocol === 'openai') {
       const message = data.choices?.[0]?.message;
       const content = message?.content || '';
       const rawToolCalls = message?.tool_calls || [];
-      
-      // Debug: log raw tool calls from API
-      console.error(`[DEBUG] Raw tool_calls from API:`, JSON.stringify(rawToolCalls, null, 2));
-      
       const toolCalls = parseOpenAIToolCalls(rawToolCalls);
-      
-      // Debug: log parsed tool calls
-      console.error(`[DEBUG] Parsed tool calls:`, JSON.stringify(toolCalls, null, 2));
       
       // If no native tool calls, try parsing from content (some models return text-based)
       if (toolCalls.length === 0 && content) {
-        console.error(`[DEBUG] No native tool calls, checking content for text-based calls...`);
-        console.error(`[DEBUG] Content preview:`, content.substring(0, 500));
         const textToolCalls = parseToolCalls(content);
         if (textToolCalls.length > 0) {
-          console.error(`[DEBUG] Found ${textToolCalls.length} text-based tool calls`);
           return { content, toolCalls: textToolCalls, usedNativeTools: false };
         }
       }
@@ -653,6 +640,7 @@ export async function runAgent(
   let result: AgentResult;
   let consecutiveTimeouts = 0;
   const maxTimeoutRetries = 3;
+  const maxConsecutiveTimeouts = 9; // Allow more consecutive timeouts before giving up
   const baseTimeout = config.get('agentApiTimeout');
   
   try {
@@ -671,7 +659,6 @@ export async function runAgent(
       
       // Check abort signal
       if (opts.abortSignal?.aborted) {
-        console.error(`[DEBUG] Agent aborted at iteration ${iteration}, signal:`, opts.abortSignal.aborted);
         result = {
           success: false,
           iterations: iteration,
@@ -683,12 +670,10 @@ export async function runAgent(
       }
       
       iteration++;
-      console.error(`[DEBUG] Starting iteration ${iteration}/${opts.maxIterations}, actions: ${actions.length}`);
       opts.onIteration?.(iteration, `Iteration ${iteration}/${opts.maxIterations}`);
       
       // Calculate dynamic timeout based on task complexity
       const dynamicTimeout = calculateDynamicTimeout(prompt, iteration, baseTimeout);
-      console.error(`[DEBUG] Using dynamic timeout: ${dynamicTimeout}ms (base: ${baseTimeout}ms, iteration: ${iteration})`);
       
       // Get AI response with retry logic for timeouts
       let chatResponse: AgentChatResponse;
@@ -703,7 +688,7 @@ export async function runAgent(
             opts.abortSignal,
             dynamicTimeout * (1 + retryCount * 0.5) // Increase timeout on retry
           );
-          consecutiveTimeouts = 0; // Reset on success
+          consecutiveTimeouts = 0; // Reset consecutive count on success
           break;
         } catch (error) {
           const err = error as Error;
@@ -724,25 +709,23 @@ export async function runAgent(
           if (err.name === 'TimeoutError') {
             retryCount++;
             consecutiveTimeouts++;
-            console.error(`[DEBUG] Timeout occurred (retry ${retryCount}/${maxTimeoutRetries}, consecutive: ${consecutiveTimeouts})`);
             opts.onIteration?.(iteration, `API timeout, retrying (${retryCount}/${maxTimeoutRetries})...`);
             
             if (retryCount >= maxTimeoutRetries) {
               // Too many retries for this iteration
-              if (consecutiveTimeouts >= maxTimeoutRetries * 2) {
+              if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
                 // Too many consecutive timeouts overall, give up
                 result = {
                   success: false,
                   iterations: iteration,
                   actions,
                   finalResponse: 'Agent stopped due to repeated API timeouts',
-                  error: `API timed out ${consecutiveTimeouts} times consecutively. The task may be too complex or the API is overloaded.`,
+                  error: `API timed out ${consecutiveTimeouts} times consecutively. Try increasing the timeout in settings or simplifying the task.`,
                 };
                 return result;
               }
               
               // Skip this iteration and try next
-              console.error(`[DEBUG] Max retries reached, skipping to next iteration`);
               messages.push({ 
                 role: 'user', 
                 content: 'The previous request timed out. Please continue with the task, using simpler responses if needed.' 
@@ -777,8 +760,6 @@ export async function runAgent(
       
       // If no tool calls, check if model wants to continue or is really done
       if (toolCalls.length === 0) {
-        console.error(`[DEBUG] No tool calls at iteration ${iteration}`);
-        
         // Remove <think>...</think> tags from response (some models include thinking)
         finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
         
@@ -796,7 +777,6 @@ export async function runAgent(
         const hasIncompleteWork = iteration < 10 && wantsToContinue && finalResponse.length < 500;
         
         if (hasIncompleteWork) {
-          console.error(`[DEBUG] Model wants to continue, prompting for next action`);
           messages.push({ role: 'assistant', content });
           messages.push({ 
             role: 'user', 
@@ -806,7 +786,6 @@ export async function runAgent(
         }
         
         // Model is done
-        console.error(`[DEBUG] Agent finished at iteration ${iteration}`);
         break;
       }
       
