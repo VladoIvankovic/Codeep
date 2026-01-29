@@ -33,6 +33,7 @@ coverage/
 # Codeep
 .claude/
 .codeep/
+.junie/
 codeep-debug.log
 
 # Package manager
