@@ -113,23 +113,21 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
             <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
             <Text color="white">{formatTarget(currentAction.target)}</Text>
           </Box>
-          {/* Show live code preview for write/edit actions */}
+          {/* Show FULL live code for write/edit actions */}
           {(currentAction.type === 'write' || currentAction.type === 'edit') && currentAction.details && (
             <Box flexDirection="column" marginTop={1}>
               <Box>
                 <Text color="cyan" bold>📝 Live Code:</Text>
                 <Text color="gray"> {currentAction.target.split('/').pop()}</Text>
+                <Text color="gray" dimColor> ({currentAction.details.split('\n').length} lines)</Text>
               </Box>
-              <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} marginTop={0}>
-                {currentAction.details.split('\n').slice(0, 12).map((line, i) => (
+              <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginTop={0}>
+                {currentAction.details.split('\n').map((line, i) => (
                   <Text key={i}>
                     <Text color="gray" dimColor>{String(i + 1).padStart(3, ' ')} │ </Text>
-                    <Text color={getCodeColor(line)}>{line.slice(0, 70)}{line.length > 70 ? '...' : ''}</Text>
+                    <Text color={getCodeColor(line)}>{line}</Text>
                   </Text>
                 ))}
-                {currentAction.details.split('\n').length > 12 && (
-                  <Text color="gray" dimColor>     ... +{currentAction.details.split('\n').length - 12} more lines</Text>
-                )}
               </Box>
             </Box>
           )}
