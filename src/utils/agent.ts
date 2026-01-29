@@ -69,15 +69,12 @@ function getAgentSystemPrompt(projectContext: ProjectContext): string {
 - List directory contents
 
 ## IMPORTANT: Follow User Instructions Exactly
-- Do EXACTLY what the user asks - complete the ENTIRE task
-- If user says "create a website" -> create ALL necessary files (HTML, CSS, JS, etc.)
+- Do EXACTLY what the user asks
 - If user says "create folder X" -> use create_directory tool to create folder X
 - If user says "delete file X" -> use delete_file tool to delete file X
-- Do NOT stop after just 1-2 tool calls unless the task is trivially simple
-- Complex tasks (like creating websites) require MANY tool calls to complete
 - The user may write in any language - understand their request and execute it
 - Tool names and parameters must ALWAYS be in English (e.g., "create_directory", not "kreiraj_direktorij")
-- KEEP WORKING until the entire task is finished - do not stop prematurely
+- When you finish a subtask, provide a clear summary and I will give you the next subtask
 
 ## Rules
 1. Always read files before editing them to understand the current content
@@ -115,15 +112,12 @@ function getFallbackSystemPrompt(projectContext: ProjectContext): string {
   return `You are an AI coding agent with FULL autonomous access to this project.
 
 ## IMPORTANT: Follow User Instructions Exactly
-- Do EXACTLY what the user asks - complete the ENTIRE task
-- If user says "create a website" -> create ALL necessary files (HTML, CSS, JS, etc.)
+- Do EXACTLY what the user asks
 - If user says "create folder X" -> use create_directory tool
 - If user says "delete file X" -> use delete_file tool
-- Do NOT stop after just 1-2 tool calls unless the task is trivially simple
-- Complex tasks (like creating websites) require MANY tool calls to complete
 - The user may write in any language - understand and execute
 - Tool names and parameters must ALWAYS be in English
-- KEEP WORKING until the entire task is finished - do not stop prematurely
+- When you finish a subtask, provide a clear summary and I will give you the next subtask
 
 ## Available Tools
 ${formatToolDefinitions()}
@@ -485,9 +479,14 @@ export async function runAgent(
   // Start history session for undo support
   const sessionId = startSession(prompt, projectContext.root || process.cwd());
   
-  // Task planning phase (if enabled and prompt is complex enough)
+  // Task planning phase (if enabled)
+  // Use planning for complex keywords or multi-word prompts
   let taskPlan: TaskPlan | null = null;
-  if (opts.usePlanning && prompt.split(' ').length > 5) {
+  const complexKeywords = ['create', 'build', 'implement', 'add', 'setup', 'generate', 'make', 'develop'];
+  const hasComplexKeyword = complexKeywords.some(kw => prompt.toLowerCase().includes(kw));
+  const shouldPlan = opts.usePlanning && (prompt.split(' ').length > 3 || hasComplexKeyword);
+  
+  if (shouldPlan) {
     try {
       opts.onIteration?.(0, 'Planning tasks...');
       taskPlan = await planTasks(prompt, {
@@ -498,6 +497,8 @@ export async function runAgent(
       
       if (taskPlan.tasks.length > 1) {
         opts.onTaskPlan?.(taskPlan);
+        // Mark first task as in_progress
+        taskPlan.tasks[0].status = 'in_progress';
       } else {
         taskPlan = null; // Single task, no need for planning
       }
@@ -600,40 +601,37 @@ export async function runAgent(
         }
       }
       
-      // If no tool calls, check if this is really the final response
-      // Don't exit on first iteration without tool calls - agent might be thinking
+      // If no tool calls, this is the final response
       if (toolCalls.length === 0) {
-        // Only accept as final response if:
-        // 1. We've done at least some work (iteration > 2)
-        // 2. Agent explicitly indicates completion
-        const completionIndicators = [
-          'task is complete',
-          'all files have been created',
-          'website has been created',
-          'successfully completed',
-          'everything is ready',
-          'all done'
-        ];
-        const lowerContent = content.toLowerCase();
-        const indicatesCompletion = completionIndicators.some(indicator => lowerContent.includes(indicator));
+        // Remove <think>...</think> tags from response (some models include thinking)
+        finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
         
-        if (iteration > 2 && indicatesCompletion) {
-          // Remove <think>...</think> tags from response
-          finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-          break;
-        } else if (iteration <= 2) {
-          // Too early to quit - remind agent to continue
-          messages.push({ role: 'assistant', content });
-          messages.push({ 
-            role: 'user', 
-            content: 'Continue with the task. Use the tools to complete what was requested. Do not stop until all files are created and the task is fully complete.' 
-          });
-          continue;
-        } else {
-          // Later iteration without completion indicator - accept as final
-          finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-          break;
+        // Check if we're using task planning and there are more tasks
+        if (taskPlan && taskPlan.tasks.some(t => t.status === 'pending')) {
+          const nextTask = getNextTask(taskPlan.tasks);
+          if (nextTask) {
+            // Move to next task
+            nextTask.status = 'in_progress';
+            opts.onTaskUpdate?.(nextTask);
+            
+            messages.push({ role: 'assistant', content: finalResponse });
+            messages.push({ 
+              role: 'user', 
+              content: `Good progress! Next task:\n\n${nextTask.id}. ${nextTask.description}\n\nComplete this task now.` 
+            });
+            
+            // Mark previous task as completed
+            const prevTask = taskPlan.tasks.find(t => t.status === 'in_progress' && t.id !== nextTask.id);
+            if (prevTask) {
+              prevTask.status = 'completed';
+            }
+            
+            finalResponse = ''; // Reset for next task
+            continue;
+          }
         }
+        
+        break;
       }
       
       // Add assistant response to history
@@ -675,13 +673,9 @@ export async function runAgent(
       }
       
       // Add tool results to messages
-      const nextStepPrompt = iteration < 5 
-        ? `Tool results:\n\n${toolResults.join('\n\n')}\n\nGood progress! Continue working on the task. Use more tools to complete what was requested. Only stop when EVERYTHING is finished and working.`
-        : `Tool results:\n\n${toolResults.join('\n\n')}\n\nContinue with the task. If the task is fully complete, provide a final summary without any tool calls.`;
-      
       messages.push({
         role: 'user',
-        content: nextStepPrompt,
+        content: `Tool results:\n\n${toolResults.join('\n\n')}\n\nContinue with the task. If this subtask is complete, provide a summary without tool calls.`,
       });
     }
     

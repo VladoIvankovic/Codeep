@@ -28,19 +28,21 @@ export async function planTasks(
   const systemPrompt = `You are a task planning expert. Break down user requests into clear, sequential subtasks.
 
 RULES:
-1. Create 3-15 subtasks maximum
-2. Each subtask should be specific and actionable
-3. Order tasks logically (dependencies first)
+1. Create 3-10 subtasks maximum (keep it focused)
+2. Each subtask should be specific and achievable in 2-5 tool calls
+3. Order tasks logically - one file/component per task
 4. Use simple, clear descriptions
-5. Respond ONLY with a JSON object, no other text
+5. For websites: separate HTML, CSS, JS into different tasks
+6. Respond ONLY with a JSON object, no other text
 
-Example response format:
+Example for "create a website":
 {
   "tasks": [
-    {"id": 1, "description": "Create project directory structure", "dependencies": []},
-    {"id": 2, "description": "Create index.html with basic structure", "dependencies": [1]},
-    {"id": 3, "description": "Create styles.css with base styles", "dependencies": [1]},
-    {"id": 4, "description": "Add navigation to all pages", "dependencies": [2, 3]}
+    {"id": 1, "description": "Create directory structure", "dependencies": []},
+    {"id": 2, "description": "Create index.html with page structure", "dependencies": [1]},
+    {"id": 3, "description": "Create styles.css with layout and design", "dependencies": [1]},
+    {"id": 4, "description": "Create script.js with interactive features", "dependencies": [1]},
+    {"id": 5, "description": "Add content and finalize all pages", "dependencies": [2, 3, 4]}
   ]
 }
 
@@ -50,7 +52,7 @@ Project Context:
 
 User Request: ${userPrompt}
 
-Break this down into subtasks. Respond with JSON only.`;
+Break this down into subtasks. Each task = one file or one logical unit. Respond with JSON only.`;
 
   try {
     const apiKey = await getApiKey();
