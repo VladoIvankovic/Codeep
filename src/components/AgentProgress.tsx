@@ -113,23 +113,12 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
             <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
             <Text color="white">{formatTarget(currentAction.target)}</Text>
           </Box>
-          {/* Show FULL live code for write/edit actions */}
+          {/* Show live code preview for write/edit actions - last 15 lines */}
           {(currentAction.type === 'write' || currentAction.type === 'edit') && currentAction.details && (
-            <Box flexDirection="column" marginTop={1}>
-              <Box>
-                <Text color="cyan" bold>📝 Live Code:</Text>
-                <Text color="gray"> {currentAction.target.split('/').pop()}</Text>
-                <Text color="gray" dimColor> ({currentAction.details.split('\n').length} lines)</Text>
-              </Box>
-              <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginTop={0}>
-                {currentAction.details.split('\n').map((line, i) => (
-                  <Text key={i}>
-                    <Text color="gray" dimColor>{String(i + 1).padStart(3, ' ')} │ </Text>
-                    <Text color={getCodeColor(line)}>{line}</Text>
-                  </Text>
-                ))}
-              </Box>
-            </Box>
+            <LiveCodePreview 
+              code={currentAction.details} 
+              filename={currentAction.target.split('/').pop() || ''}
+            />
           )}
         </Box>
       )}
@@ -214,6 +203,53 @@ const getCodeColor = (line: string): string => {
     return 'green';
   }
   return 'white';
+};
+
+/**
+ * Live code preview component - shows last N lines of code being written
+ * Creates a "streaming" effect without taking up the whole screen
+ */
+const MAX_PREVIEW_LINES = 12;
+
+const LiveCodePreview: React.FC<{ code: string; filename: string }> = ({ code, filename }) => {
+  const allLines = code.split('\n');
+  const totalLines = allLines.length;
+  
+  // Show last N lines for streaming effect
+  const startLine = Math.max(0, totalLines - MAX_PREVIEW_LINES);
+  const visibleLines = allLines.slice(startLine);
+  
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Box>
+        <Text color="cyan" bold>📝 </Text>
+        <Text color="white" bold>{filename}</Text>
+        <Text color="gray"> • </Text>
+        <Text color="cyan">{totalLines}</Text>
+        <Text color="gray"> lines</Text>
+        {startLine > 0 && (
+          <>
+            <Text color="gray"> • showing </Text>
+            <Text color="yellow">{startLine + 1}-{totalLines}</Text>
+          </>
+        )}
+      </Box>
+      <Box flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1} marginTop={0}>
+        {startLine > 0 && (
+          <Text color="gray" dimColor>    ⋮ ({startLine} lines above)</Text>
+        )}
+        {visibleLines.map((line, i) => {
+          const lineNum = startLine + i + 1;
+          return (
+            <Text key={i}>
+              <Text color="gray" dimColor>{String(lineNum).padStart(3, ' ')} │ </Text>
+              <Text color={getCodeColor(line)}>{line.length > 80 ? line.slice(0, 77) + '...' : line}</Text>
+            </Text>
+          );
+        })}
+      </Box>
+    </Box>
+  );
 };
 
 // Helper functions for action display
