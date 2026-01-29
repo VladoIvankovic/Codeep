@@ -22,6 +22,7 @@ const COMMANDS = [
   { cmd: '/commit', desc: 'Generate commit message' },
   { cmd: '/apply', desc: 'Apply file changes' },
   { cmd: '/copy', desc: 'Copy code block' },
+  { cmd: '/paste', desc: 'Paste from clipboard' },
   { cmd: '/clear', desc: 'Clear chat' },
   { cmd: '/login', desc: 'Change API key' },
   { cmd: '/logout', desc: 'Logout' },
@@ -136,9 +137,24 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
 
     // Handle Enter - submit
     if (key.return) {
-      if (value.trim()) {
+      const trimmedValue = value.trim();
+      
+      // Handle /paste command - read from clipboard
+      if (trimmedValue === '/paste') {
+        try {
+          const clipboardText = clipboardy.readSync();
+          if (clipboardText && clipboardText.trim()) {
+            handlePastedText(clipboardText.trim(), true);
+          }
+        } catch {
+          // Clipboard read failed
+        }
+        return;
+      }
+      
+      if (trimmedValue) {
         // If we have paste info, submit the full pasted text
-        const submitValue = pasteInfo ? pasteInfo.fullText : value.trim();
+        const submitValue = pasteInfo ? pasteInfo.fullText : trimmedValue;
         
         onSubmit(submitValue);
         setValue('');
