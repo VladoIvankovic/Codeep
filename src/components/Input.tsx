@@ -379,7 +379,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
       {/* Suggestions dropdown */}
       {suggestions.length > 0 && (
         <Box flexDirection="column" marginBottom={1}>
-          {suggestions.slice(0, 8).map((s, i) => (
+          {suggestions.map((s, i) => (
             <Text key={s.cmd}>
               {i === selectedIndex ? <Text color="#f02a30">▸ </Text> : '  '}
               <Text color={i === selectedIndex ? '#f02a30' : undefined} bold={i === selectedIndex}>
