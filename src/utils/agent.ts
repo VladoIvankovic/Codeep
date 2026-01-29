@@ -81,10 +81,12 @@ function getAgentSystemPrompt(projectContext: ProjectContext): string {
 2. Use edit_file for modifications to existing files (preserves other content)
 3. Use write_file only for creating new files or complete overwrites
 4. Use create_directory to create new folders/directories
-5. Use list_files to see directory contents (NOT execute_command with ls)
-6. Use execute_command only for npm, git, build tools, tests (NOT for ls, cat, etc.)
-7. When the task is complete, respond with a summary WITHOUT any tool calls
-8. IMPORTANT: After finishing, your response must NOT include any tool calls - just provide a summary
+5. Use list_files to see directory contents
+6. Use search_code to find files or search patterns
+7. NEVER use execute_command for: ls, find, cat, grep, mkdir, rm, cp, mv, touch
+8. Use execute_command ONLY for: npm, git, composer, pip, cargo (build/package managers)
+9. When the task is complete, respond with a summary WITHOUT any tool calls
+10. IMPORTANT: After finishing, your response must NOT include any tool calls - just provide a summary
 
 ## Self-Verification
 After you make changes, the system will automatically run build and tests.
@@ -145,10 +147,12 @@ When you need to use a tool, respond with:
 
 ## Rules
 1. Use the exact format shown above
-2. Use list_files to see directory contents (NOT execute_command with ls)
-3. Use execute_command only for npm, git, build tools (NOT for ls, cat, etc.)
-4. Always read files before editing
-5. When done, respond WITHOUT tool calls
+2. Use list_files to see directory contents
+3. Use search_code to find files or search patterns
+4. NEVER use execute_command for: ls, find, cat, grep, mkdir, rm, cp, mv, touch
+5. Use execute_command ONLY for: npm, git, composer, pip, cargo (build/package managers)
+6. Always read files before editing
+7. When done, respond WITHOUT tool calls
 
 ## Project: ${projectContext.name} (${projectContext.type})
 ${projectContext.structure}
