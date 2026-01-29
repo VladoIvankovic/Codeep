@@ -633,14 +633,17 @@ export async function runAgent(
         const promptLowerCase = prompt.toLowerCase();
         const isCreationTask = taskKeywords.some(kw => promptLowerCase.includes(kw));
         
-        const hasCreatedFiles = actions.some(a => a.type === 'write' || a.type === 'mkdir');
+        // Only count actual FILE writes, not directories
+        const hasCreatedFiles = actions.some(a => a.type === 'write');
         const writeFileCount = actions.filter(a => a.type === 'write').length;
+        const hasMkdir = actions.some(a => a.type === 'mkdir');
         const isVeryEarlyIteration = iteration <= 5; // Extended to 5 iterations
         
-        console.error(`[DEBUG] Task check: isCreationTask=${isCreationTask}, hasCreatedFiles=${hasCreatedFiles}, writeFileCount=${writeFileCount}, iteration=${iteration}`);
+        console.error(`[DEBUG] Task check: isCreationTask=${isCreationTask}, hasCreatedFiles=${hasCreatedFiles}, writeFileCount=${writeFileCount}, hasMkdir=${hasMkdir}, iteration=${iteration}`);
+        console.error(`[DEBUG] Actions breakdown:`, actions.map(a => `${a.type}:${a.target}`).join(', '));
         
-        // STRICT RULE: If it's a creation task, agent MUST create files
-        // Don't accept early stopping even if it has "done some actions"
+        // STRICT RULE: If it's a creation task, agent MUST create FILES (not just directories)
+        // Creating a directory is not enough - we need actual file content
         if (isCreationTask && !hasCreatedFiles && iteration <= 10) {
           console.error(`[DEBUG] BLOCKING early stop - creation task detected but NO files created yet (iteration ${iteration}, ${actions.length} actions)`);
           
