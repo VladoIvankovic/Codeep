@@ -569,6 +569,7 @@ export async function runAgent(
       
       // Check abort signal
       if (opts.abortSignal?.aborted) {
+        console.error(`[DEBUG] Agent aborted at iteration ${iteration}, signal:`, opts.abortSignal.aborted);
         result = {
           success: false,
           iterations: iteration,
@@ -580,6 +581,7 @@ export async function runAgent(
       }
       
       iteration++;
+      console.error(`[DEBUG] Starting iteration ${iteration}/${opts.maxIterations}, actions: ${actions.length}`);
       opts.onIteration?.(iteration, `Iteration ${iteration}/${opts.maxIterations}`);
       
       // Get AI response
@@ -619,6 +621,9 @@ export async function runAgent(
       
       // If no tool calls, this is the final response
       if (toolCalls.length === 0) {
+        console.error(`[DEBUG] No tool calls at iteration ${iteration}, content length: ${content.length}, actions so far: ${actions.length}`);
+        console.error(`[DEBUG] Response preview:`, content.substring(0, 200));
+        
         // Remove <think>...</think> tags from response (some models include thinking)
         finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
         
