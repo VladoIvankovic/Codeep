@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { Text, Box, useInput, useStdin } from 'ink';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Text, Box, useInput } from 'ink';
 
 const COMMANDS = [
   { cmd: '/help', desc: 'Show help' },
@@ -47,7 +47,11 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [pasteInfo, setPasteInfo] = useState<PasteInfo | null>(null);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const { stdin } = useStdin();
+  
+  // Paste detection using timing - chars arriving < 5ms apart = paste
+  const inputBuffer = useRef<string>('');
+  const lastInputTime = useRef<number>(0);
+  const pasteTimeout = useRef<NodeJS.Timeout | null>(null);
 
   // Clear input when clearTrigger changes
   useEffect(() => {
@@ -73,26 +77,22 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     }
   }, [suggestions.length]);
 
-  // Listen for raw stdin data to detect paste (multiple chars at once)
-  useEffect(() => {
-    if (disabled || !stdin) return;
+  // Process buffered input - called after paste timeout
+  const processBuffer = () => {
+    const buffer = inputBuffer.current;
+    inputBuffer.current = '';
     
-    const handleData = (data: Buffer) => {
-      const str = data.toString();
-      
-      // Detect paste: multiple printable characters arriving at once
-      // Exclude control sequences (start with ESC)
-      if (str.length > 1 && !str.startsWith('\x1b') && !str.startsWith('\x16')) {
-        // This is likely a paste - multiple chars at once
-        handlePastedText(str, true);
-      }
-    };
+    if (!buffer) return;
     
-    stdin.on('data', handleData);
-    return () => {
-      stdin.off('data', handleData);
-    };
-  }, [disabled, stdin]);
+    // If buffer has multiple chars (> 20), treat as paste and show indicator
+    if (buffer.length > 20) {
+      handlePastedText(buffer, true);
+    } else {
+      // Short buffer - just add to value normally
+      setValue(prev => prev + buffer);
+      setCursorPos(prev => prev + buffer.length);
+    }
+  };
 
   const handlePastedText = (text: string, fromCtrlV: boolean = false) => {
     const trimmed = text.trim();
@@ -263,13 +263,35 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
 
     // Regular character input
     if (input && !key.ctrl && !key.meta) {
-      // If we have paste info, clear it when user starts typing
+      // If we have paste info and user types new char, clear paste
       if (pasteInfo) {
         setPasteInfo(null);
         setValue('');
         setCursorPos(0);
       }
-      // Normal single character input
+      
+      const now = Date.now();
+      const timeSinceLastInput = now - lastInputTime.current;
+      lastInputTime.current = now;
+      
+      // If chars arrive very fast (< 5ms apart), buffer them as paste
+      if (timeSinceLastInput < 5 || inputBuffer.current.length > 0) {
+        inputBuffer.current += input;
+        
+        // Clear existing timeout
+        if (pasteTimeout.current) {
+          clearTimeout(pasteTimeout.current);
+        }
+        
+        // Set timeout to process buffer
+        pasteTimeout.current = setTimeout(() => {
+          processBuffer();
+        }, 10);
+        
+        return; // Don't add to value yet
+      }
+      
+      // Normal single character input (slow typing)
       setValue(prev => prev.slice(0, cursorPos) + input + prev.slice(cursorPos));
       setCursorPos(prev => prev + input.length);
     }
