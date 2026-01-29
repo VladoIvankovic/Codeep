@@ -49,10 +49,11 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
   const [pasteInfo, setPasteInfo] = useState<PasteInfo | null>(null);
   const [historyIndex, setHistoryIndex] = useState(-1);
   
-  // Paste detection using timing - chars arriving < 5ms apart = paste
+  // Paste detection using timing - chars arriving fast = paste
   const inputBuffer = useRef<string>('');
   const lastInputTime = useRef<number>(0);
   const pasteTimeout = useRef<NodeJS.Timeout | null>(null);
+  const charTimings = useRef<number[]>([]);
 
   // Clear input when clearTrigger changes
   useEffect(() => {
@@ -289,19 +290,42 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
       const timeSinceLastInput = now - lastInputTime.current;
       lastInputTime.current = now;
       
-      // If chars arrive very fast (< 5ms apart), buffer them as paste
-      if (timeSinceLastInput < 5 || inputBuffer.current.length > 0) {
+      // Track timing for paste detection
+      // Paste typically sends many chars with < 10ms between them
+      const isPasteLikeTiming = timeSinceLastInput < 15;
+      
+      if (isPasteLikeTiming || inputBuffer.current.length > 0) {
+        // Add to buffer
         inputBuffer.current += input;
+        charTimings.current.push(timeSinceLastInput);
         
         // Clear existing timeout
         if (pasteTimeout.current) {
           clearTimeout(pasteTimeout.current);
         }
         
-        // Set timeout to process buffer
+        // Set timeout to process buffer - wait a bit longer to collect all paste chars
         pasteTimeout.current = setTimeout(() => {
-          processBuffer();
-        }, 10);
+          const buffer = inputBuffer.current;
+          const timings = charTimings.current;
+          inputBuffer.current = '';
+          charTimings.current = [];
+          
+          if (!buffer) return;
+          
+          // Calculate average timing - if most chars came fast, it's a paste
+          const fastChars = timings.filter(t => t < 15).length;
+          const isPaste = buffer.length > 5 && (fastChars / timings.length) > 0.5;
+          
+          if (isPaste && (buffer.length > 30 || buffer.includes('\n'))) {
+            // Treat as paste
+            handlePastedText(buffer, true);
+          } else {
+            // Just fast typing, add normally
+            setValue(prev => prev + buffer);
+            setCursorPos(prev => prev + buffer.length);
+          }
+        }, 50); // Wait 50ms to collect all paste chars
         
         return; // Don't add to value yet
       }
