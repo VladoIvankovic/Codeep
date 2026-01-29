@@ -67,7 +67,7 @@ export interface AgentOptions {
   maxIterations: number;
   maxDuration: number; // milliseconds
   onToolCall?: (tool: ToolCall) => void;
-  onToolResult?: (result: ToolResult) => void;
+  onToolResult?: (result: ToolResult, toolCall: ToolCall) => void;
   onIteration?: (iteration: number, message: string) => void;
   onThinking?: (text: string) => void;
   onVerification?: (results: VerifyResult[]) => void;
@@ -839,7 +839,7 @@ export async function runAgent(
           toolResult = executeTool(toolCall, projectContext.root || process.cwd());
         }
         
-        opts.onToolResult?.(toolResult);
+        opts.onToolResult?.(toolResult, toolCall);
         
         // Log action
         const actionLog = createActionLog(toolCall, toolResult);
@@ -957,7 +957,7 @@ export async function runAgent(
               opts.onToolCall?.(toolCall);
               
               const toolResult = executeTool(toolCall, projectContext.root || process.cwd());
-              opts.onToolResult?.(toolResult);
+              opts.onToolResult?.(toolResult, toolCall);
               
               const actionLog = createActionLog(toolCall, toolResult);
               actions.push(actionLog);
