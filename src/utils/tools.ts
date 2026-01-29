@@ -1063,27 +1063,26 @@ export function createActionLog(toolCall: ToolCall, result: ToolResult): ActionL
                  (toolCall.parameters.url as string) ||
                  'unknown';
   
-  // For write/edit actions, include content preview in details
+  // For write/edit actions, include content preview in details (more lines for live code view)
   let details: string | undefined;
+  const PREVIEW_LINES = 15; // Show more lines for better live code preview
+  
   if (result.success) {
     if (normalizedTool === 'write_file' && toolCall.parameters.content) {
-      // Show first few lines of written content
+      // Show content being written
       const content = toolCall.parameters.content as string;
-      const lines = content.split('\n').slice(0, 5);
+      const lines = content.split('\n').slice(0, PREVIEW_LINES);
       details = lines.join('\n');
-      if (content.split('\n').length > 5) {
-        details += '\n...';
-      }
     } else if (normalizedTool === 'edit_file' && toolCall.parameters.new_text) {
       // Show the new text being inserted
       const newText = toolCall.parameters.new_text as string;
-      const lines = newText.split('\n').slice(0, 5);
+      const lines = newText.split('\n').slice(0, PREVIEW_LINES);
       details = lines.join('\n');
-      if (newText.split('\n').length > 5) {
-        details += '\n...';
-      }
+    } else if (normalizedTool === 'execute_command') {
+      // Show command output
+      details = result.output.slice(0, 500);
     } else {
-      details = result.output.slice(0, 200);
+      details = result.output.slice(0, 300);
     }
   } else {
     details = result.error;

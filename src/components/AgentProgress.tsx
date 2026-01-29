@@ -113,14 +113,24 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
             <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
             <Text color="white">{formatTarget(currentAction.target)}</Text>
           </Box>
-          {/* Show content preview for write/edit actions */}
+          {/* Show live code preview for write/edit actions */}
           {(currentAction.type === 'write' || currentAction.type === 'edit') && currentAction.details && (
-            <Box flexDirection="column" marginLeft={2} marginTop={0}>
-              <Text color="gray" dimColor>{'┌' + '─'.repeat(40)}</Text>
-              {currentAction.details.split('\n').slice(0, 5).map((line, i) => (
-                <Text key={i} color="gray" dimColor>{'│ '}{line.slice(0, 60)}{line.length > 60 ? '...' : ''}</Text>
-              ))}
-              <Text color="gray" dimColor>{'└' + '─'.repeat(40)}</Text>
+            <Box flexDirection="column" marginTop={1}>
+              <Box>
+                <Text color="cyan" bold>📝 Live Code:</Text>
+                <Text color="gray"> {currentAction.target.split('/').pop()}</Text>
+              </Box>
+              <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} marginTop={0}>
+                {currentAction.details.split('\n').slice(0, 12).map((line, i) => (
+                  <Text key={i}>
+                    <Text color="gray" dimColor>{String(i + 1).padStart(3, ' ')} │ </Text>
+                    <Text color={getCodeColor(line)}>{line.slice(0, 70)}{line.length > 70 ? '...' : ''}</Text>
+                  </Text>
+                ))}
+                {currentAction.details.split('\n').length > 12 && (
+                  <Text color="gray" dimColor>     ... +{currentAction.details.split('\n').length - 12} more lines</Text>
+                )}
+              </Box>
             </Box>
           )}
         </Box>
@@ -184,6 +194,28 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
       )}
     </Box>
   );
+};
+
+// Helper function for syntax highlighting
+const getCodeColor = (line: string): string => {
+  const trimmed = line.trim();
+  // Comments
+  if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('/*') || trimmed.startsWith('*')) {
+    return 'gray';
+  }
+  // Keywords
+  if (/^(import|export|const|let|var|function|class|interface|type|return|if|else|for|while|async|await)\b/.test(trimmed)) {
+    return 'magenta';
+  }
+  // HTML tags
+  if (trimmed.startsWith('<') && (trimmed.includes('>') || trimmed.includes('/>'))) {
+    return 'cyan';
+  }
+  // Strings
+  if (trimmed.includes('"') || trimmed.includes("'") || trimmed.includes('`')) {
+    return 'green';
+  }
+  return 'white';
 };
 
 // Helper functions for action display
