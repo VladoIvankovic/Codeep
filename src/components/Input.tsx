@@ -38,6 +38,7 @@ interface InputProps {
 
 export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = [], clearTrigger = 0 }) => {
   const [value, setValue] = useState('');
+  const [displayValue, setDisplayValue] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isSelectingCommand, setIsSelectingCommand] = useState(false);
 
@@ -45,6 +46,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
   useEffect(() => {
     if (clearTrigger > 0) {
       setValue('');
+      setDisplayValue('');
       setSelectedIndex(0);
       setIsSelectingCommand(false);
     }
@@ -76,7 +78,17 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
         const clipboardText = await clipboard.read();
         // Replace newlines with spaces to prevent multi-line issues
         const sanitized = clipboardText.replace(/\r?\n/g, ' ').trim();
+        
+        // Store full text in value (for submission)
         setValue(prev => prev + sanitized);
+        
+        // If text is longer than 100 chars, show "pasted -X" in display
+        if (sanitized.length > 100) {
+          const hiddenChars = sanitized.length - 100;
+          setDisplayValue(prev => prev + sanitized.substring(0, 100) + ` [pasted -${hiddenChars}]`);
+        } else {
+          setDisplayValue(prev => prev + sanitized);
+        }
       } catch (error) {
         // Clipboard read failed, ignore
       }
@@ -105,12 +117,14 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
 
   const handleChange = (newValue: string) => {
     setValue(newValue);
+    setDisplayValue(newValue);
   };
 
-  const handleSubmit = (text: string) => {
-    if (text.trim() && !disabled) {
-      onSubmit(text.trim());
+  const handleSubmit = () => {
+    if (value.trim() && !disabled) {
+      onSubmit(value.trim());
       setValue('');
+      setDisplayValue('');
       setIsSelectingCommand(false);
     }
   };
@@ -142,7 +156,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
           <Text>...</Text>
         ) : (
           <TextInput
-            value={value}
+            value={displayValue || value}
             onChange={handleChange}
             onSubmit={handleSubmit}
             placeholder="Type a message or /command..."

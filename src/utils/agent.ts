@@ -52,7 +52,7 @@ export interface AgentResult {
 const DEFAULT_OPTIONS: AgentOptions = {
   maxIterations: 100, // Increased for large tasks
   maxDuration: 20 * 60 * 1000, // 20 minutes
-  usePlanning: true, // Enable task planning by default
+  usePlanning: false, // Disable task planning - causes more problems than it solves
 };
 
 /**
