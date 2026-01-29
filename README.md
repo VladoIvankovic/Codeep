@@ -497,11 +497,14 @@ With write access enabled:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | Temperature | 0.7 | Response creativity (0.0 - 2.0) |
-| Max Tokens | 4096 | Maximum response length |
-| API Timeout | 30000ms | Request timeout |
+| Max Tokens | 8192 | Maximum response length |
+| API Timeout | 60000ms | Request timeout |
 | API Rate Limit | 30/min | Max API calls per minute |
 | Command Rate Limit | 100/min | Max commands per minute |
 | Agent Mode | Auto | `Auto` = agent runs on every message, `Manual` = use /agent |
+| Agent API Timeout | 180000ms | Timeout per agent API call (auto-adjusted for complexity) |
+| Agent Max Duration | 20 min | Maximum time for agent to run (5-60 min) |
+| Agent Max Iterations | 100 | Maximum agent iterations (10-200) |
 | Agent Confirmation | Dangerous | `Never`, `Dangerous` (default), or `Always` |
 | Agent Auto-Commit | Off | Automatically commit after agent completes |
 | Agent Branch | Off | Create new branch for agent commits |

@@ -40,7 +40,8 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
   const [value, setValue] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isSelectingCommand, setIsSelectingCommand] = useState(false);
-  const [pasteInfo, setPasteInfo] = useState<string | null>(null);
+  const [pasteInfo, setPasteInfo] = useState<{ lines: number; chars: number; preview: string } | null>(null);
+  const [fullPasteText, setFullPasteText] = useState<string | null>(null);
 
   // Clear input when clearTrigger changes
   useEffect(() => {
@@ -49,6 +50,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
       setSelectedIndex(0);
       setIsSelectingCommand(false);
       setPasteInfo(null);
+      setFullPasteText(null);
     }
   }, [clearTrigger]);
 
@@ -76,17 +78,33 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     if (key.ctrl && input === 'v') {
       try {
         const clipboardText = await clipboard.read();
-        // Replace newlines with spaces to prevent multi-line issues
-        const sanitized = clipboardText.replace(/\r?\n/g, ' ').trim();
+        const trimmed = clipboardText.trim();
         
-        // Store full text
-        setValue(prev => prev + sanitized);
+        if (!trimmed) return;
         
-        // Show paste info if long text
-        if (sanitized.length > 100) {
-          setPasteInfo(`[pasted ${sanitized.length} chars]`);
-          // Clear info after 2 seconds
-          setTimeout(() => setPasteInfo(null), 2000);
+        const lines = trimmed.split(/\r?\n/);
+        const lineCount = lines.length;
+        const charCount = trimmed.length;
+        
+        // For multi-line or long pastes, show summary and store full text
+        if (lineCount > 1 || charCount > 200) {
+          // Store the full text for submission
+          setFullPasteText(trimmed);
+          
+          // Create a short preview (first line, truncated)
+          const firstLine = lines[0].substring(0, 50);
+          const preview = firstLine + (lines[0].length > 50 ? '...' : '');
+          
+          // Show compact indicator in input
+          setValue(prev => prev + `[paste: ${lineCount} lines, ${charCount} chars]`);
+          
+          // Show detailed info below
+          setPasteInfo({ lines: lineCount, chars: charCount, preview });
+        } else {
+          // Short single-line paste - just insert directly
+          setValue(prev => prev + trimmed);
+          setFullPasteText(null);
+          setPasteInfo(null);
         }
       } catch (error) {
         // Clipboard read failed, ignore
@@ -120,9 +138,17 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
 
   const handleSubmit = () => {
     if (value.trim() && !disabled) {
-      onSubmit(value.trim());
+      // If we have stored paste text, replace the placeholder with actual content
+      let submitValue = value.trim();
+      if (fullPasteText && submitValue.includes('[paste:')) {
+        // Replace the paste placeholder with actual content
+        submitValue = submitValue.replace(/\[paste: \d+ lines, \d+ chars\]/, fullPasteText);
+      }
+      
+      onSubmit(submitValue);
       setValue('');
       setPasteInfo(null);
+      setFullPasteText(null);
       setIsSelectingCommand(false);
     }
   };
@@ -163,8 +189,13 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
           )}
         </Box>
         {pasteInfo && (
-          <Box marginLeft={2}>
-            <Text color="green">{pasteInfo}</Text>
+          <Box flexDirection="column" marginLeft={2} marginTop={1}>
+            <Text color="cyan">
+              📋 Pasted: <Text bold>{pasteInfo.lines}</Text> {pasteInfo.lines === 1 ? 'line' : 'lines'}, <Text bold>{pasteInfo.chars}</Text> chars
+            </Text>
+            <Text color="gray" dimColor>
+              Preview: {pasteInfo.preview}
+            </Text>
           </Box>
         )}
       </Box>
