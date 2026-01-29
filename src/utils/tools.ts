@@ -1063,11 +1063,37 @@ export function createActionLog(toolCall: ToolCall, result: ToolResult): ActionL
                  (toolCall.parameters.url as string) ||
                  'unknown';
   
+  // For write/edit actions, include content preview in details
+  let details: string | undefined;
+  if (result.success) {
+    if (normalizedTool === 'write_file' && toolCall.parameters.content) {
+      // Show first few lines of written content
+      const content = toolCall.parameters.content as string;
+      const lines = content.split('\n').slice(0, 5);
+      details = lines.join('\n');
+      if (content.split('\n').length > 5) {
+        details += '\n...';
+      }
+    } else if (normalizedTool === 'edit_file' && toolCall.parameters.new_text) {
+      // Show the new text being inserted
+      const newText = toolCall.parameters.new_text as string;
+      const lines = newText.split('\n').slice(0, 5);
+      details = lines.join('\n');
+      if (newText.split('\n').length > 5) {
+        details += '\n...';
+      }
+    } else {
+      details = result.output.slice(0, 200);
+    }
+  } else {
+    details = result.error;
+  }
+  
   return {
     type: typeMap[normalizedTool] || 'command',
     target,
     result: result.success ? 'success' : 'error',
-    details: result.success ? result.output.slice(0, 200) : result.error,
+    details,
     timestamp: Date.now(),
   };
 }
