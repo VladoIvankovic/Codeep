@@ -238,6 +238,35 @@ export function getAnthropicTools(): AnthropicTool[] {
 /**
  * Parse tool calls from OpenAI response
  */
+/**
+ * Normalize tool name to lowercase with underscores
+ */
+function normalizeToolName(name: string): string {
+  const toolNameMap: Record<string, string> = {
+    'executecommand': 'execute_command',
+    'execute_command': 'execute_command',
+    'readfile': 'read_file',
+    'read_file': 'read_file',
+    'writefile': 'write_file',
+    'write_file': 'write_file',
+    'editfile': 'edit_file',
+    'edit_file': 'edit_file',
+    'deletefile': 'delete_file',
+    'delete_file': 'delete_file',
+    'listfiles': 'list_files',
+    'list_files': 'list_files',
+    'searchcode': 'search_code',
+    'search_code': 'search_code',
+    'createdirectory': 'create_directory',
+    'create_directory': 'create_directory',
+    'fetchurl': 'fetch_url',
+    'fetch_url': 'fetch_url',
+  };
+  
+  const lower = name.toLowerCase().replace(/-/g, '_');
+  return toolNameMap[lower] || lower;
+}
+
 export function parseOpenAIToolCalls(toolCalls: any[]): ToolCall[] {
   if (!toolCalls || !Array.isArray(toolCalls)) return [];
   
@@ -250,7 +279,7 @@ export function parseOpenAIToolCalls(toolCalls: any[]): ToolCall[] {
     }
     
     return {
-      tool: tc.function?.name || '',
+      tool: normalizeToolName(tc.function?.name || ''),
       parameters,
       id: tc.id,
     };
@@ -266,7 +295,7 @@ export function parseAnthropicToolCalls(content: any[]): ToolCall[] {
   return content
     .filter(block => block.type === 'tool_use')
     .map(block => ({
-      tool: block.name || '',
+      tool: normalizeToolName(block.name || ''),
       parameters: block.input || {},
       id: block.id,
     }))
@@ -471,16 +500,16 @@ function tryParseToolCall(str: string): ToolCall | null {
     
     if (parsed.tool && typeof parsed.tool === 'string') {
       return {
-        tool: parsed.tool,
+        tool: normalizeToolName(parsed.tool),
         parameters: parsed.parameters || {},
         id: parsed.id,
       };
     }
   } catch {
     // Try to extract tool name and parameters manually for malformed JSON
-    const toolMatch = str.match(/"tool"\s*:\s*"([^"]+)"/);
+    const toolMatch = str.match(/"tool"\s*:\s*"([^"]+)"/i);
     if (toolMatch) {
-      const tool = toolMatch[1];
+      const tool = normalizeToolName(toolMatch[1]);
       const params: Record<string, unknown> = {};
       
       // Extract simple string parameters
