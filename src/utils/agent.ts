@@ -4,6 +4,13 @@
 
 import { ProjectContext } from './project';
 
+// Debug logging helper - only logs when CODEEP_DEBUG=1
+const debug = (...args: any[]) => {
+  if (process.env.CODEEP_DEBUG === '1') {
+    console.error('[DEBUG]', ...args);
+  }
+};
+
 /**
  * Custom error class for timeout - allows distinguishing from user abort
  */
@@ -313,16 +320,26 @@ async function agentChat(
     
     const data = await response.json();
     
+    debug('Raw API response:', JSON.stringify(data, null, 2).substring(0, 1500));
+    
     if (protocol === 'openai') {
       const message = data.choices?.[0]?.message;
       const content = message?.content || '';
       const rawToolCalls = message?.tool_calls || [];
+      
+      debug('Raw tool_calls:', JSON.stringify(rawToolCalls, null, 2));
+      
       const toolCalls = parseOpenAIToolCalls(rawToolCalls);
+      
+      debug('Parsed tool calls:', toolCalls.length, toolCalls.map(t => t.tool));
       
       // If no native tool calls, try parsing from content (some models return text-based)
       if (toolCalls.length === 0 && content) {
+        debug('No native tool calls, checking content for text-based calls...');
+        debug('Content preview:', content.substring(0, 300));
         const textToolCalls = parseToolCalls(content);
         if (textToolCalls.length > 0) {
+          debug('Found text-based tool calls:', textToolCalls.length);
           return { content, toolCalls: textToolCalls, usedNativeTools: false };
         }
       }
@@ -659,6 +676,7 @@ export async function runAgent(
       
       // Check abort signal
       if (opts.abortSignal?.aborted) {
+        debug('Agent aborted at iteration', iteration);
         result = {
           success: false,
           iterations: iteration,
@@ -672,8 +690,11 @@ export async function runAgent(
       iteration++;
       opts.onIteration?.(iteration, `Iteration ${iteration}/${opts.maxIterations}`);
       
+      debug(`Starting iteration ${iteration}/${opts.maxIterations}, actions: ${actions.length}`);
+      
       // Calculate dynamic timeout based on task complexity
       const dynamicTimeout = calculateDynamicTimeout(prompt, iteration, baseTimeout);
+      debug(`Using timeout: ${dynamicTimeout}ms (base: ${baseTimeout}ms)`);
       
       // Get AI response with retry logic for timeouts
       let chatResponse: AgentChatResponse;
@@ -709,6 +730,7 @@ export async function runAgent(
           if (err.name === 'TimeoutError') {
             retryCount++;
             consecutiveTimeouts++;
+            debug(`Timeout occurred (retry ${retryCount}/${maxTimeoutRetries}, consecutive: ${consecutiveTimeouts})`);
             opts.onIteration?.(iteration, `API timeout, retrying (${retryCount}/${maxTimeoutRetries})...`);
             
             if (retryCount >= maxTimeoutRetries) {
@@ -760,6 +782,8 @@ export async function runAgent(
       
       // If no tool calls, check if model wants to continue or is really done
       if (toolCalls.length === 0) {
+        debug(`No tool calls at iteration ${iteration}, content length: ${content.length}`);
+        
         // Remove <think>...</think> tags from response (some models include thinking)
         finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
         
@@ -777,6 +801,7 @@ export async function runAgent(
         const hasIncompleteWork = iteration < 10 && wantsToContinue && finalResponse.length < 500;
         
         if (hasIncompleteWork) {
+          debug('Model wants to continue, prompting for next action');
           messages.push({ role: 'assistant', content });
           messages.push({ 
             role: 'user', 
@@ -786,6 +811,7 @@ export async function runAgent(
         }
         
         // Model is done
+        debug(`Agent finished at iteration ${iteration}`);
         break;
       }
       
