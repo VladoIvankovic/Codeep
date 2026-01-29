@@ -19,54 +19,22 @@ class TimeoutError extends Error {
  * Complex tasks (creating pages, multiple files) need more time
  */
 function calculateDynamicTimeout(prompt: string, iteration: number, baseTimeout: number): number {
-  const promptLower = prompt.toLowerCase();
-  
-  // Keywords that indicate complex tasks requiring more time
-  const complexKeywords = [
-    'create', 'build', 'implement', 'generate', 'make', 'develop', 'setup',
-    'website', 'app', 'application', 'page', 'component', 'feature',
-    'kreiraj', 'napravi', 'izgradi', 'generiraj', 'razvij', 'stranica', 'aplikacija'
-  ];
-  
-  // Keywords indicating very large tasks
-  const veryComplexKeywords = [
-    'full', 'complete', 'entire', 'whole', 'multiple', 'all',
-    'cijeli', 'kompletni', 'sve', 'višestruki'
-  ];
+  // Simple approach: just use base timeout with small multiplier for later iterations
+  // Complex calculations were causing more problems than they solved
   
   let multiplier = 1.0;
   
-  // Check for complex keywords
-  const hasComplexKeyword = complexKeywords.some(kw => promptLower.includes(kw));
-  if (hasComplexKeyword) {
-    multiplier = 2.0; // Double timeout for complex tasks
+  // Later iterations have larger context, may need slightly more time
+  if (iteration > 3) {
+    multiplier = 1.2;
+  }
+  if (iteration > 8) {
+    multiplier = 1.5;
   }
   
-  // Check for very complex keywords
-  const hasVeryComplexKeyword = veryComplexKeywords.some(kw => promptLower.includes(kw));
-  if (hasVeryComplexKeyword) {
-    multiplier = 3.0; // Triple timeout for very complex tasks
-  }
-  
-  // Long prompts usually mean complex tasks
-  if (prompt.length > 200) {
-    multiplier = Math.max(multiplier, 2.0);
-  }
-  if (prompt.length > 500) {
-    multiplier = Math.max(multiplier, 3.0);
-  }
-  
-  // Later iterations might need more time (context is larger)
-  if (iteration > 5) {
-    multiplier *= 1.2;
-  }
-  if (iteration > 10) {
-    multiplier *= 1.3;
-  }
-  
-  // Minimum 60 seconds, maximum 5 minutes for a single API call
+  // Minimum 120 seconds, maximum 5 minutes for a single API call
   const calculatedTimeout = baseTimeout * multiplier;
-  return Math.min(Math.max(calculatedTimeout, 60000), 300000);
+  return Math.min(Math.max(calculatedTimeout, 120000), 300000);
 }
 import { 
   parseToolCalls, 
@@ -343,10 +311,32 @@ async function agentChat(
     
     const data = await response.json();
     
+    // Debug: log raw API response
+    console.error(`[DEBUG] Raw API response:`, JSON.stringify(data, null, 2).substring(0, 1000));
+    
     if (protocol === 'openai') {
       const message = data.choices?.[0]?.message;
       const content = message?.content || '';
-      const toolCalls = parseOpenAIToolCalls(message?.tool_calls || []);
+      const rawToolCalls = message?.tool_calls || [];
+      
+      // Debug: log raw tool calls from API
+      console.error(`[DEBUG] Raw tool_calls from API:`, JSON.stringify(rawToolCalls, null, 2));
+      
+      const toolCalls = parseOpenAIToolCalls(rawToolCalls);
+      
+      // Debug: log parsed tool calls
+      console.error(`[DEBUG] Parsed tool calls:`, JSON.stringify(toolCalls, null, 2));
+      
+      // If no native tool calls, try parsing from content (some models return text-based)
+      if (toolCalls.length === 0 && content) {
+        console.error(`[DEBUG] No native tool calls, checking content for text-based calls...`);
+        console.error(`[DEBUG] Content preview:`, content.substring(0, 500));
+        const textToolCalls = parseToolCalls(content);
+        if (textToolCalls.length > 0) {
+          console.error(`[DEBUG] Found ${textToolCalls.length} text-based tool calls`);
+          return { content, toolCalls: textToolCalls, usedNativeTools: false };
+        }
+      }
       
       if (onChunk && content) {
         onChunk(content);
