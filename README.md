@@ -53,6 +53,13 @@ When started in a project directory, Codeep automatically:
 - Copy code blocks to clipboard with `/copy [n]`
 - Code blocks are numbered for easy reference
 
+### Clipboard Paste
+- **`/paste` command** - Paste content from clipboard into chat
+- Type `/paste` and press Enter to read clipboard content
+- Shows preview with character/line count before sending
+- Press Enter to send, Escape to cancel
+- Works reliably in all terminals (no Ctrl+V issues)
+
 ### Autonomous Agent Mode
 
 Codeep works as a **full AI coding agent** that autonomously:
