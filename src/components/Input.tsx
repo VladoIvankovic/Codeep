@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Text, Box, useInput } from 'ink';
+import clipboardy from 'clipboardy';
 
 const COMMANDS = [
   { cmd: '/help', desc: 'Show help' },
@@ -258,6 +259,20 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
       const newBefore = lastSpace >= 0 ? beforeCursor.slice(0, lastSpace + 1) : '';
       setValue(newBefore + afterCursor);
       setCursorPos(newBefore.length);
+      return;
+    }
+
+    // Handle Ctrl+V - paste from clipboard
+    // Terminal sends ASCII 22 (\x16) for Ctrl+V
+    if (input === '\x16' || (key.ctrl && input === 'v')) {
+      try {
+        const clipboardText = clipboardy.readSync();
+        if (clipboardText) {
+          handlePastedText(clipboardText, true);
+        }
+      } catch {
+        // Clipboard read failed, ignore
+      }
       return;
     }
 
