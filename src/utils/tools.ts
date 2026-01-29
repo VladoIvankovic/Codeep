@@ -3,6 +3,13 @@
  */
 
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync } from 'fs';
+
+// Debug logging helper - only logs when CODEEP_DEBUG=1
+const debug = (...args: any[]) => {
+  if (process.env.CODEEP_DEBUG === '1') {
+    console.error('[DEBUG]', ...args);
+  }
+};
 import { join, dirname, relative, resolve, isAbsolute } from 'path';
 import { executeCommand, CommandResult } from './shell';
 import { recordWrite, recordEdit, recordDelete, recordMkdir, recordCommand } from './history';
@@ -284,10 +291,15 @@ export function parseOpenAIToolCalls(toolCalls: any[]): ToolCall[] {
     } catch (e) {
       // JSON parsing failed - likely truncated response
       // Try to extract what we can from partial JSON
+      debug(`Failed to parse tool arguments for ${toolName}, attempting partial extraction...`);
+      debug('Raw args preview:', rawArgs.substring(0, 200));
+      
       const partialParams = extractPartialToolParams(toolName, rawArgs);
       if (partialParams) {
+        debug(`Successfully extracted partial params for ${toolName}:`, Object.keys(partialParams));
         parameters = partialParams;
       } else {
+        debug(`Could not extract params, skipping ${toolName}`);
         continue;
       }
     }
@@ -295,16 +307,15 @@ export function parseOpenAIToolCalls(toolCalls: any[]): ToolCall[] {
     // Validate required parameters for specific tools
     // For write_file, we need at least a path (content can be empty string or placeholder)
     if (toolName === 'write_file' && !parameters.path) {
-      // Log for debugging write_file issues
-      if (process.env.CODEEP_DEBUG) {
-        console.error(`[WARN] write_file missing path, raw args: ${rawArgs.substring(0, 200)}`);
-      }
+      debug(`Skipping write_file - missing path. Raw args:`, rawArgs.substring(0, 200));
       continue;
     }
     if (toolName === 'read_file' && !parameters.path) {
+      debug(`Skipping read_file - missing path`);
       continue;
     }
     if (toolName === 'edit_file' && (!parameters.path || parameters.old_text === undefined || parameters.new_text === undefined)) {
+      debug(`Skipping edit_file - missing required params`);
       continue;
     }
     
@@ -413,6 +424,7 @@ function extractPartialToolParams(toolName: string, rawArgs: string): Record<str
     
     return null;
   } catch (e) {
+    debug('Error in extractPartialToolParams:', e);
     return null;
   }
 }
@@ -698,6 +710,8 @@ export function executeTool(toolCall: ToolCall, projectRoot: string): ToolResult
   const tool = normalizeToolName(toolCall.tool);
   const parameters = toolCall.parameters;
   
+  debug(`Executing tool: ${tool}`, parameters.path || parameters.command || '');
+  
   try {
     switch (tool) {
       case 'read_file': {
@@ -734,10 +748,12 @@ export function executeTool(toolCall: ToolCall, projectRoot: string): ToolResult
         let content = parameters.content as string;
         
         if (!path) {
+          debug('write_file failed: missing path');
           return { success: false, output: '', error: 'Missing required parameter: path', tool, parameters };
         }
         // Allow empty content or provide placeholder for truncated responses
         if (content === undefined || content === null) {
+          debug('write_file: content was undefined, using placeholder');
           content = '<!-- Content was not provided -->\n';
         }
         
