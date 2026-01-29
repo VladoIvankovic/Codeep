@@ -270,20 +270,43 @@ function normalizeToolName(name: string): string {
 export function parseOpenAIToolCalls(toolCalls: any[]): ToolCall[] {
   if (!toolCalls || !Array.isArray(toolCalls)) return [];
   
-  return toolCalls.map(tc => {
-    let parameters = {};
+  const parsed: ToolCall[] = [];
+  
+  for (const tc of toolCalls) {
+    const toolName = normalizeToolName(tc.function?.name || '');
+    if (!toolName) continue;
+    
+    let parameters: Record<string, unknown> = {};
     try {
       parameters = JSON.parse(tc.function?.arguments || '{}');
-    } catch {
-      parameters = {};
+    } catch (e) {
+      // JSON parsing failed - likely truncated response
+      console.error(`[DEBUG] Failed to parse tool arguments for ${toolName}:`, tc.function?.arguments?.substring(0, 100));
+      continue; // Skip this tool call entirely
     }
     
-    return {
-      tool: normalizeToolName(tc.function?.name || ''),
+    // Validate required parameters for specific tools
+    if (toolName === 'write_file' && (!parameters.path || parameters.content === undefined)) {
+      console.error(`[DEBUG] Skipping write_file with missing path or content`);
+      continue;
+    }
+    if (toolName === 'read_file' && !parameters.path) {
+      console.error(`[DEBUG] Skipping read_file with missing path`);
+      continue;
+    }
+    if (toolName === 'edit_file' && (!parameters.path || parameters.old_text === undefined || parameters.new_text === undefined)) {
+      console.error(`[DEBUG] Skipping edit_file with missing parameters`);
+      continue;
+    }
+    
+    parsed.push({
+      tool: toolName,
       parameters,
       id: tc.id,
-    };
-  }).filter(tc => tc.tool);
+    });
+  }
+  
+  return parsed;
 }
 
 /**
