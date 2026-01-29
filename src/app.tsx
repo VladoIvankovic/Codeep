@@ -67,7 +67,7 @@ import { saveContext, loadContext, clearContext, mergeContext } from './utils/co
 import { performCodeReview, formatReviewResult } from './utils/codeReview';
 import { loadProjectPreferences, learnFromProject, formatPreferencesForPrompt, addCustomRule, getLearningStatus } from './utils/learning';
 import { getAllSkills, findSkill, formatSkillsList, formatSkillHelp, generateSkillPrompt, saveCustomSkill, deleteCustomSkill, parseSkillDefinition, parseSkillChain, parseSkillArgs, searchSkills, trackSkillUsage, getSkillStats, Skill } from './utils/skills';
-import { AgentProgress, AgentSummary, ChangesList } from './components/AgentProgress';
+import { AgentProgress, AgentSummary, ChangesList, LiveCodeStream } from './components/AgentProgress';
 import { ActionLog, ToolCall, ToolResult, createActionLog } from './utils/tools';
 
 type Screen = 'chat' | 'login' | 'help' | 'status' | 'sessions' | 'sessions-delete' | 'model' | 'protocol' | 'language' | 'settings' | 'permission' | 'provider' | 'search' | 'export' | 'session-picker' | 'logout';
@@ -1612,6 +1612,14 @@ export const App: React.FC = () => {
 
       {/* Loading - show while waiting or streaming */}
       {isLoading && !isAgentRunning && <Loading isStreaming={!!streamingContent} />}
+      
+      {/* Live code stream - show ALL code being written ABOVE agent progress */}
+      {isAgentRunning && (
+        <LiveCodeStream
+          actions={agentActions}
+          isRunning={true}
+        />
+      )}
       
       {/* Agent progress - show while running */}
       {isAgentRunning && (
