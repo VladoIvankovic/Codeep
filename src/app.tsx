@@ -329,8 +329,7 @@ export const App: React.FC = () => {
     
     try {
       const result = await runAgent(prompt, projectContext, {
-        maxIterations: 50, // Increased for complex tasks
-        maxDuration: 5 * 60 * 1000, // 5 minutes
+        // Use config values - no hardcoded limits
         dryRun,
         onIteration: (iteration, message) => {
           setAgentIteration(iteration);

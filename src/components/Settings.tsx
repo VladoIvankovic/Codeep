@@ -94,6 +94,24 @@ const SETTINGS: SettingItem[] = [
     max: 300000,
     step: 10000,
   },
+  {
+    key: 'agentMaxDuration',
+    label: 'Agent Max Duration (min)',
+    value: () => config.get('agentMaxDuration'),
+    type: 'number',
+    min: 5,
+    max: 60,
+    step: 5,
+  },
+  {
+    key: 'agentMaxIterations',
+    label: 'Agent Max Iterations',
+    value: () => config.get('agentMaxIterations'),
+    type: 'number',
+    min: 10,
+    max: 200,
+    step: 10,
+  },
 ];
 
 export const Settings: React.FC<SettingsProps> = ({ onClose, notify }) => {
