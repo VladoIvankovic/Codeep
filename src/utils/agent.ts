@@ -122,6 +122,7 @@ function getAgentSystemPrompt(projectContext: ProjectContext): string {
 8. Use execute_command ONLY for: npm, git, composer, pip, cargo (build/package managers)
 9. When the task is complete, respond with a summary WITHOUT any tool calls
 10. IMPORTANT: After finishing, your response must NOT include any tool calls - just provide a summary
+11. IGNORE the .codeep folder - it contains internal configuration, do NOT read or modify it
 
 ## Self-Verification
 After you make changes, the system will automatically run build and tests.
@@ -190,6 +191,7 @@ When you need to use a tool, respond with:
 5. Use execute_command ONLY for: npm, git, composer, pip, cargo (build/package managers)
 6. Always read files before editing
 7. When done, respond WITHOUT tool calls
+8. IGNORE the .codeep folder - it contains internal configuration, do NOT read or modify it
 
 ## Project: ${projectContext.name} (${projectContext.type})
 ${projectContext.structure}
