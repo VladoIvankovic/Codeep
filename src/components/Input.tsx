@@ -103,10 +103,11 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     const lineCount = lines.length;
     const charCount = trimmed.length;
 
-    // For multi-line, long pastes, or explicit Ctrl+V - show indicator
-    if (lineCount > 1 || charCount > 100 || (fromCtrlV && charCount > 20)) {
-      const firstLine = lines[0].substring(0, 60);
-      const preview = firstLine + (lines[0].length > 60 ? '...' : '');
+    // For multi-line or long pastes - show info box with preview
+    if (lineCount > 1 || charCount > 80 || (fromCtrlV && charCount > 30)) {
+      // Create preview - first line truncated
+      const firstLine = lines[0].substring(0, 50);
+      const preview = firstLine + (lines[0].length > 50 || lineCount > 1 ? '...' : '');
       
       setPasteInfo({
         lines: lineCount,
@@ -115,11 +116,11 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
         fullText: trimmed,
       });
       
-      // Show only indicator in input field, NOT the actual pasted text
-      const indicator = `📋 Paste: ${charCount} chars`;
-      // Replace entire value with just the indicator (don't append pasted text)
-      setValue(indicator);
-      setCursorPos(indicator.length);
+      // Show truncated text in input (not ugly indicator)
+      const displayText = trimmed.replace(/\r?\n/g, ' ').substring(0, 60);
+      const inputText = displayText + (trimmed.length > 60 ? '...' : '');
+      setValue(inputText);
+      setCursorPos(inputText.length);
     } else {
       // Short paste - insert directly
       setValue(prev => prev + trimmed);
@@ -135,12 +136,8 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     // Handle Enter - submit
     if (key.return) {
       if (value.trim()) {
-        let submitValue = value.trim();
-        
-        // Replace paste indicator with actual content
-        if (pasteInfo && submitValue.includes('📋 Paste:')) {
-          submitValue = submitValue.replace(/📋 Paste: \d+ chars/, pasteInfo.fullText);
-        }
+        // If we have paste info, submit the full pasted text
+        const submitValue = pasteInfo ? pasteInfo.fullText : value.trim();
         
         onSubmit(submitValue);
         setValue('');
@@ -154,8 +151,9 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     // Handle Escape - clear paste info or input
     if (key.escape) {
       if (pasteInfo) {
-        // Remove paste indicator from value
-        setValue(prev => prev.replace(/📋 Paste: \d+ chars/, ''));
+        // Clear pasted content
+        setValue('');
+        setCursorPos(0);
         setPasteInfo(null);
       } else if (value) {
         setValue('');
@@ -167,13 +165,15 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
     // Handle Backspace
     if (key.backspace || key.delete) {
       if (cursorPos > 0) {
+        // If paste info exists, clear everything on backspace
+        if (pasteInfo) {
+          setValue('');
+          setCursorPos(0);
+          setPasteInfo(null);
+          return;
+        }
         setValue(prev => prev.slice(0, cursorPos - 1) + prev.slice(cursorPos));
         setCursorPos(prev => prev - 1);
-        
-        // Clear paste info if we deleted the indicator
-        if (pasteInfo && !value.includes('📋 Paste:')) {
-          setPasteInfo(null);
-        }
       }
       return;
     }
@@ -356,25 +356,23 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
       {pasteInfo && (
         <Box 
           borderStyle="round" 
-          borderColor="cyan" 
+          borderColor="green" 
           paddingX={1} 
           marginBottom={1}
           flexDirection="column"
         >
-          <Text color="cyan" bold>
-            📋 Pasted Content
-          </Text>
           <Text>
-            <Text color="white" bold>{pasteInfo.lines}</Text>
-            <Text color="gray"> {pasteInfo.lines === 1 ? 'line' : 'lines'} • </Text>
+            <Text color="green" bold>📋 </Text>
             <Text color="white" bold>{pasteInfo.chars}</Text>
-            <Text color="gray"> characters</Text>
-          </Text>
-          <Text color="gray" dimColor wrap="truncate">
-            {pasteInfo.preview}
-          </Text>
-          <Text color="gray" dimColor>
-            Press Enter to send • Esc to remove
+            <Text color="gray"> chars</Text>
+            {pasteInfo.lines > 1 && (
+              <>
+                <Text color="gray"> • </Text>
+                <Text color="white" bold>{pasteInfo.lines}</Text>
+                <Text color="gray"> lines</Text>
+              </>
+            )}
+            <Text color="gray" dimColor>  (Enter send • Esc cancel)</Text>
           </Text>
         </Box>
       )}
