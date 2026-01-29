@@ -629,32 +629,49 @@ export async function runAgent(
         
         // CRITICAL: Don't stop prematurely if we haven't done much work yet
         // Check if prompt contains "create", "build", "make", "implement", "add" etc.
-        const taskKeywords = ['create', 'build', 'make', 'implement', 'add', 'generate', 'write', 'setup', 'develop', 'kreiraj', 'napravi', 'dodaj'];
+        const taskKeywords = ['create', 'build', 'make', 'implement', 'add', 'generate', 'write', 'setup', 'develop', 'kreiraj', 'napravi', 'dodaj', 'website', 'app', 'feature'];
         const promptLowerCase = prompt.toLowerCase();
         const isCreationTask = taskKeywords.some(kw => promptLowerCase.includes(kw));
         
         const hasCreatedFiles = actions.some(a => a.type === 'write' || a.type === 'mkdir');
-        const hasEnoughActions = actions.length >= 3;
-        const isVeryEarlyIteration = iteration <= 3;
+        const writeFileCount = actions.filter(a => a.type === 'write').length;
+        const isVeryEarlyIteration = iteration <= 5; // Extended to 5 iterations
         
-        // If it's a creation task and agent hasn't created files yet, push it to continue
-        if (isCreationTask && isVeryEarlyIteration && !hasCreatedFiles) {
-          console.error(`[DEBUG] Agent trying to stop too early (iteration ${iteration}, ${actions.length} actions, no files created for creation task)`);
+        console.error(`[DEBUG] Task check: isCreationTask=${isCreationTask}, hasCreatedFiles=${hasCreatedFiles}, writeFileCount=${writeFileCount}, iteration=${iteration}`);
+        
+        // STRICT RULE: If it's a creation task, agent MUST create files
+        // Don't accept early stopping even if it has "done some actions"
+        if (isCreationTask && !hasCreatedFiles && iteration <= 10) {
+          console.error(`[DEBUG] BLOCKING early stop - creation task detected but NO files created yet (iteration ${iteration}, ${actions.length} actions)`);
           
-          // Push agent to actually do the work
+          // Force agent to create files
           messages.push({ role: 'assistant', content: finalResponse });
           messages.push({ 
             role: 'user', 
-            content: `You haven't completed the task yet. You need to use the tools to actually CREATE the files and folders I asked for. Don't just plan or explain - EXECUTE! Use create_directory and write_file tools NOW to create the actual files.` 
+            content: `❌ STOP. You have NOT created any files yet!\n\nYou MUST use write_file and create_directory tools to create the actual files I asked for.\n\nDo NOT respond with explanations. Execute the tools NOW:\n1. Use create_directory if needed\n2. Use write_file to create EACH file\n3. Only after creating ALL files, respond with a summary.` 
           });
           
           finalResponse = ''; // Reset
           continue;
         }
         
-        // Even if not clearly a creation task, if very few actions in early iterations, push to continue
+        // If creation task but not enough files created, keep pushing
+        if (isCreationTask && writeFileCount < 2 && iteration <= 10) {
+          console.error(`[DEBUG] BLOCKING early stop - only ${writeFileCount} files created, need more (iteration ${iteration})`);
+          
+          messages.push({ role: 'assistant', content: finalResponse });
+          messages.push({ 
+            role: 'user', 
+            content: `You've only created ${writeFileCount} file(s). The task requires creating multiple files. Continue creating the remaining files now.` 
+          });
+          
+          finalResponse = ''; // Reset
+          continue;
+        }
+        
+        // General safety: very few actions in early iterations
         if (isVeryEarlyIteration && actions.length < 2) {
-          console.error(`[DEBUG] Agent stopping with very few actions (iteration ${iteration}, only ${actions.length} actions)`);
+          console.error(`[DEBUG] BLOCKING early stop - very few actions (iteration ${iteration}, only ${actions.length} actions)`);
           
           messages.push({ role: 'assistant', content: finalResponse });
           messages.push({ 
