@@ -3,6 +3,71 @@
  */
 
 import { ProjectContext } from './project';
+
+/**
+ * Custom error class for timeout - allows distinguishing from user abort
+ */
+class TimeoutError extends Error {
+  constructor(message: string = 'Request timed out') {
+    super(message);
+    this.name = 'TimeoutError';
+  }
+}
+
+/**
+ * Calculate dynamic timeout based on task complexity
+ * Complex tasks (creating pages, multiple files) need more time
+ */
+function calculateDynamicTimeout(prompt: string, iteration: number, baseTimeout: number): number {
+  const promptLower = prompt.toLowerCase();
+  
+  // Keywords that indicate complex tasks requiring more time
+  const complexKeywords = [
+    'create', 'build', 'implement', 'generate', 'make', 'develop', 'setup',
+    'website', 'app', 'application', 'page', 'component', 'feature',
+    'kreiraj', 'napravi', 'izgradi', 'generiraj', 'razvij', 'stranica', 'aplikacija'
+  ];
+  
+  // Keywords indicating very large tasks
+  const veryComplexKeywords = [
+    'full', 'complete', 'entire', 'whole', 'multiple', 'all',
+    'cijeli', 'kompletni', 'sve', 'višestruki'
+  ];
+  
+  let multiplier = 1.0;
+  
+  // Check for complex keywords
+  const hasComplexKeyword = complexKeywords.some(kw => promptLower.includes(kw));
+  if (hasComplexKeyword) {
+    multiplier = 2.0; // Double timeout for complex tasks
+  }
+  
+  // Check for very complex keywords
+  const hasVeryComplexKeyword = veryComplexKeywords.some(kw => promptLower.includes(kw));
+  if (hasVeryComplexKeyword) {
+    multiplier = 3.0; // Triple timeout for very complex tasks
+  }
+  
+  // Long prompts usually mean complex tasks
+  if (prompt.length > 200) {
+    multiplier = Math.max(multiplier, 2.0);
+  }
+  if (prompt.length > 500) {
+    multiplier = Math.max(multiplier, 3.0);
+  }
+  
+  // Later iterations might need more time (context is larger)
+  if (iteration > 5) {
+    multiplier *= 1.2;
+  }
+  if (iteration > 10) {
+    multiplier *= 1.3;
+  }
+  
+  // Minimum 60 seconds, maximum 5 minutes for a single API call
+  const calculatedTimeout = baseTimeout * multiplier;
+  return Math.min(Math.max(calculatedTimeout, 60000), 300000);
+}
 import { 
   parseToolCalls, 
   executeTool, 
@@ -178,7 +243,8 @@ async function agentChat(
   messages: Message[],
   systemPrompt: string,
   onChunk?: (chunk: string) => void,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  dynamicTimeout?: number
 ): Promise<AgentChatResponse> {
   const protocol = config.get('protocol');
   const model = config.get('model');
@@ -199,10 +265,19 @@ async function agentChat(
   }
   
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.get('apiTimeout'));
+  const timeoutMs = dynamicTimeout || config.get('apiTimeout');
+  let isTimeout = false;
+  
+  const timeout = setTimeout(() => {
+    isTimeout = true;
+    controller.abort();
+  }, timeoutMs);
   
   if (abortSignal) {
-    abortSignal.addEventListener('abort', () => controller.abort());
+    abortSignal.addEventListener('abort', () => {
+      isTimeout = false; // User abort, not timeout
+      controller.abort();
+    });
   }
   
   const headers: Record<string, string> = {
@@ -297,6 +372,15 @@ async function agentChat(
   } catch (error) {
     const err = error as Error;
     
+    // Check if this was a timeout vs user abort
+    if (err.name === 'AbortError') {
+      if (isTimeout) {
+        throw new TimeoutError(`API request timed out after ${timeoutMs}ms`);
+      }
+      // User abort - rethrow as-is
+      throw error;
+    }
+    
     // If native tools failed, try fallback
     if (err.message.includes('tools') || err.message.includes('function')) {
       return await agentChatFallback(messages, systemPrompt, onChunk, abortSignal);
@@ -315,7 +399,8 @@ async function agentChatFallback(
   messages: Message[],
   systemPrompt: string,
   onChunk?: (chunk: string) => void,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  dynamicTimeout?: number
 ): Promise<AgentChatResponse> {
   const protocol = config.get('protocol');
   const model = config.get('model');
@@ -330,10 +415,19 @@ async function agentChatFallback(
   }
   
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.get('apiTimeout'));
+  const timeoutMs = dynamicTimeout || config.get('apiTimeout');
+  let isTimeout = false;
+  
+  const timeout = setTimeout(() => {
+    isTimeout = true;
+    controller.abort();
+  }, timeoutMs);
   
   if (abortSignal) {
-    abortSignal.addEventListener('abort', () => controller.abort());
+    abortSignal.addEventListener('abort', () => {
+      isTimeout = false; // User abort, not timeout
+      controller.abort();
+    });
   }
   
   const headers: Record<string, string> = {
@@ -415,6 +509,19 @@ async function agentChatFallback(
     const toolCalls = parseToolCalls(content);
     
     return { content, toolCalls, usedNativeTools: false };
+  } catch (error) {
+    const err = error as Error;
+    
+    // Check if this was a timeout vs user abort
+    if (err.name === 'AbortError') {
+      if (isTimeout) {
+        throw new TimeoutError(`API request timed out after ${timeoutMs}ms`);
+      }
+      // User abort - rethrow as-is
+      throw error;
+    }
+    
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
@@ -552,6 +659,9 @@ export async function runAgent(
   let iteration = 0;
   let finalResponse = '';
   let result: AgentResult;
+  let consecutiveTimeouts = 0;
+  const maxTimeoutRetries = 3;
+  const baseTimeout = config.get('agentApiTimeout');
   
   try {
     while (iteration < opts.maxIterations) {
@@ -584,28 +694,82 @@ export async function runAgent(
       console.error(`[DEBUG] Starting iteration ${iteration}/${opts.maxIterations}, actions: ${actions.length}`);
       opts.onIteration?.(iteration, `Iteration ${iteration}/${opts.maxIterations}`);
       
-      // Get AI response
+      // Calculate dynamic timeout based on task complexity
+      const dynamicTimeout = calculateDynamicTimeout(prompt, iteration, baseTimeout);
+      console.error(`[DEBUG] Using dynamic timeout: ${dynamicTimeout}ms (base: ${baseTimeout}ms, iteration: ${iteration})`);
+      
+      // Get AI response with retry logic for timeouts
       let chatResponse: AgentChatResponse;
-      try {
-        chatResponse = await agentChat(
-          messages,
-          systemPrompt,
-          opts.onThinking,
-          opts.abortSignal
-        );
-      } catch (error) {
-        const err = error as Error;
-        if (err.name === 'AbortError') {
-          result = {
-            success: false,
-            iterations: iteration,
-            actions,
-            finalResponse: 'Agent was stopped',
-            aborted: true,
-          };
-          return result;
+      let retryCount = 0;
+      
+      while (true) {
+        try {
+          chatResponse = await agentChat(
+            messages,
+            systemPrompt,
+            opts.onThinking,
+            opts.abortSignal,
+            dynamicTimeout * (1 + retryCount * 0.5) // Increase timeout on retry
+          );
+          consecutiveTimeouts = 0; // Reset on success
+          break;
+        } catch (error) {
+          const err = error as Error;
+          
+          // Handle user abort (not timeout)
+          if (err.name === 'AbortError') {
+            result = {
+              success: false,
+              iterations: iteration,
+              actions,
+              finalResponse: 'Agent was stopped by user',
+              aborted: true,
+            };
+            return result;
+          }
+          
+          // Handle timeout with retry
+          if (err.name === 'TimeoutError') {
+            retryCount++;
+            consecutiveTimeouts++;
+            console.error(`[DEBUG] Timeout occurred (retry ${retryCount}/${maxTimeoutRetries}, consecutive: ${consecutiveTimeouts})`);
+            opts.onIteration?.(iteration, `API timeout, retrying (${retryCount}/${maxTimeoutRetries})...`);
+            
+            if (retryCount >= maxTimeoutRetries) {
+              // Too many retries for this iteration
+              if (consecutiveTimeouts >= maxTimeoutRetries * 2) {
+                // Too many consecutive timeouts overall, give up
+                result = {
+                  success: false,
+                  iterations: iteration,
+                  actions,
+                  finalResponse: 'Agent stopped due to repeated API timeouts',
+                  error: `API timed out ${consecutiveTimeouts} times consecutively. The task may be too complex or the API is overloaded.`,
+                };
+                return result;
+              }
+              
+              // Skip this iteration and try next
+              console.error(`[DEBUG] Max retries reached, skipping to next iteration`);
+              messages.push({ 
+                role: 'user', 
+                content: 'The previous request timed out. Please continue with the task, using simpler responses if needed.' 
+              });
+              break;
+            }
+            
+            // Wait before retry (exponential backoff)
+            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+            continue;
+          }
+          
+          throw error;
         }
-        throw error;
+      }
+      
+      // If we broke out due to max retries without a response, continue to next iteration
+      if (!chatResponse!) {
+        continue;
       }
       
       let { content, toolCalls, usedNativeTools } = chatResponse;

@@ -55,6 +55,7 @@ interface ConfigSchema {
   agentMaxFixAttempts: number; // Max attempts to fix errors (default: 3)
   agentMaxIterations: number; // Max agent iterations (default: 100)
   agentMaxDuration: number; // Max agent duration in minutes (default: 20)
+  agentApiTimeout: number; // Base API timeout for agent in ms (default: 90000, dynamically adjusted)
   projectPermissions: ProjectPermission[];
   providerApiKeys: ProviderApiKey[];
 }
@@ -132,6 +133,7 @@ export const config = new Conf<ConfigSchema>({
     agentMaxFixAttempts: 3,
     agentMaxIterations: 100,
     agentMaxDuration: 20, // minutes
+    agentApiTimeout: 90000, // 90 seconds base timeout for agent (dynamically adjusted)
     protocol: 'openai',
     plan: 'lite',
     language: 'en',
@@ -139,7 +141,7 @@ export const config = new Conf<ConfigSchema>({
     currentSessionId: '',
     temperature: 0.7,
     maxTokens: 4096,
-    apiTimeout: 30000,
+    apiTimeout: 60000,
     rateLimitApi: 30, // 30 requests per minute
     rateLimitCommands: 100, // 100 commands per minute
     projectPermissions: [],

@@ -44,7 +44,7 @@ const SETTINGS: SettingItem[] = [
     value: () => config.get('apiTimeout'),
     type: 'number',
     min: 5000,
-    max: 120000,
+    max: 300000,
     step: 5000,
   },
   {
@@ -84,6 +84,15 @@ const SETTINGS: SettingItem[] = [
       { value: 'auto', label: 'Auto' },
       { value: 'manual', label: 'Manual' },
     ],
+  },
+  {
+    key: 'agentApiTimeout',
+    label: 'Agent API Timeout (ms)',
+    value: () => config.get('agentApiTimeout'),
+    type: 'number',
+    min: 30000,
+    max: 300000,
+    step: 10000,
   },
 ];
 
