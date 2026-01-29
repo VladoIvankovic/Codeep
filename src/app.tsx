@@ -1660,13 +1660,16 @@ export const App: React.FC = () => {
       )}
 
       {/* Input */}
-      <Box borderStyle="single" borderColor="gray" paddingX={1}>
-        <ChatInput 
-          onSubmit={handleSubmit} 
-          disabled={isLoading || isAgentRunning || pendingFileChanges.length > 0}
-          history={inputHistory}
-          clearTrigger={clearInputTrigger}
-        />
+      <Box flexDirection="column">
+        <Text color="#f02a30">{'─'.repeat(60)}</Text>
+        <Box paddingX={1}>
+          <ChatInput 
+            onSubmit={handleSubmit} 
+            disabled={isLoading || isAgentRunning || pendingFileChanges.length > 0}
+            history={inputHistory}
+            clearTrigger={clearInputTrigger}
+          />
+        </Box>
       </Box>
 
       {/* Footer */}
