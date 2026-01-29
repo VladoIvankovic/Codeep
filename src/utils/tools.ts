@@ -293,7 +293,12 @@ export function parseOpenAIToolCalls(toolCalls: any[]): ToolCall[] {
     }
     
     // Validate required parameters for specific tools
-    if (toolName === 'write_file' && (!parameters.path || parameters.content === undefined)) {
+    // For write_file, we need at least a path (content can be empty string or placeholder)
+    if (toolName === 'write_file' && !parameters.path) {
+      // Log for debugging write_file issues
+      if (process.env.CODEEP_DEBUG) {
+        console.error(`[WARN] write_file missing path, raw args: ${rawArgs.substring(0, 200)}`);
+      }
       continue;
     }
     if (toolName === 'read_file' && !parameters.path) {
@@ -322,24 +327,32 @@ function extractPartialToolParams(toolName: string, rawArgs: string): Record<str
     // For write_file, try to extract path and content
     if (toolName === 'write_file') {
       const pathMatch = rawArgs.match(/"path"\s*:\s*"([^"]+)"/);
-      const contentMatch = rawArgs.match(/"content"\s*:\s*"([\s\S]*?)(?:"|$)/);
       
-      if (pathMatch && contentMatch) {
-        // Unescape the content
-        let content = contentMatch[1];
-        content = content
-          .replace(/\\n/g, '\n')
-          .replace(/\\t/g, '\t')
-          .replace(/\\r/g, '\r')
-          .replace(/\\"/g, '"')
-          .replace(/\\\\/g, '\\');
+      if (pathMatch) {
+        // Try to extract content - it may be truncated
+        const contentMatch = rawArgs.match(/"content"\s*:\s*"([\s\S]*?)(?:"|$)/);
         
-        // If content appears truncated (doesn't end properly), add a comment
-        if (!content.endsWith('\n') && !content.endsWith('}') && !content.endsWith(';') && !content.endsWith('>')) {
-          content += '\n<!-- Content may be truncated -->\n';
+        if (contentMatch) {
+          // Unescape the content
+          let content = contentMatch[1];
+          content = content
+            .replace(/\\n/g, '\n')
+            .replace(/\\t/g, '\t')
+            .replace(/\\r/g, '\r')
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, '\\');
+          
+          // If content appears truncated (doesn't end properly), add a comment
+          if (!content.endsWith('\n') && !content.endsWith('}') && !content.endsWith(';') && !content.endsWith('>')) {
+            content += '\n<!-- Content may be truncated -->\n';
+          }
+          
+          return { path: pathMatch[1], content };
+        } else {
+          // Path found but content completely missing or malformed
+          // Return with empty content placeholder so the file is at least created
+          return { path: pathMatch[1], content: '<!-- Content was truncated by API -->\n' };
         }
-        
-        return { path: pathMatch[1], content };
       }
     }
     
@@ -656,7 +669,18 @@ function tryParseToolCall(str: string): ToolCall | null {
  * Validate path is within project
  */
 function validatePath(path: string, projectRoot: string): { valid: boolean; absolutePath: string; error?: string } {
-  const absolutePath = isAbsolute(path) ? path : resolve(projectRoot, path);
+  // If path is absolute but starts with projectRoot, convert to relative
+  let normalizedPath = path;
+  if (isAbsolute(path) && path.startsWith(projectRoot)) {
+    normalizedPath = relative(projectRoot, path);
+  }
+  
+  // If still absolute and doesn't match projectRoot, reject it
+  if (isAbsolute(normalizedPath)) {
+    return { valid: false, absolutePath: normalizedPath, error: `Absolute path '${path}' not allowed. Use relative paths.` };
+  }
+  
+  const absolutePath = resolve(projectRoot, normalizedPath);
   const relativePath = relative(projectRoot, absolutePath);
   
   if (relativePath.startsWith('..')) {
@@ -707,13 +731,14 @@ export function executeTool(toolCall: ToolCall, projectRoot: string): ToolResult
       
       case 'write_file': {
         const path = parameters.path as string;
-        const content = parameters.content as string;
+        let content = parameters.content as string;
         
         if (!path) {
           return { success: false, output: '', error: 'Missing required parameter: path', tool, parameters };
         }
-        if (content === undefined) {
-          return { success: false, output: '', error: 'Missing required parameter: content', tool, parameters };
+        // Allow empty content or provide placeholder for truncated responses
+        if (content === undefined || content === null) {
+          content = '<!-- Content was not provided -->\n';
         }
         
         const validation = validatePath(path, projectRoot);

@@ -442,7 +442,7 @@ async function agentChatFallback(
         ],
         stream: Boolean(onChunk),
         temperature: config.get('temperature'),
-        max_tokens: config.get('maxTokens'),
+        max_tokens: Math.max(config.get('maxTokens'), 16384), // Ensure enough tokens for large file generation
       };
     } else {
       endpoint = `${baseUrl}/v1/messages`;
@@ -455,7 +455,7 @@ async function agentChatFallback(
         ],
         stream: Boolean(onChunk),
         temperature: config.get('temperature'),
-        max_tokens: config.get('maxTokens'),
+        max_tokens: Math.max(config.get('maxTokens'), 16384), // Ensure enough tokens for large file generation
       };
     }
     
