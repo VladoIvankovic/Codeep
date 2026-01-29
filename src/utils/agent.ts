@@ -628,18 +628,38 @@ export async function runAgent(
         finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
         
         // CRITICAL: Don't stop prematurely if we haven't done much work yet
-        // Agent should create files, not just respond with text
-        const hasCreatedFiles = actions.some(a => a.type === 'write' || a.type === 'mkdir');
-        const isVeryEarlyIteration = iteration <= 2 && actions.length < 3;
+        // Check if prompt contains "create", "build", "make", "implement", "add" etc.
+        const taskKeywords = ['create', 'build', 'make', 'implement', 'add', 'generate', 'write', 'setup', 'develop', 'kreiraj', 'napravi', 'dodaj'];
+        const promptLowerCase = prompt.toLowerCase();
+        const isCreationTask = taskKeywords.some(kw => promptLowerCase.includes(kw));
         
-        if (isVeryEarlyIteration && !hasCreatedFiles) {
-          console.error(`[DEBUG] Agent trying to stop too early (iteration ${iteration}, ${actions.length} actions, no files created)`);
+        const hasCreatedFiles = actions.some(a => a.type === 'write' || a.type === 'mkdir');
+        const hasEnoughActions = actions.length >= 3;
+        const isVeryEarlyIteration = iteration <= 3;
+        
+        // If it's a creation task and agent hasn't created files yet, push it to continue
+        if (isCreationTask && isVeryEarlyIteration && !hasCreatedFiles) {
+          console.error(`[DEBUG] Agent trying to stop too early (iteration ${iteration}, ${actions.length} actions, no files created for creation task)`);
           
           // Push agent to actually do the work
           messages.push({ role: 'assistant', content: finalResponse });
           messages.push({ 
             role: 'user', 
-            content: `You haven't completed the task yet. You need to use the tools to actually CREATE the files and folders I asked for. Don't just plan - execute! Use create_directory, write_file, and other tools NOW.` 
+            content: `You haven't completed the task yet. You need to use the tools to actually CREATE the files and folders I asked for. Don't just plan or explain - EXECUTE! Use create_directory and write_file tools NOW to create the actual files.` 
+          });
+          
+          finalResponse = ''; // Reset
+          continue;
+        }
+        
+        // Even if not clearly a creation task, if very few actions in early iterations, push to continue
+        if (isVeryEarlyIteration && actions.length < 2) {
+          console.error(`[DEBUG] Agent stopping with very few actions (iteration ${iteration}, only ${actions.length} actions)`);
+          
+          messages.push({ role: 'assistant', content: finalResponse });
+          messages.push({ 
+            role: 'user', 
+            content: `Continue working on the task. Use the available tools to complete what I asked for.` 
           });
           
           finalResponse = ''; // Reset
