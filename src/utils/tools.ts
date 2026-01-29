@@ -277,12 +277,23 @@ export function parseOpenAIToolCalls(toolCalls: any[]): ToolCall[] {
     if (!toolName) continue;
     
     let parameters: Record<string, unknown> = {};
+    const rawArgs = tc.function?.arguments || '{}';
+    
     try {
-      parameters = JSON.parse(tc.function?.arguments || '{}');
+      parameters = JSON.parse(rawArgs);
     } catch (e) {
       // JSON parsing failed - likely truncated response
-      console.error(`[DEBUG] Failed to parse tool arguments for ${toolName}:`, tc.function?.arguments?.substring(0, 100));
-      continue; // Skip this tool call entirely
+      // Try to extract what we can from partial JSON
+      console.error(`[DEBUG] Failed to parse tool arguments for ${toolName}, attempting partial extraction...`);
+      
+      const partialParams = extractPartialToolParams(toolName, rawArgs);
+      if (partialParams) {
+        parameters = partialParams;
+        console.error(`[DEBUG] Successfully extracted partial params for ${toolName}`);
+      } else {
+        console.error(`[DEBUG] Could not extract params, skipping ${toolName}`);
+        continue;
+      }
     }
     
     // Validate required parameters for specific tools
@@ -307,6 +318,98 @@ export function parseOpenAIToolCalls(toolCalls: any[]): ToolCall[] {
   }
   
   return parsed;
+}
+
+/**
+ * Extract parameters from truncated/partial JSON for tool calls
+ * This is a fallback when JSON.parse fails due to API truncation
+ */
+function extractPartialToolParams(toolName: string, rawArgs: string): Record<string, unknown> | null {
+  try {
+    // For write_file, try to extract path and content
+    if (toolName === 'write_file') {
+      const pathMatch = rawArgs.match(/"path"\s*:\s*"([^"]+)"/);
+      const contentMatch = rawArgs.match(/"content"\s*:\s*"([\s\S]*?)(?:"|$)/);
+      
+      if (pathMatch && contentMatch) {
+        // Unescape the content
+        let content = contentMatch[1];
+        content = content
+          .replace(/\\n/g, '\n')
+          .replace(/\\t/g, '\t')
+          .replace(/\\r/g, '\r')
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, '\\');
+        
+        // If content appears truncated (doesn't end properly), add a comment
+        if (!content.endsWith('\n') && !content.endsWith('}') && !content.endsWith(';') && !content.endsWith('>')) {
+          content += '\n<!-- Content may be truncated -->\n';
+        }
+        
+        return { path: pathMatch[1], content };
+      }
+    }
+    
+    // For read_file, just need path
+    if (toolName === 'read_file') {
+      const pathMatch = rawArgs.match(/"path"\s*:\s*"([^"]+)"/);
+      if (pathMatch) {
+        return { path: pathMatch[1] };
+      }
+    }
+    
+    // For list_files, just need path
+    if (toolName === 'list_files') {
+      const pathMatch = rawArgs.match(/"path"\s*:\s*"([^"]+)"/);
+      if (pathMatch) {
+        return { path: pathMatch[1] };
+      }
+    }
+    
+    // For create_directory, just need path
+    if (toolName === 'create_directory') {
+      const pathMatch = rawArgs.match(/"path"\s*:\s*"([^"]+)"/);
+      if (pathMatch) {
+        return { path: pathMatch[1] };
+      }
+    }
+    
+    // For edit_file, need path, old_text, new_text
+    if (toolName === 'edit_file') {
+      const pathMatch = rawArgs.match(/"path"\s*:\s*"([^"]+)"/);
+      const oldTextMatch = rawArgs.match(/"old_text"\s*:\s*"([\s\S]*?)(?:"|$)/);
+      const newTextMatch = rawArgs.match(/"new_text"\s*:\s*"([\s\S]*?)(?:"|$)/);
+      
+      if (pathMatch && oldTextMatch && newTextMatch) {
+        return {
+          path: pathMatch[1],
+          old_text: oldTextMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"'),
+          new_text: newTextMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"'),
+        };
+      }
+    }
+    
+    // For execute_command
+    if (toolName === 'execute_command') {
+      const commandMatch = rawArgs.match(/"command"\s*:\s*"([^"]+)"/);
+      if (commandMatch) {
+        const argsMatch = rawArgs.match(/"args"\s*:\s*\[([\s\S]*?)\]/);
+        let args: string[] = [];
+        if (argsMatch) {
+          const argStrings = argsMatch[1].match(/"([^"]+)"/g);
+          if (argStrings) {
+            args = argStrings.map(s => s.replace(/"/g, ''));
+          }
+        }
+        return { command: commandMatch[1], args };
+      }
+    }
+    
+    return null;
+  } catch (e) {
+    console.error(`[DEBUG] Error in extractPartialToolParams:`, e);
+    return null;
+  }
 }
 
 /**
