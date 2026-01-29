@@ -121,10 +121,11 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
         fullText: trimmed,
       });
       
-      // Show indicator in input field
+      // Show only indicator in input field, NOT the actual pasted text
       const indicator = `📋 [${lineCount} lines, ${charCount} chars]`;
-      setValue(prev => prev + indicator);
-      setCursorPos(prev => prev + indicator.length);
+      // Replace entire value with just the indicator (don't append pasted text)
+      setValue(indicator);
+      setCursorPos(indicator.length);
     } else {
       // Short paste - insert directly
       setValue(prev => prev + trimmed);
@@ -279,12 +280,15 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
 
     // Regular character input
     if (input && !key.ctrl && !key.meta) {
-      // Check if this might be part of a paste
-      if (!detectPaste(input)) {
-        // Normal single character input
-        setValue(prev => prev.slice(0, cursorPos) + input + prev.slice(cursorPos));
-        setCursorPos(prev => prev + input.length);
+      // If we have paste info, clear it when user starts typing
+      if (pasteInfo) {
+        setPasteInfo(null);
+        setValue('');
+        setCursorPos(0);
       }
+      // Normal single character input
+      setValue(prev => prev.slice(0, cursorPos) + input + prev.slice(cursorPos));
+      setCursorPos(prev => prev + input.length);
     }
   }, { isActive: !disabled });
 
@@ -377,7 +381,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
       <Box>
         <Text color="#f02a30" bold>{'> '}</Text>
         {disabled ? (
-          <Text color="gray">...</Text>
+          <Text color="yellow">Agent working... (Esc to stop)</Text>
         ) : (
           renderInput()
         )}
