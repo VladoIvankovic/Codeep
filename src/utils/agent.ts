@@ -81,8 +81,10 @@ function getAgentSystemPrompt(projectContext: ProjectContext): string {
 2. Use edit_file for modifications to existing files (preserves other content)
 3. Use write_file only for creating new files or complete overwrites
 4. Use create_directory to create new folders/directories
-5. When the task is complete, respond with a summary WITHOUT any tool calls
-6. IMPORTANT: After finishing, your response must NOT include any tool calls - just provide a summary
+5. Use list_files to see directory contents (NOT execute_command with ls)
+6. Use execute_command only for npm, git, build tools, tests (NOT for ls, cat, etc.)
+7. When the task is complete, respond with a summary WITHOUT any tool calls
+8. IMPORTANT: After finishing, your response must NOT include any tool calls - just provide a summary
 
 ## Self-Verification
 After you make changes, the system will automatically run build and tests.
@@ -134,13 +136,19 @@ When you need to use a tool, respond with:
 </tool_call>
 
 <tool_call>
+{"tool": "list_files", "parameters": {"path": "."}}
+</tool_call>
+
+<tool_call>
 {"tool": "write_file", "parameters": {"path": "test/index.html", "content": "<!DOCTYPE html>..."}}
 </tool_call>
 
 ## Rules
 1. Use the exact format shown above
-2. Always read files before editing
-3. When done, respond WITHOUT tool calls
+2. Use list_files to see directory contents (NOT execute_command with ls)
+3. Use execute_command only for npm, git, build tools (NOT for ls, cat, etc.)
+4. Always read files before editing
+5. When done, respond WITHOUT tool calls
 
 ## Project: ${projectContext.name} (${projectContext.type})
 ${projectContext.structure}
@@ -610,21 +618,25 @@ export async function runAgent(
         if (taskPlan && taskPlan.tasks.some(t => t.status === 'pending')) {
           const nextTask = getNextTask(taskPlan.tasks);
           if (nextTask) {
-            // Move to next task
-            nextTask.status = 'in_progress';
-            opts.onTaskUpdate?.(nextTask);
-            
-            messages.push({ role: 'assistant', content: finalResponse });
-            messages.push({ 
-              role: 'user', 
-              content: `Good progress! Next task:\n\n${nextTask.id}. ${nextTask.description}\n\nComplete this task now.` 
-            });
-            
             // Mark previous task as completed
             const prevTask = taskPlan.tasks.find(t => t.status === 'in_progress' && t.id !== nextTask.id);
             if (prevTask) {
               prevTask.status = 'completed';
             }
+            
+            // Move to next task
+            nextTask.status = 'in_progress';
+            opts.onTaskUpdate?.(nextTask);
+            
+            // Build progress summary
+            const completedTasks = taskPlan.tasks.filter(t => t.status === 'completed');
+            const progressSummary = completedTasks.map(t => `✓ ${t.id}. ${t.description}`).join('\n');
+            
+            messages.push({ role: 'assistant', content: finalResponse });
+            messages.push({ 
+              role: 'user', 
+              content: `Excellent! Task ${prevTask?.id} is complete.\n\nProgress so far:\n${progressSummary}\n\nNow continue with:\n${nextTask.id}. ${nextTask.description}\n\nOriginal request: ${taskPlan.originalPrompt}` 
+            });
             
             finalResponse = ''; // Reset for next task
             continue;
