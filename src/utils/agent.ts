@@ -635,7 +635,7 @@ export async function runAgent(
             messages.push({ role: 'assistant', content: finalResponse });
             messages.push({ 
               role: 'user', 
-              content: `Excellent! Task ${prevTask?.id} is complete.\n\nProgress so far:\n${progressSummary}\n\nNow continue with:\n${nextTask.id}. ${nextTask.description}\n\nOriginal request: ${taskPlan.originalPrompt}` 
+              content: `Good! Task ${prevTask?.id} done.\n\nCompleted:\n${progressSummary}\n\nNEXT TASK (do it now):\n${nextTask.id}. ${nextTask.description}\n\nUse your tools immediately to complete this task. Do NOT ask for permission or confirmation.` 
             });
             
             finalResponse = ''; // Reset for next task
