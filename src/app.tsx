@@ -354,8 +354,12 @@ export const App: React.FC = () => {
           });
         },
         onThinking: (text: string) => {
-          // Strip <think> tags from thinking text
-          const cleanText = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+          // Strip <think> and <tool_call> tags from thinking text
+          const cleanText = text
+            .replace(/<think>[\s\S]*?<\/think>/gi, '')
+            .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+            .replace(/<toolcall>[\s\S]*?<\/toolcall>/gi, '')
+            .trim();
           if (cleanText) {
             setAgentThinking(prev => prev + cleanText);
           }

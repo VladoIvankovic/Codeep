@@ -133,7 +133,7 @@ export const config = new Conf<ConfigSchema>({
     agentMaxFixAttempts: 3,
     agentMaxIterations: 100,
     agentMaxDuration: 20, // minutes
-    agentApiTimeout: 120000, // 120 seconds base timeout for agent (dynamically adjusted)
+    agentApiTimeout: 180000, // 180 seconds base timeout for agent (dynamically adjusted)
     protocol: 'openai',
     plan: 'lite',
     language: 'en',

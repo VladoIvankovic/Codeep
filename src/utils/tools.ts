@@ -284,29 +284,22 @@ export function parseOpenAIToolCalls(toolCalls: any[]): ToolCall[] {
     } catch (e) {
       // JSON parsing failed - likely truncated response
       // Try to extract what we can from partial JSON
-      console.error(`[DEBUG] Failed to parse tool arguments for ${toolName}, attempting partial extraction...`);
-      
       const partialParams = extractPartialToolParams(toolName, rawArgs);
       if (partialParams) {
         parameters = partialParams;
-        console.error(`[DEBUG] Successfully extracted partial params for ${toolName}`);
       } else {
-        console.error(`[DEBUG] Could not extract params, skipping ${toolName}`);
         continue;
       }
     }
     
     // Validate required parameters for specific tools
     if (toolName === 'write_file' && (!parameters.path || parameters.content === undefined)) {
-      console.error(`[DEBUG] Skipping write_file with missing path or content`);
       continue;
     }
     if (toolName === 'read_file' && !parameters.path) {
-      console.error(`[DEBUG] Skipping read_file with missing path`);
       continue;
     }
     if (toolName === 'edit_file' && (!parameters.path || parameters.old_text === undefined || parameters.new_text === undefined)) {
-      console.error(`[DEBUG] Skipping edit_file with missing parameters`);
       continue;
     }
     
@@ -407,7 +400,6 @@ function extractPartialToolParams(toolName: string, rawArgs: string): Record<str
     
     return null;
   } catch (e) {
-    console.error(`[DEBUG] Error in extractPartialToolParams:`, e);
     return null;
   }
 }

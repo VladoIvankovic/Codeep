@@ -28,12 +28,25 @@ interface MessageProps {
 
 export const MessageView: React.FC<MessageProps> = memo(({ role, content }) => {
   if (role === 'user') {
+    // For long user messages, truncate display but keep full content for processing
+    const maxDisplayLength = 500;
+    const isLong = content.length > maxDisplayLength;
+    const displayContent = isLong 
+      ? content.substring(0, maxDisplayLength) + '...' 
+      : content;
+    
+    // Replace multiple newlines with single space for cleaner display
+    const cleanContent = displayContent.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+    
     return (
-      <Box marginY={1}>
-        <Text>
+      <Box marginY={1} flexDirection="column">
+        <Text wrap="wrap">
           <Text color="#f02a30" bold>{'> '}</Text>
-          <Text>{content}</Text>
+          <Text>{cleanContent}</Text>
         </Text>
+        {isLong && (
+          <Text color="gray" dimColor>  ({content.length} characters total)</Text>
+        )}
       </Box>
     );
   }
