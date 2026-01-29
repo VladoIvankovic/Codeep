@@ -1670,15 +1670,20 @@ export const App: React.FC = () => {
             clearTrigger={clearInputTrigger}
           />
         </Box>
+        <Text color="#f02a30">{'─'.repeat(Math.max(20, (stdout?.columns || 80) - 2))}</Text>
       </Box>
 
       {/* Footer with shortcuts */}
       <Box>
         <Text>
+          <Text color="#f02a30" bold>Ctrl+V</Text>
+          <Text> Paste  </Text>
           <Text color="#f02a30" bold>Ctrl+L</Text>
           <Text> Clear  </Text>
           <Text color="#f02a30" bold>Esc</Text>
           <Text> Cancel  </Text>
+          <Text color="#f02a30" bold>↑↓</Text>
+          <Text> History  </Text>
           <Text color="#f02a30" bold>/help</Text>
           <Text> Commands</Text>
         </Text>
