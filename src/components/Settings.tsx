@@ -6,6 +6,8 @@ import { updateRateLimits } from '../utils/ratelimit';
 interface SettingsProps {
   onClose: () => void;
   notify: (msg: string) => void;
+  hasWriteAccess?: boolean;
+  hasProjectContext?: boolean;
 }
 
 interface SettingItem {
@@ -114,7 +116,7 @@ const SETTINGS: SettingItem[] = [
   },
 ];
 
-export const Settings: React.FC<SettingsProps> = ({ onClose, notify }) => {
+export const Settings: React.FC<SettingsProps> = ({ onClose, notify, hasWriteAccess = false, hasProjectContext = false }) => {
   const [selected, setSelected] = useState(0);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
@@ -201,6 +203,16 @@ export const Settings: React.FC<SettingsProps> = ({ onClose, notify }) => {
     }
   });
 
+  const agentMode = config.get('agentMode');
+  const agentCanRun = agentMode === 'on' && hasWriteAccess && hasProjectContext;
+  const agentStatusMessage = agentMode === 'on' 
+    ? (!hasProjectContext 
+        ? '⚠️  No project detected - agent cannot run'
+        : (!hasWriteAccess 
+            ? '⚠️  No write access - use /grant or agent runs in chat mode'
+            : '✓ Agent will run automatically'))
+    : 'ℹ️  Use /agent <task> to run agent manually';
+
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="#f02a30" padding={1}>
       <Text color="#f02a30" bold>Settings</Text>
@@ -227,6 +239,8 @@ export const Settings: React.FC<SettingsProps> = ({ onClose, notify }) => {
         </Box>
       ))}
 
+      <Text> </Text>
+      <Text color={agentCanRun ? 'green' : (agentMode === 'on' ? 'yellow' : 'gray')}>{agentStatusMessage}</Text>
       <Text> </Text>
       <Text>↑/↓ Navigate  |  ←/→ Adjust  |  Enter Edit  |  Esc Close</Text>
     </Box>
