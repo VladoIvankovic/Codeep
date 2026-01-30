@@ -105,27 +105,12 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
         )}
       </Box>
       
-      {/* Current action - prominent display with code preview for write/edit */}
+      {/* Current action - simple display without code preview */}
       {isRunning && currentAction && (
-        <Box flexDirection="column" marginTop={1}>
-          <Box>
-            <Text color="white" bold>Now: </Text>
-            <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
-            <Text color="white">{formatTarget(currentAction.target)}</Text>
-            {(currentAction.type === 'write' || currentAction.type === 'edit') && currentAction.details && (
-              <Text color="gray"> ({currentAction.details.split('\n').length} lines)</Text>
-            )}
-          </Box>
-          {/* Show last few lines of code being written/edited */}
-          {(currentAction.type === 'write' || currentAction.type === 'edit') && currentAction.details && (
-            <Box flexDirection="column" marginLeft={2}>
-              {currentAction.details.split('\n').slice(-5).map((line, i) => (
-                <Text key={i} color="gray" dimColor>
-                  {line.slice(0, 60)}{line.length > 60 ? '…' : ''}
-                </Text>
-              ))}
-            </Box>
-          )}
+        <Box marginTop={1}>
+          <Text color="white" bold>Now: </Text>
+          <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
+          <Text color="white">{formatTarget(currentAction.target)}</Text>
         </Box>
       )}
       
@@ -304,18 +289,53 @@ const isSectionBreak = (line: string, prevLine: string | null): boolean => {
 
 /**
  * Live Code Stream component - shows code being written/edited by agent
- * FIXED HEIGHT to prevent layout shift and empty lines
+ * Displays code progressively 10 lines at a time ABOVE agent progress
  */
 interface LiveCodeStreamProps {
   actions: ActionLog[];
   isRunning: boolean;
 }
 
-const LIVE_CODE_LINES = 8; // Fixed number of visible lines
+const LINES_PER_CHUNK = 10; // Show 10 lines at a time
 
 export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunning }) => {
+  // Track how many lines we've shown so far
+  const [visibleLineCount, setVisibleLineCount] = useState(LINES_PER_CHUNK);
+  const lastActionIdRef = useRef<string>('');
+  
   // Find the current write/edit action with code content
   const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
+  
+  // Create a unique ID for current action
+  const currentActionId = currentAction 
+    ? `${currentAction.type}-${currentAction.target}-${currentAction.details?.length || 0}`
+    : '';
+  
+  // Reset visible lines when action changes
+  useEffect(() => {
+    if (currentActionId !== lastActionIdRef.current) {
+      lastActionIdRef.current = currentActionId;
+      setVisibleLineCount(LINES_PER_CHUNK);
+    }
+  }, [currentActionId]);
+  
+  // Progressively show more lines
+  useEffect(() => {
+    if (!isRunning || !currentAction) return;
+    if (currentAction.type !== 'write' && currentAction.type !== 'edit') return;
+    if (!currentAction.details) return;
+    
+    const totalLines = currentAction.details.split('\n').length;
+    
+    // If we haven't shown all lines yet, schedule showing more
+    if (visibleLineCount < totalLines) {
+      const timer = setTimeout(() => {
+        setVisibleLineCount(prev => Math.min(prev + LINES_PER_CHUNK, totalLines));
+      }, 200); // Show next 10 lines every 200ms
+      
+      return () => clearTimeout(timer);
+    }
+  }, [isRunning, currentAction, visibleLineCount]);
   
   // Only show for write/edit actions with content while running
   if (!isRunning || !currentAction) return null;
@@ -332,50 +352,46 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   const actionLabel = currentAction.type === 'write' ? '✨ Creating' : '✏️  Editing';
   const actionColor = currentAction.type === 'write' ? 'green' : 'yellow';
   
-  // Show last N lines (sliding window)
-  const startLine = Math.max(0, totalLines - LIVE_CODE_LINES);
-  const visibleLines = allLines.slice(startLine, totalLines);
-  
-  // Pad to fixed height to prevent layout shift
-  const paddedLines: string[] = [...visibleLines];
-  while (paddedLines.length < LIVE_CODE_LINES) {
-    paddedLines.push('');
-  }
+  // Show lines up to visibleLineCount
+  const linesToShow = allLines.slice(0, visibleLineCount);
+  const hasMoreLines = visibleLineCount < totalLines;
   
   return (
-    <Box flexDirection="column">
-      {/* Header bar - single line */}
+    <Box flexDirection="column" marginBottom={1}>
+      {/* Header bar */}
+      <Text color={actionColor}>{'─'.repeat(60)}</Text>
       <Text>
         <Text color={actionColor} bold>{actionLabel} </Text>
         <Text color="white" bold>{filename}</Text>
         <Text color="gray"> • {langLabel} • </Text>
-        <Text color="cyan">{totalLines}</Text>
-        <Text color="gray"> lines</Text>
-        {startLine > 0 && <Text color="gray" dimColor> (showing {startLine + 1}-{totalLines})</Text>}
+        <Text color="cyan">{visibleLineCount}</Text>
+        <Text color="gray">/{totalLines} lines</Text>
+        {hasMoreLines && <Text color="yellow"> ▼ streaming...</Text>}
       </Text>
       
-      {/* Code content - FIXED HEIGHT with padding */}
-      {paddedLines.map((line, i) => {
-        const lineNum = startLine + i + 1;
-        const isRealLine = i < visibleLines.length;
+      {/* Code content - show progressively */}
+      {linesToShow.map((line, i) => {
+        const lineNum = i + 1;
         return (
-          <Text key={`fixed-line-${i}`}>
+          <Text key={`line-${i}`}>
             <Text color="gray" dimColor>
-              {isRealLine ? String(lineNum).padStart(4, ' ') : '    '} │{' '}
+              {String(lineNum).padStart(4, ' ')} │{' '}
             </Text>
-            {isRealLine ? (
-              <>
-                <Text color={getCodeColor(line, ext)}>
-                  {line.slice(0, 70)}
-                </Text>
-                {line.length > 70 && <Text color="gray">…</Text>}
-              </>
-            ) : (
-              <Text> </Text>
-            )}
+            <Text color={getCodeColor(line, ext)}>
+              {line.slice(0, 80)}
+            </Text>
+            {line.length > 80 && <Text color="gray">…</Text>}
           </Text>
         );
       })}
+      
+      {/* Show loading indicator if more lines coming */}
+      {hasMoreLines && (
+        <Text color="gray" dimColor>
+          {'     '}│ ... {totalLines - visibleLineCount} more lines loading...
+        </Text>
+      )}
+      <Text color={actionColor}>{'─'.repeat(60)}</Text>
     </Box>
   );
 };
