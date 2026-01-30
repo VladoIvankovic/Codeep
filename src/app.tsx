@@ -217,20 +217,26 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
-  // Clear terminal and input when opening command-triggered modals (not session-picker or permission)
-  // Also force stdout to flush to ensure screen clears before render
+  // Track previous screen to detect transitions
+  const [prevScreen, setPrevScreen] = useState<Screen>(screen);
+  
+  // Clear terminal when opening modals OR when closing them back to chat
   useEffect(() => {
     const commandModals: Screen[] = ['help', 'status', 'sessions', 'sessions-delete', 'model', 'protocol', 'language', 'settings', 'provider', 'search', 'export', 'logout'];
+    
+    // Clear when opening a modal
     if (commandModals.includes(screen)) {
-      // Clear screen and reset cursor
-      stdout?.write('\x1b[2J\x1b[3J\x1b[H\x1b[0;0H');
-      // Force flush
-      if (stdout && 'moveCursor' in stdout) {
-        (stdout as any).moveCursor(0, -999); // Move cursor way up
-      }
-      setClearInputTrigger(prev => prev + 1); // Clear input to remove command text and suggestions
+      stdout?.write('\x1b[2J\x1b[3J\x1b[H');
+      setClearInputTrigger(prev => prev + 1);
     }
-  }, [screen, stdout]);
+    
+    // Clear when returning to chat from a modal
+    if (screen === 'chat' && commandModals.includes(prevScreen)) {
+      stdout?.write('\x1b[2J\x1b[3J\x1b[H');
+    }
+    
+    setPrevScreen(screen);
+  }, [screen, stdout, prevScreen]);
 
   // Handle keyboard shortcuts
   useInput((input, key) => {
