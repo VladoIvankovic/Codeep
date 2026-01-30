@@ -73,10 +73,8 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
 
   // Filter commands based on input
   const suggestions = useMemo(() => {
-    // No suggestions for empty input
-    if (!value || value.length === 0) return [];
-    // Show all commands when user types just '/'
-    if (value === '/') return COMMANDS;
+    // No suggestions for empty input or just '/'
+    if (!value || value.length === 0 || value === '/') return [];
     if (!value.startsWith('/') || value.includes(' ')) return [];
     return COMMANDS.filter(c => c.cmd.startsWith(value.toLowerCase()));
   }, [value]);
@@ -382,6 +380,15 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
 
   return (
     <Box flexDirection="column">
+      {/* Command hint when just '/' is typed */}
+      {value === '/' && (
+        <Box marginBottom={1}>
+          <Text color="gray" dimColor>
+            Type command name (e.g., help, status, settings) or type /help to see all commands
+          </Text>
+        </Box>
+      )}
+
       {/* Suggestions dropdown */}
       {suggestions.length > 0 && (
         <Box flexDirection="column" marginBottom={1}>
