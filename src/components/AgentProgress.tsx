@@ -174,31 +174,123 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   );
 };
 
-// Helper function for syntax highlighting
-const getCodeColor = (line: string): string => {
+// Get file extension for language detection
+const getFileExtension = (filename: string): string => {
+  const parts = filename.split('.');
+  return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : '';
+};
+
+// Get language label from extension
+const getLanguageLabel = (ext: string): string => {
+  const langMap: Record<string, string> = {
+    'js': 'JavaScript',
+    'jsx': 'React JSX',
+    'ts': 'TypeScript',
+    'tsx': 'React TSX',
+    'html': 'HTML',
+    'css': 'CSS',
+    'scss': 'SCSS',
+    'json': 'JSON',
+    'md': 'Markdown',
+    'py': 'Python',
+    'rb': 'Ruby',
+    'go': 'Go',
+    'rs': 'Rust',
+    'java': 'Java',
+    'kt': 'Kotlin',
+    'swift': 'Swift',
+    'php': 'PHP',
+    'sql': 'SQL',
+    'sh': 'Shell',
+    'bash': 'Bash',
+    'yml': 'YAML',
+    'yaml': 'YAML',
+    'xml': 'XML',
+    'vue': 'Vue',
+    'svelte': 'Svelte',
+  };
+  return langMap[ext] || ext.toUpperCase();
+};
+
+// Enhanced syntax highlighting with more colors
+const getCodeColor = (line: string, ext: string): string => {
   const trimmed = line.trim();
-  // Comments
-  if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('/*') || trimmed.startsWith('*')) {
+  
+  // Empty lines
+  if (!trimmed) return 'gray';
+  
+  // Comments - multiple styles
+  if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('/*') || 
+      trimmed.startsWith('*') || trimmed.startsWith('<!--') || trimmed.startsWith('"""') ||
+      trimmed.startsWith("'''")) {
     return 'gray';
   }
-  // Keywords
-  if (/^(import|export|const|let|var|function|class|interface|type|return|if|else|for|while|async|await)\b/.test(trimmed)) {
+  
+  // Import/export statements
+  if (/^(import|export|from|require)\b/.test(trimmed)) {
     return 'magenta';
   }
-  // HTML tags
-  if (trimmed.startsWith('<') && (trimmed.includes('>') || trimmed.includes('/>'))) {
+  
+  // Function/class definitions
+  if (/^(function|class|interface|type|enum|const\s+\w+\s*=\s*(\(|async)|def |class |fn |func |pub fn)\b/.test(trimmed)) {
+    return 'yellow';
+  }
+  
+  // Control flow keywords
+  if (/^(if|else|for|while|switch|case|try|catch|finally|return|throw|break|continue|async|await)\b/.test(trimmed)) {
+    return 'blue';
+  }
+  
+  // Variable declarations
+  if (/^(const|let|var|val|mut)\b/.test(trimmed)) {
     return 'cyan';
   }
-  // Strings
-  if (trimmed.includes('"') || trimmed.includes("'") || trimmed.includes('`')) {
+  
+  // HTML/JSX tags
+  if ((ext === 'html' || ext === 'jsx' || ext === 'tsx' || ext === 'vue' || ext === 'svelte') &&
+      (trimmed.startsWith('<') || trimmed.startsWith('</'))) {
+    return 'cyan';
+  }
+  
+  // CSS selectors and properties
+  if ((ext === 'css' || ext === 'scss') && (trimmed.includes('{') || trimmed.includes(':'))) {
     return 'green';
   }
+  
+  // JSON keys
+  if (ext === 'json' && trimmed.includes(':')) {
+    return 'cyan';
+  }
+  
+  // Strings (but not the whole line)
+  if (/["'`]/.test(trimmed)) {
+    return 'green';
+  }
+  
   return 'white';
+};
+
+// Check if line is a section separator (empty or comment-only)
+const isSectionBreak = (line: string, prevLine: string | null): boolean => {
+  const trimmed = line.trim();
+  const prevTrimmed = prevLine?.trim() || '';
+  
+  // Empty line after non-empty line
+  if (!trimmed && prevTrimmed) return true;
+  
+  // Comment after code
+  if ((trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('/*')) &&
+      prevTrimmed && !prevTrimmed.startsWith('//') && !prevTrimmed.startsWith('#')) {
+    return true;
+  }
+  
+  return false;
 };
 
 /**
  * Live Code Stream component - shows ALL code being written/edited by agent
  * Displayed ABOVE the AgentProgress component
+ * Enhanced with better syntax highlighting and visual organization
  */
 interface LiveCodeStreamProps {
   actions: ActionLog[];
@@ -215,32 +307,86 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   if (!currentAction.details) return null;
   
   const code = currentAction.details;
-  const filename = currentAction.target.split('/').pop() || currentAction.target;
+  const fullPath = currentAction.target;
+  const filename = fullPath.split('/').pop() || fullPath;
+  const ext = getFileExtension(filename);
+  const langLabel = getLanguageLabel(ext);
   const allLines = code.split('\n');
   const totalLines = allLines.length;
-  const actionLabel = currentAction.type === 'write' ? 'Creating' : 'Editing';
+  const actionLabel = currentAction.type === 'write' ? '✨ Creating' : '✏️  Editing';
+  const actionColor = currentAction.type === 'write' ? 'green' : 'yellow';
+  
+  // Calculate code stats
+  const nonEmptyLines = allLines.filter(l => l.trim()).length;
+  const commentLines = allLines.filter(l => {
+    const t = l.trim();
+    return t.startsWith('//') || t.startsWith('#') || t.startsWith('/*') || t.startsWith('*');
+  }).length;
   
   return (
     <Box flexDirection="column" marginY={1}>
-      {/* Header */}
-      <Box>
-        <Text color="cyan" bold>📝 {actionLabel}: </Text>
-        <Text color="white" bold>{filename}</Text>
-        <Text color="gray"> ({totalLines} lines)</Text>
+      {/* Header bar */}
+      <Box flexDirection="row" justifyContent="space-between">
+        <Box>
+          <Text color={actionColor} bold>{actionLabel} </Text>
+          <Text color="white" bold>{filename}</Text>
+        </Box>
+        <Box>
+          <Text color="gray">{langLabel} • </Text>
+          <Text color="cyan">{totalLines}</Text>
+          <Text color="gray"> lines</Text>
+          {commentLines > 0 && (
+            <>
+              <Text color="gray"> • </Text>
+              <Text color="gray" dimColor>{commentLines} comments</Text>
+            </>
+          )}
+        </Box>
       </Box>
       
-      {/* Code content - ALL lines with syntax highlighting */}
-      <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+      {/* Path info */}
+      {fullPath !== filename && (
+        <Text color="gray" dimColor>  📁 {fullPath}</Text>
+      )}
+      
+      {/* Top border */}
+      <Text color={actionColor}>{'┌' + '─'.repeat(78) + '┐'}</Text>
+      
+      {/* Code content - ALL lines with enhanced syntax highlighting */}
+      <Box flexDirection="column">
         {allLines.map((line, i) => {
           const lineNum = i + 1;
+          const prevLine = i > 0 ? allLines[i - 1] : null;
+          const showSeparator = isSectionBreak(line, prevLine);
+          const lineColor = getCodeColor(line, ext);
+          
+          // Zebra striping for better readability (subtle)
+          const isEvenLine = i % 2 === 0;
+          
           return (
-            <Text key={i}>
-              <Text color="gray" dimColor>{String(lineNum).padStart(4, ' ')} │ </Text>
-              <Text color={getCodeColor(line)}>{line}</Text>
-            </Text>
+            <Box key={i} flexDirection="column">
+              {/* Section separator for visual grouping */}
+              {showSeparator && i > 0 && (
+                <Text color="gray" dimColor>{'│' + ' '.repeat(78) + '│'}</Text>
+              )}
+              <Text>
+                <Text color={actionColor}>│</Text>
+                <Text color={isEvenLine ? 'gray' : 'white'} dimColor={!isEvenLine}>
+                  {String(lineNum).padStart(4, ' ')}
+                </Text>
+                <Text color="gray" dimColor> │ </Text>
+                <Text color={lineColor}>{line.slice(0, 70)}</Text>
+                {line.length > 70 && <Text color="gray">…</Text>}
+                {line.length <= 70 && <Text>{' '.repeat(Math.max(0, 70 - line.length))}</Text>}
+                <Text color={actionColor}>│</Text>
+              </Text>
+            </Box>
           );
         })}
       </Box>
+      
+      {/* Bottom border with stats */}
+      <Text color={actionColor}>{'└' + '─'.repeat(78) + '┘'}</Text>
     </Box>
   );
 };
