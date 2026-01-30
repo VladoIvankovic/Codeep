@@ -729,7 +729,7 @@ export const App: React.FC = () => {
 
       case '/grant': {
         // Grant write permission for agent mode
-        if (!projectContext) {
+        if (!isInProject) {
           notify('No project detected. Open terminal in a project folder and run codeep there.');
           break;
         }
