@@ -207,11 +207,11 @@ export const Settings: React.FC<SettingsProps> = ({ onClose, notify, hasWriteAcc
   const agentCanRun = agentMode === 'on' && hasWriteAccess && hasProjectContext;
   const agentStatusMessage = agentMode === 'on' 
     ? (!hasProjectContext 
-        ? '⚠️  No project detected - agent cannot run'
+        ? '⚠️  Not a project folder - run codeep inside a project directory'
         : (!hasWriteAccess 
-            ? '⚠️  No write access - use /grant or agent runs in chat mode'
-            : '✓ Agent will run automatically'))
-    : 'ℹ️  Use /agent <task> to run agent manually';
+            ? '⚠️  Needs write permission - use /grant to enable agent'
+            : '✓ Agent will run automatically on every message'))
+    : 'ℹ️  Manual mode - use /agent <task> to run agent';
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="#f02a30" padding={1}>
