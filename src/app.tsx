@@ -217,6 +217,13 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
+  // Clear terminal when opening modals
+  useEffect(() => {
+    if (screen !== 'chat' && screen !== 'login') {
+      stdout?.write('\x1b[2J\x1b[H');
+    }
+  }, [screen, stdout]);
+
   // Handle keyboard shortcuts
   useInput((input, key) => {
     // Ctrl+L to clear chat (F5 doesn't work reliably in all terminals)
@@ -226,6 +233,8 @@ export const App: React.FC = () => {
         stdout?.write('\x1b[2J\x1b[H');
         setMessages([]);
         clearCodeBlocks();
+        setAgentResult(null);
+        setAgentActions([]);
         const newSessId = startNewSession();
         setSessionId(newSessId);
         setClearInputTrigger(prev => prev + 1); // Trigger input clear
