@@ -45,7 +45,7 @@ export const MessageView: React.FC<MessageProps> = memo(({ role, content }) => {
           <Text>{cleanContent}</Text>
         </Text>
         {isLong && (
-          <Text color="gray" dimColor>  ({content.length} characters total)</Text>
+          <Text color="#888888" dimColor>  ({content.length} characters total)</Text>
         )}
       </Box>
     );
@@ -224,7 +224,7 @@ const SyntaxLine: React.FC<{ line: string; language: string }> = memo(({ line, l
   while (remaining.length > 0) {
     // Comments
     if (remaining.startsWith('//') || remaining.startsWith('#')) {
-      parts.push(<Text key={key++} color="gray">{remaining}</Text>);
+      parts.push(<Text key={key++} color="#888888">{remaining}</Text>);
       break;
     }
     

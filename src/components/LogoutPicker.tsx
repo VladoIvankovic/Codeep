@@ -62,7 +62,7 @@ export const LogoutPicker: React.FC<LogoutPickerProps> = ({
     return (
       <Box flexDirection="column" padding={1}>
         <Text color="yellow">No providers configured.</Text>
-        <Text color="gray">Press Escape to go back.</Text>
+        <Text color="#888888">Press Escape to go back.</Text>
       </Box>
     );
   }
@@ -96,7 +96,7 @@ export const LogoutPicker: React.FC<LogoutPickerProps> = ({
       </Box>
 
       <Box marginTop={1}>
-        <Text color="gray">↑↓ Navigate  Enter Select  Esc Cancel</Text>
+        <Text color="#888888">↑↓ Navigate  Enter Select  Esc Cancel</Text>
       </Box>
     </Box>
   );

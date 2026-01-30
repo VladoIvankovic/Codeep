@@ -228,6 +228,12 @@ export const App: React.FC = () => {
 
   // Handle keyboard shortcuts
   useInput((input, key) => {
+    // ? to open help (only from chat screen)
+    if (input === '?' && screen === 'chat' && !isLoading) {
+      setScreen('help');
+      return;
+    }
+
     // Ctrl+L to clear chat (F5 doesn't work reliably in all terminals)
     if (key.ctrl && input === 'l') {
       if (!isLoading && screen === 'chat') {
@@ -1657,7 +1663,12 @@ export const App: React.FC = () => {
     );
   }
 
-  // Main chat screen
+  // Main chat screen (only render when screen === 'chat')
+  if (screen !== 'chat') {
+    // If we got here, we're in an unknown state - default to chat
+    return null;
+  }
+
   return (
     <Box flexDirection="column">
       {/* Header - show logo only when no messages and not loading */}
@@ -1732,7 +1743,7 @@ export const App: React.FC = () => {
           })}
           <Text> </Text>
           <Text>Apply changes? <Text color="#f02a30" bold>[Y/n]</Text></Text>
-          <Text color="gray">Press Y to apply, N or Esc to reject</Text>
+          <Text color="#888888">Press Y to apply, N or Esc to reject</Text>
         </Box>
       )}
 
@@ -1781,7 +1792,7 @@ export const App: React.FC = () => {
               <Text color="yellow">Agent: ON (no permission - use /grant)</Text>
             )
           ) : (
-            <Text color="gray">Agent: Manual (use /agent)</Text>
+            <Text color="#888888">Agent: Manual (use /agent)</Text>
           )}
         </Box>
       </Box>
