@@ -335,14 +335,35 @@ export const App: React.FC = () => {
           setAgentIteration(iteration);
         },
         onToolCall: (tool: ToolCall) => {
-          // Create a placeholder action - will be updated by onToolResult
-          const placeholderResult: ToolResult = {
-            success: true,
-            output: '',
-            tool: tool.tool,
-            parameters: tool.parameters,
+          // Create action log with content for live code preview
+          // For write/edit actions, include content immediately so it shows while agent works
+          const toolName = tool.tool.toLowerCase().replace(/-/g, '_');
+          let details: string | undefined;
+          
+          if (toolName === 'write_file' && tool.parameters.content) {
+            details = tool.parameters.content as string;
+          } else if (toolName === 'edit_file' && tool.parameters.new_text) {
+            details = tool.parameters.new_text as string;
+          }
+          
+          const actionLog: ActionLog = {
+            type: toolName === 'write_file' ? 'write' : 
+                  toolName === 'edit_file' ? 'edit' : 
+                  toolName === 'read_file' ? 'read' :
+                  toolName === 'delete_file' ? 'delete' :
+                  toolName === 'execute_command' ? 'command' :
+                  toolName === 'search_code' ? 'search' :
+                  toolName === 'list_files' ? 'list' :
+                  toolName === 'create_directory' ? 'mkdir' :
+                  toolName === 'fetch_url' ? 'fetch' : 'command',
+            target: (tool.parameters.path as string) || 
+                    (tool.parameters.command as string) ||
+                    (tool.parameters.pattern as string) ||
+                    (tool.parameters.url as string) || 'unknown',
+            result: 'success', // Will be updated by onToolResult
+            details,
+            timestamp: Date.now(),
           };
-          const actionLog = createActionLog(tool, placeholderResult);
           setAgentActions(prev => [...prev, actionLog]);
         },
         onToolResult: (result: ToolResult, toolCall: ToolCall) => {
