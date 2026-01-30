@@ -83,6 +83,7 @@ export const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
   const [notification, setNotification] = useState('');
+  const [notificationDuration, setNotificationDuration] = useState(3000);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [sessionId, setSessionId] = useState(getCurrentSessionId());
   const [showIntro, setShowIntro] = useState(true);
@@ -165,6 +166,7 @@ export const App: React.FC = () => {
           const agentMode = config.get('agentMode');
           if (agentMode === 'on' && !hasWrite) {
             setTimeout(() => {
+              setNotificationDuration(8000);
               setNotification('⚠️  Agent Mode is ON but only read access. Use /grant for write access or /agent for manual mode.');
             }, 500);
           }
@@ -180,6 +182,7 @@ export const App: React.FC = () => {
         const agentMode = config.get('agentMode');
         if (agentMode === 'on') {
           setTimeout(() => {
+            setNotificationDuration(8000);
             setNotification('⚠️  Agent Mode is ON but no project detected. Run codeep in a project directory.');
           }, 500);
         }
@@ -220,10 +223,10 @@ export const App: React.FC = () => {
   // Clear notification after delay
   useEffect(() => {
     if (notification) {
-      const timer = setTimeout(() => setNotification(''), 3000);
+      const timer = setTimeout(() => setNotification(''), notificationDuration);
       return () => clearTimeout(timer);
     }
-  }, [notification]);
+  }, [notification, notificationDuration]);
 
   // Handle keyboard shortcuts
   useInput((input, key) => {
@@ -309,7 +312,8 @@ export const App: React.FC = () => {
     }
   });
 
-  const notify = useCallback((msg: string) => {
+  const notify = useCallback((msg: string, duration: number = 3000) => {
+    setNotificationDuration(duration);
     setNotification(msg);
   }, []);
 
@@ -484,9 +488,9 @@ export const App: React.FC = () => {
     logger.debug(`[handleSubmit] agentMode=${agentMode}, hasWriteAccess=${hasWriteAccess}, hasProjectContext=${!!projectContext}`);
     if (agentMode === 'on') {
       if (!projectContext) {
-        notify('⚠️  Agent Mode ON: Requires project directory. Using chat mode instead.');
+        notify('⚠️  Agent Mode ON: Requires project directory. Using chat mode instead.', 8000);
       } else if (!hasWriteAccess) {
-        notify('⚠️  Agent Mode ON: Write permission required. Grant with /grant or using chat mode.');
+        notify('⚠️  Agent Mode ON: Write permission required. Grant with /grant or using chat mode.', 8000);
       } else {
         notify('✓ Using agent mode (change in /settings)');
         startAgent(sanitizedInput, false);
@@ -1447,7 +1451,7 @@ export const App: React.FC = () => {
       const agentMode = config.get('agentMode');
       if (agentMode === 'on' && !writeGranted) {
         setTimeout(() => {
-          notify('⚠️  Agent Mode is ON but write access not granted. Use /grant for full agent or /agent for manual.');
+          notify('⚠️  Agent Mode is ON but write access not granted. Use /grant for full agent or /agent for manual.', 8000);
         }, 100);
       }
     } else {
@@ -1457,7 +1461,7 @@ export const App: React.FC = () => {
       const agentMode = config.get('agentMode');
       if (agentMode === 'on') {
         setTimeout(() => {
-          notify('⚠️  Agent Mode is ON but project access denied. Agent cannot run.');
+          notify('⚠️  Agent Mode is ON but project access denied. Agent cannot run.', 8000);
         }, 100);
       }
     }
@@ -1579,6 +1583,8 @@ export const App: React.FC = () => {
       <Settings 
         onClose={() => setScreen('chat')}
         notify={notify}
+        hasWriteAccess={hasWriteAccess}
+        hasProjectContext={!!projectContext}
       />
     );
   }
@@ -1746,19 +1752,32 @@ export const App: React.FC = () => {
       </Box>
 
       {/* Footer with shortcuts */}
-      <Box>
-        <Text>
-          <Text color="#f02a30" bold>Ctrl+V</Text>
-          <Text> Paste  </Text>
-          <Text color="#f02a30" bold>Ctrl+L</Text>
-          <Text> Clear  </Text>
-          <Text color="#f02a30" bold>Esc</Text>
-          <Text> Cancel  </Text>
-          <Text color="#f02a30" bold>↑↓</Text>
-          <Text> History  </Text>
-          <Text color="#f02a30" bold>/help</Text>
-          <Text> Commands</Text>
-        </Text>
+      <Box flexDirection="column">
+        <Box>
+          <Text>
+            <Text color="#f02a30" bold>Ctrl+V</Text>
+            <Text> Paste  </Text>
+            <Text color="#f02a30" bold>Ctrl+L</Text>
+            <Text> Clear  </Text>
+            <Text color="#f02a30" bold>Esc</Text>
+            <Text> Cancel  </Text>
+            <Text color="#f02a30" bold>↑↓</Text>
+            <Text> History  </Text>
+            <Text color="#f02a30" bold>/help</Text>
+            <Text> Commands</Text>
+          </Text>
+        </Box>
+        <Box>
+          {config.get('agentMode') === 'on' ? (
+            hasWriteAccess && projectContext ? (
+              <Text color="green">Agent: ON ✓</Text>
+            ) : (
+              <Text color="yellow">Agent: ON (inactive - {!projectContext ? 'no project' : 'no write access'})</Text>
+            )
+          ) : (
+            <Text color="gray">Agent: Manual (use /agent)</Text>
+          )}
+        </Box>
       </Box>
     </Box>
   );
