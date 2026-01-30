@@ -115,7 +115,7 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
               <Text color={isSelected ? 'green' : 'white'} bold={isSelected}>
                 {prefix}{name}
               </Text>
-              <Text color="gray"> ({meta})</Text>
+              <Text color="#888888"> ({meta})</Text>
             </Box>
           );
         })}
@@ -127,10 +127,10 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
       </Box>
 
       <Box marginTop={1}>
-        <Text color="gray">↑↓ Navigate  </Text>
-        <Text color="gray">Enter Select  </Text>
-        <Text color="gray">N New  </Text>
-        <Text color="gray">Esc New</Text>
+        <Text color="#888888">↑↓ Navigate  </Text>
+        <Text color="#888888">Enter Select  </Text>
+        <Text color="#888888">N New  </Text>
+        <Text color="#888888">Esc New</Text>
       </Box>
     </Box>
   );

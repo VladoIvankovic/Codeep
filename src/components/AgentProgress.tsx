@@ -85,21 +85,21 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
             <Text color={dryRun ? 'yellow' : '#f02a30'} bold>
               {' '}{dryRun ? 'DRY RUN' : 'AGENT'}{' '}
             </Text>
-            <Text color="gray">|</Text>
+            <Text color="#888888">|</Text>
             <Text color="cyan"> step {iteration}</Text>
-            <Text color="gray"> | </Text>
+            <Text color="#888888"> | </Text>
             {actionCounts.reads > 0 && <Text color="blue">{actionCounts.reads}R </Text>}
             {actionCounts.writes > 0 && <Text color="green">{actionCounts.writes}W </Text>}
             {actionCounts.edits > 0 && <Text color="yellow">{actionCounts.edits}E </Text>}
             {actionCounts.commands > 0 && <Text color="magenta">{actionCounts.commands}C </Text>}
             {actionCounts.searches > 0 && <Text color="cyan">{actionCounts.searches}S </Text>}
-            {actions.length === 0 && <Text color="gray">0 actions</Text>}
+            {actions.length === 0 && <Text color="#888888">0 actions</Text>}
           </>
         ) : (
           <>
             <Text color="green" bold>[DONE] </Text>
             <Text>Agent completed</Text>
-            <Text color="gray"> | </Text>
+            <Text color="#888888"> | </Text>
             <Text color="white">{actions.length} actions</Text>
           </>
         )}
@@ -115,12 +115,12 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
       )}
       
       {/* Divider */}
-      <Text color="gray">{'─'.repeat(50)}</Text>
+      <Text color="#888888">{'─'.repeat(50)}</Text>
       
       {/* Recent actions list - show previous actions */}
       {recentActions.length > 1 && (
         <Box flexDirection="column">
-          <Text color="gray" dimColor>Recent:</Text>
+          <Text color="#888888" dimColor>Recent:</Text>
           {recentActions.slice(0, -1).map((action, i) => (
             <ActionItem key={i} action={action} />
           ))}
@@ -130,7 +130,7 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
       {/* File changes summary - show during run */}
       {isRunning && totalFileChanges > 0 && (
         <Box marginTop={1}>
-          <Text color="gray">Changes: </Text>
+          <Text color="#888888">Changes: </Text>
           {fileChanges.created > 0 && <Text color="green">+{fileChanges.created} </Text>}
           {fileChanges.modified > 0 && <Text color="yellow">~{fileChanges.modified} </Text>}
           {fileChanges.deleted > 0 && <Text color="red">-{fileChanges.deleted}</Text>}
@@ -140,7 +140,7 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
       {/* Current thinking - truncated */}
       {isRunning && currentThinking && (
         <Box marginTop={1}>
-          <Text color="gray" wrap="truncate-end">
+          <Text color="#888888" wrap="truncate-end">
             &gt; {currentThinking.slice(0, 80)}{currentThinking.length > 80 ? '...' : ''}
           </Text>
         </Box>
@@ -149,9 +149,9 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
       {/* Footer - how to stop */}
       {isRunning && (
         <Box marginTop={1}>
-          <Text color="gray">Press </Text>
+          <Text color="#888888">Press </Text>
           <Text color="#f02a30">Esc</Text>
-          <Text color="gray"> to stop</Text>
+          <Text color="#888888"> to stop</Text>
         </Box>
       )}
       
@@ -367,9 +367,9 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
       <Text>
         <Text color={actionColor} bold>{actionLabel} </Text>
         <Text color="white" bold>{filename}</Text>
-        <Text color="gray"> • {langLabel} • </Text>
+        <Text color="#888888"> • {langLabel} • </Text>
         <Text color="cyan">{visibleLineCount}</Text>
-        <Text color="gray">/{totalLines} lines</Text>
+        <Text color="#888888">/{totalLines} lines</Text>
         {hasMoreLines && <Text color="yellow"> ▼ streaming...</Text>}
       </Text>
       
@@ -378,20 +378,20 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
         const lineNum = i + 1;
         return (
           <Text key={`line-${i}`}>
-            <Text color="gray" dimColor>
+            <Text color="#888888" dimColor>
               {String(lineNum).padStart(4, ' ')} │{' '}
             </Text>
             <Text color={getCodeColor(line, ext)}>
               {line.slice(0, 80)}
             </Text>
-            {line.length > 80 && <Text color="gray">…</Text>}
+            {line.length > 80 && <Text color="#888888">…</Text>}
           </Text>
         );
       })}
       
       {/* Show loading indicator if more lines coming */}
       {hasMoreLines && (
-        <Text color="gray" dimColor>
+        <Text color="#888888" dimColor>
           {'     '}│ ... {totalLines - visibleLineCount} more lines loading...
         </Text>
       )}
@@ -463,7 +463,7 @@ const ActionItem: React.FC<{ action: ActionLog }> = ({ action }) => {
     <Text>
       {getStatusIndicator()}{' '}
       <Text color={getActionColor(action.type)}>{getActionLabel(action.type).padEnd(10)}</Text>{' '}
-      <Text color="gray">{formatTarget(action.target)}</Text>
+      <Text color="#888888">{formatTarget(action.target)}</Text>
     </Text>
   );
 };
@@ -513,7 +513,7 @@ export const AgentSummary: React.FC<AgentSummaryProps> = ({
         ) : (
           <Text color="red" bold>[!!] Agent failed</Text>
         )}
-        <Text color="gray"> | {iterations} iterations | {actions.length} actions</Text>
+        <Text color="#888888"> | {iterations} iterations | {actions.length} actions</Text>
       </Box>
       
       {error && (
@@ -523,7 +523,7 @@ export const AgentSummary: React.FC<AgentSummaryProps> = ({
       {/* File changes breakdown */}
       {hasFileChanges && (
         <>
-          <Text color="gray">{'─'.repeat(40)}</Text>
+          <Text color="#888888">{'─'.repeat(40)}</Text>
           <Text bold>Changes:</Text>
           
           {filesWritten.length > 0 && (
@@ -590,7 +590,7 @@ export const ChangesList: React.FC<ChangesListProps> = ({ actions }) => {
   if (totalChanges === 0) {
     return (
       <Box>
-        <Text color="gray">No file changes in current session</Text>
+        <Text color="#888888">No file changes in current session</Text>
       </Box>
     );
   }
@@ -598,7 +598,7 @@ export const ChangesList: React.FC<ChangesListProps> = ({ actions }) => {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" padding={1}>
       <Text color="cyan" bold>Session Changes ({totalChanges} total)</Text>
-      <Text color="gray">{'─'.repeat(40)}</Text>
+      <Text color="#888888">{'─'.repeat(40)}</Text>
       
       {writes.length > 0 && (
         <Box flexDirection="column" marginTop={1}>
