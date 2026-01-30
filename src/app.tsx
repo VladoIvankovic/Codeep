@@ -114,7 +114,6 @@ export const App: React.FC = () => {
   const [sessionId, setSessionId] = useState(getCurrentSessionId());
   const [showIntro, setShowIntro] = useState(true);
   const [clearInputTrigger, setClearInputTrigger] = useState(0);
-  const [chatRenderKey, setChatRenderKey] = useState(0);
 
   // Project context
   const [projectPath] = useState(process.cwd());
@@ -244,13 +243,10 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
-  // Clear input when opening modals, force re-render when closing
+  // Clear input when opening modals
   useEffect(() => {
     if (modalScreen !== null) {
       setClearInputTrigger(prev => prev + 1);
-    } else {
-      // Modal just closed - force chat screen re-render to clear ghost content
-      setChatRenderKey(prev => prev + 1);
     }
   }, [modalScreen]);
 
@@ -1692,7 +1688,7 @@ export const App: React.FC = () => {
   }
 
   return (
-    <Box key={`chat-${chatRenderKey}`} flexDirection="column">
+    <Box key="chat-screen" flexDirection="column">
       {/* Header - show logo only when no messages and not loading */}
       {messages.length === 0 && !isLoading && <Logo />}
       
@@ -1778,19 +1774,19 @@ export const App: React.FC = () => {
 
       {/* Modal Overlays */}
       {modalScreen === 'help' && (
-        <ModalOverlay key={`help-modal-${chatRenderKey}`} onClose={() => setModalScreen(null)}>
+        <ModalOverlay key="help-modal" onClose={() => setModalScreen(null)}>
           <Help />
         </ModalOverlay>
       )}
       
       {modalScreen === 'status' && (
-        <ModalOverlay key={`status-modal-${chatRenderKey}`} onClose={() => setModalScreen(null)}>
+        <ModalOverlay key="status-modal" onClose={() => setModalScreen(null)}>
           <Status />
         </ModalOverlay>
       )}
       
       {modalScreen === 'settings' && (
-        <ModalOverlay key={`settings-modal-${chatRenderKey}`} onClose={() => setModalScreen(null)}>
+        <ModalOverlay key="settings-modal" onClose={() => setModalScreen(null)}>
           <Settings 
             onClose={() => setModalScreen(null)}
             notify={notify}
