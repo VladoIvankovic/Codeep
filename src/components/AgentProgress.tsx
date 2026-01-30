@@ -70,7 +70,10 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   return (
     <Box 
       flexDirection="column" 
+      borderStyle="round" 
+      borderColor={dryRun ? 'yellow' : '#f02a30'} 
       paddingX={1}
+      marginY={1}
     >
       {/* Header */}
       <Box>
@@ -102,12 +105,27 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
         )}
       </Box>
       
-      {/* Current action - prominent display */}
+      {/* Current action - prominent display with code preview for write/edit */}
       {isRunning && currentAction && (
-        <Box marginTop={1}>
-          <Text color="white" bold>Now: </Text>
-          <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
-          <Text color="white">{formatTarget(currentAction.target)}</Text>
+        <Box flexDirection="column" marginTop={1}>
+          <Box>
+            <Text color="white" bold>Now: </Text>
+            <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
+            <Text color="white">{formatTarget(currentAction.target)}</Text>
+            {(currentAction.type === 'write' || currentAction.type === 'edit') && currentAction.details && (
+              <Text color="gray"> ({currentAction.details.split('\n').length} lines)</Text>
+            )}
+          </Box>
+          {/* Show last few lines of code being written/edited */}
+          {(currentAction.type === 'write' || currentAction.type === 'edit') && currentAction.details && (
+            <Box flexDirection="column" marginLeft={2}>
+              {currentAction.details.split('\n').slice(-5).map((line, i) => (
+                <Text key={i} color="gray" dimColor>
+                  {line.slice(0, 60)}{line.length > 60 ? '…' : ''}
+                </Text>
+              ))}
+            </Box>
+          )}
         </Box>
       )}
       
