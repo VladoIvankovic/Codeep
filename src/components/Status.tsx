@@ -12,7 +12,7 @@ export const Status: React.FC = () => {
   const models = getModelsForCurrentProvider();
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="#f02a30" padding={1}>
+    <Box flexDirection="column">
       <Text color="#f02a30" bold>Status</Text>
       <Text> </Text>
       <Text><Text color="#f02a30">Provider:</Text>    {provider.name}</Text>

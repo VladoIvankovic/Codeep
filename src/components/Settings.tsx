@@ -214,7 +214,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose, notify, hasWriteAcc
     : 'ℹ️  Manual mode - use /agent <task> to run agent';
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="#f02a30" padding={1}>
+    <Box flexDirection="column">
       <Text color="#f02a30" bold>Settings</Text>
       <Text> </Text>
       
