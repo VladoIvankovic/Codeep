@@ -298,8 +298,40 @@ interface LiveCodeStreamProps {
 }
 
 export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunning }) => {
+  // State for streaming effect - show lines progressively
+  const [visibleLines, setVisibleLines] = useState(0);
+  const [lastActionId, setLastActionId] = useState<string | null>(null);
+  
   // Find the current write/edit action with code content
   const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
+  
+  // Create a unique ID for the current action
+  const actionId = currentAction ? `${currentAction.target}-${currentAction.timestamp}` : null;
+  
+  // Reset visible lines when action changes, then stream progressively
+  useEffect(() => {
+    if (!currentAction || !currentAction.details) {
+      setVisibleLines(0);
+      return;
+    }
+    
+    // If this is a new action, reset and start streaming
+    if (actionId !== lastActionId) {
+      setLastActionId(actionId);
+      setVisibleLines(10); // Start with first 10 lines
+      return;
+    }
+    
+    // Stream more lines progressively
+    const totalLines = currentAction.details.split('\n').length;
+    if (visibleLines < totalLines) {
+      const timer = setTimeout(() => {
+        // Add 10 more lines every 100ms
+        setVisibleLines(prev => Math.min(prev + 10, totalLines));
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [currentAction, actionId, lastActionId, visibleLines]);
   
   // Only show for write/edit actions with content
   if (!isRunning || !currentAction) return null;
@@ -316,8 +348,11 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   const actionLabel = currentAction.type === 'write' ? '✨ Creating' : '✏️  Editing';
   const actionColor = currentAction.type === 'write' ? 'green' : 'yellow';
   
+  // Only show lines up to visibleLines (streaming effect)
+  const linesToShow = allLines.slice(0, visibleLines);
+  const remainingLines = totalLines - visibleLines;
+  
   // Calculate code stats
-  const nonEmptyLines = allLines.filter(l => l.trim()).length;
   const commentLines = allLines.filter(l => {
     const t = l.trim();
     return t.startsWith('//') || t.startsWith('#') || t.startsWith('/*') || t.startsWith('*');
@@ -333,13 +368,10 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
         </Box>
         <Box>
           <Text color="gray">{langLabel} • </Text>
-          <Text color="cyan">{totalLines}</Text>
-          <Text color="gray"> lines</Text>
-          {commentLines > 0 && (
-            <>
-              <Text color="gray"> • </Text>
-              <Text color="gray" dimColor>{commentLines} comments</Text>
-            </>
+          <Text color="cyan">{visibleLines}</Text>
+          <Text color="gray">/{totalLines} lines</Text>
+          {remainingLines > 0 && (
+            <Text color="yellow"> ▼ streaming...</Text>
           )}
         </Box>
       </Box>
@@ -352,9 +384,9 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
       {/* Top border */}
       <Text color={actionColor}>{'┌' + '─'.repeat(78) + '┐'}</Text>
       
-      {/* Code content - ALL lines with enhanced syntax highlighting */}
+      {/* Code content - show lines progressively */}
       <Box flexDirection="column">
-        {allLines.map((line, i) => {
+        {linesToShow.map((line, i) => {
           const lineNum = i + 1;
           const prevLine = i > 0 ? allLines[i - 1] : null;
           const showSeparator = isSectionBreak(line, prevLine);
@@ -385,7 +417,12 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
         })}
       </Box>
       
-      {/* Bottom border with stats */}
+      {/* Show remaining lines indicator */}
+      {remainingLines > 0 && (
+        <Text color="yellow">{'│'} ... {remainingLines} more lines loading... {'│'}</Text>
+      )}
+      
+      {/* Bottom border */}
       <Text color={actionColor}>{'└' + '─'.repeat(78) + '┘'}</Text>
     </Box>
   );
