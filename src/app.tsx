@@ -1634,7 +1634,15 @@ export const App: React.FC = () => {
       {/* Loading - show while waiting or streaming */}
       {isLoading && !isAgentRunning && <Loading isStreaming={!!streamingContent} />}
       
-      {/* Agent progress panel - without live code inside */}
+      {/* Live code stream - shows code being written ABOVE agent progress */}
+      {isAgentRunning && (
+        <LiveCodeStream
+          actions={agentActions}
+          isRunning={true}
+        />
+      )}
+      
+      {/* Agent progress panel */}
       {isAgentRunning && (
         <AgentProgress
           isRunning={true}
