@@ -143,51 +143,38 @@ export const App: React.FC = () => {
     });
   }, []);
   
-  // Check project permission after intro
+  // Check folder permission after intro
   useEffect(() => {
     if (!showIntro && !permissionChecked && screen !== 'login') {
       const isProject = isProjectDirectory(projectPath);
       setIsInProject(isProject);
       
-      if (isProject) {
-        const hasRead = hasReadPermission(projectPath);
-        if (hasRead) {
-          // Already has permission, load context
-          setHasProjectAccess(true);
-          const hasWrite = hasWritePermission(projectPath);
-          setHasWriteAccess(hasWrite);
-          
-          const ctx = getProjectContext(projectPath);
-          if (ctx) {
-            ctx.hasWriteAccess = hasWrite;
-          }
-          setProjectContext(ctx);
-          setPermissionChecked(true);
-          
-          // Warn user if Agent Mode is ON but only read permission exists
-          const agentMode = config.get('agentMode');
-          if (agentMode === 'on' && !hasWrite) {
-            setTimeout(() => {
-              setNotificationDuration(8000);
-              setNotification('⚠️  Agent Mode ON: Needs write permission to work. Use /grant to enable or /agent for manual mode.');
-            }, 500);
-          }
-        } else {
-          // Need to ask for permission
-          setScreen('permission');
-          setPermissionChecked(true);
+      const hasRead = hasReadPermission(projectPath);
+      if (hasRead) {
+        // Already has permission, load context
+        setHasProjectAccess(true);
+        const hasWrite = hasWritePermission(projectPath);
+        setHasWriteAccess(hasWrite);
+        
+        const ctx = getProjectContext(projectPath);
+        if (ctx) {
+          ctx.hasWriteAccess = hasWrite;
         }
-      } else {
+        setProjectContext(ctx);
         setPermissionChecked(true);
         
-        // Warn user if Agent Mode is ON but not in a project directory
+        // Warn user if Agent Mode is ON but only read permission exists
         const agentMode = config.get('agentMode');
-        if (agentMode === 'on') {
+        if (agentMode === 'on' && !hasWrite) {
           setTimeout(() => {
             setNotificationDuration(8000);
-            setNotification('⚠️  Agent Mode ON: No project detected here. Open terminal in a project folder and run codeep there.');
+            setNotification('⚠️  Agent Mode ON: Needs write permission. Use /grant to enable or /agent for manual mode.');
           }, 500);
         }
+      } else {
+        // Need to ask for permission
+        setScreen('permission');
+        setPermissionChecked(true);
       }
     }
   }, [showIntro, permissionChecked, projectPath, screen]);
@@ -489,12 +476,10 @@ export const App: React.FC = () => {
     const agentMode = config.get('agentMode');
     logger.debug(`[handleSubmit] agentMode=${agentMode}, hasWriteAccess=${hasWriteAccess}, hasProjectContext=${!!projectContext}, isInProject=${isInProject}`);
     if (agentMode === 'on') {
-      if (!isInProject) {
-        notify('⚠️  Agent Mode ON: No project detected. Open terminal in a project folder and run codeep there.', 8000);
-      } else if (!hasWriteAccess) {
+      if (!hasWriteAccess) {
         notify('⚠️  Agent Mode ON: Needs write permission. Use /grant to enable.', 8000);
       } else if (!projectContext) {
-        notify('⚠️  Agent Mode ON: Needs permission. Use /grant to allow project access.', 8000);
+        notify('⚠️  Agent Mode ON: Needs permission. Use /grant to allow folder access.', 8000);
       } else {
         notify('✓ Using agent mode (change in /settings)');
         startAgent(sanitizedInput, false);
@@ -1595,7 +1580,6 @@ export const App: React.FC = () => {
         notify={notify}
         hasWriteAccess={hasWriteAccess}
         hasProjectContext={!!projectContext}
-        isInProject={isInProject}
       />
     );
   }
@@ -1783,7 +1767,7 @@ export const App: React.FC = () => {
             hasWriteAccess && projectContext ? (
               <Text color="green">Agent: ON ✓</Text>
             ) : (
-              <Text color="yellow">Agent: ON ({!isInProject ? 'no project - run codeep in project folder' : 'no permission - use /grant'})</Text>
+              <Text color="yellow">Agent: ON (no permission - use /grant)</Text>
             )
           ) : (
             <Text color="gray">Agent: Manual (use /agent)</Text>
