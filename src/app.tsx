@@ -1695,7 +1695,7 @@ export const App: React.FC = () => {
 
       {/* Input */}
       <Box flexDirection="column">
-        <Text color="#f02a30">{'─'.repeat(Math.max(20, (stdout?.columns || 80) - 2))}</Text>
+        <Text color="#f02a30">{'─'.repeat(Math.max(20, stdout?.columns || 80))}</Text>
         <Box paddingX={1}>
           <ChatInput 
             onSubmit={handleSubmit} 
@@ -1704,7 +1704,7 @@ export const App: React.FC = () => {
             clearTrigger={clearInputTrigger}
           />
         </Box>
-        <Text color="#f02a30">{'─'.repeat(Math.max(20, (stdout?.columns || 80) - 2))}</Text>
+        <Text color="#f02a30">{'─'.repeat(Math.max(20, stdout?.columns || 80))}</Text>
       </Box>
 
       {/* Footer with shortcuts */}
