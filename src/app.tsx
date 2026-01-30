@@ -1639,6 +1639,7 @@ export const App: React.FC = () => {
         <LiveCodeStream
           actions={agentActions}
           isRunning={true}
+          terminalWidth={stdout?.columns || 80}
         />
       )}
       
