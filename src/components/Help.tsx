@@ -2,7 +2,7 @@ import React from 'react';
 import { Text, Box } from 'ink';
 
 export const Help: React.FC = () => (
-  <Box flexDirection="column" borderStyle="round" borderColor="#f02a30" padding={1}>
+  <Box flexDirection="column">
     <Text color="#f02a30" bold>Commands</Text>
     <Text> </Text>
     <Text><Text color="#f02a30">/help</Text>              - Show this help</Text>
