@@ -101,6 +101,7 @@ export const App: React.FC = () => {
   const [hasProjectAccess, setHasProjectAccess] = useState(false);
   const [hasWriteAccess, setHasWriteAccess] = useState(false);
   const [permissionChecked, setPermissionChecked] = useState(false);
+  const [isInProject, setIsInProject] = useState(false);
 
   // Load previous session on startup (after intro)
   const [sessionLoaded, setSessionLoaded] = useState(false);
@@ -146,6 +147,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (!showIntro && !permissionChecked && screen !== 'login') {
       const isProject = isProjectDirectory(projectPath);
+      setIsInProject(isProject);
       
       if (isProject) {
         const hasRead = hasReadPermission(projectPath);
@@ -485,12 +487,14 @@ export const App: React.FC = () => {
 
     // Auto-agent mode: if enabled and we have write access, use agent
     const agentMode = config.get('agentMode');
-    logger.debug(`[handleSubmit] agentMode=${agentMode}, hasWriteAccess=${hasWriteAccess}, hasProjectContext=${!!projectContext}`);
+    logger.debug(`[handleSubmit] agentMode=${agentMode}, hasWriteAccess=${hasWriteAccess}, hasProjectContext=${!!projectContext}, isInProject=${isInProject}`);
     if (agentMode === 'on') {
-      if (!projectContext) {
+      if (!isInProject) {
         notify('⚠️  Agent Mode ON: No project detected. Open terminal in a project folder and run codeep there.', 8000);
       } else if (!hasWriteAccess) {
         notify('⚠️  Agent Mode ON: Needs write permission. Use /grant to enable.', 8000);
+      } else if (!projectContext) {
+        notify('⚠️  Agent Mode ON: Needs permission. Use /grant to allow project access.', 8000);
       } else {
         notify('✓ Using agent mode (change in /settings)');
         startAgent(sanitizedInput, false);
@@ -1600,6 +1604,7 @@ export const App: React.FC = () => {
         notify={notify}
         hasWriteAccess={hasWriteAccess}
         hasProjectContext={!!projectContext}
+        isInProject={isInProject}
       />
     );
   }
@@ -1787,7 +1792,7 @@ export const App: React.FC = () => {
             hasWriteAccess && projectContext ? (
               <Text color="green">Agent: ON ✓</Text>
             ) : (
-              <Text color="yellow">Agent: ON ({!projectContext ? 'no project - run codeep in project folder' : 'no permission - use /grant'})</Text>
+              <Text color="yellow">Agent: ON ({!isInProject ? 'no project - run codeep in project folder' : 'no permission - use /grant'})</Text>
             )
           ) : (
             <Text color="gray">Agent: Manual (use /agent)</Text>
