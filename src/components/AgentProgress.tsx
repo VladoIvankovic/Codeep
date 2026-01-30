@@ -2,7 +2,7 @@
  * Agent progress display component
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Box, Text } from 'ink';
 import { ActionLog } from '../utils/tools';
 
@@ -298,9 +298,15 @@ interface LiveCodeStreamProps {
 }
 
 export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunning }) => {
-  // State for streaming effect - sliding window showing last 10 lines
-  const [visibleEndLine, setVisibleEndLine] = useState(0);
-  const [lastActionId, setLastActionId] = useState<string | null>(null);
+  // Use ref for tracking to avoid re-render loops
+  const lastActionIdRef = useRef<string | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // State for visible lines - only update when batch is ready
+  const [displayState, setDisplayState] = useState<{ endLine: number; actionId: string | null }>({
+    endLine: 0,
+    actionId: null,
+  });
   
   // Find the current write/edit action with code content
   const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
@@ -308,30 +314,50 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   // Create a unique ID for the current action
   const actionId = currentAction ? `${currentAction.target}-${currentAction.timestamp}` : null;
   
-  // Reset and stream progressively when action changes
+  // Get total lines for current action
+  const totalLines = currentAction?.details ? currentAction.details.split('\n').length : 0;
+  
+  // Stream lines progressively using interval instead of recursive setTimeout
   useEffect(() => {
-    if (!currentAction || !currentAction.details) {
-      setVisibleEndLine(0);
+    // Clear any existing timer
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    
+    if (!currentAction || !currentAction.details || !isRunning) {
+      if (displayState.endLine !== 0 || displayState.actionId !== null) {
+        setDisplayState({ endLine: 0, actionId: null });
+      }
       return;
     }
     
     // If this is a new action, reset and start streaming
-    if (actionId !== lastActionId) {
-      setLastActionId(actionId);
-      setVisibleEndLine(10); // Start with first 10 lines
-      return;
+    if (actionId !== lastActionIdRef.current) {
+      lastActionIdRef.current = actionId;
+      setDisplayState({ endLine: 10, actionId });
+      
+      // Start interval to stream more lines
+      timerRef.current = setInterval(() => {
+        setDisplayState(prev => {
+          const newEndLine = Math.min(prev.endLine + 10, totalLines);
+          // Stop interval when we've shown all lines
+          if (newEndLine >= totalLines && timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
+          return { ...prev, endLine: newEndLine };
+        });
+      }, 150); // Slightly slower for smoother experience
     }
     
-    // Stream more lines progressively (sliding window moves forward)
-    const totalLines = currentAction.details.split('\n').length;
-    if (visibleEndLine < totalLines) {
-      const timer = setTimeout(() => {
-        // Move window forward by 10 lines every 100ms
-        setVisibleEndLine(prev => Math.min(prev + 10, totalLines));
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [currentAction, actionId, lastActionId, visibleEndLine]);
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [actionId, isRunning, totalLines]);
   
   // Only show for write/edit actions with content while running
   if (!isRunning || !currentAction) return null;
@@ -344,9 +370,11 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   const ext = getFileExtension(filename);
   const langLabel = getLanguageLabel(ext);
   const allLines = code.split('\n');
-  const totalLines = allLines.length;
   const actionLabel = currentAction.type === 'write' ? '✨ Creating' : '✏️  Editing';
   const actionColor = currentAction.type === 'write' ? 'green' : 'yellow';
+  
+  // Use displayState for rendering
+  const visibleEndLine = displayState.endLine;
   
   // Sliding window: show only last 10 lines of what's been "written" so far
   const WINDOW_SIZE = 10;
