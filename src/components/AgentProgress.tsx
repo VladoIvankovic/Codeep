@@ -285,14 +285,15 @@ const isSectionBreak = (line: string, prevLine: string | null): boolean => {
 };
 
 /**
- * Live Code Stream component - shows ALL code being written/edited by agent
- * Displayed ABOVE the AgentProgress component
- * Enhanced with better syntax highlighting and visual organization
+ * Live Code Stream component - shows code being written/edited by agent
+ * FIXED HEIGHT to prevent layout shift and empty lines
  */
 interface LiveCodeStreamProps {
   actions: ActionLog[];
   isRunning: boolean;
 }
+
+const LIVE_CODE_LINES = 8; // Fixed number of visible lines
 
 export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunning }) => {
   // Find the current write/edit action with code content
@@ -313,46 +314,50 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   const actionLabel = currentAction.type === 'write' ? '✨ Creating' : '✏️  Editing';
   const actionColor = currentAction.type === 'write' ? 'green' : 'yellow';
   
-  // Show last 10 lines (most recent code being written)
-  const WINDOW_SIZE = 10;
-  const startLine = Math.max(0, totalLines - WINDOW_SIZE);
-  const linesToShow = allLines.slice(startLine, totalLines);
-  const linesAbove = startLine;
+  // Show last N lines (sliding window)
+  const startLine = Math.max(0, totalLines - LIVE_CODE_LINES);
+  const visibleLines = allLines.slice(startLine, totalLines);
+  
+  // Pad to fixed height to prevent layout shift
+  const paddedLines: string[] = [...visibleLines];
+  while (paddedLines.length < LIVE_CODE_LINES) {
+    paddedLines.push('');
+  }
   
   return (
     <Box flexDirection="column">
-      {/* Header bar */}
-      <Box>
+      {/* Header bar - single line */}
+      <Text>
         <Text color={actionColor} bold>{actionLabel} </Text>
         <Text color="white" bold>{filename}</Text>
         <Text color="gray"> • {langLabel} • </Text>
         <Text color="cyan">{totalLines}</Text>
         <Text color="gray"> lines</Text>
-      </Box>
+        {startLine > 0 && <Text color="gray" dimColor> (showing {startLine + 1}-{totalLines})</Text>}
+      </Text>
       
-      {/* Top border */}
-      <Text color={actionColor}>{'─'.repeat(76)}</Text>
-      
-      {/* Lines above indicator */}
-      {linesAbove > 0 && (
-        <Text color="gray" dimColor>  ⋮ {linesAbove} lines above</Text>
-      )}
-      
-      {/* Code content - show last 10 lines */}
-      {linesToShow.map((line, i) => (
-        <Text key={`line-${startLine + i}`}>
-          <Text color="gray" dimColor>
-            {String(startLine + i + 1).padStart(4, ' ')} │{' '}
+      {/* Code content - FIXED HEIGHT with padding */}
+      {paddedLines.map((line, i) => {
+        const lineNum = startLine + i + 1;
+        const isRealLine = i < visibleLines.length;
+        return (
+          <Text key={`fixed-line-${i}`}>
+            <Text color="gray" dimColor>
+              {isRealLine ? String(lineNum).padStart(4, ' ') : '    '} │{' '}
+            </Text>
+            {isRealLine ? (
+              <>
+                <Text color={getCodeColor(line, ext)}>
+                  {line.slice(0, 70)}
+                </Text>
+                {line.length > 70 && <Text color="gray">…</Text>}
+              </>
+            ) : (
+              <Text> </Text>
+            )}
           </Text>
-          <Text color={getCodeColor(line, ext)}>
-            {line.slice(0, 68)}
-          </Text>
-          {line.length > 68 && <Text color="gray">…</Text>}
-        </Text>
-      ))}
-      
-      {/* Bottom border */}
-      <Text color={actionColor}>{'─'.repeat(76)}</Text>
+        );
+      })}
     </Box>
   );
 };
