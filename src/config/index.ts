@@ -31,7 +31,7 @@ interface ProviderApiKey {
   apiKey: string;
 }
 
-type AgentMode = 'auto' | 'manual';
+type AgentMode = 'on' | 'manual';
 
 interface ConfigSchema {
   apiKey: string; // Legacy, kept for backwards compatibility
@@ -47,7 +47,7 @@ interface ConfigSchema {
   apiTimeout: number;
   rateLimitApi: number; // API requests per minute
   rateLimitCommands: number; // Commands per minute
-  agentMode: AgentMode; // auto = always use agent, manual = use /agent command
+  agentMode: AgentMode; // on = always use agent, manual = use /agent command
   agentConfirmation: 'always' | 'dangerous' | 'never'; // Confirmation mode for agent actions
   agentAutoCommit: boolean; // Auto-commit after agent completes
   agentAutoCommitBranch: boolean; // Create new branch for commits
@@ -125,7 +125,7 @@ export const config = new Conf<ConfigSchema>({
     apiKey: '',
     provider: 'z.ai',
     model: 'glm-4.7',
-    agentMode: 'auto',
+    agentMode: 'on',
     agentConfirmation: 'dangerous', // Confirm only dangerous actions by default
     agentAutoCommit: false,
     agentAutoCommitBranch: false,
@@ -148,6 +148,11 @@ export const config = new Conf<ConfigSchema>({
     providerApiKeys: [],
   },
 });
+
+// Migrate old 'auto' value to 'on'
+if (config.get('agentMode') === 'auto' as any) {
+  config.set('agentMode', 'on');
+}
 
 // In-memory cache for API keys (populated on first access)
 const apiKeyCache = new Map<string, string>();

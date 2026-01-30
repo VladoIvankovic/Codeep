@@ -57,13 +57,17 @@ export const Help: React.FC = () => (
     <Text> </Text>
     <Text color="#f02a30" bold>Agent Mode</Text>
     <Text> </Text>
-    <Text>Use /agent for autonomous task execution:</Text>
+    <Text>Two modes available in <Text color="#f02a30">/settings</Text>:</Text>
+    <Text>  • <Text color="green" bold>ON</Text> - Agent runs automatically on every message</Text>
+    <Text>  • <Text color="yellow" bold>Manual</Text> - Agent runs only with /agent command</Text>
+    <Text> </Text>
+    <Text>Agent capabilities:</Text>
     <Text>  • Creates, edits, deletes files automatically</Text>
     <Text>  • Runs shell commands (npm, git, etc.)</Text>
     <Text>  • Loops until task is complete</Text>
     <Text>  • Shows progress and all actions taken</Text>
     <Text> </Text>
-    <Text>Examples:</Text>
+    <Text>Manual mode examples:</Text>
     <Text>  <Text color="#f02a30">/agent</Text> "add error handling to api.ts"</Text>
     <Text>  <Text color="#f02a30">/agent</Text> "run tests and fix failures"</Text>
     <Text>  <Text color="#f02a30">/agent</Text> "create a new React component for user profile"</Text>

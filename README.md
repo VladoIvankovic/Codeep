@@ -508,7 +508,7 @@ With write access enabled:
 | API Timeout | 60000ms | Request timeout |
 | API Rate Limit | 30/min | Max API calls per minute |
 | Command Rate Limit | 100/min | Max commands per minute |
-| Agent Mode | Auto | `Auto` = agent runs on every message, `Manual` = use /agent |
+| Agent Mode | ON | `ON` = agent runs on every message, `Manual` = use /agent |
 | Agent API Timeout | 180000ms | Timeout per agent API call (auto-adjusted for complexity) |
 | Agent Max Duration | 20 min | Maximum time for agent to run (5-60 min) |
 | Agent Max Iterations | 100 | Maximum agent iterations (10-200) |
@@ -520,7 +520,7 @@ With write access enabled:
 
 ## Usage Examples
 
-### Autonomous Coding (Auto Agent Mode)
+### Autonomous Coding (Agent Mode ON)
 
 With write access enabled, just describe what you want:
 
