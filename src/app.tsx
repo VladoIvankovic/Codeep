@@ -728,16 +728,12 @@ export const App: React.FC = () => {
         break;
 
       case '/grant': {
-        // Grant write permission for agent mode
+        // Open permission dialog to manage project access
         if (!isInProject) {
           notify('No project detected. Open terminal in a project folder and run codeep there.');
           break;
         }
-        if (hasWriteAccess) {
-          notify('Write permission already granted. Agent Mode is ready.');
-          break;
-        }
-        // Open permission dialog to grant write access
+        // Always open permission dialog to allow users to manage permissions
         setScreen('permission');
         break;
       }
