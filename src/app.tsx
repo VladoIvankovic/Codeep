@@ -217,26 +217,13 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
-  // Track previous screen to detect transitions
-  const [prevScreen, setPrevScreen] = useState<Screen>(screen);
-  
-  // Clear terminal when opening modals OR when closing them back to chat
+  // Clear input when opening command modals
   useEffect(() => {
     const commandModals: Screen[] = ['help', 'status', 'sessions', 'sessions-delete', 'model', 'protocol', 'language', 'settings', 'provider', 'search', 'export', 'logout'];
-    
-    // Clear when opening a modal
     if (commandModals.includes(screen)) {
-      stdout?.write('\x1b[2J\x1b[3J\x1b[H');
       setClearInputTrigger(prev => prev + 1);
     }
-    
-    // Clear when returning to chat from a modal
-    if (screen === 'chat' && commandModals.includes(prevScreen)) {
-      stdout?.write('\x1b[2J\x1b[3J\x1b[H');
-    }
-    
-    setPrevScreen(screen);
-  }, [screen, stdout, prevScreen]);
+  }, [screen]);
 
   // Handle keyboard shortcuts
   useInput((input, key) => {
@@ -1517,7 +1504,7 @@ export const App: React.FC = () => {
 
   if (screen === 'help') {
     return (
-      <Box flexDirection="column">
+      <Box key="help-screen" flexDirection="column">
         <Help />
         <Text>Press Escape to close</Text>
       </Box>
@@ -1526,7 +1513,7 @@ export const App: React.FC = () => {
 
   if (screen === 'status') {
     return (
-      <Box flexDirection="column">
+      <Box key="status-screen" flexDirection="column">
         <Status />
         <Text>Press Escape to close</Text>
       </Box>
@@ -1682,7 +1669,7 @@ export const App: React.FC = () => {
   }
 
   return (
-    <Box flexDirection="column">
+    <Box key="chat-screen" flexDirection="column">
       {/* Header - show logo only when no messages and not loading */}
       {messages.length === 0 && !isLoading && <Logo />}
       
