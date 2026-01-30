@@ -183,7 +183,7 @@ export const App: React.FC = () => {
         if (agentMode === 'on') {
           setTimeout(() => {
             setNotificationDuration(8000);
-            setNotification('⚠️  Agent Mode ON: Not a project folder (no package.json, etc). Run codeep inside a project.');
+            setNotification('⚠️  Agent Mode ON: No project detected here. Open terminal in a project folder and run codeep there.');
           }, 500);
         }
       }
@@ -488,7 +488,7 @@ export const App: React.FC = () => {
     logger.debug(`[handleSubmit] agentMode=${agentMode}, hasWriteAccess=${hasWriteAccess}, hasProjectContext=${!!projectContext}`);
     if (agentMode === 'on') {
       if (!projectContext) {
-        notify('⚠️  Agent Mode ON: Not a project folder. Run codeep inside a project directory.', 8000);
+        notify('⚠️  Agent Mode ON: No project detected. Open terminal in a project folder and run codeep there.', 8000);
       } else if (!hasWriteAccess) {
         notify('⚠️  Agent Mode ON: Needs write permission. Use /grant to enable.', 8000);
       } else {
@@ -726,7 +726,7 @@ export const App: React.FC = () => {
       case '/grant': {
         // Grant write permission for agent mode
         if (!projectContext) {
-          notify('Not in a project directory. Run codeep inside a project folder.');
+          notify('No project detected. Open terminal in a project folder and run codeep there.');
           break;
         }
         if (hasWriteAccess) {
@@ -1787,7 +1787,7 @@ export const App: React.FC = () => {
             hasWriteAccess && projectContext ? (
               <Text color="green">Agent: ON ✓</Text>
             ) : (
-              <Text color="yellow">Agent: ON (needs {!projectContext ? 'project folder' : 'permission - /grant'})</Text>
+              <Text color="yellow">Agent: ON ({!projectContext ? 'no project - run codeep in project folder' : 'no permission - use /grant'})</Text>
             )
           ) : (
             <Text color="gray">Agent: Manual (use /agent)</Text>
