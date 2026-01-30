@@ -294,11 +294,12 @@ const isSectionBreak = (line: string, prevLine: string | null): boolean => {
 interface LiveCodeStreamProps {
   actions: ActionLog[];
   isRunning: boolean;
+  terminalWidth?: number;
 }
 
 const LINES_PER_CHUNK = 10; // Show 10 lines at a time
 
-export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunning }) => {
+export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunning, terminalWidth = 80 }) => {
   // Track how many lines we've shown so far
   const [visibleLineCount, setVisibleLineCount] = useState(LINES_PER_CHUNK);
   const lastActionIdRef = useRef<string>('');
@@ -356,10 +357,13 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   const linesToShow = allLines.slice(0, visibleLineCount);
   const hasMoreLines = visibleLineCount < totalLines;
   
+  // Calculate line width based on terminal width
+  const lineWidth = Math.max(20, terminalWidth - 2);
+  
   return (
     <Box flexDirection="column" marginBottom={1}>
       {/* Header bar */}
-      <Text color={actionColor}>{'─'.repeat(60)}</Text>
+      <Text color={actionColor}>{'─'.repeat(lineWidth)}</Text>
       <Text>
         <Text color={actionColor} bold>{actionLabel} </Text>
         <Text color="white" bold>{filename}</Text>
@@ -391,7 +395,7 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
           {'     '}│ ... {totalLines - visibleLineCount} more lines loading...
         </Text>
       )}
-      <Text color={actionColor}>{'─'.repeat(60)}</Text>
+      <Text color={actionColor}>{'─'.repeat(lineWidth)}</Text>
     </Box>
   );
 };
