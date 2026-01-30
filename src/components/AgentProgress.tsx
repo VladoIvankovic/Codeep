@@ -295,16 +295,13 @@ interface LiveCodeStreamProps {
 }
 
 export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunning }) => {
-  // Use ref for tracking to avoid re-render loops
+  // Use refs for mutable state to minimize re-renders
   const lastActionIdRef = useRef<string | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const totalLinesRef = useRef<number>(0);
+  const visibleEndLineRef = useRef<number>(0);
   
-  // State for visible lines - only update when batch is ready
-  const [displayState, setDisplayState] = useState<{ endLine: number; actionId: string | null }>({
-    endLine: 0,
-    actionId: null,
-  });
+  // Single state for forcing re-render - increment only when needed
+  const [, forceRender] = useState(0);
   
   // Find the current write/edit action with code content
   const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
@@ -315,11 +312,10 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   // Create a unique ID for the current action
   const actionId = currentAction ? `${currentAction.target}-${currentAction.timestamp}` : null;
   
-  // Get total lines for current action and store in ref
+  // Get total lines for current action
   const totalLines = currentAction?.details ? currentAction.details.split('\n').length : 0;
-  totalLinesRef.current = totalLines;
   
-  // Stream lines progressively using interval instead of recursive setTimeout
+  // Stream lines progressively - minimize state updates
   useEffect(() => {
     // Clear any existing timer
     if (timerRef.current) {
@@ -329,8 +325,9 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
     
     // Only stream for write/edit actions with content
     if (!currentAction || !currentAction.details || !isRunning || !isWriteOrEdit) {
-      if (displayState.endLine !== 0 || displayState.actionId !== null) {
-        setDisplayState({ endLine: 0, actionId: null });
+      if (visibleEndLineRef.current !== 0) {
+        visibleEndLineRef.current = 0;
+        lastActionIdRef.current = null;
       }
       return;
     }
@@ -338,24 +335,27 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
     // If this is a new action, reset and start streaming
     if (actionId !== lastActionIdRef.current) {
       lastActionIdRef.current = actionId;
-      const initialLines = Math.min(10, totalLinesRef.current);
-      setDisplayState({ endLine: initialLines, actionId });
+      const lines = currentAction.details.split('\n').length;
+      visibleEndLineRef.current = Math.min(10, lines);
+      forceRender(n => n + 1);
       
       // Only start interval if there are more lines to show
-      if (totalLinesRef.current > 10) {
+      if (lines > 10) {
         timerRef.current = setInterval(() => {
-          setDisplayState(prev => {
-            // Use ref to get current totalLines value
-            const currentTotal = totalLinesRef.current;
-            const newEndLine = Math.min(prev.endLine + 10, currentTotal);
-            // Stop interval when we've shown all lines
-            if (newEndLine >= currentTotal && timerRef.current) {
-              clearInterval(timerRef.current);
-              timerRef.current = null;
-            }
-            return { ...prev, endLine: newEndLine };
-          });
-        }, 150);
+          const currentLines = currentAction.details?.split('\n').length || 0;
+          const newEndLine = Math.min(visibleEndLineRef.current + 10, currentLines);
+          
+          if (newEndLine !== visibleEndLineRef.current) {
+            visibleEndLineRef.current = newEndLine;
+            forceRender(n => n + 1);
+          }
+          
+          // Stop interval when we've shown all lines
+          if (newEndLine >= currentLines && timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
+        }, 200); // Slower interval to reduce flickering
       }
     }
     
@@ -365,7 +365,7 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
         timerRef.current = null;
       }
     };
-  }, [actionId, isRunning, isWriteOrEdit]);
+  }, [actionId, isRunning, isWriteOrEdit, currentAction]);
   
   // Only show for write/edit actions with content while running
   if (!isRunning || !currentAction) return null;
@@ -381,73 +381,62 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   const actionLabel = currentAction.type === 'write' ? '✨ Creating' : '✏️  Editing';
   const actionColor = currentAction.type === 'write' ? 'green' : 'yellow';
   
-  // Use displayState for rendering
-  const visibleEndLine = displayState.endLine;
+  // Use ref value for rendering
+  const visibleEndLine = visibleEndLineRef.current || Math.min(10, totalLines);
   
-  // Sliding window: show only last 10 lines of what's been "written" so far
+  // Sliding window: show only last 10 lines
   const WINDOW_SIZE = 10;
   const startLine = Math.max(0, visibleEndLine - WINDOW_SIZE);
   const linesToShow = allLines.slice(startLine, visibleEndLine);
   const remainingLines = totalLines - visibleEndLine;
   const linesAbove = startLine;
   
+  // Pad lines to fixed height to prevent layout shifts
+  const paddedLines = [...linesToShow];
+  while (paddedLines.length < WINDOW_SIZE) {
+    paddedLines.push('');
+  }
+  
   return (
     <Box flexDirection="column">
-      {/* Header bar */}
-      <Box flexDirection="row" justifyContent="space-between">
-        <Box>
-          <Text color={actionColor} bold>{actionLabel} </Text>
-          <Text color="white" bold>{filename}</Text>
-        </Box>
-        <Box>
-          <Text color="gray">{langLabel} • </Text>
-          <Text color="cyan">{visibleEndLine}</Text>
-          <Text color="gray">/{totalLines} lines</Text>
-          {remainingLines > 0 && (
-            <Text color="yellow"> ▼ streaming...</Text>
-          )}
-        </Box>
+      {/* Header bar - single line */}
+      <Box>
+        <Text color={actionColor} bold>{actionLabel} </Text>
+        <Text color="white" bold>{filename}</Text>
+        <Text color="gray"> • {langLabel} • </Text>
+        <Text color="cyan">{visibleEndLine}</Text>
+        <Text color="gray">/{totalLines}</Text>
+        {remainingLines > 0 && <Text color="yellow"> ▼</Text>}
       </Box>
-      
-      {/* Path info */}
-      {fullPath !== filename && (
-        <Text color="gray" dimColor>  📁 {fullPath}</Text>
-      )}
       
       {/* Top border */}
-      <Text color={actionColor}>{'─'.repeat(80)}</Text>
+      <Text color={actionColor}>{'─'.repeat(76)}</Text>
       
-      {/* Show lines above indicator */}
-      {linesAbove > 0 && (
-        <Text color="gray" dimColor>  ⋮ {linesAbove} lines above</Text>
-      )}
+      {/* Lines above indicator - always reserve space */}
+      <Text color="gray" dimColor>
+        {linesAbove > 0 ? `  ⋮ ${linesAbove} lines above` : ' '}
+      </Text>
       
-      {/* Code content - sliding window showing last 10 lines */}
-      <Box flexDirection="column">
-        {linesToShow.map((line, i) => {
-          const lineNum = startLine + i + 1;
-          const lineColor = getCodeColor(line, ext);
-          
-          return (
-            <Text key={i}>
-              <Text color="gray" dimColor>
-                {String(lineNum).padStart(4, ' ')}
-              </Text>
-              <Text color="gray" dimColor> │ </Text>
-              <Text color={lineColor}>{line.slice(0, 72)}</Text>
-              {line.length > 72 && <Text color="gray">…</Text>}
-            </Text>
-          );
-        })}
-      </Box>
+      {/* Code content - fixed 10 lines */}
+      {paddedLines.map((line, i) => (
+        <Text key={`line-${startLine + i}`}>
+          <Text color="gray" dimColor>
+            {line ? String(startLine + i + 1).padStart(4, ' ') : '    '} │{' '}
+          </Text>
+          <Text color={line ? getCodeColor(line, ext) : 'gray'}>
+            {line.slice(0, 68)}
+          </Text>
+          {line.length > 68 && <Text color="gray">…</Text>}
+        </Text>
+      ))}
       
-      {/* Show remaining lines indicator */}
-      {remainingLines > 0 && (
-        <Text color="yellow">  ⋮ {remainingLines} more lines...</Text>
-      )}
+      {/* Remaining lines indicator - always reserve space */}
+      <Text color="yellow">
+        {remainingLines > 0 ? `  ⋮ ${remainingLines} more lines...` : ' '}
+      </Text>
       
       {/* Bottom border */}
-      <Text color={actionColor}>{'─'.repeat(80)}</Text>
+      <Text color={actionColor}>{'─'.repeat(76)}</Text>
     </Box>
   );
 };
