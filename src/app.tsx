@@ -1692,12 +1692,30 @@ export const App: React.FC = () => {
       {/* Header - show logo only when no messages and not loading */}
       {messages.length === 0 && !isLoading && <Logo />}
       
-      {/* Show "Connected to" only when no messages */}
+      {/* Welcome message - show only when no messages */}
       {messages.length === 0 && !isLoading && (
-        <Box justifyContent="center">
-          <Text>
-            Connected to <Text color="#f02a30">{config.get('model')}</Text>. Type <Text color="#f02a30">/help</Text> for commands.
-          </Text>
+        <Box flexDirection="column" marginY={1}>
+          <Box justifyContent="center">
+            <Text>
+              Connected to <Text color="#f02a30">{config.get('model')}</Text>. Type <Text color="#f02a30">/help</Text> for commands.
+            </Text>
+          </Box>
+          <Text> </Text>
+          <Box justifyContent="center">
+            <Text color="cyan" bold>Welcome to Codeep - Your AI Coding Assistant</Text>
+          </Box>
+          <Text> </Text>
+          <Box flexDirection="column" paddingX={2}>
+            <Text><Text color="#f02a30">•</Text> Ask questions about your code or request implementations</Text>
+            <Text><Text color="#f02a30">•</Text> Use <Text color="cyan">/agent {'<task>'}</Text> for autonomous task execution</Text>
+            <Text><Text color="#f02a30">•</Text> Type <Text color="cyan">/diff</Text> to review changes, <Text color="cyan">/commit</Text> to generate commit messages</Text>
+            <Text><Text color="#f02a30">•</Text> Configure settings with <Text color="cyan">/settings</Text> - enable Agent Mode for auto-execution</Text>
+          </Box>
+          <Text> </Text>
+          <Box justifyContent="center">
+            <Text color="gray">Start typing your message or use a command to begin...</Text>
+          </Box>
+          <Text> </Text>
         </Box>
       )}
 
