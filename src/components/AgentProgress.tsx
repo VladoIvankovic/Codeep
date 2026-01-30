@@ -357,8 +357,8 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   const linesToShow = allLines.slice(0, visibleLineCount);
   const hasMoreLines = visibleLineCount < totalLines;
   
-  // Calculate line width based on terminal width
-  const lineWidth = Math.max(20, terminalWidth - 2);
+  // Calculate line width based on terminal width (same as agent box)
+  const lineWidth = Math.max(20, terminalWidth);
   
   return (
     <Box flexDirection="column" marginBottom={1}>
