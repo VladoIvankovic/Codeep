@@ -364,6 +364,7 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 
 | Command | Description |
 |---------|-------------|
+| `/grant` | Grant write permission for agent (opens permission dialog) |
 | `/agent <task>` | Run agent for a specific task (manual mode) |
 | `/agent-dry <task>` | Preview what agent would do without executing |
 | `/agent-stop` | Stop a running agent |
@@ -508,7 +509,7 @@ With write access enabled:
 | API Timeout | 60000ms | Request timeout |
 | API Rate Limit | 30/min | Max API calls per minute |
 | Command Rate Limit | 100/min | Max commands per minute |
-| Agent Mode | ON | `ON` = agent runs on every message, `Manual` = use /agent |
+| Agent Mode | ON | `ON` = agent runs automatically (requires write permission via `/grant`), `Manual` = use /agent |
 | Agent API Timeout | 180000ms | Timeout per agent API call (auto-adjusted for complexity) |
 | Agent Max Duration | 20 min | Maximum time for agent to run (5-60 min) |
 | Agent Max Iterations | 100 | Maximum agent iterations (10-200) |
@@ -521,6 +522,13 @@ With write access enabled:
 ## Usage Examples
 
 ### Autonomous Coding (Agent Mode ON)
+
+First, grant write permission (required for Agent Mode ON to work):
+
+```
+> /grant
+# Opens permission dialog - select "Read + Write" for full agent access
+```
 
 With write access enabled, just describe what you want:
 
