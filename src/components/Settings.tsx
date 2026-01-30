@@ -8,7 +8,6 @@ interface SettingsProps {
   notify: (msg: string) => void;
   hasWriteAccess?: boolean;
   hasProjectContext?: boolean;
-  isInProject?: boolean;
 }
 
 interface SettingItem {
@@ -117,7 +116,7 @@ const SETTINGS: SettingItem[] = [
   },
 ];
 
-export const Settings: React.FC<SettingsProps> = ({ onClose, notify, hasWriteAccess = false, hasProjectContext = false, isInProject = false }) => {
+export const Settings: React.FC<SettingsProps> = ({ onClose, notify, hasWriteAccess = false, hasProjectContext = false }) => {
   const [selected, setSelected] = useState(0);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
@@ -207,10 +206,10 @@ export const Settings: React.FC<SettingsProps> = ({ onClose, notify, hasWriteAcc
   const agentMode = config.get('agentMode');
   const agentCanRun = agentMode === 'on' && hasWriteAccess && hasProjectContext;
   const agentStatusMessage = agentMode === 'on' 
-    ? (!isInProject 
-        ? '⚠️  No project detected - open terminal in a project folder and run codeep there'
-        : (!hasWriteAccess 
-            ? '⚠️  Agent needs permission - use /grant to allow project access'
+    ? (!hasWriteAccess 
+        ? '⚠️  Agent needs permission - use /grant to allow folder access'
+        : (!hasProjectContext
+            ? '⚠️  Agent needs permission - use /grant to allow folder access'
             : '✓ Agent will run automatically on every message'))
     : 'ℹ️  Manual mode - use /agent <task> to run agent';
 
