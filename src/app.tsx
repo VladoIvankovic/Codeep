@@ -160,6 +160,14 @@ export const App: React.FC = () => {
           }
           setProjectContext(ctx);
           setPermissionChecked(true);
+          
+          // Warn user if Agent Mode is ON but only read permission exists
+          const agentMode = config.get('agentMode');
+          if (agentMode === 'on' && !hasWrite) {
+            setTimeout(() => {
+              setNotification('⚠️  Agent Mode is ON but only read access. Use /grant for write access or /agent for manual mode.');
+            }, 500);
+          }
         } else {
           // Need to ask for permission
           setScreen('permission');
@@ -167,6 +175,14 @@ export const App: React.FC = () => {
         }
       } else {
         setPermissionChecked(true);
+        
+        // Warn user if Agent Mode is ON but not in a project directory
+        const agentMode = config.get('agentMode');
+        if (agentMode === 'on') {
+          setTimeout(() => {
+            setNotification('⚠️  Agent Mode is ON but no project detected. Run codeep in a project directory.');
+          }, 500);
+        }
       }
     }
   }, [showIntro, permissionChecked, projectPath, screen]);
@@ -1426,8 +1442,24 @@ export const App: React.FC = () => {
           ? 'Project access granted (read + write, this session)' 
           : 'Project access granted (read-only, this session)');
       }
+      
+      // Warn user if Agent Mode is ON but write access was not granted
+      const agentMode = config.get('agentMode');
+      if (agentMode === 'on' && !writeGranted) {
+        setTimeout(() => {
+          notify('⚠️  Agent Mode is ON but write access not granted. Use /grant for full agent or /agent for manual.');
+        }, 100);
+      }
     } else {
       notify('Project access denied');
+      
+      // Warn user if Agent Mode is ON but access was denied
+      const agentMode = config.get('agentMode');
+      if (agentMode === 'on') {
+        setTimeout(() => {
+          notify('⚠️  Agent Mode is ON but project access denied. Agent cannot run.');
+        }, 100);
+      }
     }
     setScreen('chat');
   };
