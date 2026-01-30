@@ -466,10 +466,16 @@ export const App: React.FC = () => {
     // Auto-agent mode: if enabled and we have write access, use agent
     const agentMode = config.get('agentMode');
     logger.debug(`[handleSubmit] agentMode=${agentMode}, hasWriteAccess=${hasWriteAccess}, hasProjectContext=${!!projectContext}`);
-    if (agentMode === 'auto' && hasWriteAccess && projectContext) {
-      notify('Using agent mode (change in /settings)');
-      startAgent(sanitizedInput, false);
-      return;
+    if (agentMode === 'on') {
+      if (!projectContext) {
+        notify('⚠️  Agent Mode ON: Requires project directory. Using chat mode instead.');
+      } else if (!hasWriteAccess) {
+        notify('⚠️  Agent Mode ON: Write permission required. Grant with /grant or using chat mode.');
+      } else {
+        notify('✓ Using agent mode (change in /settings)');
+        startAgent(sanitizedInput, false);
+        return;
+      }
     }
 
     // Auto-detect file paths and enrich message

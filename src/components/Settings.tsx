@@ -78,10 +78,10 @@ const SETTINGS: SettingItem[] = [
   {
     key: 'agentMode',
     label: 'Agent Mode',
-    value: () => config.get('agentMode') === 'auto' ? 'Auto' : 'Manual',
+    value: () => config.get('agentMode') === 'on' ? 'ON' : 'Manual',
     type: 'select',
     options: [
-      { value: 'auto', label: 'Auto' },
+      { value: 'on', label: 'ON' },
       { value: 'manual', label: 'Manual' },
     ],
   },
