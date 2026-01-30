@@ -243,17 +243,12 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
-  // Clear input when opening modals and clear terminal when closing
+  // Clear input when opening modals
   useEffect(() => {
     if (modalScreen !== null) {
       setClearInputTrigger(prev => prev + 1);
-    } else {
-      // Modal was just closed - clear any remaining content
-      setTimeout(() => {
-        stdout?.write('\x1b[2J\x1b[H');
-      }, 0);
     }
-  }, [modalScreen, stdout]);
+  }, [modalScreen]);
 
   // Handle keyboard shortcuts
   useInput((input, key) => {
