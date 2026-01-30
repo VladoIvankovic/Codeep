@@ -207,9 +207,9 @@ export const Settings: React.FC<SettingsProps> = ({ onClose, notify, hasWriteAcc
   const agentCanRun = agentMode === 'on' && hasWriteAccess && hasProjectContext;
   const agentStatusMessage = agentMode === 'on' 
     ? (!hasProjectContext 
-        ? '⚠️  Not a project folder - run codeep inside a project directory'
+        ? '⚠️  No project detected - open terminal in a project folder and run codeep there'
         : (!hasWriteAccess 
-            ? '⚠️  Needs write permission - use /grant to enable agent'
+            ? '⚠️  Agent needs permission - use /grant to allow project access'
             : '✓ Agent will run automatically on every message'))
     : 'ℹ️  Manual mode - use /agent <task> to run agent';
 
