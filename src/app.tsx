@@ -218,10 +218,16 @@ export const App: React.FC = () => {
   }, [notification, notificationDuration]);
 
   // Clear terminal and input when opening command-triggered modals (not session-picker or permission)
+  // Also force stdout to flush to ensure screen clears before render
   useEffect(() => {
     const commandModals: Screen[] = ['help', 'status', 'sessions', 'sessions-delete', 'model', 'protocol', 'language', 'settings', 'provider', 'search', 'export', 'logout'];
     if (commandModals.includes(screen)) {
-      stdout?.write('\x1b[2J\x1b[H');
+      // Clear screen and reset cursor
+      stdout?.write('\x1b[2J\x1b[3J\x1b[H\x1b[0;0H');
+      // Force flush
+      if (stdout && 'moveCursor' in stdout) {
+        (stdout as any).moveCursor(0, -999); // Move cursor way up
+      }
       setClearInputTrigger(prev => prev + 1); // Clear input to remove command text and suggestions
     }
   }, [screen, stdout]);
@@ -1505,7 +1511,7 @@ export const App: React.FC = () => {
 
   if (screen === 'help') {
     return (
-      <Box flexDirection="column" padding={1}>
+      <Box flexDirection="column">
         <Help />
         <Text>Press Escape to close</Text>
       </Box>
@@ -1514,7 +1520,7 @@ export const App: React.FC = () => {
 
   if (screen === 'status') {
     return (
-      <Box flexDirection="column" padding={1}>
+      <Box flexDirection="column">
         <Status />
         <Text>Press Escape to close</Text>
       </Box>
@@ -1743,7 +1749,7 @@ export const App: React.FC = () => {
           })}
           <Text> </Text>
           <Text>Apply changes? <Text color="#f02a30" bold>[Y/n]</Text></Text>
-          <Text color="#888888">Press Y to apply, N or Esc to reject</Text>
+          <Text color="cyan">Press Y to apply, N or Esc to reject</Text>
         </Box>
       )}
 
@@ -1792,7 +1798,7 @@ export const App: React.FC = () => {
               <Text color="yellow">Agent: ON (no permission - use /grant)</Text>
             )
           ) : (
-            <Text color="#888888">Agent: Manual (use /agent)</Text>
+            <Text color="cyan">Agent: Manual (use /agent)</Text>
           )}
         </Box>
       </Box>
