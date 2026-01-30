@@ -72,12 +72,38 @@ import { ActionLog, ToolCall, ToolResult, createActionLog } from './utils/tools'
 
 type Screen = 'chat' | 'login' | 'help' | 'status' | 'sessions' | 'sessions-delete' | 'model' | 'protocol' | 'language' | 'settings' | 'permission' | 'provider' | 'search' | 'export' | 'session-picker' | 'logout';
 
+// Modal overlay component - renders modal content on top of chat
+const ModalOverlay: React.FC<{ children: React.ReactNode; onClose: () => void }> = ({ children, onClose }) => {
+  useInput((input, key) => {
+    if (key.escape) {
+      onClose();
+    }
+  });
+
+  return (
+    <Box 
+      flexDirection="column" 
+      borderStyle="round" 
+      borderColor="#f02a30" 
+      padding={1}
+      marginTop={2}
+      marginBottom={2}
+    >
+      {children}
+      <Box marginTop={1}>
+        <Text color="cyan">Press Escape to close</Text>
+      </Box>
+    </Box>
+  );
+};
+
 export const App: React.FC = () => {
   const { exit } = useApp();
   const { stdout } = useStdout();
   
   // Start with 'chat' screen, will switch to login if needed after loading API key
   const [screen, setScreen] = useState<Screen>('chat');
+  const [modalScreen, setModalScreen] = useState<'help' | 'status' | 'settings' | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -228,8 +254,8 @@ export const App: React.FC = () => {
   // Handle keyboard shortcuts
   useInput((input, key) => {
     // ? to open help (only from chat screen)
-    if (input === '?' && screen === 'chat' && !isLoading) {
-      setScreen('help');
+    if (input === '?' && screen === 'chat' && !isLoading && !modalScreen) {
+      setModalScreen('help');
       return;
     }
 
@@ -631,11 +657,11 @@ export const App: React.FC = () => {
         break;
 
       case '/help':
-        setScreen('help');
+        setModalScreen('help');
         break;
 
       case '/status':
-        setScreen('status');
+        setModalScreen('status');
         break;
 
       case '/version': {
@@ -725,7 +751,7 @@ export const App: React.FC = () => {
         break;
 
       case '/settings':
-        setScreen('settings');
+        setModalScreen('settings');
         break;
 
       case '/grant': {
@@ -1751,6 +1777,30 @@ export const App: React.FC = () => {
         <Box justifyContent="center">
           <Text color="cyan">{notification}</Text>
         </Box>
+      )}
+
+      {/* Modal Overlays */}
+      {modalScreen === 'help' && (
+        <ModalOverlay onClose={() => setModalScreen(null)}>
+          <Help />
+        </ModalOverlay>
+      )}
+      
+      {modalScreen === 'status' && (
+        <ModalOverlay onClose={() => setModalScreen(null)}>
+          <Status />
+        </ModalOverlay>
+      )}
+      
+      {modalScreen === 'settings' && (
+        <ModalOverlay onClose={() => setModalScreen(null)}>
+          <Settings 
+            onClose={() => setModalScreen(null)}
+            notify={notify}
+            hasWriteAccess={hasWriteAccess}
+            hasProjectContext={!!projectContext}
+          />
+        </ModalOverlay>
       )}
 
       {/* Input */}
