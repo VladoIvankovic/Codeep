@@ -362,7 +362,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
   // Render input with cursor
   const renderInput = () => {
     if (!value) {
-      return <Text color="#888888">Type a message or /command...</Text>;
+      return <Text color="cyan">Type a message or /command...</Text>;
     }
     
     const before = value.slice(0, cursorPos);
@@ -383,7 +383,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
       {/* Command hint when just '/' is typed */}
       {value === '/' && (
         <Box marginBottom={1}>
-          <Text color="#888888" dimColor>
+          <Text color="cyan" dimColor>
             Type command name (e.g., help, status, settings) or type /help to see all commands
           </Text>
         </Box>
@@ -401,7 +401,7 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
               <Text color={i === selectedIndex ? undefined : 'gray'}> - {s.desc}</Text>
             </Text>
           ))}
-          <Text color="#888888" dimColor>
+          <Text color="cyan" dimColor>
             ↑↓ navigate • Tab complete • Esc cancel
           </Text>
         </Box>
@@ -419,15 +419,15 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
           <Text>
             <Text color="green" bold>📋 </Text>
             <Text color="white" bold>{pasteInfo.chars}</Text>
-            <Text color="#888888"> chars</Text>
+            <Text color="cyan"> chars</Text>
             {pasteInfo.lines > 1 && (
               <>
-                <Text color="#888888"> • </Text>
+                <Text color="cyan"> • </Text>
                 <Text color="white" bold>{pasteInfo.lines}</Text>
-                <Text color="#888888"> lines</Text>
+                <Text color="cyan"> lines</Text>
               </>
             )}
-            <Text color="#888888" dimColor>  (Enter send • Esc cancel)</Text>
+            <Text color="cyan" dimColor>  (Enter send • Esc cancel)</Text>
           </Text>
         </Box>
       )}
