@@ -298,6 +298,7 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   // Use ref for tracking to avoid re-render loops
   const lastActionIdRef = useRef<string | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const totalLinesRef = useRef<number>(0);
   
   // State for visible lines - only update when batch is ready
   const [displayState, setDisplayState] = useState<{ endLine: number; actionId: string | null }>({
@@ -308,11 +309,15 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   // Find the current write/edit action with code content
   const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
   
+  // Only show for write/edit actions
+  const isWriteOrEdit = currentAction && (currentAction.type === 'write' || currentAction.type === 'edit');
+  
   // Create a unique ID for the current action
   const actionId = currentAction ? `${currentAction.target}-${currentAction.timestamp}` : null;
   
-  // Get total lines for current action
+  // Get total lines for current action and store in ref
   const totalLines = currentAction?.details ? currentAction.details.split('\n').length : 0;
+  totalLinesRef.current = totalLines;
   
   // Stream lines progressively using interval instead of recursive setTimeout
   useEffect(() => {
@@ -322,7 +327,8 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
       timerRef.current = null;
     }
     
-    if (!currentAction || !currentAction.details || !isRunning) {
+    // Only stream for write/edit actions with content
+    if (!currentAction || !currentAction.details || !isRunning || !isWriteOrEdit) {
       if (displayState.endLine !== 0 || displayState.actionId !== null) {
         setDisplayState({ endLine: 0, actionId: null });
       }
@@ -332,20 +338,25 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
     // If this is a new action, reset and start streaming
     if (actionId !== lastActionIdRef.current) {
       lastActionIdRef.current = actionId;
-      setDisplayState({ endLine: 10, actionId });
+      const initialLines = Math.min(10, totalLinesRef.current);
+      setDisplayState({ endLine: initialLines, actionId });
       
-      // Start interval to stream more lines
-      timerRef.current = setInterval(() => {
-        setDisplayState(prev => {
-          const newEndLine = Math.min(prev.endLine + 10, totalLines);
-          // Stop interval when we've shown all lines
-          if (newEndLine >= totalLines && timerRef.current) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-          }
-          return { ...prev, endLine: newEndLine };
-        });
-      }, 150); // Slightly slower for smoother experience
+      // Only start interval if there are more lines to show
+      if (totalLinesRef.current > 10) {
+        timerRef.current = setInterval(() => {
+          setDisplayState(prev => {
+            // Use ref to get current totalLines value
+            const currentTotal = totalLinesRef.current;
+            const newEndLine = Math.min(prev.endLine + 10, currentTotal);
+            // Stop interval when we've shown all lines
+            if (newEndLine >= currentTotal && timerRef.current) {
+              clearInterval(timerRef.current);
+              timerRef.current = null;
+            }
+            return { ...prev, endLine: newEndLine };
+          });
+        }, 150);
+      }
     }
     
     return () => {
@@ -354,7 +365,7 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
         timerRef.current = null;
       }
     };
-  }, [actionId, isRunning, totalLines]);
+  }, [actionId, isRunning, isWriteOrEdit]);
   
   // Only show for write/edit actions with content while running
   if (!isRunning || !currentAction) return null;
