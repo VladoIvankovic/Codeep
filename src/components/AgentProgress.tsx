@@ -295,77 +295,8 @@ interface LiveCodeStreamProps {
 }
 
 export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunning }) => {
-  // Use refs for mutable state to minimize re-renders
-  const lastActionIdRef = useRef<string | null>(null);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const visibleEndLineRef = useRef<number>(0);
-  
-  // Single state for forcing re-render - increment only when needed
-  const [, forceRender] = useState(0);
-  
   // Find the current write/edit action with code content
   const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
-  
-  // Only show for write/edit actions
-  const isWriteOrEdit = currentAction && (currentAction.type === 'write' || currentAction.type === 'edit');
-  
-  // Create a unique ID for the current action
-  const actionId = currentAction ? `${currentAction.target}-${currentAction.timestamp}` : null;
-  
-  // Get total lines for current action
-  const totalLines = currentAction?.details ? currentAction.details.split('\n').length : 0;
-  
-  // Stream lines progressively - minimize state updates
-  useEffect(() => {
-    // Clear any existing timer
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    
-    // Only stream for write/edit actions with content
-    if (!currentAction || !currentAction.details || !isRunning || !isWriteOrEdit) {
-      if (visibleEndLineRef.current !== 0) {
-        visibleEndLineRef.current = 0;
-        lastActionIdRef.current = null;
-      }
-      return;
-    }
-    
-    // If this is a new action, reset and start streaming
-    if (actionId !== lastActionIdRef.current) {
-      lastActionIdRef.current = actionId;
-      const lines = currentAction.details.split('\n').length;
-      visibleEndLineRef.current = Math.min(10, lines);
-      forceRender(n => n + 1);
-      
-      // Only start interval if there are more lines to show
-      if (lines > 10) {
-        timerRef.current = setInterval(() => {
-          const currentLines = currentAction.details?.split('\n').length || 0;
-          const newEndLine = Math.min(visibleEndLineRef.current + 10, currentLines);
-          
-          if (newEndLine !== visibleEndLineRef.current) {
-            visibleEndLineRef.current = newEndLine;
-            forceRender(n => n + 1);
-          }
-          
-          // Stop interval when we've shown all lines
-          if (newEndLine >= currentLines && timerRef.current) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-          }
-        }, 200); // Slower interval to reduce flickering
-      }
-    }
-    
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-    };
-  }, [actionId, isRunning, isWriteOrEdit, currentAction]);
   
   // Only show for write/edit actions with content while running
   if (!isRunning || !currentAction) return null;
@@ -378,62 +309,47 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   const ext = getFileExtension(filename);
   const langLabel = getLanguageLabel(ext);
   const allLines = code.split('\n');
+  const totalLines = allLines.length;
   const actionLabel = currentAction.type === 'write' ? '✨ Creating' : '✏️  Editing';
   const actionColor = currentAction.type === 'write' ? 'green' : 'yellow';
   
-  // Use ref value for rendering
-  const visibleEndLine = visibleEndLineRef.current || Math.min(10, totalLines);
-  
-  // Sliding window: show only last 10 lines
+  // Show last 10 lines (most recent code being written)
   const WINDOW_SIZE = 10;
-  const startLine = Math.max(0, visibleEndLine - WINDOW_SIZE);
-  const linesToShow = allLines.slice(startLine, visibleEndLine);
-  const remainingLines = totalLines - visibleEndLine;
+  const startLine = Math.max(0, totalLines - WINDOW_SIZE);
+  const linesToShow = allLines.slice(startLine, totalLines);
   const linesAbove = startLine;
-  
-  // Pad lines to fixed height to prevent layout shifts
-  const paddedLines = [...linesToShow];
-  while (paddedLines.length < WINDOW_SIZE) {
-    paddedLines.push('');
-  }
   
   return (
     <Box flexDirection="column">
-      {/* Header bar - single line */}
+      {/* Header bar */}
       <Box>
         <Text color={actionColor} bold>{actionLabel} </Text>
         <Text color="white" bold>{filename}</Text>
         <Text color="gray"> • {langLabel} • </Text>
-        <Text color="cyan">{visibleEndLine}</Text>
-        <Text color="gray">/{totalLines}</Text>
-        {remainingLines > 0 && <Text color="yellow"> ▼</Text>}
+        <Text color="cyan">{totalLines}</Text>
+        <Text color="gray"> lines</Text>
       </Box>
       
       {/* Top border */}
       <Text color={actionColor}>{'─'.repeat(76)}</Text>
       
-      {/* Lines above indicator - always reserve space */}
-      <Text color="gray" dimColor>
-        {linesAbove > 0 ? `  ⋮ ${linesAbove} lines above` : ' '}
-      </Text>
+      {/* Lines above indicator */}
+      {linesAbove > 0 && (
+        <Text color="gray" dimColor>  ⋮ {linesAbove} lines above</Text>
+      )}
       
-      {/* Code content - fixed 10 lines */}
-      {paddedLines.map((line, i) => (
+      {/* Code content - show last 10 lines */}
+      {linesToShow.map((line, i) => (
         <Text key={`line-${startLine + i}`}>
           <Text color="gray" dimColor>
-            {line ? String(startLine + i + 1).padStart(4, ' ') : '    '} │{' '}
+            {String(startLine + i + 1).padStart(4, ' ')} │{' '}
           </Text>
-          <Text color={line ? getCodeColor(line, ext) : 'gray'}>
+          <Text color={getCodeColor(line, ext)}>
             {line.slice(0, 68)}
           </Text>
           {line.length > 68 && <Text color="gray">…</Text>}
         </Text>
       ))}
-      
-      {/* Remaining lines indicator - always reserve space */}
-      <Text color="yellow">
-        {remainingLines > 0 ? `  ⋮ ${remainingLines} more lines...` : ' '}
-      </Text>
       
       {/* Bottom border */}
       <Text color={actionColor}>{'─'.repeat(76)}</Text>
