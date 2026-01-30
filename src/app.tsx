@@ -1778,19 +1778,19 @@ export const App: React.FC = () => {
 
       {/* Modal Overlays */}
       {modalScreen === 'help' && (
-        <ModalOverlay key="help-modal" onClose={() => setModalScreen(null)}>
+        <ModalOverlay key={`help-modal-${chatRenderKey}`} onClose={() => setModalScreen(null)}>
           <Help />
         </ModalOverlay>
       )}
       
       {modalScreen === 'status' && (
-        <ModalOverlay key="status-modal" onClose={() => setModalScreen(null)}>
+        <ModalOverlay key={`status-modal-${chatRenderKey}`} onClose={() => setModalScreen(null)}>
           <Status />
         </ModalOverlay>
       )}
       
       {modalScreen === 'settings' && (
-        <ModalOverlay key="settings-modal" onClose={() => setModalScreen(null)}>
+        <ModalOverlay key={`settings-modal-${chatRenderKey}`} onClose={() => setModalScreen(null)}>
           <Settings 
             onClose={() => setModalScreen(null)}
             notify={notify}
