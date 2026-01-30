@@ -167,7 +167,7 @@ export const App: React.FC = () => {
           if (agentMode === 'on' && !hasWrite) {
             setTimeout(() => {
               setNotificationDuration(8000);
-              setNotification('⚠️  Agent Mode is ON but only read access. Use /grant for write access or /agent for manual mode.');
+              setNotification('⚠️  Agent Mode ON: Needs write permission to work. Use /grant to enable or /agent for manual mode.');
             }, 500);
           }
         } else {
@@ -183,7 +183,7 @@ export const App: React.FC = () => {
         if (agentMode === 'on') {
           setTimeout(() => {
             setNotificationDuration(8000);
-            setNotification('⚠️  Agent Mode is ON but no project detected. Run codeep in a project directory.');
+            setNotification('⚠️  Agent Mode ON: Not a project folder (no package.json, etc). Run codeep inside a project.');
           }, 500);
         }
       }
@@ -488,9 +488,9 @@ export const App: React.FC = () => {
     logger.debug(`[handleSubmit] agentMode=${agentMode}, hasWriteAccess=${hasWriteAccess}, hasProjectContext=${!!projectContext}`);
     if (agentMode === 'on') {
       if (!projectContext) {
-        notify('⚠️  Agent Mode ON: Requires project directory. Using chat mode instead.', 8000);
+        notify('⚠️  Agent Mode ON: Not a project folder. Run codeep inside a project directory.', 8000);
       } else if (!hasWriteAccess) {
-        notify('⚠️  Agent Mode ON: Write permission required. Grant with /grant or using chat mode.', 8000);
+        notify('⚠️  Agent Mode ON: Needs write permission. Use /grant to enable.', 8000);
       } else {
         notify('✓ Using agent mode (change in /settings)');
         startAgent(sanitizedInput, false);
@@ -722,6 +722,21 @@ export const App: React.FC = () => {
       case '/settings':
         setScreen('settings');
         break;
+
+      case '/grant': {
+        // Grant write permission for agent mode
+        if (!projectContext) {
+          notify('Not in a project directory. Run codeep inside a project folder.');
+          break;
+        }
+        if (hasWriteAccess) {
+          notify('Write permission already granted. Agent Mode is ready.');
+          break;
+        }
+        // Open permission dialog to grant write access
+        setScreen('permission');
+        break;
+      }
 
       case '/login':
         setScreen('login');
@@ -1451,7 +1466,7 @@ export const App: React.FC = () => {
       const agentMode = config.get('agentMode');
       if (agentMode === 'on' && !writeGranted) {
         setTimeout(() => {
-          notify('⚠️  Agent Mode is ON but write access not granted. Use /grant for full agent or /agent for manual.', 8000);
+          notify('⚠️  Agent Mode ON: Needs write permission to work. Use /grant to enable or /agent for manual mode.', 8000);
         }, 100);
       }
     } else {
@@ -1461,7 +1476,7 @@ export const App: React.FC = () => {
       const agentMode = config.get('agentMode');
       if (agentMode === 'on') {
         setTimeout(() => {
-          notify('⚠️  Agent Mode is ON but project access denied. Agent cannot run.', 8000);
+          notify('⚠️  Agent Mode ON: Permission denied. Use /grant to try again or /agent for manual mode.', 8000);
         }, 100);
       }
     }
@@ -1772,7 +1787,7 @@ export const App: React.FC = () => {
             hasWriteAccess && projectContext ? (
               <Text color="green">Agent: ON ✓</Text>
             ) : (
-              <Text color="yellow">Agent: ON (inactive - {!projectContext ? 'no project' : 'no write access'})</Text>
+              <Text color="yellow">Agent: ON (needs {!projectContext ? 'project folder' : 'permission - /grant'})</Text>
             )
           ) : (
             <Text color="gray">Agent: Manual (use /agent)</Text>

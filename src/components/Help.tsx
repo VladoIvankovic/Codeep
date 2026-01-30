@@ -23,6 +23,7 @@ export const Help: React.FC = () => (
     <Text><Text color="#f02a30">/commit</Text>            - Generate commit message from staged changes</Text>
     <Text><Text color="#f02a30">/apply</Text>             - Apply file changes from AI response</Text>
     <Text><Text color="#f02a30">/copy</Text> [n]           - Copy code block [n] to clipboard</Text>
+    <Text><Text color="#f02a30">/grant</Text>             - Grant write permission for agent</Text>
     <Text><Text color="#f02a30">/agent</Text> {'<task>'}      - Start autonomous agent for task</Text>
     <Text><Text color="#f02a30">/agent-dry</Text> {'<task>'}  - Preview agent actions (no changes)</Text>
     <Text><Text color="#f02a30">/agent-stop</Text>        - Stop running agent</Text>
