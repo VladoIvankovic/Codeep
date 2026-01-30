@@ -243,22 +243,15 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
-  // Clear input when opening command modals
+  // Clear input when opening modals
   useEffect(() => {
-    const commandModals: Screen[] = ['help', 'status', 'sessions', 'sessions-delete', 'model', 'protocol', 'language', 'settings', 'provider', 'search', 'export', 'logout'];
-    if (commandModals.includes(screen)) {
+    if (modalScreen !== null) {
       setClearInputTrigger(prev => prev + 1);
     }
-  }, [screen]);
+  }, [modalScreen]);
 
   // Handle keyboard shortcuts
   useInput((input, key) => {
-    // ? to open help (only from chat screen)
-    if (input === '?' && screen === 'chat' && !isLoading && !modalScreen) {
-      setModalScreen('help');
-      return;
-    }
-
     // Ctrl+L to clear chat (F5 doesn't work reliably in all terminals)
     if (key.ctrl && input === 'l') {
       if (!isLoading && screen === 'chat') {
