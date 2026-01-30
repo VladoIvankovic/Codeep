@@ -1613,24 +1613,24 @@ export const App: React.FC = () => {
       {/* Loading - show while waiting or streaming */}
       {isLoading && !isAgentRunning && <Loading isStreaming={!!streamingContent} />}
       
-      {/* Live code stream - show ALL code being written ABOVE agent progress */}
+      {/* Agent panel - fixed at bottom with live code and progress */}
       {isAgentRunning && (
-        <LiveCodeStream
-          actions={agentActions}
-          isRunning={true}
-        />
-      )}
-      
-      {/* Agent progress - show while running */}
-      {isAgentRunning && (
-        <AgentProgress
-          isRunning={true}
-          iteration={agentIteration}
-          maxIterations={50}
-          actions={agentActions}
-          currentThinking={agentThinking}
-          dryRun={agentDryRun}
-        />
+        <Box flexDirection="column" borderStyle="round" borderColor={agentDryRun ? 'yellow' : '#f02a30'} marginY={1}>
+          {/* Live code stream inside agent panel */}
+          <LiveCodeStream
+            actions={agentActions}
+            isRunning={true}
+          />
+          {/* Agent progress */}
+          <AgentProgress
+            isRunning={true}
+            iteration={agentIteration}
+            maxIterations={50}
+            actions={agentActions}
+            currentThinking={agentThinking}
+            dryRun={agentDryRun}
+          />
+        </Box>
       )}
       
       {/* Agent summary - show after completion */}
