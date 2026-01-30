@@ -728,11 +728,6 @@ export const App: React.FC = () => {
         break;
 
       case '/grant': {
-        // Open permission dialog to manage project access
-        if (!isProjectDirectory(projectPath)) {
-          notify('No project detected. Open terminal in a project folder and run codeep there.');
-          break;
-        }
         // Always open permission dialog to allow users to manage permissions
         setScreen('permission');
         break;
