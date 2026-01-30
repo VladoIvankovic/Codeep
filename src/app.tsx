@@ -217,9 +217,10 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
-  // Clear terminal when opening modals
+  // Clear terminal when opening command-triggered modals (not session-picker or permission)
   useEffect(() => {
-    if (screen !== 'chat' && screen !== 'login') {
+    const commandModals: Screen[] = ['help', 'status', 'sessions', 'sessions-delete', 'model', 'protocol', 'language', 'settings', 'provider', 'search', 'export', 'logout'];
+    if (commandModals.includes(screen)) {
       stdout?.write('\x1b[2J\x1b[H');
     }
   }, [screen, stdout]);
