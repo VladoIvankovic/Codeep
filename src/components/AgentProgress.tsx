@@ -70,10 +70,7 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   return (
     <Box 
       flexDirection="column" 
-      borderStyle="round" 
-      borderColor={dryRun ? 'yellow' : '#f02a30'} 
-      padding={1} 
-      marginY={1}
+      paddingX={1}
     >
       {/* Header */}
       <Box>
@@ -384,7 +381,7 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
   const linesAbove = startLine;
   
   return (
-    <Box flexDirection="column" marginY={1}>
+    <Box flexDirection="column">
       {/* Header bar */}
       <Box flexDirection="row" justifyContent="space-between">
         <Box>
