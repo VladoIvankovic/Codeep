@@ -217,11 +217,12 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
-  // Clear terminal when opening command-triggered modals (not session-picker or permission)
+  // Clear terminal and input when opening command-triggered modals (not session-picker or permission)
   useEffect(() => {
     const commandModals: Screen[] = ['help', 'status', 'sessions', 'sessions-delete', 'model', 'protocol', 'language', 'settings', 'provider', 'search', 'export', 'logout'];
     if (commandModals.includes(screen)) {
       stdout?.write('\x1b[2J\x1b[H');
+      setClearInputTrigger(prev => prev + 1); // Clear input to remove command text and suggestions
     }
   }, [screen, stdout]);
 
