@@ -154,6 +154,9 @@ export const App: React.FC = () => {
   const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
   const [agentDryRun, setAgentDryRun] = useState(false);
   
+  // Track LiveCodeStream height to render placeholder after agent finishes (prevents ghost content)
+  const [lastStreamHeight, setLastStreamHeight] = useState(0);
+  
   // Load API keys for ALL providers on startup and check if current provider is configured
   useEffect(() => {
     loadAllApiKeys().then(() => {
@@ -261,6 +264,7 @@ export const App: React.FC = () => {
         clearCodeBlocks();
         setAgentResult(null);
         setAgentActions([]);
+        setLastStreamHeight(0);
         const newSessId = startNewSession();
         setSessionId(newSessId);
         setClearInputTrigger(prev => prev + 1); // Trigger input clear
@@ -359,6 +363,7 @@ export const App: React.FC = () => {
     setAgentActions([]);
     setAgentThinking('');
     setAgentResult(null);
+    setLastStreamHeight(0);
     setAgentDryRun(dryRun);
     
     // Add user message
@@ -409,6 +414,13 @@ export const App: React.FC = () => {
             timestamp: Date.now(),
           };
           setAgentActions(prev => [...prev, actionLog]);
+          
+          // Track stream height for ghost content cleanup
+          if (details) {
+            const lineCount = details.split('\n').length;
+            // LiveCodeStream shows: 1 header + lines + 1 loading indicator + 1 footer = ~lineCount + 3
+            setLastStreamHeight(Math.min(lineCount, 50) + 5);
+          }
         },
         onToolResult: (result: ToolResult, toolCall: ToolCall) => {
           // Replace the last action with the complete one
@@ -471,6 +483,7 @@ export const App: React.FC = () => {
     if (agentResult) {
       setAgentResult(null);
       setAgentActions([]);
+      setLastStreamHeight(0);
     }
     
     // Validate input
@@ -1753,6 +1766,14 @@ export const App: React.FC = () => {
         </Box>
       ) : agentResult ? (
         <Box key="agent-complete" flexDirection="column">
+          {/* Empty placeholder to overwrite LiveCodeStream ghost content */}
+          {lastStreamHeight > 0 && (
+            <Box flexDirection="column">
+              {Array.from({ length: lastStreamHeight }).map((_, i) => (
+                <Text key={i}> </Text>
+              ))}
+            </Box>
+          )}
           {/* Agent summary - show after completion */}
           <AgentSummary
             success={agentResult.success}
