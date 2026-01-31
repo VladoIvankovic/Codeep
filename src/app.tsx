@@ -157,6 +157,16 @@ export const App: React.FC = () => {
   // Track LiveCodeStream height to render placeholder after agent finishes (prevents ghost content)
   const [lastStreamHeight, setLastStreamHeight] = useState(0);
   
+  // Clear placeholder height after agent finishes (let it overwrite ghost, then disappear)
+  useEffect(() => {
+    if (agentResult && lastStreamHeight > 0) {
+      const timer = setTimeout(() => {
+        setLastStreamHeight(0);
+      }, 100); // Short delay to allow one render cycle to overwrite ghost
+      return () => clearTimeout(timer);
+    }
+  }, [agentResult, lastStreamHeight]);
+  
   // Load API keys for ALL providers on startup and check if current provider is configured
   useEffect(() => {
     loadAllApiKeys().then(() => {
