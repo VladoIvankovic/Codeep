@@ -1,54 +1,80 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, memo } from 'react';
 import { Text, Box } from 'ink';
 
-// Spinner frames
+// Spinner frames - Braille pattern for smooth animation
 const SPINNER = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
 
 interface LoadingProps {
   isStreaming?: boolean;
 }
 
-export const Loading: React.FC<LoadingProps> = ({ isStreaming = false }) => {
-  const [tick, setTick] = useState(0);
+/**
+ * Isolated spinner animation component
+ * Only this component re-renders during animation, not the parent
+ */
+const AnimatedSpinner: React.FC = memo(() => {
+  const [frame, setFrame] = useState(0);
 
   useEffect(() => {
-    // Force re-render every 100ms to animate even when parent doesn't update
     const timer = setInterval(() => {
-      setTick(t => t + 1);
+      setFrame(f => (f + 1) % SPINNER.length);
     }, 100);
-
     return () => clearInterval(timer);
   }, []);
 
-  const spinnerFrame = tick % SPINNER.length;
-  const dotsCount = (Math.floor(tick / 3) % 4); // 0, 1, 2, 3 dots cycling
-  const dots = '.'.repeat(dotsCount);
+  return <Text color="#f02a30">{SPINNER[frame]}</Text>;
+});
+
+AnimatedSpinner.displayName = 'AnimatedSpinner';
+
+/**
+ * Animated dots component
+ * Isolated animation state
+ */
+const AnimatedDots: React.FC = memo(() => {
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCount(c => (c + 1) % 4);
+    }, 300);
+    return () => clearInterval(timer);
+  }, []);
+
+  return <Text color="#f02a30">{'.'.repeat(count)}</Text>;
+});
+
+AnimatedDots.displayName = 'AnimatedDots';
+
+/**
+ * Loading indicator with isolated animation
+ * Parent component won't re-render when spinner animates
+ */
+export const Loading: React.FC<LoadingProps> = memo(({ isStreaming = false }) => {
   const message = isStreaming ? 'Writing' : 'Thinking';
 
   return (
     <Box paddingLeft={2} paddingY={0}>
-      <Text color="#f02a30" bold>
-        {SPINNER[spinnerFrame]} {message}{dots}
-      </Text>
+      <AnimatedSpinner />
+      <Text color="#f02a30" bold> {message}</Text>
+      <AnimatedDots />
     </Box>
   );
-};
+});
 
-// Simple inline spinner for smaller spaces
-export const InlineSpinner: React.FC<{ text?: string }> = ({ text = 'Loading' }) => {
-  const [tick, setTick] = useState(0);
+Loading.displayName = 'Loading';
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTick(t => t + 1);
-    }, 80);
-    return () => clearInterval(timer);
-  }, []);
-
+/**
+ * Simple inline spinner for smaller spaces
+ * Also uses isolated animation
+ */
+export const InlineSpinner: React.FC<{ text?: string }> = memo(({ text = 'Loading' }) => {
   return (
     <Text>
-      <Text color="#f02a30">{SPINNER[tick % SPINNER.length]} </Text>
-      <Text>{text}</Text>
+      <AnimatedSpinner />
+      <Text> {text}</Text>
     </Text>
   );
-};
+});
+
+InlineSpinner.displayName = 'InlineSpinner';
