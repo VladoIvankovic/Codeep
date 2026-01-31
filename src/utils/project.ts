@@ -414,11 +414,10 @@ export function detectFilePaths(text: string, projectRoot: string = process.cwd(
  * Get full project context for AI
  */
 export function getProjectContext(dir: string = process.cwd()): ProjectContext | null {
-  if (!isProjectDirectory(dir)) return null;
-
   try {
     const files = scanDirectory(dir, 3);
-    const projectType = getProjectType(dir);
+    const isProject = isProjectDirectory(dir);
+    const projectType = isProject ? getProjectType(dir) : 'generic';
     const structure = generateTreeStructure(files, 25);
     
     // Find key files that exist
@@ -439,7 +438,9 @@ export function getProjectContext(dir: string = process.cwd()): ProjectContext |
     const fileCount = codeFiles.length;
 
     // Generate summary
-    const summary = `${projectName} is a ${projectType} project with ${fileCount} code files.`;
+    const summary = isProject 
+      ? `${projectName} is a ${projectType} project with ${fileCount} code files.`
+      : `${projectName} is a folder with ${fileCount} files.`;
 
     return {
       root: dir,
