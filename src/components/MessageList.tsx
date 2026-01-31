@@ -1,5 +1,5 @@
-import React, { memo } from 'react';
-import { Box, Static } from 'ink';
+import React, { memo, useMemo } from 'react';
+import { Box } from 'ink';
 import { MessageView } from './Message';
 import { StreamingMessage } from './StreamingMessage';
 import { Message } from '../config/index';
@@ -12,40 +12,45 @@ interface MessageListProps {
 }
 
 /**
- * Generate unique key for message based on content and position
- * More stable than index-based keys
+ * Memoized individual message component
+ * Only re-renders when its specific content changes
  */
-const getMessageKey = (msg: Message, index: number): string => {
-  // Use hash of first 50 chars + role + index for uniqueness
-  const contentHash = msg.content.slice(0, 50).split('').reduce((acc, char) => {
-    return ((acc << 5) - acc) + char.charCodeAt(0);
-  }, 0);
-  return `${msg.role}-${index}-${Math.abs(contentHash)}`;
-};
+const MemoizedMessage = memo<{ msg: Message; index: number }>(
+  ({ msg }) => <MessageView role={msg.role} content={msg.content} />,
+  (prev, next) => prev.msg.content === next.msg.content && prev.msg.role === next.msg.role
+);
+
+MemoizedMessage.displayName = 'MemoizedMessage';
 
 /**
- * Message list with optimized rendering
- * Uses Static component for stable scroll position
- * Uses content-based keys instead of index for better React reconciliation
+ * Message list WITHOUT Static component
+ * 
+ * We removed the Static component because:
+ * - Static preserves content in terminal scroll history even after unmount
+ * - This causes ghost/duplicate content when switching screens
+ * - The trade-off is that messages will re-render on each update
+ * - We mitigate this with memoization at the individual message level
+ * 
+ * NOTE: This is a temporary solution until we implement a custom renderer
+ * like Claude CLI uses (DEC Mode 2026 / synchronized output).
  */
 export const MessageList: React.FC<MessageListProps> = memo(({
   messages,
   streamingContent,
 }) => {
+  // Memoize the messages array rendering
+  const renderedMessages = useMemo(() => (
+    messages.map((msg, index) => (
+      <MemoizedMessage key={`msg-${index}-${msg.role}`} msg={msg} index={index} />
+    ))
+  ), [messages]);
+
   return (
     <Box flexDirection="column">
-      {/* Static messages - won't re-render on every keystroke */}
-      <Static items={messages}>
-        {(msg, index) => (
-          <MessageView 
-            key={getMessageKey(msg, index)} 
-            role={msg.role} 
-            content={msg.content} 
-          />
-        )}
-      </Static>
+      {/* Messages - render normally with memoization */}
+      {renderedMessages}
       
-      {/* Streaming content - renders outside Static for live updates */}
+      {/* Streaming content - renders for live updates */}
       {streamingContent && (
         <StreamingMessage content={streamingContent} />
       )}
