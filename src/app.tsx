@@ -1622,135 +1622,97 @@ export const App: React.FC = () => {
       )}
 
       {/* Inline menus - render below chat when active */}
-      {screen === 'help' && (
-        <Box flexDirection="column" marginTop={1}>
-          <Help />
-          <Text color="gray">Press Escape to close</Text>
-        </Box>
-      )}
-
-      {screen === 'status' && (
-        <Box flexDirection="column" marginTop={1}>
-          <Status />
-          <Text color="gray">Press Escape to close</Text>
-        </Box>
-      )}
-
-      {screen === 'settings' && (
-        <Box flexDirection="column" marginTop={1}>
-          <Settings 
-            onClose={() => setScreen('chat')}
-            notify={notify}
-            hasWriteAccess={hasWriteAccess}
-            hasProjectContext={!!projectContext}
-          />
-        </Box>
-      )}
-
-      {screen === 'sessions' && (
-        <Box flexDirection="column" marginTop={1}>
-          <Sessions 
-            history={messages} 
-            onLoad={handleSessionLoad}
-            onClose={() => setScreen('chat')}
-            projectPath={projectPath}
-          />
-        </Box>
-      )}
-
-      {screen === 'sessions-delete' && (
-        <Box flexDirection="column" marginTop={1}>
-          <Sessions 
-            history={messages} 
-            onLoad={handleSessionLoad}
-            onClose={() => setScreen('chat')}
-            onDelete={(name) => {
-              notify(`Deleted: ${name}`);
-              setScreen('chat');
-            }}
-            deleteMode={true}
-            projectPath={projectPath}
-          />
-        </Box>
-      )}
-
-      {screen === 'logout' && (
-        <Box flexDirection="column" marginTop={1}>
-          <LogoutPicker
-            onLogout={(providerId) => {
-              notify(`Logged out from ${providerId}`);
-              if (providerId === config.get('provider')) {
+      {isInlineMenu && (
+        <Box flexDirection="column">
+          {/* Separator line */}
+          <Text color="#f02a30">{'─'.repeat(stdout?.columns || 80)}</Text>
+          
+          {/* Menu content */}
+          {screen === 'help' && <Help />}
+          {screen === 'status' && <Status />}
+          {screen === 'settings' && (
+            <Settings 
+              onClose={() => setScreen('chat')}
+              notify={notify}
+              hasWriteAccess={hasWriteAccess}
+              hasProjectContext={!!projectContext}
+            />
+          )}
+          {screen === 'sessions' && (
+            <Sessions 
+              history={messages} 
+              onLoad={handleSessionLoad}
+              onClose={() => setScreen('chat')}
+              projectPath={projectPath}
+            />
+          )}
+          {screen === 'sessions-delete' && (
+            <Sessions 
+              history={messages} 
+              onLoad={handleSessionLoad}
+              onClose={() => setScreen('chat')}
+              onDelete={(name) => {
+                notify(`Deleted: ${name}`);
+                setScreen('chat');
+              }}
+              deleteMode={true}
+              projectPath={projectPath}
+            />
+          )}
+          {screen === 'logout' && (
+            <LogoutPicker
+              onLogout={(providerId) => {
+                notify(`Logged out from ${providerId}`);
+                if (providerId === config.get('provider')) {
+                  setMessages([]);
+                  setScreen('login');
+                } else {
+                  setScreen('chat');
+                }
+              }}
+              onLogoutAll={() => {
+                notify('Logged out from all providers');
                 setMessages([]);
                 setScreen('login');
-              } else {
+              }}
+              onCancel={() => setScreen('chat')}
+            />
+          )}
+          {screen === 'search' && (
+            <Search 
+              results={searchResults}
+              searchTerm={searchTerm}
+              onClose={() => setScreen('chat')}
+              onSelectMessage={(index) => {
+                notify(`Message #${index + 1}`);
+              }}
+            />
+          )}
+          {screen === 'export' && (
+            <Export
+              onExport={(format) => {
+                const content = exportMessages(messages, {
+                  format,
+                  sessionName: sessionId || 'chat',
+                });
+                const result = saveExport(content, format, process.cwd(), sessionId || undefined);
+                if (result.success) {
+                  notify(`Exported to ${result.filePath}`);
+                } else {
+                  notify(`Export failed: ${result.error}`);
+                }
                 setScreen('chat');
-              }
-            }}
-            onLogoutAll={() => {
-              notify('Logged out from all providers');
-              setMessages([]);
-              setScreen('login');
-            }}
-            onCancel={() => setScreen('chat')}
-          />
-        </Box>
-      )}
-
-      {screen === 'search' && (
-        <Box flexDirection="column" marginTop={1}>
-          <Search 
-            results={searchResults}
-            searchTerm={searchTerm}
-            onClose={() => setScreen('chat')}
-            onSelectMessage={(index) => {
-              notify(`Message #${index + 1}`);
-            }}
-          />
-        </Box>
-      )}
-
-      {screen === 'export' && (
-        <Box flexDirection="column" marginTop={1}>
-          <Export
-            onExport={(format) => {
-              const content = exportMessages(messages, {
-                format,
-                sessionName: sessionId || 'chat',
-              });
-              const result = saveExport(content, format, process.cwd(), sessionId || undefined);
-              if (result.success) {
-                notify(`Exported to ${result.filePath}`);
-              } else {
-                notify(`Export failed: ${result.error}`);
-              }
-              setScreen('chat');
-            }}
-            onCancel={() => setScreen('chat')}
-          />
-        </Box>
-      )}
-
-      {screen === 'model' && (
-        <Box flexDirection="column" marginTop={1}>
-          <ModelSelect onClose={() => setScreen('chat')} notify={notify} />
-        </Box>
-      )}
-
-      {screen === 'provider' && (
-        <Box flexDirection="column" marginTop={1}>
-          <ProviderSelect onClose={() => setScreen('chat')} notify={notify} />
-        </Box>
-      )}
-
-      {screen === 'protocol' && (
-        <Box flexDirection="column" marginTop={1}>
-          <ProtocolSelect onClose={() => setScreen('chat')} notify={notify} />
-        </Box>
-      )}
-
-      {screen === 'language' && (
-        <Box flexDirection="column" marginTop={1}>
-          <LanguageSelect onClose={() => setScreen('chat')} notify={notify} />
+              }}
+              onCancel={() => setScreen('chat')}
+            />
+          )}
+          {screen === 'model' && <ModelSelect onClose={() => setScreen('chat')} notify={notify} />}
+          {screen === 'provider' && <ProviderSelect onClose={() => setScreen('chat')} notify={notify} />}
+          {screen === 'protocol' && <ProtocolSelect onClose={() => setScreen('chat')} notify={notify} />}
+          {screen === 'language' && <LanguageSelect onClose={() => setScreen('chat')} notify={notify} />}
+          
+          {/* Close hint */}
+          <Text color="gray">Press Escape to close</Text>
         </Box>
       )}
 
