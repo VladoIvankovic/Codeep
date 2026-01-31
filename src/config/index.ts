@@ -630,29 +630,29 @@ export function listSessionsWithInfo(projectPath?: string): SessionInfo[] {
 
 // Project permission management
 /**
- * Get project permission from local .codeep/config.json
+ * Get project permission from local .codeep/config.json or global config
  */
 export function getProjectPermission(projectPath: string): ProjectPermission | null {
+  // First try local .codeep/config.json (for recognized projects)
   const configPath = getLocalConfigPath(projectPath);
-  if (!configPath || !existsSync(configPath)) {
-    return null;
+  if (configPath && existsSync(configPath)) {
+    try {
+      const data = JSON.parse(readFileSync(configPath, 'utf-8'));
+      if (data.permission) return data.permission;
+    } catch {
+      // Fall through to global config
+    }
   }
   
-  try {
-    const data = JSON.parse(readFileSync(configPath, 'utf-8'));
-    return data.permission || null;
-  } catch {
-    return null;
-  }
+  // Fallback to global config for non-project folders
+  const permissions = config.get('projectPermissions') || [];
+  return permissions.find((p: ProjectPermission) => p.path === projectPath) || null;
 }
 
 /**
- * Set project permission in local .codeep/config.json
+ * Set project permission in local .codeep/config.json or global config
  */
 export function setProjectPermission(projectPath: string, read: boolean, write: boolean): void {
-  const configPath = getLocalConfigPath(projectPath);
-  if (!configPath) return;
-  
   const permission: ProjectPermission = {
     path: projectPath,
     readPermission: read,
@@ -660,38 +660,65 @@ export function setProjectPermission(projectPath: string, read: boolean, write: 
     grantedAt: new Date().toISOString(),
   };
   
-  let data: any = {};
-  if (existsSync(configPath)) {
-    try {
-      data = JSON.parse(readFileSync(configPath, 'utf-8'));
-    } catch {
-      // Invalid JSON, start fresh
+  // Try to save to local .codeep/config.json (for recognized projects)
+  const configPath = getLocalConfigPath(projectPath);
+  if (configPath) {
+    let data: any = {};
+    if (existsSync(configPath)) {
+      try {
+        data = JSON.parse(readFileSync(configPath, 'utf-8'));
+      } catch {
+        // Invalid JSON, start fresh
+      }
     }
+    
+    data.permission = permission;
+    writeFileSync(configPath, JSON.stringify(data, null, 2));
+    return;
   }
   
-  data.permission = permission;
-  writeFileSync(configPath, JSON.stringify(data, null, 2));
+  // Fallback to global config for non-project folders
+  const permissions = config.get('projectPermissions') || [];
+  const existingIndex = permissions.findIndex((p: ProjectPermission) => p.path === projectPath);
+  
+  if (existingIndex >= 0) {
+    permissions[existingIndex] = permission;
+  } else {
+    permissions.push(permission);
+  }
+  
+  config.set('projectPermissions', permissions);
 }
 
 /**
- * Remove project permission from local .codeep/config.json
+ * Remove project permission from local .codeep/config.json or global config
  */
 export function removeProjectPermission(projectPath: string): boolean {
+  // Try to remove from local .codeep/config.json
   const configPath = getLocalConfigPath(projectPath);
-  if (!configPath || !existsSync(configPath)) {
-    return false;
+  if (configPath && existsSync(configPath)) {
+    try {
+      const data = JSON.parse(readFileSync(configPath, 'utf-8'));
+      if (data.permission) {
+        delete data.permission;
+        writeFileSync(configPath, JSON.stringify(data, null, 2));
+        return true;
+      }
+    } catch {
+      // Fall through to global config
+    }
   }
   
-  try {
-    const data = JSON.parse(readFileSync(configPath, 'utf-8'));
-    if (data.permission) {
-      delete data.permission;
-      writeFileSync(configPath, JSON.stringify(data, null, 2));
-      return true;
-    }
-  } catch {
-    // Ignore errors
+  // Try to remove from global config
+  const permissions = config.get('projectPermissions') || [];
+  const existingIndex = permissions.findIndex((p: ProjectPermission) => p.path === projectPath);
+  
+  if (existingIndex >= 0) {
+    permissions.splice(existingIndex, 1);
+    config.set('projectPermissions', permissions);
+    return true;
   }
+  
   return false;
 }
 
