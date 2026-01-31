@@ -77,6 +77,7 @@ export const App: React.FC = () => {
   
   // Start with 'chat' screen, will switch to login if needed after loading API key
   const [screen, setScreen] = useState<Screen>('chat');
+  const [chatRenderKey, setChatRenderKey] = useState(0); // Increment to force re-render of Static
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -216,16 +217,15 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
-  // Clear terminal when switching to fullscreen views (prevents ghost content from Static)
+  // Force re-render of MessageList (and its Static component) when returning to chat
+  // This prevents ghost content from previous screen
   const prevScreenRef = React.useRef(screen);
   useEffect(() => {
-    const fullscreenViews = ['help', 'status', 'settings', 'sessions', 'search', 'export'];
-    if (fullscreenViews.includes(screen) && prevScreenRef.current === 'chat') {
-      // Clear screen when entering fullscreen view from chat
-      stdout?.write('\x1b[2J\x1b[H');
+    if (screen === 'chat' && prevScreenRef.current !== 'chat') {
+      setChatRenderKey(k => k + 1);
     }
     prevScreenRef.current = screen;
-  }, [screen, stdout]);
+  }, [screen]);
 
   // Handle keyboard shortcuts
   useInput((input, key) => {
@@ -1698,7 +1698,7 @@ export const App: React.FC = () => {
 
       {/* Messages with pagination */}
       <MessageList
-        key={sessionId}
+        key={`${sessionId}-${chatRenderKey}`}
         messages={messages}
         streamingContent={streamingContent}
         scrollOffset={0}
