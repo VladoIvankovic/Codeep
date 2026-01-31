@@ -345,7 +345,7 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = memo(({ actions, is
     }
   }, [isRunning, currentAction, visibleLineCount]);
   
-  // Only show for write/edit actions with content while running
+  // Only show for write/edit actions with content
   if (!isRunning || !currentAction) return null;
   if (currentAction.type !== 'write' && currentAction.type !== 'edit') return null;
   if (!currentAction.details) return null;
@@ -357,6 +357,33 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = memo(({ actions, is
   const langLabel = getLanguageLabel(ext);
   const allLines = code.split('\n');
   const totalLines = allLines.length;
+  
+  // When action completes, show compact summary with blank lines to overwrite ghost
+  const isCompleted = currentAction.result === 'success' || currentAction.result === 'error';
+  
+  if (isCompleted) {
+    const statusIcon = currentAction.result === 'success' ? '✓' : '✗';
+    const statusColor = currentAction.result === 'success' ? 'green' : 'red';
+    const actionVerb = currentAction.type === 'write' ? 'Created' : 'Edited';
+    
+    // Calculate how many blank lines we need to overwrite the previous code display
+    // Header (2) + code lines shown + footer (1) + loading indicator (1)
+    const previousHeight = Math.min(visibleLineCount, totalLines) + 4;
+    const blankLines = Math.max(0, previousHeight - 1); // -1 for our summary line
+    
+    return (
+      <Box flexDirection="column" marginBottom={1}>
+        <Text color={statusColor}>
+          {statusIcon} {actionVerb} {filename} ({totalLines} lines)
+        </Text>
+        {/* Blank lines to overwrite ghost content */}
+        {Array.from({ length: blankLines }).map((_, i) => (
+          <Text key={i}> </Text>
+        ))}
+      </Box>
+    );
+  }
+  
   const actionLabel = currentAction.type === 'write' ? '✨ Creating' : '✏️  Editing';
   const actionColor = currentAction.type === 'write' ? 'green' : 'yellow';
   
