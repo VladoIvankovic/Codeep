@@ -216,6 +216,23 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
+  // Use alternate screen buffer for fullscreen views (non-chat screens)
+  // This prevents ghost content while keeping chat scrollable in normal buffer
+  useEffect(() => {
+    const isFullscreen = screen !== 'chat' && screen !== 'login' && screen !== 'permission' && screen !== 'session-picker';
+    
+    if (isFullscreen) {
+      // Enter alternate buffer
+      stdout?.write('\x1b[?1049h\x1b[H');
+    }
+    
+    return () => {
+      if (isFullscreen) {
+        // Exit alternate buffer when leaving fullscreen view
+        stdout?.write('\x1b[?1049l');
+      }
+    };
+  }, [screen, stdout]);
 
 
   // Handle keyboard shortcuts
