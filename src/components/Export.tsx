@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import React, { useState, useEffect } from 'react';
+import { Box, Text, useInput, useStdout } from 'ink';
 import { ExportFormat } from '../utils/export';
 
 interface ExportProps {
@@ -8,7 +8,12 @@ interface ExportProps {
 }
 
 export const Export: React.FC<ExportProps> = ({ onExport, onCancel }) => {
+  const { stdout } = useStdout();
   const [selectedIndex, setSelectedIndex] = useState(0);
+
+  useEffect(() => {
+    stdout?.write('\x1b[2J\x1b[H');
+  }, [stdout]);
 
   const formats: Array<{ id: ExportFormat; name: string; description: string }> = [
     { id: 'md', name: 'Markdown', description: 'Formatted with headers and separators' },

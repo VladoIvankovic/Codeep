@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { Text, Box, useInput } from 'ink';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Text, Box, useInput, useStdout } from 'ink';
 import { SessionInfo, listSessionsWithInfo, loadSession, startNewSession } from '../config/index';
 import { Message } from '../config/index';
 
@@ -47,8 +47,13 @@ export const SessionPicker: React.FC<SessionPickerProps> = ({
   onNewSession,
   projectPath 
 }) => {
+  const { stdout } = useStdout();
   const sessions = useMemo(() => listSessionsWithInfo(projectPath), [projectPath]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+
+  useEffect(() => {
+    stdout?.write('\x1b[2J\x1b[H');
+  }, [stdout]);
 
   useInput((input, key) => {
     // N = New session

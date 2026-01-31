@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Text, Box, useInput } from 'ink';
+import React, { useState, useEffect } from 'react';
+import { Text, Box, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { Message, listSessions, saveSession, loadSession, deleteSession } from '../config/index';
 
@@ -13,11 +13,16 @@ interface SessionsProps {
 }
 
 export const Sessions: React.FC<SessionsProps> = ({ history, onLoad, onClose, onDelete, deleteMode = false, projectPath }) => {
+  const { stdout } = useStdout();
   const [name, setName] = useState('');
   const [message, setMessage] = useState(deleteMode ? 'Select a session to delete (D or Enter)' : '');
   const [sessions, setSessions] = useState(listSessions(projectPath));
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  useEffect(() => {
+    stdout?.write('\x1b[2J\x1b[H');
+  }, [stdout]);
 
   useInput((input, key) => {
     // Handle delete confirmation
