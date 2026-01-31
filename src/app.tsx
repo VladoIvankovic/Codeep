@@ -216,6 +216,17 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
+  // Clear terminal when switching to fullscreen views (prevents ghost content from Static)
+  const prevScreenRef = React.useRef(screen);
+  useEffect(() => {
+    const fullscreenViews = ['help', 'status', 'settings', 'sessions', 'search', 'export'];
+    if (fullscreenViews.includes(screen) && prevScreenRef.current === 'chat') {
+      // Clear screen when entering fullscreen view from chat
+      stdout?.write('\x1b[2J\x1b[H');
+    }
+    prevScreenRef.current = screen;
+  }, [screen, stdout]);
+
   // Handle keyboard shortcuts
   useInput((input, key) => {
     // Ctrl+L to clear chat (F5 doesn't work reliably in all terminals)
