@@ -295,8 +295,8 @@ const isSectionBreak = (line: string, prevLine: string | null): boolean => {
 };
 
 /**
- * Live Code Stream component - shows code being written/edited by agent
- * Displays code progressively 10 lines at a time ABOVE agent progress
+ * Live Code Stream component - shows current file operation
+ * Simplified single-line display to avoid ghost content issues
  */
 interface LiveCodeStreamProps {
   actions: ActionLog[];
@@ -304,133 +304,46 @@ interface LiveCodeStreamProps {
   terminalWidth?: number;
 }
 
-const LINES_PER_CHUNK = 10; // Show 10 lines at a time
-
-export const LiveCodeStream: React.FC<LiveCodeStreamProps> = memo(({ actions, isRunning, terminalWidth = 80 }) => {
-  // Track how many lines we've shown so far
-  const [visibleLineCount, setVisibleLineCount] = useState(LINES_PER_CHUNK);
-  const lastActionIdRef = useRef<string>('');
-  
-  // Find the current write/edit action with code content
+export const LiveCodeStream: React.FC<LiveCodeStreamProps> = memo(({ actions, isRunning }) => {
+  // Find the current write/edit action
   const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
   
-  // Create a unique ID for current action
-  const currentActionId = currentAction 
-    ? `${currentAction.type}-${currentAction.target}-${currentAction.details?.length || 0}`
-    : '';
-  
-  // Reset visible lines when action changes
-  useEffect(() => {
-    if (currentActionId !== lastActionIdRef.current) {
-      lastActionIdRef.current = currentActionId;
-      setVisibleLineCount(LINES_PER_CHUNK);
-    }
-  }, [currentActionId]);
-  
-  // Progressively show more lines
-  useEffect(() => {
-    if (!isRunning || !currentAction) return;
-    if (currentAction.type !== 'write' && currentAction.type !== 'edit') return;
-    if (!currentAction.details) return;
-    
-    const totalLines = currentAction.details.split('\n').length;
-    
-    // If we haven't shown all lines yet, schedule showing more
-    if (visibleLineCount < totalLines) {
-      const timer = setTimeout(() => {
-        setVisibleLineCount(prev => Math.min(prev + LINES_PER_CHUNK, totalLines));
-      }, 200); // Show next 10 lines every 200ms
-      
-      return () => clearTimeout(timer);
-    }
-  }, [isRunning, currentAction, visibleLineCount]);
-  
-  // Only show for write/edit actions with content
+  // Only show for write/edit actions while running
   if (!isRunning || !currentAction) return null;
   if (currentAction.type !== 'write' && currentAction.type !== 'edit') return null;
-  if (!currentAction.details) return null;
   
-  const code = currentAction.details;
   const fullPath = currentAction.target;
   const filename = fullPath.split('/').pop() || fullPath;
   const ext = getFileExtension(filename);
   const langLabel = getLanguageLabel(ext);
-  const allLines = code.split('\n');
-  const totalLines = allLines.length;
+  const totalLines = currentAction.details?.split('\n').length || 0;
   
-  // When action completes, show compact summary with blank lines to overwrite ghost
-  const isCompleted = currentAction.result === 'success' || currentAction.result === 'error';
+  const actionIcon = currentAction.type === 'write' ? '✨' : '✏️';
+  const actionVerb = currentAction.type === 'write' ? 'Creating' : 'Editing';
+  const actionColor = currentAction.type === 'write' ? 'green' : 'yellow';
   
-  if (isCompleted) {
-    const statusIcon = currentAction.result === 'success' ? '✓' : '✗';
-    const statusColor = currentAction.result === 'success' ? 'green' : 'red';
-    const actionVerb = currentAction.type === 'write' ? 'Created' : 'Edited';
-    
-    // Calculate how many blank lines we need to overwrite the previous code display
-    // Header (2) + code lines shown + footer (1) + loading indicator (1)
-    const previousHeight = Math.min(visibleLineCount, totalLines) + 4;
-    const blankLines = Math.max(0, previousHeight - 1); // -1 for our summary line
-    
+  // Show completion status if available
+  if (currentAction.result === 'success') {
     return (
-      <Box flexDirection="column" marginBottom={1}>
-        <Text color={statusColor}>
-          {statusIcon} {actionVerb} {filename} ({totalLines} lines)
-        </Text>
-        {/* Blank lines to overwrite ghost content */}
-        {Array.from({ length: blankLines }).map((_, i) => (
-          <Text key={i}> </Text>
-        ))}
-      </Box>
+      <Text color="green">
+        ✓ {currentAction.type === 'write' ? 'Created' : 'Edited'} {filename} ({totalLines} lines)
+      </Text>
     );
   }
   
-  const actionLabel = currentAction.type === 'write' ? '✨ Creating' : '✏️  Editing';
-  const actionColor = currentAction.type === 'write' ? 'green' : 'yellow';
-  
-  // Show lines up to visibleLineCount
-  const linesToShow = allLines.slice(0, visibleLineCount);
-  const hasMoreLines = visibleLineCount < totalLines;
-  
-  // Calculate line width based on terminal width (same as agent box)
-  const lineWidth = Math.max(20, terminalWidth);
-  
-  return (
-    <Box flexDirection="column" marginBottom={1}>
-      {/* Header bar */}
-      <Text color={actionColor}>{'─'.repeat(lineWidth)}</Text>
-      <Text>
-        <Text color={actionColor} bold>{actionLabel} </Text>
-        <Text color="white" bold>{filename}</Text>
-        <Text color="cyan"> • {langLabel} • </Text>
-        <Text color="cyan">{visibleLineCount}</Text>
-        <Text color="cyan">/{totalLines} lines</Text>
-        {hasMoreLines && <Text color="yellow"> ▼ streaming...</Text>}
+  if (currentAction.result === 'error') {
+    return (
+      <Text color="red">
+        ✗ Failed to {currentAction.type} {filename}
       </Text>
-      
-      {/* Code content - show progressively */}
-      {linesToShow.map((line, i) => {
-        const lineNum = i + 1;
-        return (
-          <Text key={`line-${i}`}>
-            <Text color="cyan" dimColor>
-              {String(lineNum).padStart(4, ' ')} │{' '}
-            </Text>
-            <Text color={getCodeColor(line, ext)}>
-              {line.slice(0, 80)}
-            </Text>
-            {line.length > 80 && <Text color="cyan">…</Text>}
-          </Text>
-        );
-      })}
-      
-      {/* Show loading indicator if more lines coming */}
-      {hasMoreLines && (
-        <Text color="cyan" dimColor>
-          {'     '}│ ... {totalLines - visibleLineCount} more lines loading...
-        </Text>
-      )}
-      <Text color={actionColor}>{'─'.repeat(lineWidth)}</Text>
-    </Box>
+    );
+  }
+  
+  // Show in-progress status - single line, no height changes
+  return (
+    <Text color={actionColor}>
+      {actionIcon} {actionVerb} {filename} • {langLabel} • {totalLines} lines
+    </Text>
   );
 });
 
