@@ -216,6 +216,14 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
+  // Clear screen when switching to fullscreen views (non-chat screens)
+  // This ensures fullscreen components render from top, not below existing content
+  useEffect(() => {
+    if (screen !== 'chat') {
+      stdout?.write('\x1b[2J\x1b[H');
+    }
+  }, [screen, stdout]);
+
   // Handle keyboard shortcuts
   useInput((input, key) => {
     // Ctrl+L to clear chat (F5 doesn't work reliably in all terminals)
