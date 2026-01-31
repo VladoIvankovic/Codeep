@@ -250,19 +250,6 @@ export const App: React.FC = () => {
     }
   }, [modalScreen]);
 
-  // Clear LiveCodeStream ghost content when agent finishes
-  const prevAgentRunning = React.useRef(isAgentRunning);
-  useEffect(() => {
-    // Detect transition from running to stopped
-    if (prevAgentRunning.current === true && isAgentRunning === false) {
-      // Agent just stopped - clear terminal to remove LiveCodeStream ghost
-      setTimeout(() => {
-        stdout?.write('\x1b[2J\x1b[3J\x1b[H');
-      }, 100);
-    }
-    prevAgentRunning.current = isAgentRunning;
-  }, [isAgentRunning, stdout]);
-
   // Handle keyboard shortcuts
   useInput((input, key) => {
     // Ctrl+L to clear chat (F5 doesn't work reliably in all terminals)
