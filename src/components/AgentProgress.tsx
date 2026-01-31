@@ -311,6 +311,12 @@ interface LiveCodeStreamProps {
 const MAX_PREVIEW_LINES = 8; // Code preview lines (total box will be ~10 with header/footer)
 
 export const LiveCodeStream: React.FC<LiveCodeStreamProps> = memo(({ actions, isRunning, terminalWidth = 80 }) => {
+  // Find the current write/edit action for live preview
+  const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
+  const isCodeAction = currentAction && (currentAction.type === 'write' || currentAction.type === 'edit');
+  
+  // ALL HOOKS MUST BE CALLED BEFORE ANY EARLY RETURNS (Rules of Hooks)
+  
   // Calculate statistics from all actions
   const stats = useMemo(() => {
     const filesCreated = actions.filter(a => a.type === 'write' && a.result === 'success');
@@ -341,20 +347,16 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = memo(({ actions, is
     };
   }, [actions]);
   
-  // Find the current write/edit action for live preview
-  const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
-  const isCodeAction = currentAction && (currentAction.type === 'write' || currentAction.type === 'edit');
-  
-  // Don't render anything if no actions yet (agent just started)
-  if (actions.length === 0) {
-    return null;
-  }
-  
   // Get code lines for preview
   const codeLines = useMemo(() => {
     if (!isCodeAction || !currentAction?.details) return [];
     return currentAction.details.split('\n');
   }, [isCodeAction, currentAction?.details]);
+  
+  // Don't render anything if no actions yet (agent just started)
+  if (actions.length === 0) {
+    return null;
+  }
   
   const filename = currentAction?.target.split('/').pop() || '';
   const ext = getFileExtension(filename);
