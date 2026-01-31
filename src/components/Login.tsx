@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Text, Box, useInput, useStdout } from 'ink';
+import React, { useState } from 'react';
+import { Text, Box, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import open from 'open';
 import { setApiKey, setProvider, config, PROVIDERS } from '../config/index';
@@ -20,16 +20,11 @@ interface LoginProps {
 type Step = 'provider' | 'apikey';
 
 export const Login: React.FC<LoginProps> = ({ onLogin, onCancel }) => {
-  const { stdout } = useStdout();
   const [step, setStep] = useState<Step>('provider');
   const [selectedProvider, setSelectedProvider] = useState(0);
   const [apiKey, setApiKeyState] = useState('');
   const [error, setError] = useState('');
   const [validating, setValidating] = useState(false);
-
-  useEffect(() => {
-    stdout?.write('\x1b[2J\x1b[H');
-  }, [stdout]);
 
   const providers = getProviderList();
   const currentProvider = providers[selectedProvider];

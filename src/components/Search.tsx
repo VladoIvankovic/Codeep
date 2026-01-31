@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Box, Text, useInput, useStdout } from 'ink';
+import React, { useState } from 'react';
+import { Box, Text, useInput } from 'ink';
 import { SearchResult } from '../utils/search';
 
 interface SearchProps {
@@ -10,12 +10,7 @@ interface SearchProps {
 }
 
 export const Search: React.FC<SearchProps> = ({ results, searchTerm, onClose, onSelectMessage }) => {
-  const { stdout } = useStdout();
   const [selectedIndex, setSelectedIndex] = useState(0);
-
-  useEffect(() => {
-    stdout?.write('\x1b[2J\x1b[H');
-  }, [stdout]);
 
   useInput((input, key) => {
     if (key.escape) {

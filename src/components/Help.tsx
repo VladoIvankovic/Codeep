@@ -1,14 +1,7 @@
-import React, { useEffect } from 'react';
-import { Text, Box, useStdout } from 'ink';
+import React from 'react';
+import { Text, Box } from 'ink';
 
 export const Help: React.FC = () => {
-  const { stdout } = useStdout();
-
-  // Clear screen on mount to show fullscreen view
-  useEffect(() => {
-    stdout?.write('\x1b[2J\x1b[H');
-  }, [stdout]);
-
   return (
     <Box flexDirection="column">
       <Text color="#f02a30" bold>Available Commands</Text>

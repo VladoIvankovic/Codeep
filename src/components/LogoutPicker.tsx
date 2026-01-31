@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Text, Box, useInput, useStdout } from 'ink';
+import React, { useState } from 'react';
+import { Text, Box, useInput } from 'ink';
 import { getConfiguredProviders, clearApiKey, getCurrentProvider } from '../config/index';
 
 interface LogoutPickerProps {
@@ -13,14 +13,9 @@ export const LogoutPicker: React.FC<LogoutPickerProps> = ({
   onLogoutAll,
   onCancel 
 }) => {
-  const { stdout } = useStdout();
   const providers = getConfiguredProviders();
   const currentProvider = getCurrentProvider();
   const [selectedIndex, setSelectedIndex] = useState(0);
-
-  useEffect(() => {
-    stdout?.write('\x1b[2J\x1b[H');
-  }, [stdout]);
   
   // Options: individual providers + "All" + "Cancel"
   const options = [
