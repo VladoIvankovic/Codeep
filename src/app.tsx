@@ -67,7 +67,7 @@ import { saveContext, loadContext, clearContext, mergeContext } from './utils/co
 import { performCodeReview, formatReviewResult } from './utils/codeReview';
 import { loadProjectPreferences, learnFromProject, formatPreferencesForPrompt, addCustomRule, getLearningStatus } from './utils/learning';
 import { getAllSkills, findSkill, formatSkillsList, formatSkillHelp, generateSkillPrompt, saveCustomSkill, deleteCustomSkill, parseSkillDefinition, parseSkillChain, parseSkillArgs, searchSkills, trackSkillUsage, getSkillStats, Skill } from './utils/skills';
-import { AgentProgress, AgentSummary, ChangesList, LiveCodeStream } from './components/AgentProgress';
+import { AgentProgress, ChangesList, LiveCodeStream } from './components/AgentProgress';
 import { ActionLog, ToolCall, ToolResult, createActionLog } from './utils/tools';
 
 type Screen = 'chat' | 'login' | 'help' | 'status' | 'sessions' | 'sessions-delete' | 'model' | 'protocol' | 'language' | 'settings' | 'permission' | 'provider' | 'search' | 'export' | 'session-picker' | 'logout';
@@ -1695,38 +1695,30 @@ export const App: React.FC = () => {
       {/* Loading - show while waiting or streaming */}
       {isLoading && !isAgentRunning && <Loading isStreaming={!!streamingContent} />}
       
-      {/* Agent UI - wrap in Box to ensure clean transitions */}
-      {isAgentRunning ? (
-        <Box key="agent-running" flexDirection="column">
-          {/* Live code stream - shows code being written ABOVE agent progress */}
+      {/* Agent UI - LiveCodeStream handles both running and completed states */}
+      {/* This prevents ghost/jump by keeping constant height and transforming content */}
+      {(isAgentRunning || agentResult) && (
+        <Box key="agent-ui" flexDirection="column">
+          {/* Live code stream - shows live preview while running, summary when done */}
           <LiveCodeStream
             actions={agentActions}
-            isRunning={true}
+            isRunning={isAgentRunning}
             terminalWidth={stdout?.columns || 80}
           />
           
-          {/* Agent progress panel */}
-          <AgentProgress
-            isRunning={true}
-            iteration={agentIteration}
-            maxIterations={50}
-            actions={agentActions}
-            currentThinking={agentThinking}
-            dryRun={agentDryRun}
-          />
+          {/* Agent progress panel - only while running */}
+          {isAgentRunning && (
+            <AgentProgress
+              isRunning={true}
+              iteration={agentIteration}
+              maxIterations={50}
+              actions={agentActions}
+              currentThinking={agentThinking}
+              dryRun={agentDryRun}
+            />
+          )}
         </Box>
-      ) : agentResult ? (
-        <Box key="agent-complete" flexDirection="column">
-          {/* Agent summary - show after completion */}
-          <AgentSummary
-            success={agentResult.success}
-            iterations={agentResult.iterations}
-            actions={agentActions}
-            error={agentResult.error}
-            aborted={agentResult.aborted}
-          />
-        </Box>
-      ) : null}
+      )}
 
       {/* File changes prompt */}
       {pendingFileChanges.length > 0 && !isLoading && (

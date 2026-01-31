@@ -295,8 +295,12 @@ const isSectionBreak = (line: string, prevLine: string | null): boolean => {
 };
 
 /**
- * Live Code Stream component - shows current file operation
- * Simplified single-line display to avoid ghost content issues
+ * Live Code Stream component - shows current file operation with live preview
+ * 
+ * KEY DESIGN: This component always renders exactly MAX_LINES lines
+ * - While running: shows live code preview
+ * - When finished: shows summary statistics
+ * - This prevents ghost content and terminal jumping because height is constant
  */
 interface LiveCodeStreamProps {
   actions: ActionLog[];
@@ -304,46 +308,216 @@ interface LiveCodeStreamProps {
   terminalWidth?: number;
 }
 
-export const LiveCodeStream: React.FC<LiveCodeStreamProps> = memo(({ actions, isRunning }) => {
-  // Find the current write/edit action
+const MAX_PREVIEW_LINES = 8; // Code preview lines (total box will be ~10 with header/footer)
+
+export const LiveCodeStream: React.FC<LiveCodeStreamProps> = memo(({ actions, isRunning, terminalWidth = 80 }) => {
+  // Calculate statistics from all actions
+  const stats = useMemo(() => {
+    const filesCreated = actions.filter(a => a.type === 'write' && a.result === 'success');
+    const filesEdited = actions.filter(a => a.type === 'edit' && a.result === 'success');
+    const filesDeleted = actions.filter(a => a.type === 'delete' && a.result === 'success');
+    const filesRead = actions.filter(a => a.type === 'read' && a.result === 'success');
+    const commands = actions.filter(a => a.type === 'command' && a.result === 'success');
+    const errors = actions.filter(a => a.result === 'error');
+    
+    // Calculate total lines written
+    let totalLinesWritten = 0;
+    for (const action of [...filesCreated, ...filesEdited]) {
+      if (action.details) {
+        totalLinesWritten += action.details.split('\n').length;
+      }
+    }
+    
+    return {
+      filesCreated: filesCreated.length,
+      filesEdited: filesEdited.length,
+      filesDeleted: filesDeleted.length,
+      filesRead: filesRead.length,
+      commands: commands.length,
+      errors: errors.length,
+      totalLinesWritten,
+      createdFiles: filesCreated.map(a => a.target.split('/').pop() || a.target),
+      editedFiles: filesEdited.map(a => a.target.split('/').pop() || a.target),
+    };
+  }, [actions]);
+  
+  // Find the current write/edit action for live preview
   const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
+  const isCodeAction = currentAction && (currentAction.type === 'write' || currentAction.type === 'edit');
   
-  // Only show for write/edit actions while running
-  if (!isRunning || !currentAction) return null;
-  if (currentAction.type !== 'write' && currentAction.type !== 'edit') return null;
+  // Don't render anything if no actions yet (agent just started)
+  if (actions.length === 0) {
+    return null;
+  }
   
-  const fullPath = currentAction.target;
-  const filename = fullPath.split('/').pop() || fullPath;
+  // Get code lines for preview
+  const codeLines = useMemo(() => {
+    if (!isCodeAction || !currentAction?.details) return [];
+    return currentAction.details.split('\n');
+  }, [isCodeAction, currentAction?.details]);
+  
+  const filename = currentAction?.target.split('/').pop() || '';
   const ext = getFileExtension(filename);
   const langLabel = getLanguageLabel(ext);
-  const totalLines = currentAction.details?.split('\n').length || 0;
   
-  const actionIcon = currentAction.type === 'write' ? '✨' : '✏️';
-  const actionVerb = currentAction.type === 'write' ? 'Creating' : 'Editing';
-  const actionColor = currentAction.type === 'write' ? 'green' : 'yellow';
-  
-  // Show completion status if available
-  if (currentAction.result === 'success') {
+  // RUNNING STATE: Show live code preview
+  if (isRunning && isCodeAction && codeLines.length > 0) {
+    // Show last N lines of code being written
+    const visibleLines = codeLines.slice(-MAX_PREVIEW_LINES);
+    const hiddenCount = Math.max(0, codeLines.length - MAX_PREVIEW_LINES);
+    
+    const actionIcon = currentAction.type === 'write' ? '+' : '~';
+    const actionColor = currentAction.type === 'write' ? 'green' : 'yellow';
+    const boxWidth = Math.min(terminalWidth - 4, 76);
+    
     return (
-      <Text color="green">
-        ✓ {currentAction.type === 'write' ? 'Created' : 'Edited'} {filename} ({totalLines} lines)
-      </Text>
+      <Box 
+        flexDirection="column" 
+        borderStyle="round" 
+        borderColor={actionColor}
+        marginBottom={1}
+        width={boxWidth}
+      >
+        {/* Header */}
+        <Box paddingX={1}>
+          <Text color={actionColor} bold>{actionIcon} </Text>
+          <Text color="white" bold>{filename}</Text>
+          <Text color="gray"> • {langLabel} • {codeLines.length} lines</Text>
+        </Box>
+        
+        {/* Code preview */}
+        <Box flexDirection="column" paddingX={1}>
+          {hiddenCount > 0 && (
+            <Text color="gray" dimColor>  ... {hiddenCount} more lines above</Text>
+          )}
+          {visibleLines.map((line, i) => {
+            const lineNum = hiddenCount + i + 1;
+            const displayLine = line.length > boxWidth - 10 
+              ? line.slice(0, boxWidth - 13) + '...' 
+              : line;
+            return (
+              <Text key={i}>
+                <Text color="gray" dimColor>{String(lineNum).padStart(3)} </Text>
+                <Text color={getCodeColor(line, ext)}>{displayLine || ' '}</Text>
+              </Text>
+            );
+          })}
+          {/* Pad with empty lines to maintain constant height */}
+          {Array.from({ length: MAX_PREVIEW_LINES - visibleLines.length }).map((_, i) => (
+            <Text key={`pad-${i}`} color="gray" dimColor>{'    '}</Text>
+          ))}
+        </Box>
+      </Box>
     );
   }
   
-  if (currentAction.result === 'error') {
+  // RUNNING STATE but not a code action: show simple status
+  if (isRunning && currentAction) {
+    const boxWidth = Math.min(terminalWidth - 4, 76);
+    
     return (
-      <Text color="red">
-        ✗ Failed to {currentAction.type} {filename}
-      </Text>
+      <Box 
+        flexDirection="column" 
+        borderStyle="round" 
+        borderColor="cyan"
+        marginBottom={1}
+        width={boxWidth}
+      >
+        <Box paddingX={1}>
+          <Text color="cyan" bold>◦ </Text>
+          <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
+          <Text color="white">{formatTarget(currentAction.target)}</Text>
+        </Box>
+        {/* Pad to maintain height */}
+        {Array.from({ length: MAX_PREVIEW_LINES }).map((_, i) => (
+          <Text key={`pad-${i}`} color="gray" dimColor> </Text>
+        ))}
+      </Box>
     );
   }
   
-  // Show in-progress status - single line, no height changes
+  // FINISHED STATE: Show summary statistics (same height as live preview)
+  const boxWidth = Math.min(terminalWidth - 4, 76);
+  const hasChanges = stats.filesCreated > 0 || stats.filesEdited > 0 || stats.filesDeleted > 0;
+  
   return (
-    <Text color={actionColor}>
-      {actionIcon} {actionVerb} {filename} • {langLabel} • {totalLines} lines
-    </Text>
+    <Box 
+      flexDirection="column" 
+      borderStyle="round" 
+      borderColor={stats.errors > 0 ? 'red' : 'green'}
+      marginBottom={1}
+      width={boxWidth}
+    >
+      {/* Header */}
+      <Box paddingX={1}>
+        <Text color={stats.errors > 0 ? 'red' : 'green'} bold>
+          {stats.errors > 0 ? '!' : '✓'} Session Complete
+        </Text>
+        <Text color="gray"> • {actions.length} actions</Text>
+      </Box>
+      
+      {/* Statistics */}
+      <Box flexDirection="column" paddingX={1}>
+        {hasChanges ? (
+          <>
+            {stats.filesCreated > 0 && (
+              <Text>
+                <Text color="green" bold>  + {stats.filesCreated} </Text>
+                <Text color="gray">file(s) created</Text>
+                {stats.createdFiles.length <= 3 && (
+                  <Text color="gray" dimColor> ({stats.createdFiles.join(', ')})</Text>
+                )}
+              </Text>
+            )}
+            {stats.filesEdited > 0 && (
+              <Text>
+                <Text color="yellow" bold>  ~ {stats.filesEdited} </Text>
+                <Text color="gray">file(s) modified</Text>
+                {stats.editedFiles.length <= 3 && (
+                  <Text color="gray" dimColor> ({stats.editedFiles.join(', ')})</Text>
+                )}
+              </Text>
+            )}
+            {stats.filesDeleted > 0 && (
+              <Text>
+                <Text color="red" bold>  - {stats.filesDeleted} </Text>
+                <Text color="gray">file(s) deleted</Text>
+              </Text>
+            )}
+            {stats.totalLinesWritten > 0 && (
+              <Text>
+                <Text color="cyan" bold>  ≡ {stats.totalLinesWritten} </Text>
+                <Text color="gray">total lines written</Text>
+              </Text>
+            )}
+            {stats.filesRead > 0 && (
+              <Text color="gray" dimColor>    {stats.filesRead} file(s) read</Text>
+            )}
+            {stats.commands > 0 && (
+              <Text color="gray" dimColor>    {stats.commands} command(s) run</Text>
+            )}
+          </>
+        ) : (
+          <>
+            <Text color="gray">  No file changes made</Text>
+            {stats.filesRead > 0 && (
+              <Text color="gray" dimColor>    {stats.filesRead} file(s) read</Text>
+            )}
+            {stats.commands > 0 && (
+              <Text color="gray" dimColor>    {stats.commands} command(s) run</Text>
+            )}
+          </>
+        )}
+        {stats.errors > 0 && (
+          <Text color="red">  ✗ {stats.errors} error(s) occurred</Text>
+        )}
+        
+        {/* Pad with empty lines to maintain constant height */}
+        {Array.from({ length: Math.max(0, MAX_PREVIEW_LINES - 6) }).map((_, i) => (
+          <Text key={`pad-${i}`} color="gray" dimColor> </Text>
+        ))}
+      </Box>
+    </Box>
   );
 });
 
