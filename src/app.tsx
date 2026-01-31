@@ -216,24 +216,6 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
-  // Use alternate screen buffer for fullscreen views (non-chat screens)
-  // This prevents ghost content while keeping chat scrollable in normal buffer
-  useEffect(() => {
-    const isFullscreen = screen !== 'chat' && screen !== 'login' && screen !== 'permission' && screen !== 'session-picker';
-    
-    if (isFullscreen) {
-      // Enter alternate buffer
-      stdout?.write('\x1b[?1049h\x1b[H');
-    }
-    
-    return () => {
-      if (isFullscreen) {
-        // Exit alternate buffer when leaving fullscreen view
-        stdout?.write('\x1b[?1049l');
-      }
-    };
-  }, [screen, stdout]);
-
 
   // Handle keyboard shortcuts
   useInput((input, key) => {
@@ -1506,24 +1488,6 @@ export const App: React.FC = () => {
     );
   }
 
-  if (screen === 'help') {
-    return (
-      <Box key="help-screen" flexDirection="column" height={stdout?.rows || 24}>
-        <Help />
-        <Text>Press Escape to close</Text>
-      </Box>
-    );
-  }
-
-  if (screen === 'status') {
-    return (
-      <Box key="status-screen" flexDirection="column" height={stdout?.rows || 24}>
-        <Status />
-        <Text>Press Escape to close</Text>
-      </Box>
-    );
-  }
-
   if (screen === 'session-picker') {
     return (
       <SessionPicker
@@ -1543,136 +1507,9 @@ export const App: React.FC = () => {
     );
   }
 
-  if (screen === 'sessions') {
-    return (
-      <Sessions 
-        history={messages} 
-        onLoad={handleSessionLoad}
-        onClose={() => setScreen('chat')}
-        projectPath={projectPath}
-      />
-    );
-  }
-
-  if (screen === 'sessions-delete') {
-    return (
-      <Sessions 
-        history={messages} 
-        onLoad={handleSessionLoad}
-        onClose={() => setScreen('chat')}
-        onDelete={(name) => {
-          notify(`Deleted: ${name}`);
-          setScreen('chat');
-        }}
-        deleteMode={true}
-        projectPath={projectPath}
-      />
-    );
-  }
-
-  if (screen === 'logout') {
-    return (
-      <LogoutPicker
-        onLogout={(providerId) => {
-          notify(`Logged out from ${providerId}`);
-          // If logged out from current provider, go to login
-          if (providerId === config.get('provider')) {
-            setMessages([]);
-            setScreen('login');
-          } else {
-            setScreen('chat');
-          }
-        }}
-        onLogoutAll={() => {
-          notify('Logged out from all providers');
-          setMessages([]);
-          setScreen('login');
-        }}
-        onCancel={() => setScreen('chat')}
-      />
-    );
-  }
-
-  if (screen === 'settings') {
-    return (
-      <Box key="settings-screen" flexDirection="column" height={stdout?.rows || 24}>
-        <Settings 
-          onClose={() => setScreen('chat')}
-          notify={notify}
-          hasWriteAccess={hasWriteAccess}
-          hasProjectContext={!!projectContext}
-        />
-      </Box>
-    );
-  }
-
-  if (screen === 'search') {
-    return (
-      <Search 
-        results={searchResults}
-        searchTerm={searchTerm}
-        onClose={() => setScreen('chat')}
-        onSelectMessage={(index) => {
-          // Just close search for now - message is already in chat history
-          notify(`Message #${index + 1}`);
-        }}
-      />
-    );
-  }
-
-  if (screen === 'export') {
-    return (
-      <Export
-        onExport={(format) => {
-          const content = exportMessages(messages, {
-            format,
-            sessionName: sessionId || 'chat',
-          });
-          
-          const result = saveExport(content, format, process.cwd(), sessionId || undefined);
-          
-          if (result.success) {
-            notify(`Exported to ${result.filePath}`);
-          } else {
-            notify(`Export failed: ${result.error}`);
-          }
-          
-          setScreen('chat');
-        }}
-        onCancel={() => setScreen('chat')}
-      />
-    );
-  }
-
-  if (screen === 'model') {
-    return (
-      <ModelSelect onClose={() => setScreen('chat')} notify={notify} />
-    );
-  }
-
-  if (screen === 'provider') {
-    return (
-      <ProviderSelect onClose={() => setScreen('chat')} notify={notify} />
-    );
-  }
-
-  if (screen === 'protocol') {
-    return (
-      <ProtocolSelect onClose={() => setScreen('chat')} notify={notify} />
-    );
-  }
-
-  if (screen === 'language') {
-    return (
-      <LanguageSelect onClose={() => setScreen('chat')} notify={notify} />
-    );
-  }
-
-  // Main chat screen (only render when screen === 'chat')
-  if (screen !== 'chat') {
-    // If we got here, we're in an unknown state - default to chat
-    return null;
-  }
+  // Helper to check if we're showing an inline menu
+  const isInlineMenu = ['help', 'status', 'settings', 'sessions', 'sessions-delete', 
+                        'logout', 'search', 'export', 'model', 'provider', 'protocol', 'language'].includes(screen);
 
   return (
     <Box key="chat-screen" flexDirection="column">
@@ -1768,48 +1605,185 @@ export const App: React.FC = () => {
         </Box>
       )}
 
-      {/* Input */}
-      <Box flexDirection="column">
-        <Text color="#f02a30">{'─'.repeat(Math.max(20, stdout?.columns || 80))}</Text>
-        <Box paddingX={1}>
-          <ChatInput 
-            onSubmit={handleSubmit} 
-            disabled={isLoading || isAgentRunning || pendingFileChanges.length > 0}
-            history={inputHistory}
-            clearTrigger={clearInputTrigger}
+      {/* Input - hide when inline menu is open */}
+      {!isInlineMenu && (
+        <Box flexDirection="column">
+          <Text color="#f02a30">{'─'.repeat(Math.max(20, stdout?.columns || 80))}</Text>
+          <Box paddingX={1}>
+            <ChatInput 
+              onSubmit={handleSubmit} 
+              disabled={isLoading || isAgentRunning || pendingFileChanges.length > 0}
+              history={inputHistory}
+              clearTrigger={clearInputTrigger}
+            />
+          </Box>
+          <Text color="#f02a30">{'─'.repeat(Math.max(20, stdout?.columns || 80))}</Text>
+        </Box>
+      )}
+
+      {/* Inline menus - render below chat when active */}
+      {screen === 'help' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Help />
+          <Text color="gray">Press Escape to close</Text>
+        </Box>
+      )}
+
+      {screen === 'status' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Status />
+          <Text color="gray">Press Escape to close</Text>
+        </Box>
+      )}
+
+      {screen === 'settings' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Settings 
+            onClose={() => setScreen('chat')}
+            notify={notify}
+            hasWriteAccess={hasWriteAccess}
+            hasProjectContext={!!projectContext}
           />
         </Box>
-        <Text color="#f02a30">{'─'.repeat(Math.max(20, stdout?.columns || 80))}</Text>
-      </Box>
+      )}
 
-      {/* Footer with shortcuts */}
-      <Box flexDirection="column">
-        <Box>
-          <Text>
-            <Text color="#f02a30" bold>Ctrl+V</Text>
-            <Text> Paste  </Text>
-            <Text color="#f02a30" bold>Ctrl+L</Text>
-            <Text> Clear  </Text>
-            <Text color="#f02a30" bold>Esc</Text>
-            <Text> Cancel  </Text>
-            <Text color="#f02a30" bold>↑↓</Text>
-            <Text> History  </Text>
-            <Text color="#f02a30" bold>/help</Text>
-            <Text> Commands</Text>
-          </Text>
+      {screen === 'sessions' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Sessions 
+            history={messages} 
+            onLoad={handleSessionLoad}
+            onClose={() => setScreen('chat')}
+            projectPath={projectPath}
+          />
         </Box>
-        <Box>
-          {config.get('agentMode') === 'on' ? (
-            hasWriteAccess && projectContext ? (
-              <Text color="green">Agent: ON ✓</Text>
+      )}
+
+      {screen === 'sessions-delete' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Sessions 
+            history={messages} 
+            onLoad={handleSessionLoad}
+            onClose={() => setScreen('chat')}
+            onDelete={(name) => {
+              notify(`Deleted: ${name}`);
+              setScreen('chat');
+            }}
+            deleteMode={true}
+            projectPath={projectPath}
+          />
+        </Box>
+      )}
+
+      {screen === 'logout' && (
+        <Box flexDirection="column" marginTop={1}>
+          <LogoutPicker
+            onLogout={(providerId) => {
+              notify(`Logged out from ${providerId}`);
+              if (providerId === config.get('provider')) {
+                setMessages([]);
+                setScreen('login');
+              } else {
+                setScreen('chat');
+              }
+            }}
+            onLogoutAll={() => {
+              notify('Logged out from all providers');
+              setMessages([]);
+              setScreen('login');
+            }}
+            onCancel={() => setScreen('chat')}
+          />
+        </Box>
+      )}
+
+      {screen === 'search' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Search 
+            results={searchResults}
+            searchTerm={searchTerm}
+            onClose={() => setScreen('chat')}
+            onSelectMessage={(index) => {
+              notify(`Message #${index + 1}`);
+            }}
+          />
+        </Box>
+      )}
+
+      {screen === 'export' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Export
+            onExport={(format) => {
+              const content = exportMessages(messages, {
+                format,
+                sessionName: sessionId || 'chat',
+              });
+              const result = saveExport(content, format, process.cwd(), sessionId || undefined);
+              if (result.success) {
+                notify(`Exported to ${result.filePath}`);
+              } else {
+                notify(`Export failed: ${result.error}`);
+              }
+              setScreen('chat');
+            }}
+            onCancel={() => setScreen('chat')}
+          />
+        </Box>
+      )}
+
+      {screen === 'model' && (
+        <Box flexDirection="column" marginTop={1}>
+          <ModelSelect onClose={() => setScreen('chat')} notify={notify} />
+        </Box>
+      )}
+
+      {screen === 'provider' && (
+        <Box flexDirection="column" marginTop={1}>
+          <ProviderSelect onClose={() => setScreen('chat')} notify={notify} />
+        </Box>
+      )}
+
+      {screen === 'protocol' && (
+        <Box flexDirection="column" marginTop={1}>
+          <ProtocolSelect onClose={() => setScreen('chat')} notify={notify} />
+        </Box>
+      )}
+
+      {screen === 'language' && (
+        <Box flexDirection="column" marginTop={1}>
+          <LanguageSelect onClose={() => setScreen('chat')} notify={notify} />
+        </Box>
+      )}
+
+      {/* Footer with shortcuts - hide when inline menu is open */}
+      {!isInlineMenu && (
+        <Box flexDirection="column">
+          <Box>
+            <Text>
+              <Text color="#f02a30" bold>Ctrl+V</Text>
+              <Text> Paste  </Text>
+              <Text color="#f02a30" bold>Ctrl+L</Text>
+              <Text> Clear  </Text>
+              <Text color="#f02a30" bold>Esc</Text>
+              <Text> Cancel  </Text>
+              <Text color="#f02a30" bold>↑↓</Text>
+              <Text> History  </Text>
+              <Text color="#f02a30" bold>/help</Text>
+              <Text> Commands</Text>
+            </Text>
+          </Box>
+          <Box>
+            {config.get('agentMode') === 'on' ? (
+              hasWriteAccess && projectContext ? (
+                <Text color="green">Agent: ON ✓</Text>
+              ) : (
+                <Text color="yellow">Agent: ON (no permission - use /grant)</Text>
+              )
             ) : (
-              <Text color="yellow">Agent: ON (no permission - use /grant)</Text>
-            )
-          ) : (
-            <Text color="cyan">Agent: Manual (use /agent)</Text>
-          )}
+              <Text color="cyan">Agent: Manual (use /agent)</Text>
+            )}
+          </Box>
         </Box>
-      </Box>
+      )}
     </Box>
   );
 };
