@@ -1731,37 +1731,38 @@ export const App: React.FC = () => {
       {/* Loading - show while waiting or streaming */}
       {isLoading && !isAgentRunning && <Loading isStreaming={!!streamingContent} />}
       
-      {/* Live code stream - shows code being written ABOVE agent progress */}
-      {isAgentRunning && (
-        <LiveCodeStream
-          actions={agentActions}
-          isRunning={true}
-          terminalWidth={stdout?.columns || 80}
-        />
-      )}
-      
-      {/* Agent progress panel */}
-      {isAgentRunning && (
-        <AgentProgress
-          isRunning={true}
-          iteration={agentIteration}
-          maxIterations={50}
-          actions={agentActions}
-          currentThinking={agentThinking}
-          dryRun={agentDryRun}
-        />
-      )}
-      
-      {/* Agent summary - show after completion */}
-      {!isAgentRunning && agentResult && (
-        <AgentSummary
-          success={agentResult.success}
-          iterations={agentResult.iterations}
-          actions={agentActions}
-          error={agentResult.error}
-          aborted={agentResult.aborted}
-        />
-      )}
+      {/* Agent UI - wrap in Box to ensure clean transitions */}
+      {isAgentRunning ? (
+        <Box key="agent-running" flexDirection="column">
+          {/* Live code stream - shows code being written ABOVE agent progress */}
+          <LiveCodeStream
+            actions={agentActions}
+            isRunning={true}
+            terminalWidth={stdout?.columns || 80}
+          />
+          
+          {/* Agent progress panel */}
+          <AgentProgress
+            isRunning={true}
+            iteration={agentIteration}
+            maxIterations={50}
+            actions={agentActions}
+            currentThinking={agentThinking}
+            dryRun={agentDryRun}
+          />
+        </Box>
+      ) : agentResult ? (
+        <Box key="agent-complete" flexDirection="column">
+          {/* Agent summary - show after completion */}
+          <AgentSummary
+            success={agentResult.success}
+            iterations={agentResult.iterations}
+            actions={agentActions}
+            error={agentResult.error}
+            aborted={agentResult.aborted}
+          />
+        </Box>
+      ) : null}
 
       {/* File changes prompt */}
       {pendingFileChanges.length > 0 && !isLoading && (
