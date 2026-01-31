@@ -216,13 +216,7 @@ export const App: React.FC = () => {
     }
   }, [notification, notificationDuration]);
 
-  // Clear screen when switching to fullscreen views (non-chat screens)
-  // This ensures fullscreen components render from top, not below existing content
-  useEffect(() => {
-    if (screen !== 'chat') {
-      stdout?.write('\x1b[2J\x1b[H');
-    }
-  }, [screen, stdout]);
+
 
   // Handle keyboard shortcuts
   useInput((input, key) => {
@@ -1497,7 +1491,7 @@ export const App: React.FC = () => {
 
   if (screen === 'help') {
     return (
-      <Box key="help-screen" flexDirection="column">
+      <Box key="help-screen" flexDirection="column" height={stdout?.rows || 24}>
         <Help />
         <Text>Press Escape to close</Text>
       </Box>
@@ -1506,7 +1500,7 @@ export const App: React.FC = () => {
 
   if (screen === 'status') {
     return (
-      <Box key="status-screen" flexDirection="column">
+      <Box key="status-screen" flexDirection="column" height={stdout?.rows || 24}>
         <Status />
         <Text>Press Escape to close</Text>
       </Box>
@@ -1584,12 +1578,14 @@ export const App: React.FC = () => {
 
   if (screen === 'settings') {
     return (
-      <Settings 
-        onClose={() => setScreen('chat')}
-        notify={notify}
-        hasWriteAccess={hasWriteAccess}
-        hasProjectContext={!!projectContext}
-      />
+      <Box key="settings-screen" flexDirection="column" height={stdout?.rows || 24}>
+        <Settings 
+          onClose={() => setScreen('chat')}
+          notify={notify}
+          hasWriteAccess={hasWriteAccess}
+          hasProjectContext={!!projectContext}
+        />
+      </Box>
     );
   }
 
