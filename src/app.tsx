@@ -157,15 +157,23 @@ export const App: React.FC = () => {
   // Track LiveCodeStream height to render placeholder after agent finishes (prevents ghost content)
   const [lastStreamHeight, setLastStreamHeight] = useState(0);
   
-  // Clear placeholder height after agent finishes (let it overwrite ghost, then disappear)
+  // Clear ghost content when agent finishes by erasing lines above cursor
+  const prevAgentRunning = React.useRef(isAgentRunning);
   useEffect(() => {
-    if (agentResult && lastStreamHeight > 0) {
-      const timer = setTimeout(() => {
-        setLastStreamHeight(0);
-      }, 100); // Short delay to allow one render cycle to overwrite ghost
-      return () => clearTimeout(timer);
+    if (prevAgentRunning.current === true && isAgentRunning === false && lastStreamHeight > 0) {
+      // Erase N lines above without scrolling: move up, clear each line, move back down
+      const linesToClear = lastStreamHeight;
+      let escapeSeq = '';
+      escapeSeq += `\x1b[${linesToClear}A`; // Move cursor up N lines
+      for (let i = 0; i < linesToClear; i++) {
+        escapeSeq += '\x1b[2K\x1b[B'; // Clear line, move down
+      }
+      escapeSeq += `\x1b[${linesToClear}A`; // Move back up to original position
+      stdout?.write(escapeSeq);
+      setLastStreamHeight(0);
     }
-  }, [agentResult, lastStreamHeight]);
+    prevAgentRunning.current = isAgentRunning;
+  }, [isAgentRunning, lastStreamHeight, stdout]);
   
   // Load API keys for ALL providers on startup and check if current provider is configured
   useEffect(() => {
@@ -1776,14 +1784,6 @@ export const App: React.FC = () => {
         </Box>
       ) : agentResult ? (
         <Box key="agent-complete" flexDirection="column">
-          {/* Empty placeholder to overwrite LiveCodeStream ghost content */}
-          {lastStreamHeight > 0 && (
-            <Box flexDirection="column">
-              {Array.from({ length: lastStreamHeight }).map((_, i) => (
-                <Text key={i}> </Text>
-              ))}
-            </Box>
-          )}
           {/* Agent summary - show after completion */}
           <AgentSummary
             success={agentResult.success}
