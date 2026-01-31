@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import React, { useState, useEffect } from 'react';
+import { Box, Text, useInput, useStdout } from 'ink';
 import { config } from '../config/index';
 import { updateRateLimits } from '../utils/ratelimit';
 
@@ -117,9 +117,15 @@ const SETTINGS: SettingItem[] = [
 ];
 
 export const Settings: React.FC<SettingsProps> = ({ onClose, notify, hasWriteAccess = false, hasProjectContext = false }) => {
+  const { stdout } = useStdout();
   const [selected, setSelected] = useState(0);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
+
+  // Clear screen on mount to show fullscreen view
+  useEffect(() => {
+    stdout?.write('\x1b[2J\x1b[H');
+  }, [stdout]);
 
   useInput((input, key) => {
     if (key.escape) {
