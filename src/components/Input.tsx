@@ -380,18 +380,28 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
 
   return (
     <Box flexDirection="column">
-      {/* Command hint when just '/' is typed */}
+      {/* Input line */}
+      <Box>
+        <Text color="#f02a30" bold>{'> '}</Text>
+        {disabled ? (
+          <Text color="yellow">Agent working... (Esc to stop)</Text>
+        ) : (
+          renderInput()
+        )}
+      </Box>
+
+      {/* Command hint when just '/' is typed - below input */}
       {value === '/' && (
-        <Box marginBottom={1}>
+        <Box marginTop={1}>
           <Text color="cyan" dimColor>
-            Type command name (e.g., help, status, settings) or type /help to see all commands
+            Type command name (e.g., help, status, settings) or press Tab to see all
           </Text>
         </Box>
       )}
 
-      {/* Suggestions dropdown */}
+      {/* Suggestions dropdown - below input */}
       {suggestions.length > 0 && (
-        <Box flexDirection="column" marginBottom={1}>
+        <Box flexDirection="column" marginTop={1}>
           {suggestions.map((s, i) => (
             <Text key={s.cmd}>
               {i === selectedIndex ? <Text color="#f02a30">▸ </Text> : '  '}
@@ -407,13 +417,13 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
         </Box>
       )}
 
-      {/* Paste info box */}
+      {/* Paste info box - below input */}
       {pasteInfo && (
         <Box 
           borderStyle="round" 
           borderColor="green" 
           paddingX={1} 
-          marginBottom={1}
+          marginTop={1}
           flexDirection="column"
         >
           <Text>
@@ -431,17 +441,6 @@ export const ChatInput: React.FC<InputProps> = ({ onSubmit, disabled, history = 
           </Text>
         </Box>
       )}
-      
-      {/* Input line */}
-      <Box>
-        <Text color="#f02a30" bold>{'> '}</Text>
-        {disabled ? (
-          <Text color="yellow">Agent working... (Esc to stop)</Text>
-        ) : (
-          renderInput()
-        )}
-      </Box>
-
     </Box>
   );
 };
