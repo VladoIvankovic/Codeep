@@ -1,7 +1,7 @@
 import Conf from 'conf';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync, statSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
+import { join, dirname } from 'path';
+
 import { PROVIDERS, getProvider } from './providers';
 import { logSession } from '../utils/logger';
 import { createSecureStorage, type SecureStorage } from '../utils/keychain';
@@ -64,13 +64,7 @@ export type { AgentMode };
 
 export type { LanguageCode };
 
-// Global sessions directory (fallback when not in a project)
-const GLOBAL_SESSIONS_DIR = join(homedir(), '.codeep', 'sessions');
-
-// Ensure global sessions directory exists
-if (!existsSync(GLOBAL_SESSIONS_DIR)) {
-  mkdirSync(GLOBAL_SESSIONS_DIR, { recursive: true });
-}
+// We'll initialize GLOBAL_SESSIONS_DIR after config is created (to use config.path)
 
 /**
  * Get sessions directory - local .codeep/sessions/ if in project, otherwise global
@@ -152,6 +146,16 @@ export const config = new Conf<ConfigSchema>({
 // Migrate old 'auto' value to 'on'
 if (config.get('agentMode') === 'auto' as any) {
   config.set('agentMode', 'on');
+}
+
+// Global sessions directory - use same directory as conf package for cross-platform consistency
+// config.path gives us something like ~/.config/codeep-nodejs/config.json, we use its parent
+const GLOBAL_BASE_DIR = dirname(config.path);
+const GLOBAL_SESSIONS_DIR = join(GLOBAL_BASE_DIR, 'sessions');
+
+// Ensure global sessions directory exists
+if (!existsSync(GLOBAL_SESSIONS_DIR)) {
+  mkdirSync(GLOBAL_SESSIONS_DIR, { recursive: true });
 }
 
 // In-memory cache for API keys (populated on first access)
