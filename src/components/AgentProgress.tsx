@@ -308,12 +308,15 @@ interface LiveCodeStreamProps {
   terminalWidth?: number;
 }
 
-const MAX_PREVIEW_LINES = 8; // Code preview lines (total box will be ~10 with header/footer)
+const MAX_PREVIEW_LINES = 12; // Code preview lines for live streaming
 
 export const LiveCodeStream: React.FC<LiveCodeStreamProps> = memo(({ actions, isRunning, terminalWidth = 80 }) => {
-  // Find the current write/edit action for live preview
+  // Find the current write/edit action for live preview (skip read actions)
   const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
   const isCodeAction = currentAction && (currentAction.type === 'write' || currentAction.type === 'edit');
+  
+  // Skip rendering for read actions - no preview needed
+  const isReadAction = currentAction && currentAction.type === 'read';
   
   // ALL HOOKS MUST BE CALLED BEFORE ANY EARLY RETURNS (Rules of Hooks)
   
@@ -404,17 +407,14 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = memo(({ actions, is
               </Text>
             );
           })}
-          {/* Pad with empty lines to maintain constant height */}
-          {Array.from({ length: MAX_PREVIEW_LINES - visibleLines.length }).map((_, i) => (
-            <Text key={`pad-${i}`} color="gray" dimColor>{'    '}</Text>
-          ))}
         </Box>
       </Box>
     );
   }
   
-  // RUNNING STATE but not a code action: show simple status
-  if (isRunning && currentAction) {
+  // RUNNING STATE but not a code action (and not read): show simple status
+  // Skip showing box for read actions - they don't need preview
+  if (isRunning && currentAction && !isReadAction) {
     const boxWidth = Math.min(terminalWidth - 4, 76);
     
     return (
@@ -430,12 +430,13 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = memo(({ actions, is
           <Text color={getActionColor(currentAction.type)}>{getActionLabel(currentAction.type)} </Text>
           <Text color="white">{formatTarget(currentAction.target)}</Text>
         </Box>
-        {/* Pad to maintain height */}
-        {Array.from({ length: MAX_PREVIEW_LINES }).map((_, i) => (
-          <Text key={`pad-${i}`} color="gray" dimColor> </Text>
-        ))}
       </Box>
     );
+  }
+  
+  // For read actions while running, don't show anything
+  if (isRunning && isReadAction) {
+    return null;
   }
   
   // FINISHED STATE: Show summary statistics (same height as live preview)
