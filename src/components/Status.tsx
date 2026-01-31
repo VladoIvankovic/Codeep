@@ -1,9 +1,8 @@
-import React, { useEffect } from 'react';
-import { Text, Box, useStdout } from 'ink';
+import React from 'react';
+import { Text, Box } from 'ink';
 import { config, getMaskedApiKey, getModelsForCurrentProvider, getCurrentProvider, PROTOCOLS, LANGUAGES } from '../config/index';
 
 export const Status: React.FC = () => {
-  const { stdout } = useStdout();
   const model = config.get('model');
   const protocol = config.get('protocol');
   const plan = config.get('plan');
@@ -11,11 +10,6 @@ export const Status: React.FC = () => {
   const agentMode = config.get('agentMode');
   const provider = getCurrentProvider();
   const models = getModelsForCurrentProvider();
-
-  // Clear screen on mount to show fullscreen view
-  useEffect(() => {
-    stdout?.write('\x1b[2J\x1b[H');
-  }, [stdout]);
 
   return (
     <Box flexDirection="column">
