@@ -1,13 +1,32 @@
 /**
  * Agent progress display component
+ * Optimized with isolated spinner animation and memoization
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, memo, useMemo } from 'react';
 import { Box, Text } from 'ink';
 import { ActionLog } from '../utils/tools';
 
 // Spinner frames for animation (no emojis)
 const SPINNER_FRAMES = ['/', '-', '\\', '|'];
+
+/**
+ * Isolated spinner component - animation doesn't cause parent re-renders
+ */
+const AgentSpinner: React.FC<{ color?: string }> = memo(({ color = '#f02a30' }) => {
+  const [frame, setFrame] = useState(0);
+  
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setFrame(f => (f + 1) % SPINNER_FRAMES.length);
+    }, 150);
+    return () => clearInterval(timer);
+  }, []);
+  
+  return <Text color={color}>[{SPINNER_FRAMES[frame]}]</Text>;
+});
+
+AgentSpinner.displayName = 'AgentSpinner';
 
 interface AgentProgressProps {
   isRunning: boolean;
@@ -18,7 +37,7 @@ interface AgentProgressProps {
   dryRun?: boolean;
 }
 
-export const AgentProgress: React.FC<AgentProgressProps> = ({
+export const AgentProgress: React.FC<AgentProgressProps> = memo(({
   isRunning,
   iteration,
   maxIterations,
@@ -26,18 +45,6 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
   currentThinking,
   dryRun,
 }) => {
-  const [spinnerFrame, setSpinnerFrame] = useState(0);
-  
-  // Animate spinner when running
-  useEffect(() => {
-    if (!isRunning) return;
-    
-    const timer = setInterval(() => {
-      setSpinnerFrame(f => (f + 1) % SPINNER_FRAMES.length);
-    }, 150);
-    
-    return () => clearInterval(timer);
-  }, [isRunning]);
   
   // Don't show anything if not running and no actions
   if (!isRunning && actions.length === 0) {
@@ -79,9 +86,7 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
       <Box>
         {isRunning ? (
           <>
-            <Text color={dryRun ? 'yellow' : '#f02a30'}>
-              [{SPINNER_FRAMES[spinnerFrame]}]
-            </Text>
+            <AgentSpinner color={dryRun ? 'yellow' : '#f02a30'} />
             <Text color={dryRun ? 'yellow' : '#f02a30'} bold>
               {' '}{dryRun ? 'DRY RUN' : 'AGENT'}{' '}
             </Text>
@@ -172,7 +177,9 @@ export const AgentProgress: React.FC<AgentProgressProps> = ({
       )}
     </Box>
   );
-};
+});
+
+AgentProgress.displayName = 'AgentProgress';
 
 // Get file extension for language detection
 const getFileExtension = (filename: string): string => {
@@ -299,7 +306,7 @@ interface LiveCodeStreamProps {
 
 const LINES_PER_CHUNK = 10; // Show 10 lines at a time
 
-export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunning, terminalWidth = 80 }) => {
+export const LiveCodeStream: React.FC<LiveCodeStreamProps> = memo(({ actions, isRunning, terminalWidth = 80 }) => {
   // Track how many lines we've shown so far
   const [visibleLineCount, setVisibleLineCount] = useState(LINES_PER_CHUNK);
   const lastActionIdRef = useRef<string>('');
@@ -398,7 +405,9 @@ export const LiveCodeStream: React.FC<LiveCodeStreamProps> = ({ actions, isRunni
       <Text color={actionColor}>{'─'.repeat(lineWidth)}</Text>
     </Box>
   );
-};
+});
+
+LiveCodeStream.displayName = 'LiveCodeStream';
 
 // Helper functions for action display
 const getActionColor = (type: string): string => {
@@ -479,7 +488,7 @@ interface AgentSummaryProps {
   aborted?: boolean;
 }
 
-export const AgentSummary: React.FC<AgentSummaryProps> = ({
+export const AgentSummary: React.FC<AgentSummaryProps> = memo(({
   success,
   iterations,
   actions,
@@ -570,7 +579,9 @@ export const AgentSummary: React.FC<AgentSummaryProps> = ({
       )}
     </Box>
   );
-};
+});
+
+AgentSummary.displayName = 'AgentSummary';
 
 /**
  * Changes list component - for /changes command
