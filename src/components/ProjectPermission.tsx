@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import React, { useState, useEffect } from 'react';
+import { Box, Text, useInput, useStdout } from 'ink';
 import { setProjectPermission } from '../config/index';
 import { getProjectSummary } from '../utils/project';
 
@@ -9,8 +9,13 @@ interface ProjectPermissionProps {
 }
 
 export const ProjectPermission: React.FC<ProjectPermissionProps> = ({ projectPath, onComplete }) => {
+  const { stdout } = useStdout();
   const [step, setStep] = useState<'read' | 'write'>('read');
   const [readGranted, setReadGranted] = useState(false);
+
+  useEffect(() => {
+    stdout?.write('\x1b[2J\x1b[H');
+  }, [stdout]);
   
   const summary = getProjectSummary(projectPath);
   const projectName = summary?.name || projectPath.split('/').pop() || 'Unknown';
