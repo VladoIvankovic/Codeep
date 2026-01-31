@@ -154,27 +154,6 @@ export const App: React.FC = () => {
   const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
   const [agentDryRun, setAgentDryRun] = useState(false);
   
-  // Track LiveCodeStream height to render placeholder after agent finishes (prevents ghost content)
-  const [lastStreamHeight, setLastStreamHeight] = useState(0);
-  
-  // Clear ghost content when agent finishes by erasing lines above cursor
-  const prevAgentRunning = React.useRef(isAgentRunning);
-  useEffect(() => {
-    if (prevAgentRunning.current === true && isAgentRunning === false && lastStreamHeight > 0) {
-      // Erase N lines above without scrolling: move up, clear each line, move back down
-      const linesToClear = lastStreamHeight;
-      let escapeSeq = '';
-      escapeSeq += `\x1b[${linesToClear}A`; // Move cursor up N lines
-      for (let i = 0; i < linesToClear; i++) {
-        escapeSeq += '\x1b[2K\x1b[B'; // Clear line, move down
-      }
-      escapeSeq += `\x1b[${linesToClear}A`; // Move back up to original position
-      stdout?.write(escapeSeq);
-      setLastStreamHeight(0);
-    }
-    prevAgentRunning.current = isAgentRunning;
-  }, [isAgentRunning, lastStreamHeight, stdout]);
-  
   // Load API keys for ALL providers on startup and check if current provider is configured
   useEffect(() => {
     loadAllApiKeys().then(() => {
@@ -282,7 +261,6 @@ export const App: React.FC = () => {
         clearCodeBlocks();
         setAgentResult(null);
         setAgentActions([]);
-        setLastStreamHeight(0);
         const newSessId = startNewSession();
         setSessionId(newSessId);
         setClearInputTrigger(prev => prev + 1); // Trigger input clear
@@ -381,7 +359,6 @@ export const App: React.FC = () => {
     setAgentActions([]);
     setAgentThinking('');
     setAgentResult(null);
-    setLastStreamHeight(0);
     setAgentDryRun(dryRun);
     
     // Add user message
@@ -432,13 +409,6 @@ export const App: React.FC = () => {
             timestamp: Date.now(),
           };
           setAgentActions(prev => [...prev, actionLog]);
-          
-          // Track stream height for ghost content cleanup
-          if (details) {
-            const lineCount = details.split('\n').length;
-            // LiveCodeStream shows: 1 header + lines + 1 loading indicator + 1 footer = ~lineCount + 3
-            setLastStreamHeight(Math.min(lineCount, 50) + 5);
-          }
         },
         onToolResult: (result: ToolResult, toolCall: ToolCall) => {
           // Replace the last action with the complete one
@@ -501,7 +471,6 @@ export const App: React.FC = () => {
     if (agentResult) {
       setAgentResult(null);
       setAgentActions([]);
-      setLastStreamHeight(0);
     }
     
     // Validate input
