@@ -52,6 +52,7 @@ import {
   parseFileChanges,
   writeProjectFile,
   deleteProjectFile,
+  getProjectTip,
   ProjectContext
 } from './utils/project';
 import { logStartup, logAppError, setLogProjectPath } from './utils/logger';
@@ -1435,13 +1436,14 @@ export const App: React.FC = () => {
       if (permanent) {
         // Save permission to local .codeep/config.json
         setProjectPermission(projectPath, true, writeGranted);
-        notify(writeGranted 
-          ? 'Project access granted (read + write, permanent)' 
-          : 'Project access granted (read-only, permanent)');
+      }
+      
+      // Show project tip with type and suggested commands
+      const tip = getProjectTip(projectPath);
+      if (tip) {
+        notify(tip, 5000);
       } else {
-        notify(writeGranted 
-          ? 'Project access granted (read + write, this session)' 
-          : 'Project access granted (read-only, this session)');
+        notify(writeGranted ? 'Project access granted (read + write)' : 'Project access granted (read-only)');
       }
       
       // Warn user if Agent Mode is ON but write access was not granted
@@ -1628,7 +1630,7 @@ export const App: React.FC = () => {
           <Text color="#f02a30">{'─'.repeat(stdout?.columns || 80)}</Text>
           
           {/* Menu content */}
-          {screen === 'help' && <Help />}
+          {screen === 'help' && <Help projectPath={projectPath} />}
           {screen === 'status' && <Status />}
           {screen === 'settings' && (
             <Settings 
