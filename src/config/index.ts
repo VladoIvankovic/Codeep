@@ -113,21 +113,55 @@ function isProjectDirectory(path: string): boolean {
   return projectFiles.some(file => existsSync(join(path, file)));
 }
 
-export const config = new Conf<ConfigSchema>({
-  projectName: 'codeep',
-  defaults: {
+/**
+ * Get fallback config directory if standard location is not writable
+ * Falls back to .codeep in current working directory
+ */
+function getFallbackConfigDir(): string | undefined {
+  const cwdConfig = join(process.cwd(), '.codeep');
+  try {
+    if (!existsSync(cwdConfig)) {
+      mkdirSync(cwdConfig, { recursive: true });
+    }
+    return cwdConfig;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Check if a directory is writable
+ */
+function isWritable(dir: string): boolean {
+  try {
+    const testFile = join(dir, '.write-test');
+    writeFileSync(testFile, 'test');
+    unlinkSync(testFile);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Create config with fallback logic
+ * 1. Try standard Conf location (~/.config/codeep-nodejs on Linux, etc.)
+ * 2. If not writable, use .codeep in current working directory
+ */
+function createConfig(): Conf<ConfigSchema> {
+  const defaults: ConfigSchema = {
     apiKey: '',
     provider: 'z.ai',
     model: 'glm-4.7',
     agentMode: 'on',
-    agentConfirmation: 'dangerous', // Confirm only dangerous actions by default
+    agentConfirmation: 'dangerous',
     agentAutoCommit: false,
     agentAutoCommitBranch: false,
-    agentAutoVerify: true, // Auto-verify by default
+    agentAutoVerify: true,
     agentMaxFixAttempts: 3,
     agentMaxIterations: 100,
-    agentMaxDuration: 20, // minutes
-    agentApiTimeout: 180000, // 180 seconds base timeout for agent (dynamically adjusted)
+    agentMaxDuration: 20,
+    agentApiTimeout: 180000,
     protocol: 'openai',
     plan: 'lite',
     language: 'en',
@@ -136,12 +170,50 @@ export const config = new Conf<ConfigSchema>({
     temperature: 0.7,
     maxTokens: 8192,
     apiTimeout: 60000,
-    rateLimitApi: 30, // 30 requests per minute
-    rateLimitCommands: 100, // 100 commands per minute
+    rateLimitApi: 30,
+    rateLimitCommands: 100,
     projectPermissions: [],
     providerApiKeys: [],
-  },
-});
+  };
+
+  // First try standard location
+  try {
+    const standardConfig = new Conf<ConfigSchema>({
+      projectName: 'codeep',
+      defaults,
+    });
+    
+    // Test if we can write to the config directory
+    const configDir = dirname(standardConfig.path);
+    if (isWritable(configDir)) {
+      return standardConfig;
+    }
+  } catch {
+    // Standard location failed, try fallback
+  }
+  
+  // Fallback: use .codeep in current working directory
+  const fallbackDir = getFallbackConfigDir();
+  if (fallbackDir) {
+    try {
+      return new Conf<ConfigSchema>({
+        projectName: 'codeep',
+        cwd: fallbackDir,
+        defaults,
+      });
+    } catch {
+      // Even fallback failed
+    }
+  }
+  
+  // Last resort: use standard config anyway (may fail on write)
+  return new Conf<ConfigSchema>({
+    projectName: 'codeep',
+    defaults,
+  });
+}
+
+export const config = createConfig();
 
 // Migrate old 'auto' value to 'on'
 if (config.get('agentMode') === 'auto' as any) {
