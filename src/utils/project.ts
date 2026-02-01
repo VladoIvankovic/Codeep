@@ -489,3 +489,181 @@ export function getProjectSummary(dir: string = process.cwd()): {
     return null;
   }
 }
+
+/**
+ * Project feature detection
+ */
+export interface ProjectFeatures {
+  hasGit: boolean;
+  hasPackageJson: boolean;
+  hasTypescript: boolean;
+  hasPython: boolean;
+  hasDocker: boolean;
+  hasTests: boolean;
+  hasCargo: boolean;
+  hasGoMod: boolean;
+  projectType: string;
+}
+
+/**
+ * Suggested command based on project features
+ */
+export interface ProjectSuggestion {
+  command: string;
+  description: string;
+  reason: string;
+  priority: number; // Lower = higher priority
+}
+
+/**
+ * Detect project features
+ */
+export function detectProjectFeatures(dir: string = process.cwd()): ProjectFeatures {
+  return {
+    hasGit: existsSync(join(dir, '.git')),
+    hasPackageJson: existsSync(join(dir, 'package.json')),
+    hasTypescript: existsSync(join(dir, 'tsconfig.json')),
+    hasPython: existsSync(join(dir, 'requirements.txt')) || existsSync(join(dir, 'setup.py')) || existsSync(join(dir, 'pyproject.toml')),
+    hasDocker: existsSync(join(dir, 'Dockerfile')) || existsSync(join(dir, 'docker-compose.yml')),
+    hasTests: existsSync(join(dir, 'jest.config.js')) || existsSync(join(dir, 'jest.config.ts')) || 
+              existsSync(join(dir, 'pytest.ini')) || existsSync(join(dir, 'test')) || existsSync(join(dir, 'tests')) ||
+              existsSync(join(dir, '__tests__')) || existsSync(join(dir, 'spec')),
+    hasCargo: existsSync(join(dir, 'Cargo.toml')),
+    hasGoMod: existsSync(join(dir, 'go.mod')),
+    projectType: getProjectType(dir),
+  };
+}
+
+/**
+ * Get smart suggestions based on project type
+ */
+export function getProjectSuggestions(dir: string = process.cwd()): ProjectSuggestion[] {
+  const features = detectProjectFeatures(dir);
+  const suggestions: ProjectSuggestion[] = [];
+
+  // Git suggestions
+  if (features.hasGit) {
+    suggestions.push({
+      command: '/diff',
+      description: 'Review uncommitted changes',
+      reason: 'Git repository detected',
+      priority: 1,
+    });
+    suggestions.push({
+      command: '/commit',
+      description: 'Generate commit message',
+      reason: 'Git repository detected',
+      priority: 2,
+    });
+  }
+
+  // Node.js/TypeScript suggestions
+  if (features.hasPackageJson) {
+    suggestions.push({
+      command: '/agent npm run build',
+      description: 'Build the project',
+      reason: 'Node.js project detected',
+      priority: 3,
+    });
+    if (features.hasTests) {
+      suggestions.push({
+        command: '/agent npm test',
+        description: 'Run tests',
+        reason: 'Test configuration found',
+        priority: 4,
+      });
+    }
+  }
+
+  // Python suggestions
+  if (features.hasPython) {
+    suggestions.push({
+      command: '/agent pip install -r requirements.txt',
+      description: 'Install dependencies',
+      reason: 'Python project detected',
+      priority: 3,
+    });
+    if (features.hasTests) {
+      suggestions.push({
+        command: '/agent pytest',
+        description: 'Run tests',
+        reason: 'Python tests detected',
+        priority: 4,
+      });
+    }
+  }
+
+  // Rust suggestions
+  if (features.hasCargo) {
+    suggestions.push({
+      command: '/agent cargo build',
+      description: 'Build the project',
+      reason: 'Rust project detected',
+      priority: 3,
+    });
+    suggestions.push({
+      command: '/agent cargo test',
+      description: 'Run tests',
+      reason: 'Rust project detected',
+      priority: 4,
+    });
+  }
+
+  // Go suggestions
+  if (features.hasGoMod) {
+    suggestions.push({
+      command: '/agent go build',
+      description: 'Build the project',
+      reason: 'Go project detected',
+      priority: 3,
+    });
+    suggestions.push({
+      command: '/agent go test ./...',
+      description: 'Run tests',
+      reason: 'Go project detected',
+      priority: 4,
+    });
+  }
+
+  // Docker suggestions
+  if (features.hasDocker) {
+    suggestions.push({
+      command: '/agent docker build',
+      description: 'Build Docker image',
+      reason: 'Dockerfile detected',
+      priority: 5,
+    });
+  }
+
+  // Always suggest agent for code tasks
+  suggestions.push({
+    command: '/agent',
+    description: 'Run autonomous agent for any task',
+    reason: 'Project access granted',
+    priority: 10,
+  });
+
+  // Sort by priority
+  return suggestions.sort((a, b) => a.priority - b.priority);
+}
+
+/**
+ * Get a brief tip message for the project type
+ */
+export function getProjectTip(dir: string = process.cwd()): string | null {
+  const features = detectProjectFeatures(dir);
+  const tips: string[] = [];
+
+  if (features.hasGit) {
+    tips.push('/diff, /commit');
+  }
+
+  if (features.hasPackageJson || features.hasCargo || features.hasGoMod || features.hasPython) {
+    tips.push('/agent for tasks');
+  }
+
+  if (tips.length === 0) return null;
+
+  const projectName = features.projectType !== 'Unknown' ? features.projectType : 'project';
+  return `${projectName} • Try: ${tips.join(' • ')}`;
+}
