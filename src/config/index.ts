@@ -95,8 +95,15 @@ function getLocalConfigPath(projectPath: string): string | null {
 /**
  * Check if directory is a project
  * Looks for common project indicators: package.json, pyproject.toml, Cargo.toml, go.mod, composer.json, etc.
+ * Also checks if user has manually initialized this folder as a project (.codeep/project.json)
  */
 function isProjectDirectory(path: string): boolean {
+  // Check if user has manually initialized this as a project
+  const manualProjectMarker = join(path, '.codeep', 'project.json');
+  if (existsSync(manualProjectMarker)) {
+    return true;
+  }
+  
   const projectFiles = [
     'package.json',      // Node.js
     'pyproject.toml',    // Python (Poetry)
@@ -111,6 +118,58 @@ function isProjectDirectory(path: string): boolean {
   ];
   
   return projectFiles.some(file => existsSync(join(path, file)));
+}
+
+/**
+ * Check if directory has standard project markers (not manually initialized)
+ */
+export function hasStandardProjectMarkers(path: string): boolean {
+  const projectFiles = [
+    'package.json',
+    'pyproject.toml',
+    'requirements.txt',
+    'setup.py',
+    'Cargo.toml',
+    'go.mod',
+    'composer.json',
+    'pom.xml',
+    'build.gradle',
+    '.git',
+  ];
+  
+  return projectFiles.some(file => existsSync(join(path, file)));
+}
+
+/**
+ * Initialize a folder as a Codeep project
+ * Creates .codeep/project.json marker file
+ */
+export function initializeAsProject(path: string): boolean {
+  try {
+    const codeepDir = join(path, '.codeep');
+    if (!existsSync(codeepDir)) {
+      mkdirSync(codeepDir, { recursive: true });
+    }
+    
+    const projectFile = join(codeepDir, 'project.json');
+    const projectData = {
+      name: path.split('/').pop() || 'project',
+      initializedAt: new Date().toISOString(),
+      version: '1.0',
+    };
+    
+    writeFileSync(projectFile, JSON.stringify(projectData, null, 2));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if folder was manually initialized as project
+ */
+export function isManuallyInitializedProject(path: string): boolean {
+  return existsSync(join(path, '.codeep', 'project.json'));
 }
 
 /**
