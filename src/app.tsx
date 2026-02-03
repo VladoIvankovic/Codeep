@@ -68,7 +68,7 @@ import { saveContext, loadContext, clearContext, mergeContext } from './utils/co
 import { performCodeReview, formatReviewResult } from './utils/codeReview';
 import { loadProjectPreferences, learnFromProject, formatPreferencesForPrompt, addCustomRule, getLearningStatus } from './utils/learning';
 import { getAllSkills, findSkill, formatSkillsList, formatSkillHelp, generateSkillPrompt, saveCustomSkill, deleteCustomSkill, parseSkillDefinition, parseSkillChain, parseSkillArgs, searchSkills, trackSkillUsage, getSkillStats, Skill } from './utils/skills';
-import { AgentProgress, ChangesList, LiveCodeStream } from './components/AgentProgress';
+import { AgentProgress, ChangesList } from './components/AgentProgress';
 import { ActionLog, ToolCall, ToolResult, createActionLog } from './utils/tools';
 import { scanProject, saveProjectIntelligence, loadProjectIntelligence, generateContextFromIntelligence, isIntelligenceFresh, ProjectIntelligence } from './utils/projectIntelligence';
 
@@ -128,6 +128,7 @@ export const App: React.FC = () => {
   const [agentThinking, setAgentThinking] = useState('');
   const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
   const [agentDryRun, setAgentDryRun] = useState(false);
+  const [agentStreamingContent, setAgentStreamingContent] = useState(''); // Live action log in chat
   
   // Load API keys for ALL providers on startup and check if current provider is configured
   useEffect(() => {
@@ -329,6 +330,7 @@ export const App: React.FC = () => {
     setAgentThinking('');
     setAgentResult(null);
     setAgentDryRun(dryRun);
+    setAgentStreamingContent(''); // Reset streaming content
     
     // Add user message
     const userMessage: Message = { 
@@ -389,6 +391,70 @@ export const App: React.FC = () => {
             }
             return updated;
           });
+          
+          // Add formatted action to streaming content (stays in chat)
+          const actionType = actionLog.type;
+          const target = actionLog.target.split('/').pop() || actionLog.target; // Just filename
+          const fullPath = actionLog.target;
+          const status = actionLog.result === 'success' ? '✓' : '✗';
+          const statusColor = actionLog.result === 'success' ? '' : ' (failed)';
+          
+          // Get file extension for syntax highlighting
+          const getLanguage = (filename: string): string => {
+            const ext = filename.split('.').pop()?.toLowerCase() || '';
+            const langMap: Record<string, string> = {
+              'ts': 'typescript', 'tsx': 'typescript', 'js': 'javascript', 'jsx': 'javascript',
+              'py': 'python', 'rb': 'ruby', 'go': 'go', 'rs': 'rust', 'java': 'java',
+              'php': 'php', 'css': 'css', 'scss': 'css', 'html': 'html', 'vue': 'html',
+              'json': 'json', 'yml': 'yaml', 'yaml': 'yaml', 'md': 'markdown',
+              'sh': 'bash', 'bash': 'bash', 'sql': 'sql',
+            };
+            return langMap[ext] || ext || 'code';
+          };
+          
+          let actionLine = '';
+          if (actionType === 'write' && actionLog.details) {
+            // Show full code with syntax highlighting
+            const lang = getLanguage(target);
+            actionLine = `${status} **Created ${fullPath}**\n\`\`\`${lang}\n${actionLog.details}\n\`\`\``;
+          } else if (actionType === 'write') {
+            actionLine = `${status} Created **${target}**${statusColor}`;
+          } else if (actionType === 'edit' && actionLog.details) {
+            // Show edited code with syntax highlighting
+            const lang = getLanguage(target);
+            actionLine = `${status} **Edited ${fullPath}**\n\`\`\`${lang}\n${actionLog.details}\n\`\`\``;
+          } else if (actionType === 'edit') {
+            actionLine = `${status} Edited **${target}**${statusColor}`;
+          } else if (actionType === 'read') {
+            // Don't show read actions in stream - too noisy
+            return;
+          } else if (actionType === 'delete') {
+            actionLine = `${status} Deleted **${fullPath}**${statusColor}`;
+          } else if (actionType === 'command') {
+            const cmd = actionLog.target;
+            // Show command output if available
+            if (actionLog.details && actionLog.details.trim()) {
+              actionLine = `${status} Ran \`${cmd}\`\n\`\`\`\n${actionLog.details.slice(0, 500)}${actionLog.details.length > 500 ? '\n...(truncated)' : ''}\n\`\`\``;
+            } else {
+              actionLine = `${status} Ran \`${cmd}\`${statusColor}`;
+            }
+          } else if (actionType === 'search') {
+            // Don't show search actions - too noisy
+            return;
+          } else if (actionType === 'mkdir') {
+            actionLine = `${status} Created directory **${fullPath}**${statusColor}`;
+          } else if (actionType === 'fetch') {
+            actionLine = `${status} Fetched ${target}${statusColor}`;
+          } else if (actionType === 'list') {
+            // Don't show list actions
+            return;
+          } else {
+            actionLine = `◦ ${actionType}: ${target}`;
+          }
+          
+          if (actionLine) {
+            setAgentStreamingContent(prev => prev + (prev ? '\n\n' : '') + actionLine);
+          }
         },
         onThinking: (text: string) => {
           // Strip <think> and <tool_call> tags from thinking text
@@ -1605,33 +1671,23 @@ export const App: React.FC = () => {
         key={sessionId}
         messages={messages}
         streamingContent={streamingContent}
+        agentStreamingContent={isAgentRunning ? agentStreamingContent : undefined}
       />
 
       {/* Loading - show while waiting or streaming */}
       {isLoading && !isAgentRunning && <Loading isStreaming={!!streamingContent} />}
       
-      {/* Agent UI - LiveCodeStream handles both running and completed states */}
-      {/* This prevents ghost/jump by keeping constant height and transforming content */}
-      {(isAgentRunning || agentResult) && (
+      {/* Agent UI - progress panel only while running */}
+      {isAgentRunning && (
         <Box key="agent-ui" flexDirection="column">
-          {/* Live code stream - shows live preview while running, summary when done */}
-          <LiveCodeStream
+          <AgentProgress
+            isRunning={true}
+            iteration={agentIteration}
+            maxIterations={50}
             actions={agentActions}
-            isRunning={isAgentRunning}
-            terminalWidth={stdout?.columns || 80}
+            currentThinking={agentThinking}
+            dryRun={agentDryRun}
           />
-          
-          {/* Agent progress panel - only while running */}
-          {isAgentRunning && (
-            <AgentProgress
-              isRunning={true}
-              iteration={agentIteration}
-              maxIterations={50}
-              actions={agentActions}
-              currentThinking={agentThinking}
-              dryRun={agentDryRun}
-            />
-          )}
         </Box>
       )}
 
