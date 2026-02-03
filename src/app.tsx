@@ -70,6 +70,7 @@ import { loadProjectPreferences, learnFromProject, formatPreferencesForPrompt, a
 import { getAllSkills, findSkill, formatSkillsList, formatSkillHelp, generateSkillPrompt, saveCustomSkill, deleteCustomSkill, parseSkillDefinition, parseSkillChain, parseSkillArgs, searchSkills, trackSkillUsage, getSkillStats, Skill } from './utils/skills';
 import { AgentProgress, ChangesList, LiveCodeStream } from './components/AgentProgress';
 import { ActionLog, ToolCall, ToolResult, createActionLog } from './utils/tools';
+import { scanProject, saveProjectIntelligence, loadProjectIntelligence, generateContextFromIntelligence, isIntelligenceFresh, ProjectIntelligence } from './utils/projectIntelligence';
 
 type Screen = 'chat' | 'login' | 'help' | 'status' | 'sessions' | 'sessions-delete' | 'model' | 'protocol' | 'language' | 'settings' | 'permission' | 'provider' | 'search' | 'export' | 'session-picker' | 'logout';
 export const App: React.FC = () => {
@@ -1134,6 +1135,60 @@ export const App: React.FC = () => {
           role: 'assistant',
           content: formatted,
         }]);
+        break;
+      }
+
+      case '/scan': {
+        if (!projectContext) {
+          notify('No project context');
+          break;
+        }
+        
+        // Check for subcommands
+        if (args[0] === 'status') {
+          const intel = loadProjectIntelligence(projectContext.root);
+          if (intel) {
+            const age = Math.round((Date.now() - new Date(intel.scannedAt).getTime()) / (1000 * 60 * 60));
+            notify(`Last scan: ${age}h ago | ${intel.structure.totalFiles} files | ${intel.type}`);
+          } else {
+            notify('No scan data. Run /scan to analyze project.');
+          }
+          break;
+        }
+        
+        if (args[0] === 'clear') {
+          // Clear cached intelligence
+          const intelPath = `${projectContext.root}/.codeep/intelligence.json`;
+          try {
+            const fs = require('fs');
+            if (fs.existsSync(intelPath)) {
+              fs.unlinkSync(intelPath);
+              notify('Project intelligence cleared');
+            } else {
+              notify('No cached intelligence to clear');
+            }
+          } catch {
+            notify('Failed to clear intelligence');
+          }
+          break;
+        }
+        
+        // Run full scan
+        notify('Scanning project...');
+        scanProject(projectContext.root).then(intelligence => {
+          saveProjectIntelligence(projectContext.root, intelligence);
+          
+          // Generate and display summary
+          const context = generateContextFromIntelligence(intelligence);
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `# Project Scan Complete\n\n${context}\n\n---\n*Saved to .codeep/intelligence.json*`,
+          }]);
+          
+          notify(`Scanned: ${intelligence.structure.totalFiles} files, ${intelligence.structure.totalDirectories} dirs`);
+        }).catch(error => {
+          notify('Scan failed: ' + (error as Error).message);
+        });
         break;
       }
 

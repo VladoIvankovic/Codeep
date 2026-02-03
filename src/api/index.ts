@@ -3,6 +3,7 @@ import { withRetry, isNetworkError, isTimeoutError } from '../utils/retry';
 import { ProjectContext } from '../utils/project';
 import { getProvider, getProviderBaseUrl, getProviderAuthHeader } from '../config/providers';
 import { logApiRequest, logApiResponse, logAppError } from '../utils/logger';
+import { loadProjectIntelligence, generateContextFromIntelligence, ProjectIntelligence } from '../utils/projectIntelligence';
 
 // Error messages by language
 const ERROR_MESSAGES: Record<string, Record<string, string>> = {
@@ -48,9 +49,16 @@ interface AnthropicResponse {
 
 // Store project context for use in system prompt
 let currentProjectContext: ProjectContext | null = null;
+let cachedIntelligence: ProjectIntelligence | null = null;
 
 export function setProjectContext(ctx: ProjectContext | null): void {
   currentProjectContext = ctx;
+  // Try to load cached intelligence when project context is set
+  if (ctx) {
+    cachedIntelligence = loadProjectIntelligence(ctx.root);
+  } else {
+    cachedIntelligence = null;
+  }
 }
 
 export async function chat(
@@ -175,6 +183,23 @@ The user will review and approve changes before they are applied.`
 
 **Write Access:** READ-ONLY - You can analyze code but cannot suggest file modifications.`;
 
+    // Use cached intelligence if available (from /scan command)
+    // This provides richer context than basic project structure
+    if (cachedIntelligence) {
+      const intelligenceContext = generateContextFromIntelligence(cachedIntelligence);
+      const projectInfo = `
+
+## Project Intelligence (cached)
+${intelligenceContext}
+${writeInfo}
+
+When the user mentions a file path, the file content will be automatically attached to their message.
+You can analyze, explain, or suggest improvements to the code.`;
+      
+      return basePrompt + projectInfo;
+    }
+
+    // Fallback to basic project context
     const projectInfo = `
 
 ## Project Context

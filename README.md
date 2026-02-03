@@ -220,6 +220,64 @@ Custom skill example (`~/.codeep/skills/my-workflow.json`):
 }
 ```
 
+### Project Intelligence (`/scan`)
+
+Scan your project once and cache deep analysis for faster AI responses:
+
+```
+/scan          # Full project scan - analyzes structure, dependencies, patterns
+/scan status   # Show last scan info (age, file count, project type)
+/scan clear    # Clear cached intelligence
+```
+
+**What gets analyzed and cached:**
+
+| Category | Information |
+|----------|-------------|
+| **Structure** | File count, directory tree, language distribution |
+| **Dependencies** | Runtime & dev dependencies, detected frameworks |
+| **Architecture** | Patterns (MVC, Component-based), main modules, entry points |
+| **Scripts** | Available npm/composer/make scripts |
+| **Conventions** | Indentation style, quotes, semicolons, naming conventions |
+| **Testing** | Test framework, test directory location |
+
+**Benefits:**
+- AI understands your project deeply without re-analyzing each time
+- Faster responses - no need to scan files repeatedly  
+- Consistent context across sessions
+- Framework-aware suggestions (React, Vue, Express, Django, etc.)
+
+**Storage:** `.codeep/intelligence.json` (project-local)
+
+**Example output:**
+```
+# Project: my-app
+Type: TypeScript/Node.js
+
+## Structure
+- 156 files, 24 directories
+- Languages: TypeScript React (89), TypeScript (45), JSON (12)
+- Main directories: src, components, utils, hooks
+
+## Frameworks
+React, Next.js
+
+## Architecture
+Patterns: Component-based, File-based routing
+Main modules: src, components, hooks, utils
+
+## Available Scripts
+- dev: next dev
+- build: next build
+- test: vitest
+
+## Code Conventions
+- Indentation: spaces
+- Quotes: single
+- Semicolons: no
+- Naming: camelCase
+```
+
 ### Self-Verification
 After making changes, the agent automatically:
 1. Runs **build** to check for compilation errors
@@ -399,6 +457,14 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 | `/learn` | Learn preferences from project files |
 | `/learn status` | Show learned preferences |
 | `/learn rule <text>` | Add a custom coding rule |
+
+### Project Intelligence
+
+| Command | Description |
+|---------|-------------|
+| `/scan` | Scan project and cache intelligence for AI |
+| `/scan status` | Show last scan info |
+| `/scan clear` | Clear cached intelligence |
 
 ### Skills
 
