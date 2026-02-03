@@ -68,7 +68,7 @@ import { saveContext, loadContext, clearContext, mergeContext } from './utils/co
 import { performCodeReview, formatReviewResult } from './utils/codeReview';
 import { loadProjectPreferences, learnFromProject, formatPreferencesForPrompt, addCustomRule, getLearningStatus } from './utils/learning';
 import { getAllSkills, findSkill, formatSkillsList, formatSkillHelp, generateSkillPrompt, saveCustomSkill, deleteCustomSkill, parseSkillDefinition, parseSkillChain, parseSkillArgs, searchSkills, trackSkillUsage, getSkillStats, Skill } from './utils/skills';
-import { AgentProgress, ChangesList } from './components/AgentProgress';
+import { ChangesList } from './components/AgentProgress';
 import { ActionLog, ToolCall, ToolResult, createActionLog } from './utils/tools';
 import { scanProject, saveProjectIntelligence, loadProjectIntelligence, generateContextFromIntelligence, isIntelligenceFresh, ProjectIntelligence } from './utils/projectIntelligence';
 
@@ -1677,17 +1677,13 @@ export const App: React.FC = () => {
       {/* Loading - show while waiting or streaming */}
       {isLoading && !isAgentRunning && <Loading isStreaming={!!streamingContent} />}
       
-      {/* Agent UI - progress panel only while running */}
+      {/* Agent status indicator - minimal, no floating boxes */}
       {isAgentRunning && (
-        <Box key="agent-ui" flexDirection="column">
-          <AgentProgress
-            isRunning={true}
-            iteration={agentIteration}
-            maxIterations={50}
-            actions={agentActions}
-            currentThinking={agentThinking}
-            dryRun={agentDryRun}
-          />
+        <Box key="agent-status" paddingX={1}>
+          <Text color={agentDryRun ? 'yellow' : '#f02a30'}>
+            {agentDryRun ? '[DRY RUN]' : '[AGENT]'} Step {agentIteration} | {agentActions.length} actions
+          </Text>
+          <Text color="gray"> | Press Esc to stop</Text>
         </Box>
       )}
 
