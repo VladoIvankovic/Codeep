@@ -845,6 +845,9 @@ export async function runAgent(
           toolResult = executeTool(toolCall, projectContext.root || process.cwd());
         }
         
+        // Debug
+        process.stderr.write(`[AGENT DEBUG] Tool executed: ${toolCall.tool}, calling onToolResult: ${!!opts.onToolResult}\n`);
+        
         opts.onToolResult?.(toolResult, toolCall);
         
         // Log action
