@@ -1,9 +1,10 @@
 /**
- * Agent Actions component using Static to prevent re-rendering/jumping
+ * Agent Actions component - displays actions in the chat area
+ * Removed Static component as it renders at top of terminal
  */
 
 import React, { useState, useEffect, memo } from 'react';
-import { Box, Text, Static } from 'ink';
+import { Box, Text } from 'ink';
 import { ActionLog } from '../utils/tools';
 
 // Spinner frames
@@ -123,10 +124,8 @@ interface AgentActionsProps {
 }
 
 /**
- * Agent Actions display using Static component
- * 
- * Static renders items once and never re-renders them,
- * preventing terminal jumping when new actions are added.
+ * Agent Actions display - renders in chat area
+ * Shows only the last few actions to prevent too much jumping
  */
 export const AgentActions: React.FC<AgentActionsProps> = memo(({
   actions,
@@ -137,12 +136,14 @@ export const AgentActions: React.FC<AgentActionsProps> = memo(({
   const color = dryRun ? 'yellow' : '#f02a30';
   const label = dryRun ? 'DRY RUN' : 'AGENT';
   
-  // Get completed actions (all except potentially the last one if still pending)
+  // Only show last 5 completed actions to minimize re-render area
+  const MAX_VISIBLE_ACTIONS = 5;
   const completedActions = actions.filter(a => a.result === 'success' || a.result === 'error');
+  const visibleActions = completedActions.slice(-MAX_VISIBLE_ACTIONS);
+  const hiddenCount = completedActions.length - visibleActions.length;
   
   // Current action (last one if result is pending or the running state)
   const currentAction = actions.length > 0 ? actions[actions.length - 1] : null;
-  const isCurrentPending = currentAction && currentAction.result !== 'success' && currentAction.result !== 'error';
   
   if (!isRunning && actions.length === 0) {
     return null;
@@ -150,12 +151,15 @@ export const AgentActions: React.FC<AgentActionsProps> = memo(({
   
   return (
     <Box flexDirection="column" marginY={1}>
-      {/* Completed actions - using Static so they don't re-render */}
-      <Static items={completedActions.map((a, i) => ({ ...a, id: `action-${i}-${a.timestamp}` }))}>
-        {(action) => (
-          <ActionLine key={action.id} action={action} />
-        )}
-      </Static>
+      {/* Show count of hidden actions */}
+      {hiddenCount > 0 && (
+        <Text color="gray">... {hiddenCount} earlier action(s) ...</Text>
+      )}
+      
+      {/* Recent completed actions */}
+      {visibleActions.map((action, i) => (
+        <ActionLine key={`action-${hiddenCount + i}-${action.timestamp}`} action={action} />
+      ))}
       
       {/* Current action with spinner (only while running) */}
       {isRunning && (
