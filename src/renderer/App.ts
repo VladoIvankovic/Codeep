@@ -99,6 +99,22 @@ export class App {
   }
   
   /**
+   * Get all messages (for API history)
+   */
+  getMessages(): Message[] {
+    return this.messages;
+  }
+  
+  /**
+   * Get messages without system messages (for API)
+   */
+  getChatHistory(): Array<{ role: 'user' | 'assistant'; content: string }> {
+    return this.messages
+      .filter(m => m.role !== 'system')
+      .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+  }
+  
+  /**
    * Start streaming
    */
   startStreaming(): void {
