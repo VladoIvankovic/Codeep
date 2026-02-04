@@ -59,8 +59,8 @@ export function spinnerFail(text?: string): void {
  */
 export function stopSpinner(): void {
   if (currentSpinner) {
-    currentSpinner.clear();
-    currentSpinner.stop();
+    // Use stopAndPersist with empty symbol to leave a clean line
+    currentSpinner.stopAndPersist({ symbol: '' });
     currentSpinner = null;
   }
 }
