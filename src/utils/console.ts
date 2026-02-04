@@ -81,6 +81,9 @@ export function setAgentRunning(running: boolean, dryRun: boolean = false): void
  * Log agent action
  */
 export function logAction(type: string, target: string, result: 'success' | 'error' | 'pending', details?: string): void {
+  // Debug
+  console.log(`[DEBUG] logAction called: ${type} ${target} ${result}`);
+  
   stopSpinner(); // Stop spinner before logging
   
   const filename = target.split('/').pop() || target;
