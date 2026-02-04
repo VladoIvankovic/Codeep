@@ -1,5 +1,5 @@
 import React, { memo, useMemo } from 'react';
-import { Box } from 'ink';
+import { Box, Text } from 'ink';
 import { MessageView } from './Message';
 import { StreamingMessage } from './StreamingMessage';
 import { Message } from '../config/index';
@@ -34,28 +34,49 @@ MemoizedMessage.displayName = 'MemoizedMessage';
  * NOTE: This is a temporary solution until we implement a custom renderer
  * like Claude CLI uses (DEC Mode 2026 / synchronized output).
  */
+// Maximum number of messages to render at once
+// This prevents performance issues and flickering with large chat histories
+const MAX_VISIBLE_MESSAGES = 20;
+
 export const MessageList: React.FC<MessageListProps> = memo(({
   messages,
   streamingContent,
 }) => {
+  // Virtualization: only render the last N messages to prevent flickering
+  // Older messages are still in history but not rendered
+  const visibleMessages = useMemo(() => {
+    if (messages.length <= MAX_VISIBLE_MESSAGES) {
+      return messages;
+    }
+    return messages.slice(-MAX_VISIBLE_MESSAGES);
+  }, [messages]);
+  
+  // Calculate how many messages are hidden
+  const hiddenCount = messages.length - visibleMessages.length;
+  
   // Memoize the messages array rendering
   const renderedMessages = useMemo(() => (
-    messages.map((msg, index) => (
-      <MemoizedMessage key={`msg-${index}-${msg.role}`} msg={msg} index={index} />
+    visibleMessages.map((msg, index) => (
+      <MemoizedMessage key={`msg-${hiddenCount + index}-${msg.role}`} msg={msg} index={hiddenCount + index} />
     ))
-  ), [messages]);
+  ), [visibleMessages, hiddenCount]);
 
   return (
     <Box flexDirection="column">
-      {/* Messages - render normally with memoization */}
+      {/* Show indicator if messages are hidden */}
+      {hiddenCount > 0 && (
+        <Box marginBottom={1}>
+          <Text color="gray">... {hiddenCount} earlier message(s) hidden ...</Text>
+        </Box>
+      )}
+      
+      {/* Messages - only render visible subset */}
       {renderedMessages}
       
       {/* Streaming content - renders for live updates */}
       {streamingContent && (
         <StreamingMessage content={streamingContent} />
       )}
-      
-      {/* Agent actions now use console.log with chalk/ora - no Ink re-rendering */}
     </Box>
   );
 });
