@@ -6,6 +6,10 @@ import { Screen } from '../Screen';
 import { fg, style } from '../ansi';
 import { createBox, centerBox } from './Box';
 
+// Primary color: #f02a30 (Codeep red)
+const PRIMARY_COLOR = fg.rgb(240, 42, 48);
+const PRIMARY_BRIGHT = fg.rgb(255, 80, 85);
+
 export type PermissionLevel = 'none' | 'read' | 'write';
 
 export interface PermissionOptions {
@@ -31,7 +35,7 @@ export function renderPermissionScreen(
   // Title
   const title = '═══ Folder Access ═══';
   const titleX = Math.floor((width - title.length) / 2);
-  screen.write(titleX, 1, title, fg.cyan + style.bold);
+  screen.write(titleX, 1, title, PRIMARY_COLOR + style.bold);
   
   // Box
   const boxWidth = Math.min(60, width - 4);
@@ -44,7 +48,7 @@ export function renderPermissionScreen(
     width: boxWidth,
     height: boxHeight,
     style: 'rounded',
-    borderColor: fg.cyan,
+    borderColor: PRIMARY_COLOR,
   });
   
   for (const line of boxLines) {
@@ -94,7 +98,7 @@ export function renderPermissionScreen(
     const prefix = isSelected ? '► ' : '  ';
     
     // Label
-    const labelStyle = isSelected ? fg.brightCyan + style.bold : fg.white;
+    const labelStyle = isSelected ? PRIMARY_BRIGHT + style.bold : fg.white;
     screen.write(contentX, contentY, prefix + opt.label, labelStyle);
     
     // Description on same line

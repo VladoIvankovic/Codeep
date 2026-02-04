@@ -6,6 +6,9 @@ import { Screen } from '../Screen';
 import { fg, style } from '../ansi';
 import { createBox, centerBox } from './Box';
 
+// Primary color: #f02a30 (Codeep red)
+const PRIMARY_COLOR = fg.rgb(240, 42, 48);
+
 export interface StatusInfo {
   version: string;
   provider: string;
@@ -28,7 +31,7 @@ export function renderStatusScreen(screen: Screen, status: StatusInfo): void {
   // Title
   const title = '═══ Codeep Status ═══';
   const titleX = Math.floor((width - title.length) / 2);
-  screen.write(titleX, 0, title, fg.cyan + style.bold);
+  screen.write(titleX, 0, title, PRIMARY_COLOR + style.bold);
   
   // Status items
   const items = [

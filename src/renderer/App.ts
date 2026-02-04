@@ -6,7 +6,10 @@
 import { Screen } from './Screen';
 import { Input, LineEditor, KeyEvent } from './Input';
 import { fg, style } from './ansi';
-import { renderHelpScreen } from './components/Help';
+
+// Primary color: #f02a30 (Codeep red)
+const PRIMARY_COLOR = fg.rgb(240, 42, 48);
+import { renderHelpScreen, getHelpTotalPages } from './components/Help';
 import { renderStatusScreen, StatusInfo } from './components/Status';
 import { renderListModal } from './components/Modal';
 
@@ -43,6 +46,27 @@ export class App {
   private listSelectedIndex = 0;
   private listTitle = '';
   private listCallback: ((index: number) => void) | null = null;
+  
+  // Help screen state
+  private helpPage = 0;
+  
+  // Autocomplete state
+  private showAutocomplete = false;
+  private autocompleteIndex = 0;
+  private autocompleteItems: string[] = [];
+  
+  // All available commands
+  private static readonly COMMANDS = [
+    'help', 'status', 'version', 'update', 'clear', 'exit',
+    'sessions', 'new', 'rename', 'search', 'export',
+    'agent', 'agent-dry', 'stop', 'undo', 'undo-all', 'history', 'changes',
+    'diff', 'commit', 'git-commit', 'push', 'pull', 'scan', 'review',
+    'copy', 'paste', 'apply',
+    'test', 'docs', 'refactor', 'fix', 'explain', 'optimize', 'debug', 'skills',
+    'provider', 'model', 'protocol', 'lang', 'grant', 'login', 'logout',
+    'context-save', 'context-load', 'context-clear', 'learn',
+    'c', 't', 'd', 'r', 'f', 'e', 'o', 'b', 'p',
+  ];
   
   constructor(options: AppOptions) {
     this.screen = new Screen();
@@ -198,10 +222,7 @@ export class App {
     // Screen-specific handling
     switch (this.currentScreen) {
       case 'help':
-        if (event.key === 'escape' || event.key === 'q') {
-          this.currentScreen = 'chat';
-          this.render();
-        }
+        this.handleHelpKey(event);
         break;
         
       case 'status':
@@ -228,12 +249,41 @@ export class App {
    * Handle chat screen keys
    */
   private handleChatKey(event: KeyEvent): void {
-    // Escape to cancel streaming/loading
+    // Escape to cancel streaming/loading or close autocomplete
     if (event.key === 'escape') {
+      if (this.showAutocomplete) {
+        this.showAutocomplete = false;
+        this.render();
+        return;
+      }
       if (this.isStreaming) {
         this.endStreaming();
       }
       return;
+    }
+    
+    // Handle autocomplete navigation
+    if (this.showAutocomplete) {
+      if (event.key === 'up') {
+        this.autocompleteIndex = Math.max(0, this.autocompleteIndex - 1);
+        this.render();
+        return;
+      }
+      if (event.key === 'down') {
+        this.autocompleteIndex = Math.min(this.autocompleteItems.length - 1, this.autocompleteIndex + 1);
+        this.render();
+        return;
+      }
+      if (event.key === 'tab' || event.key === 'enter') {
+        // Select autocomplete item
+        if (this.autocompleteItems.length > 0) {
+          const selected = this.autocompleteItems[this.autocompleteIndex];
+          this.editor.setValue('/' + selected + ' ');
+          this.showAutocomplete = false;
+          this.render();
+          return;
+        }
+      }
     }
     
     // Ctrl+L to clear
@@ -256,12 +306,13 @@ export class App {
       return;
     }
     
-    // Enter to submit
-    if (event.key === 'enter' && !this.isLoading && !this.isStreaming) {
+    // Enter to submit (only if not in autocomplete)
+    if (event.key === 'enter' && !this.isLoading && !this.isStreaming && !this.showAutocomplete) {
       const value = this.editor.getValue().trim();
       if (value) {
         this.editor.addToHistory(value);
         this.editor.clear();
+        this.showAutocomplete = false;
         
         // Check for commands
         if (value.startsWith('/')) {
@@ -281,7 +332,61 @@ export class App {
     
     // Handle editor keys
     if (this.editor.handleKey(event)) {
+      // Update autocomplete based on input
+      this.updateAutocomplete();
       this.render();
+    }
+  }
+  
+  /**
+   * Update autocomplete suggestions
+   */
+  private updateAutocomplete(): void {
+    const value = this.editor.getValue();
+    
+    // Show autocomplete only when typing a command
+    if (value.startsWith('/') && !value.includes(' ')) {
+      const query = value.slice(1).toLowerCase();
+      this.autocompleteItems = App.COMMANDS.filter(cmd => 
+        cmd.startsWith(query)
+      ).slice(0, 8); // Max 8 items
+      
+      this.showAutocomplete = this.autocompleteItems.length > 0 && query.length > 0;
+      this.autocompleteIndex = 0;
+    } else {
+      this.showAutocomplete = false;
+      this.autocompleteItems = [];
+    }
+  }
+  
+  /**
+   * Handle help screen keys
+   */
+  private handleHelpKey(event: KeyEvent): void {
+    if (event.key === 'escape' || event.key === 'q') {
+      this.helpPage = 0;
+      this.currentScreen = 'chat';
+      this.render();
+      return;
+    }
+    
+    const { height } = this.screen.getSize();
+    const totalPages = getHelpTotalPages(height);
+    
+    if (event.key === 'down' || event.key === 'pagedown' || event.key === 'right') {
+      if (this.helpPage < totalPages - 1) {
+        this.helpPage++;
+        this.render();
+      }
+      return;
+    }
+    
+    if (event.key === 'up' || event.key === 'pageup' || event.key === 'left') {
+      if (this.helpPage > 0) {
+        this.helpPage--;
+        this.render();
+      }
+      return;
     }
   }
   
@@ -365,7 +470,7 @@ export class App {
   render(): void {
     switch (this.currentScreen) {
       case 'help':
-        renderHelpScreen(this.screen);
+        renderHelpScreen(this.screen, this.helpPage);
         break;
         
       case 'status':
@@ -404,7 +509,7 @@ export class App {
     // Header
     const header = ' Codeep ';
     const headerPadding = '─'.repeat(Math.max(0, (width - header.length) / 2));
-    this.screen.writeLine(headerLine, headerPadding + header + headerPadding, fg.cyan);
+    this.screen.writeLine(headerLine, headerPadding + header + headerPadding, PRIMARY_COLOR);
     
     // Messages
     const messagesHeight = messagesEnd - messagesStart + 1;
@@ -422,6 +527,11 @@ export class App {
     
     // Input
     this.renderInput(inputLine, width);
+    
+    // Autocomplete popup (above input line)
+    if (this.showAutocomplete && this.autocompleteItems.length > 0) {
+      this.renderAutocomplete(inputLine - 1, width);
+    }
     
     // Status bar
     this.renderStatusBar(statusLine, width);
@@ -477,11 +587,57 @@ export class App {
       cursorX = prompt.length + (cursorPos - visibleStart);
     }
     
-    const promptColor = this.isLoading ? fg.yellow : this.isStreaming ? fg.cyan : fg.green;
+    const promptColor = this.isLoading ? fg.yellow : this.isStreaming ? PRIMARY_COLOR : fg.green;
     this.screen.writeLine(y, prompt + displayValue, promptColor);
     
     this.screen.setCursor(cursorX, y);
     this.screen.showCursor(!this.isLoading && !this.isStreaming);
+  }
+  
+  /**
+   * Render autocomplete popup
+   */
+  private renderAutocomplete(bottomY: number, width: number): void {
+    const items = this.autocompleteItems;
+    const boxWidth = Math.min(30, width - 4);
+    const boxHeight = Math.min(items.length + 2, 10);
+    const startY = bottomY - boxHeight + 1;
+    const startX = 2;
+    
+    // Draw box background
+    for (let y = startY; y <= bottomY; y++) {
+      this.screen.write(startX, y, ' '.repeat(boxWidth), fg.white);
+    }
+    
+    // Draw border
+    this.screen.write(startX, startY, '┌' + '─'.repeat(boxWidth - 2) + '┐', PRIMARY_COLOR);
+    for (let y = startY + 1; y < bottomY; y++) {
+      this.screen.write(startX, y, '│', PRIMARY_COLOR);
+      this.screen.write(startX + boxWidth - 1, y, '│', PRIMARY_COLOR);
+    }
+    this.screen.write(startX, bottomY, '└' + '─'.repeat(boxWidth - 2) + '┘', PRIMARY_COLOR);
+    
+    // Draw items
+    const maxVisible = boxHeight - 2;
+    const visibleStart = Math.max(0, this.autocompleteIndex - maxVisible + 1);
+    const visibleItems = items.slice(visibleStart, visibleStart + maxVisible);
+    
+    for (let i = 0; i < visibleItems.length; i++) {
+      const item = visibleItems[i];
+      const actualIndex = visibleStart + i;
+      const isSelected = actualIndex === this.autocompleteIndex;
+      const y = startY + 1 + i;
+      
+      const prefix = isSelected ? '► ' : '  ';
+      const text = ('/' + item).slice(0, boxWidth - 5);
+      const padding = ' '.repeat(Math.max(0, boxWidth - 4 - text.length));
+      
+      if (isSelected) {
+        this.screen.write(startX + 1, y, prefix + text + padding, PRIMARY_COLOR + style.bold);
+      } else {
+        this.screen.write(startX + 1, y, prefix + text + padding, fg.white);
+      }
+    }
   }
   
   /**
@@ -537,7 +693,7 @@ export class App {
   private formatMessage(role: 'user' | 'assistant' | 'system', content: string, maxWidth: number): Array<{ text: string; style: string }> {
     const lines: Array<{ text: string; style: string }> = [];
     
-    const roleStyle = role === 'user' ? fg.green : role === 'assistant' ? fg.cyan : fg.yellow;
+    const roleStyle = role === 'user' ? fg.green : role === 'assistant' ? PRIMARY_COLOR : fg.yellow;
     const roleLabel = role === 'user' ? '> ' : role === 'assistant' ? '  ' : '# ';
     
     const contentLines = content.split('\n');

@@ -1047,3 +1047,38 @@ export {
   formatSession,
   type ActionSession 
 };
+
+/**
+ * Get agent history for display
+ */
+export function getAgentHistory(): Array<{
+  timestamp: number;
+  task: string;
+  actions: Array<{ type: string; target: string; result: string }>;
+  success: boolean;
+}> {
+  const sessions = getRecentSessions(10);
+  return sessions.map(s => ({
+    timestamp: s.startTime,
+    task: s.prompt || 'Unknown task',
+    actions: s.actions.map(a => ({
+      type: a.type,
+      target: a.path || '',
+      result: 'success',
+    })),
+    success: s.endTime !== undefined,
+  }));
+}
+
+/**
+ * Get current session actions
+ */
+export function getCurrentSessionActions(): Array<{ type: string; target: string; result: string }> {
+  const session = getCurrentSession();
+  if (!session) return [];
+  return session.actions.map(a => ({
+    type: a.type,
+    target: a.path || '',
+    result: 'success',
+  }));
+}

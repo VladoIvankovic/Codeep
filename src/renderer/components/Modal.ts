@@ -7,6 +7,10 @@ import { Screen } from '../Screen';
 import { fg, style } from '../ansi';
 import { createBox, centerBox, BoxStyle } from './Box';
 
+// Primary color: #f02a30 (Codeep red)
+const PRIMARY_COLOR = fg.rgb(240, 42, 48);
+const PRIMARY_BRIGHT = fg.rgb(255, 80, 85);
+
 export interface ModalOptions {
   title: string;
   content: string[];
@@ -57,8 +61,8 @@ export function renderModal(screen: Screen, options: ModalOptions): void {
     height: modalHeight,
     style: options.boxStyle || 'rounded',
     title: options.title,
-    borderColor: options.borderColor || fg.cyan,
-    titleColor: options.titleColor || fg.brightCyan,
+    borderColor: options.borderColor || PRIMARY_COLOR,
+    titleColor: options.titleColor || PRIMARY_BRIGHT,
   });
   
   for (const line of boxLines) {
@@ -120,8 +124,8 @@ export function renderHelpModal(
     height: modalHeight,
     style: 'rounded',
     title,
-    borderColor: fg.cyan,
-    titleColor: fg.brightCyan,
+    borderColor: PRIMARY_COLOR,
+    titleColor: PRIMARY_BRIGHT,
   });
   
   for (const line of boxLines) {
@@ -178,8 +182,8 @@ export function renderListModal(
     height: modalHeight,
     style: 'rounded',
     title,
-    borderColor: fg.cyan,
-    titleColor: fg.brightCyan,
+    borderColor: PRIMARY_COLOR,
+    titleColor: PRIMARY_BRIGHT,
   });
   
   for (const line of boxLines) {
@@ -203,7 +207,7 @@ export function renderListModal(
     const isSelected = actualIndex === selectedIndex;
     
     const prefix = isSelected ? '► ' : '  ';
-    const itemStyle = isSelected ? fg.brightCyan + style.bold : fg.white;
+    const itemStyle = isSelected ? PRIMARY_BRIGHT + style.bold : fg.white;
     
     screen.write(contentStartX, contentStartY + i, prefix + item, itemStyle);
   }
