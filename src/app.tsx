@@ -68,9 +68,10 @@ import { saveContext, loadContext, clearContext, mergeContext } from './utils/co
 import { performCodeReview, formatReviewResult } from './utils/codeReview';
 import { loadProjectPreferences, learnFromProject, formatPreferencesForPrompt, addCustomRule, getLearningStatus } from './utils/learning';
 import { getAllSkills, findSkill, formatSkillsList, formatSkillHelp, generateSkillPrompt, saveCustomSkill, deleteCustomSkill, parseSkillDefinition, parseSkillChain, parseSkillArgs, searchSkills, trackSkillUsage, getSkillStats, Skill } from './utils/skills';
-import { ChangesList, AgentStatusBar } from './components/AgentProgress';
+import { ChangesList } from './components/AgentProgress';
 import { ActionLog, ToolCall, ToolResult, createActionLog } from './utils/tools';
 import { scanProject, saveProjectIntelligence, loadProjectIntelligence, generateContextFromIntelligence, isIntelligenceFresh, ProjectIntelligence } from './utils/projectIntelligence';
+import { logAction, startAgentSpinner, updateSpinner, stopSpinner, logAgentComplete, logSeparator } from './utils/console';
 
 type Screen = 'chat' | 'login' | 'help' | 'status' | 'sessions' | 'sessions-delete' | 'model' | 'protocol' | 'language' | 'settings' | 'permission' | 'provider' | 'search' | 'export' | 'session-picker' | 'logout';
 export const App: React.FC = () => {
@@ -332,6 +333,10 @@ export const App: React.FC = () => {
     setAgentDryRun(dryRun);
     setAgentStreamingContent(''); // Reset streaming content
     
+    // Start console spinner for agent
+    logSeparator();
+    startAgentSpinner('Starting...', dryRun);
+    
     // Add user message
     const userMessage: Message = { 
       role: 'user', 
@@ -348,6 +353,7 @@ export const App: React.FC = () => {
         dryRun,
         onIteration: (iteration, message) => {
           setAgentIteration(iteration);
+          updateSpinner(`Step ${iteration}`, dryRun);
         },
         onToolCall: (tool: ToolCall) => {
           // Create action log with content for live code preview
@@ -392,41 +398,8 @@ export const App: React.FC = () => {
             return updated;
           });
           
-          // Add formatted action to streaming content (stays in chat)
-          // NO CODE DISPLAY - just clean action lines to prevent terminal jumping
-          const actionType = actionLog.type;
-          const target = actionLog.target.split('/').pop() || actionLog.target; // Just filename
-          const status = actionLog.result === 'success' ? '✓' : '✗';
-          const failedText = actionLog.result === 'error' ? ' ✗' : '';
-          
-          // Count lines in content
-          const lineCount = actionLog.details ? actionLog.details.split('\n').length : 0;
-          
-          let actionLine = '';
-          if (actionType === 'write') {
-            actionLine = `${status} Created **${target}**${lineCount > 0 ? ` (${lineCount} lines)` : ''}${failedText}`;
-          } else if (actionType === 'edit') {
-            actionLine = `${status} Edited **${target}**${lineCount > 0 ? ` (${lineCount} lines)` : ''}${failedText}`;
-          } else if (actionType === 'read') {
-            actionLine = `→ Reading **${target}**`;
-          } else if (actionType === 'delete') {
-            actionLine = `${status} Deleted **${target}**${failedText}`;
-          } else if (actionType === 'command') {
-            const cmd = actionLog.target.length > 40 ? actionLog.target.slice(0, 40) + '...' : actionLog.target;
-            actionLine = `${status} Ran \`${cmd}\`${failedText}`;
-          } else if (actionType === 'search') {
-            actionLine = `→ Searching **${target}**`;
-          } else if (actionType === 'mkdir') {
-            actionLine = `${status} Created dir **${target}**`;
-          } else if (actionType === 'fetch') {
-            actionLine = `→ Fetching **${target}**`;
-          } else if (actionType === 'list') {
-            actionLine = `→ Listing **${target}**`;
-          }
-          
-          if (actionLine) {
-            setAgentStreamingContent(prev => prev + (prev ? '\n' : '') + actionLine);
-          }
+          // Use console.log with chalk for agent actions - no Ink re-rendering!
+          logAction(actionLog.type, actionLog.target, actionLog.result, actionLog.details);
         },
         onThinking: (text: string) => {
           // Strip <think> and <tool_call> tags from thinking text
@@ -446,6 +419,7 @@ export const App: React.FC = () => {
       
       // Build action statistics
       const stats = {
+        iterations: result.iterations,
         created: result.actions.filter(a => a.type === 'write' && a.result === 'success').length,
         edited: result.actions.filter(a => a.type === 'edit' && a.result === 'success').length,
         deleted: result.actions.filter(a => a.type === 'delete' && a.result === 'success').length,
@@ -454,22 +428,14 @@ export const App: React.FC = () => {
         errors: result.actions.filter(a => a.result === 'error').length,
       };
       
-      // Format statistics line
-      const statParts: string[] = [];
-      if (stats.created > 0) statParts.push(`+${stats.created} created`);
-      if (stats.edited > 0) statParts.push(`~${stats.edited} edited`);
-      if (stats.deleted > 0) statParts.push(`-${stats.deleted} deleted`);
-      if (stats.commands > 0) statParts.push(`${stats.commands} commands`);
-      if (stats.errors > 0) statParts.push(`${stats.errors} errors`);
+      // Log completion to console (chalk/ora)
+      logAgentComplete(stats, result.success);
+      logSeparator();
       
-      const statsLine = statParts.length > 0 
-        ? `\n\n---\n**${result.iterations} steps** | ${statParts.join(' | ')}`
-        : '';
-      
-      // Add agent summary as assistant message with stats
+      // Add agent summary as assistant message (without duplicate stats - they're in console)
       const summaryMessage: Message = {
         role: 'assistant',
-        content: (result.finalResponse || formatAgentResult(result)) + statsLine,
+        content: result.finalResponse || formatAgentResult(result),
       };
       setMessages(prev => [...prev, summaryMessage]);
       
@@ -485,8 +451,10 @@ export const App: React.FC = () => {
       }
     } catch (error) {
       const err = error as Error;
+      stopSpinner();
       notify(`Agent error: ${err.message}`);
     } finally {
+      stopSpinner();
       setIsAgentRunning(false);
       setAbortController(null);
       setAgentThinking('');
@@ -1665,21 +1633,12 @@ export const App: React.FC = () => {
         key={sessionId}
         messages={messages}
         streamingContent={streamingContent}
-        agentStreamingContent={isAgentRunning ? agentStreamingContent : undefined}
       />
 
       {/* Loading - show while waiting or streaming */}
       {isLoading && !isAgentRunning && <Loading isStreaming={!!streamingContent} />}
 
-      {/* Agent status bar - fixed height with spinner */}
-      {isAgentRunning && (
-        <AgentStatusBar
-          iteration={agentIteration}
-          actionsCount={agentActions.length}
-          dryRun={agentDryRun}
-          currentAction={agentActions.length > 0 ? `${agentActions[agentActions.length - 1].type}: ${agentActions[agentActions.length - 1].target.split('/').pop()}` : undefined}
-        />
-      )}
+      {/* Agent status now uses console.log with chalk/ora - no Ink component needed */}
 
       {/* File changes prompt */}
       {pendingFileChanges.length > 0 && !isLoading && (
