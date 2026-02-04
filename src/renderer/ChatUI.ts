@@ -44,8 +44,8 @@ export class ChatUI {
     // Handle keyboard input
     this.input.onKey((event) => this.handleKey(event));
     
-    // Initial render
-    this.render();
+    // Initial render - use full render first time
+    this.fullRender();
   }
   
   /**
@@ -184,8 +184,8 @@ export class ChatUI {
     const headerPadding = '─'.repeat(Math.max(0, (width - header.length) / 2));
     this.screen.writeLine(headerLine, headerPadding + header + headerPadding, fg.cyan);
     
-    // Messages area
-    const messagesHeight = messagesEnd - messagesStart;
+    // Messages area (including streaming content)
+    const messagesHeight = messagesEnd - messagesStart + 1;
     const messagesToRender = this.getVisibleMessages(messagesHeight, width - 2);
     
     let y = messagesStart;
@@ -195,32 +195,46 @@ export class ChatUI {
       y++;
     }
     
-    // Streaming content
-    if (this.isStreaming && this.streamingContent) {
-      const streamLines = this.formatMessage('assistant', this.streamingContent + '▊', width - 2);
-      for (const line of streamLines.slice(-(messagesEnd - y + 1))) {
-        if (y > messagesEnd) break;
-        this.screen.writeLine(y, line.text, line.style);
-        y++;
-      }
-    }
-    
     // Separator
     this.screen.horizontalLine(separatorLine, '─', fg.gray);
     
     // Input line
     const prompt = '> ';
     const inputValue = this.editor.getValue();
+    const cursorPos = this.editor.getCursorPos();
     const maxInputWidth = width - prompt.length - 1;
-    const displayValue = inputValue.length > maxInputWidth 
-      ? '…' + inputValue.slice(-(maxInputWidth - 1))
-      : inputValue;
+    
+    // Calculate what part of input to show and where cursor should be
+    let displayValue: string;
+    let cursorX: number;
+    
+    if (inputValue.length <= maxInputWidth) {
+      // Input fits - show all, cursor at actual position
+      displayValue = inputValue;
+      cursorX = prompt.length + cursorPos;
+    } else {
+      // Input too long - scroll to keep cursor visible
+      // Keep cursor roughly in the middle-right of visible area
+      const visibleStart = Math.max(0, cursorPos - Math.floor(maxInputWidth * 0.7));
+      const visibleEnd = visibleStart + maxInputWidth;
+      
+      if (visibleStart > 0) {
+        displayValue = '…' + inputValue.slice(visibleStart + 1, visibleEnd);
+      } else {
+        displayValue = inputValue.slice(0, maxInputWidth);
+      }
+      
+      // Cursor position relative to visible portion
+      cursorX = prompt.length + (cursorPos - visibleStart);
+      if (visibleStart > 0) {
+        cursorX = prompt.length + (cursorPos - visibleStart);
+      }
+    }
     
     this.screen.writeLine(inputLine, prompt + displayValue, fg.green);
     
     // Position cursor
-    const cursorOffset = Math.min(this.editor.getCursorPos(), maxInputWidth);
-    this.screen.setCursor(prompt.length + cursorOffset, inputLine);
+    this.screen.setCursor(cursorX, inputLine);
     this.screen.showCursor(true);
     
     // Status bar
@@ -229,8 +243,15 @@ export class ChatUI {
     const statusPadding = ' '.repeat(Math.max(0, width - statusLeft.length - statusRight.length));
     this.screen.writeLine(statusLine, statusLeft + statusPadding + statusRight, fg.gray);
     
-    // Render to terminal
-    this.screen.render();
+    // Render to terminal (use fullRender for now - more reliable)
+    this.screen.fullRender();
+  }
+  
+  /**
+   * Full render (alias for render, used on start)
+   */
+  private fullRender(): void {
+    this.render();
   }
   
   /**
@@ -275,7 +296,7 @@ export class ChatUI {
   }
   
   /**
-   * Get messages formatted for visible area
+   * Get messages formatted for visible area (including streaming)
    */
   private getVisibleMessages(height: number, width: number): Array<{ text: string; style: string }> {
     const allLines: Array<{ text: string; style: string }> = [];
@@ -283,6 +304,12 @@ export class ChatUI {
     for (const msg of this.messages) {
       const msgLines = this.formatMessage(msg.role, msg.content, width);
       allLines.push(...msgLines);
+    }
+    
+    // Add streaming content if active
+    if (this.isStreaming && this.streamingContent) {
+      const streamLines = this.formatMessage('assistant', this.streamingContent + '▊', width);
+      allLines.push(...streamLines);
     }
     
     // Apply scroll offset and return last 'height' lines
