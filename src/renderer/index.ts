@@ -10,3 +10,10 @@ export { cursor, screen, fg, bg, style, styled, stripAnsi, visibleLength, trunca
 export { Screen, Cell } from './Screen';
 export { Input, LineEditor, KeyEvent, KeyHandler } from './Input';
 export { ChatUI, ChatMessage, ChatUIOptions } from './ChatUI';
+export { App, AppScreen, AppOptions, Message } from './App';
+
+// Components
+export { createBox, centerBox, BoxStyle, BoxOptions } from './components/Box';
+export { renderModal, renderHelpModal, renderListModal, ModalOptions } from './components/Modal';
+export { renderHelpScreen, helpCategories, keyboardShortcuts } from './components/Help';
+export { renderStatusScreen, StatusInfo } from './components/Status';

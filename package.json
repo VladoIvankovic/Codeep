@@ -12,6 +12,8 @@
     "build": "tsc && node scripts/fix-imports.js",
     "start": "node dist/index.js",
     "demo:renderer": "node --import tsx src/renderer/demo.ts",
+    "demo:app": "node --import tsx src/renderer/demo-app.ts",
+    "start:new": "node --import tsx src/renderer/main.ts",
     "build:binary": "npm run build && pkg dist/index.js --targets node18-macos-arm64,node18-macos-x64,node18-linux-x64 --output bin/codeep",
     "test": "vitest run",
     "test:watch": "vitest",
