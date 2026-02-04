@@ -59,6 +59,7 @@ export function spinnerFail(text?: string): void {
  */
 export function stopSpinner(): void {
   if (currentSpinner) {
+    currentSpinner.clear();
     currentSpinner.stop();
     currentSpinner = null;
   }
