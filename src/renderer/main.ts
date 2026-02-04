@@ -10,6 +10,7 @@ import { Input, KeyEvent } from './Input';
 import { StatusInfo } from './components/Status';
 import { LoginScreen, renderProviderSelect } from './components/Login';
 import { renderPermissionScreen, getPermissionOptions, PermissionLevel } from './components/Permission';
+import { showIntro } from './components/Intro';
 import { chat, setProjectContext } from '../api/index';
 import { runAgent, AgentResult } from '../utils/agent';
 import { ActionLog } from '../utils/tools';
@@ -661,8 +662,11 @@ Commands (in chat):
     }
   }
   
-  // Clear screen
-  console.clear();
+  // Show intro animation
+  const introScreen = new Screen();
+  introScreen.init();
+  await showIntro(introScreen, 1200);
+  introScreen.cleanup();
   
   // Create and start app
   app = new App({
