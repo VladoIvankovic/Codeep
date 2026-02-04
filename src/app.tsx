@@ -393,64 +393,39 @@ export const App: React.FC = () => {
           });
           
           // Add formatted action to streaming content (stays in chat)
+          // NO CODE DISPLAY - just clean action lines to prevent terminal jumping
           const actionType = actionLog.type;
           const target = actionLog.target.split('/').pop() || actionLog.target; // Just filename
-          const fullPath = actionLog.target;
           const status = actionLog.result === 'success' ? '✓' : '✗';
-          const statusColor = actionLog.result === 'success' ? '' : ' (failed)';
+          const failedText = actionLog.result === 'error' ? ' ✗' : '';
           
-          // Get file extension for syntax highlighting
-          const getLanguage = (filename: string): string => {
-            const ext = filename.split('.').pop()?.toLowerCase() || '';
-            const langMap: Record<string, string> = {
-              'ts': 'typescript', 'tsx': 'typescript', 'js': 'javascript', 'jsx': 'javascript',
-              'py': 'python', 'rb': 'ruby', 'go': 'go', 'rs': 'rust', 'java': 'java',
-              'php': 'php', 'css': 'css', 'scss': 'css', 'html': 'html', 'vue': 'html',
-              'json': 'json', 'yml': 'yaml', 'yaml': 'yaml', 'md': 'markdown',
-              'sh': 'bash', 'bash': 'bash', 'sql': 'sql',
-            };
-            return langMap[ext] || ext || 'code';
-          };
+          // Count lines in content
+          const lineCount = actionLog.details ? actionLog.details.split('\n').length : 0;
           
           let actionLine = '';
-          if (actionType === 'write' && actionLog.details) {
-            // Show full code with syntax highlighting
-            const lang = getLanguage(target);
-            actionLine = `${status} **Created ${fullPath}**\n\`\`\`${lang}\n${actionLog.details}\n\`\`\``;
-          } else if (actionType === 'write') {
-            actionLine = `${status} Created **${target}**${statusColor}`;
-          } else if (actionType === 'edit' && actionLog.details) {
-            // Show edited code with syntax highlighting
-            const lang = getLanguage(target);
-            actionLine = `${status} **Edited ${fullPath}**\n\`\`\`${lang}\n${actionLog.details}\n\`\`\``;
+          if (actionType === 'write') {
+            actionLine = `${status} Created **${target}**${lineCount > 0 ? ` (${lineCount} lines)` : ''}${failedText}`;
           } else if (actionType === 'edit') {
-            actionLine = `${status} Edited **${target}**${statusColor}`;
+            actionLine = `${status} Edited **${target}**${lineCount > 0 ? ` (${lineCount} lines)` : ''}${failedText}`;
           } else if (actionType === 'read') {
             actionLine = `→ Reading **${target}**`;
           } else if (actionType === 'delete') {
-            actionLine = `${status} Deleted **${fullPath}**${statusColor}`;
+            actionLine = `${status} Deleted **${target}**${failedText}`;
           } else if (actionType === 'command') {
-            const cmd = actionLog.target;
-            // Show command output if available
-            if (actionLog.details && actionLog.details.trim()) {
-              actionLine = `${status} Ran \`${cmd}\`\n\`\`\`\n${actionLog.details.slice(0, 500)}${actionLog.details.length > 500 ? '\n...(truncated)' : ''}\n\`\`\``;
-            } else {
-              actionLine = `${status} Ran \`${cmd}\`${statusColor}`;
-            }
+            const cmd = actionLog.target.length > 40 ? actionLog.target.slice(0, 40) + '...' : actionLog.target;
+            actionLine = `${status} Ran \`${cmd}\`${failedText}`;
           } else if (actionType === 'search') {
             actionLine = `→ Searching **${target}**`;
           } else if (actionType === 'mkdir') {
-            actionLine = `${status} Created directory **${fullPath}**${statusColor}`;
+            actionLine = `${status} Created dir **${target}**`;
           } else if (actionType === 'fetch') {
-            actionLine = `${status} Fetched ${target}${statusColor}`;
+            actionLine = `→ Fetching **${target}**`;
           } else if (actionType === 'list') {
             actionLine = `→ Listing **${target}**`;
-          } else {
-            actionLine = `◦ ${actionType}: ${target}`;
           }
           
           if (actionLine) {
-            setAgentStreamingContent(prev => prev + (prev ? '\n\n' : '') + actionLine);
+            setAgentStreamingContent(prev => prev + (prev ? '\n' : '') + actionLine);
           }
         },
         onThinking: (text: string) => {
@@ -469,10 +444,32 @@ export const App: React.FC = () => {
       
       setAgentResult(result);
       
-      // Add agent summary as assistant message
+      // Build action statistics
+      const stats = {
+        created: result.actions.filter(a => a.type === 'write' && a.result === 'success').length,
+        edited: result.actions.filter(a => a.type === 'edit' && a.result === 'success').length,
+        deleted: result.actions.filter(a => a.type === 'delete' && a.result === 'success').length,
+        commands: result.actions.filter(a => a.type === 'command' && a.result === 'success').length,
+        reads: result.actions.filter(a => a.type === 'read').length,
+        errors: result.actions.filter(a => a.result === 'error').length,
+      };
+      
+      // Format statistics line
+      const statParts: string[] = [];
+      if (stats.created > 0) statParts.push(`+${stats.created} created`);
+      if (stats.edited > 0) statParts.push(`~${stats.edited} edited`);
+      if (stats.deleted > 0) statParts.push(`-${stats.deleted} deleted`);
+      if (stats.commands > 0) statParts.push(`${stats.commands} commands`);
+      if (stats.errors > 0) statParts.push(`${stats.errors} errors`);
+      
+      const statsLine = statParts.length > 0 
+        ? `\n\n---\n**${result.iterations} steps** | ${statParts.join(' | ')}`
+        : '';
+      
+      // Add agent summary as assistant message with stats
       const summaryMessage: Message = {
         role: 'assistant',
-        content: result.finalResponse || formatAgentResult(result),
+        content: (result.finalResponse || formatAgentResult(result)) + statsLine,
       };
       setMessages(prev => [...prev, summaryMessage]);
       
