@@ -1676,16 +1676,6 @@ export const App: React.FC = () => {
 
       {/* Loading - show while waiting or streaming */}
       {isLoading && !isAgentRunning && <Loading isStreaming={!!streamingContent} />}
-      
-      {/* Agent status indicator - minimal, no floating boxes */}
-      {isAgentRunning && (
-        <Box key="agent-status" paddingX={1}>
-          <Text color={agentDryRun ? 'yellow' : '#f02a30'}>
-            {agentDryRun ? '[DRY RUN]' : '[AGENT]'} Step {agentIteration} | {agentActions.length} actions
-          </Text>
-          <Text color="gray"> | Press Esc to stop</Text>
-        </Box>
-      )}
 
       {/* File changes prompt */}
       {pendingFileChanges.length > 0 && !isLoading && (
@@ -1727,6 +1717,16 @@ export const App: React.FC = () => {
             />
           </Box>
           <Text color="#f02a30">{'─'.repeat(Math.max(20, stdout?.columns || 80))}</Text>
+          
+          {/* Agent status - below input to prevent chat jumping */}
+          {isAgentRunning && (
+            <Box paddingX={1}>
+              <Text color={agentDryRun ? 'yellow' : '#f02a30'}>
+                {agentDryRun ? '[DRY RUN]' : '[AGENT]'} Step {agentIteration} | {agentActions.length} actions
+              </Text>
+              <Text color="gray"> | Press Esc to stop</Text>
+            </Box>
+          )}
         </Box>
       )}
 
