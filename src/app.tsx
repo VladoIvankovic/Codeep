@@ -68,7 +68,7 @@ import { saveContext, loadContext, clearContext, mergeContext } from './utils/co
 import { performCodeReview, formatReviewResult } from './utils/codeReview';
 import { loadProjectPreferences, learnFromProject, formatPreferencesForPrompt, addCustomRule, getLearningStatus } from './utils/learning';
 import { getAllSkills, findSkill, formatSkillsList, formatSkillHelp, generateSkillPrompt, saveCustomSkill, deleteCustomSkill, parseSkillDefinition, parseSkillChain, parseSkillArgs, searchSkills, trackSkillUsage, getSkillStats, Skill } from './utils/skills';
-import { ChangesList } from './components/AgentProgress';
+import { ChangesList, AgentStatusBar } from './components/AgentProgress';
 import { ActionLog, ToolCall, ToolResult, createActionLog } from './utils/tools';
 import { scanProject, saveProjectIntelligence, loadProjectIntelligence, generateContextFromIntelligence, isIntelligenceFresh, ProjectIntelligence } from './utils/projectIntelligence';
 
@@ -426,8 +426,7 @@ export const App: React.FC = () => {
           } else if (actionType === 'edit') {
             actionLine = `${status} Edited **${target}**${statusColor}`;
           } else if (actionType === 'read') {
-            // Don't show read actions in stream - too noisy
-            return;
+            actionLine = `→ Reading **${target}**`;
           } else if (actionType === 'delete') {
             actionLine = `${status} Deleted **${fullPath}**${statusColor}`;
           } else if (actionType === 'command') {
@@ -439,15 +438,13 @@ export const App: React.FC = () => {
               actionLine = `${status} Ran \`${cmd}\`${statusColor}`;
             }
           } else if (actionType === 'search') {
-            // Don't show search actions - too noisy
-            return;
+            actionLine = `→ Searching **${target}**`;
           } else if (actionType === 'mkdir') {
             actionLine = `${status} Created directory **${fullPath}**${statusColor}`;
           } else if (actionType === 'fetch') {
             actionLine = `${status} Fetched ${target}${statusColor}`;
           } else if (actionType === 'list') {
-            // Don't show list actions
-            return;
+            actionLine = `→ Listing **${target}**`;
           } else {
             actionLine = `◦ ${actionType}: ${target}`;
           }
@@ -1677,6 +1674,16 @@ export const App: React.FC = () => {
       {/* Loading - show while waiting or streaming */}
       {isLoading && !isAgentRunning && <Loading isStreaming={!!streamingContent} />}
 
+      {/* Agent status bar - fixed height with spinner */}
+      {isAgentRunning && (
+        <AgentStatusBar
+          iteration={agentIteration}
+          actionsCount={agentActions.length}
+          dryRun={agentDryRun}
+          currentAction={agentActions.length > 0 ? `${agentActions[agentActions.length - 1].type}: ${agentActions[agentActions.length - 1].target.split('/').pop()}` : undefined}
+        />
+      )}
+
       {/* File changes prompt */}
       {pendingFileChanges.length > 0 && !isLoading && (
         <Box flexDirection="column" borderStyle="round" borderColor="#f02a30" padding={1} marginY={1}>
@@ -1717,16 +1724,6 @@ export const App: React.FC = () => {
             />
           </Box>
           <Text color="#f02a30">{'─'.repeat(Math.max(20, stdout?.columns || 80))}</Text>
-          
-          {/* Agent status - below input to prevent chat jumping */}
-          {isAgentRunning && (
-            <Box paddingX={1}>
-              <Text color={agentDryRun ? 'yellow' : '#f02a30'}>
-                {agentDryRun ? '[DRY RUN]' : '[AGENT]'} Step {agentIteration} | {agentActions.length} actions
-              </Text>
-              <Text color="gray"> | Press Esc to stop</Text>
-            </Box>
-          )}
         </Box>
       )}
 

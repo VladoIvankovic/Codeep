@@ -729,3 +729,50 @@ export const ChangesList: React.FC<ChangesListProps> = ({ actions }) => {
     </Box>
   );
 };
+
+/**
+ * Agent Status Bar - fixed height, with spinner animation
+ * Shows above input, doesn't cause chat jumping
+ */
+interface AgentStatusBarProps {
+  iteration: number;
+  actionsCount: number;
+  dryRun?: boolean;
+  currentAction?: string;
+}
+
+export const AgentStatusBar: React.FC<AgentStatusBarProps> = memo(({ 
+  iteration, 
+  actionsCount, 
+  dryRun,
+  currentAction 
+}) => {
+  const color = dryRun ? 'yellow' : '#f02a30';
+  
+  return (
+    <Box 
+      borderStyle="round" 
+      borderColor={color}
+      paddingX={1}
+      marginY={1}
+      height={3}
+    >
+      <AgentSpinner color={color} />
+      <Text color={color} bold> {dryRun ? 'DRY RUN' : 'AGENT'} </Text>
+      <Text color="cyan">Step {iteration}</Text>
+      <Text color="gray"> | </Text>
+      <Text color="white">{actionsCount} actions</Text>
+      {currentAction && (
+        <>
+          <Text color="gray"> | </Text>
+          <Text color="cyan">{currentAction}</Text>
+        </>
+      )}
+      <Text color="gray"> | Press </Text>
+      <Text color={color}>Esc</Text>
+      <Text color="gray"> to stop</Text>
+    </Box>
+  );
+});
+
+AgentStatusBar.displayName = 'AgentStatusBar';
