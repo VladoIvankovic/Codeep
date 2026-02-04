@@ -785,7 +785,13 @@ export async function runAgent(
         debug(`No tool calls at iteration ${iteration}, content length: ${content.length}`);
         
         // Remove <think>...</think> tags from response (some models include thinking)
-        finalResponse = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+        // Also remove Tool parameters/tool call artifacts that AI sometimes includes in text
+        finalResponse = content
+          .replace(/<think>[\s\S]*?<\/think>/gi, '')
+          .replace(/Tool parameters:[\s\S]*?(?=\n\n|$)/gi, '')
+          .replace(/\{'path'[\s\S]*?\}/g, '')
+          .replace(/```[\s\S]*?```/g, '')
+          .trim();
         
         // Check if model indicates it wants to continue (incomplete response)
         const continueIndicators = [
