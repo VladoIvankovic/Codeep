@@ -22,13 +22,19 @@ import {
   getCurrentProvider,
   getModelsForCurrentProvider,
   PROVIDERS,
+  PROTOCOLS,
+  LANGUAGES,
   setProvider,
   setApiKey,
+  clearApiKey,
   autoSaveSession,
+  saveSession,
   startNewSession,
   getCurrentSessionId,
   loadSession,
   listSessionsWithInfo,
+  deleteSession,
+  renameSession,
   hasReadPermission,
   hasWritePermission,
   setProjectPermission,
@@ -428,6 +434,566 @@ function handleCommand(command: string, args: string[]): void {
         }).catch(() => {
           app.notify('Failed to check for updates');
         });
+      });
+      break;
+    }
+    
+    // Session management
+    case 'rename': {
+      if (!args.length) {
+        app.notify('Usage: /rename <new-name>');
+        return;
+      }
+      const newName = args.join('-');
+      if (renameSession(sessionId, newName, projectPath)) {
+        sessionId = newName;
+        app.notify(`Session renamed to: ${newName}`);
+      } else {
+        app.notify('Failed to rename session');
+      }
+      break;
+    }
+    
+    case 'search': {
+      if (!args.length) {
+        app.notify('Usage: /search <term>');
+        return;
+      }
+      const searchTerm = args.join(' ').toLowerCase();
+      const messages = app.getMessages();
+      const matches = messages.filter(m => 
+        m.content.toLowerCase().includes(searchTerm)
+      );
+      if (matches.length === 0) {
+        app.notify(`No matches for "${searchTerm}"`);
+      } else {
+        app.addMessage({
+          role: 'system',
+          content: `Found ${matches.length} message(s) containing "${searchTerm}":\n\n${matches.slice(0, 5).map((m, i) => 
+            `${i + 1}. [${m.role}]: ${m.content.slice(0, 100)}${m.content.length > 100 ? '...' : ''}`
+          ).join('\n\n')}${matches.length > 5 ? `\n\n...and ${matches.length - 5} more` : ''}`,
+        });
+      }
+      break;
+    }
+    
+    case 'export': {
+      const format = args[0] || 'md';
+      const messages = app.getMessages();
+      if (messages.length === 0) {
+        app.notify('No messages to export');
+        return;
+      }
+      
+      import('fs').then(fs => {
+        import('path').then(path => {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          let filename: string;
+          let content: string;
+          
+          if (format === 'json') {
+            filename = `codeep-export-${timestamp}.json`;
+            content = JSON.stringify(messages, null, 2);
+          } else if (format === 'txt') {
+            filename = `codeep-export-${timestamp}.txt`;
+            content = messages.map(m => `[${m.role.toUpperCase()}]\n${m.content}\n`).join('\n---\n\n');
+          } else {
+            filename = `codeep-export-${timestamp}.md`;
+            content = `# Codeep Chat Export\n\n${messages.map(m => 
+              `## ${m.role === 'user' ? '👤 User' : m.role === 'assistant' ? '🤖 Assistant' : '⚙️ System'}\n\n${m.content}\n`
+            ).join('\n---\n\n')}`;
+          }
+          
+          const exportPath = path.join(projectPath, filename);
+          fs.writeFileSync(exportPath, content);
+          app.notify(`Exported to ${filename}`);
+        });
+      });
+      break;
+    }
+    
+    // Protocol and language
+    case 'protocol': {
+      const protocols = Object.entries(PROTOCOLS);
+      app.showList('Select Protocol', protocols.map(([, name]) => name), (index) => {
+        const selected = protocols[index][0];
+        config.set('protocol', selected);
+        app.notify(`Protocol: ${protocols[index][1]}`);
+      });
+      break;
+    }
+    
+    case 'lang': {
+      const languages = Object.entries(LANGUAGES);
+      app.showList('Select Language', languages.map(([, name]) => name), (index) => {
+        const selected = languages[index][0];
+        config.set('language', selected);
+        app.notify(`Language: ${languages[index][1]}`);
+      });
+      break;
+    }
+    
+    // Login/Logout
+    case 'login': {
+      showLoginFlow().then(key => {
+        if (key) {
+          app.notify('Logged in successfully');
+        }
+      });
+      break;
+    }
+    
+    case 'logout': {
+      const providers = getProviderList();
+      app.showList('Logout from', providers.map(p => p.name), (index) => {
+        const selected = providers[index];
+        clearApiKey(selected.id);
+        app.notify(`Logged out from ${selected.name}`);
+      });
+      break;
+    }
+    
+    // Git commit
+    case 'git-commit': {
+      const message = args.join(' ');
+      if (!message) {
+        app.notify('Usage: /git-commit <message>');
+        return;
+      }
+      
+      import('child_process').then(({ execSync }) => {
+        try {
+          execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, { 
+            cwd: projectPath,
+            encoding: 'utf-8',
+          });
+          app.notify('Committed successfully');
+        } catch (err) {
+          app.notify(`Commit failed: ${(err as Error).message}`);
+        }
+      });
+      break;
+    }
+    
+    // Code block operations
+    case 'copy': {
+      const blockNum = args[0] ? parseInt(args[0], 10) : -1;
+      const messages = app.getMessages();
+      
+      // Find code blocks in messages
+      const codeBlocks: string[] = [];
+      for (const msg of messages) {
+        const matches = msg.content.matchAll(/```[\w]*\n([\s\S]*?)```/g);
+        for (const match of matches) {
+          codeBlocks.push(match[1]);
+        }
+      }
+      
+      if (codeBlocks.length === 0) {
+        app.notify('No code blocks found');
+        return;
+      }
+      
+      const index = blockNum === -1 ? codeBlocks.length - 1 : blockNum - 1;
+      if (index < 0 || index >= codeBlocks.length) {
+        app.notify(`Invalid block number. Available: 1-${codeBlocks.length}`);
+        return;
+      }
+      
+      import('../utils/clipboard').then(({ copyToClipboard }) => {
+        if (copyToClipboard(codeBlocks[index])) {
+          app.notify(`Copied block ${index + 1} to clipboard`);
+        } else {
+          app.notify('Failed to copy to clipboard');
+        }
+      }).catch(() => {
+        app.notify('Clipboard not available');
+      });
+      break;
+    }
+    
+    case 'paste': {
+      import('../utils/clipboard').then(({ readFromClipboard }) => {
+        const content = readFromClipboard();
+        if (content) {
+          const preview = content.length > 100 ? content.slice(0, 100) + '...' : content;
+          const lines = content.split('\n').length;
+          app.addMessage({
+            role: 'system',
+            content: `📋 Clipboard (${content.length} chars, ${lines} lines):\n\`\`\`\n${preview}\n\`\`\``,
+          });
+          // Add to user input or directly submit
+          app.notify('Paste preview shown. Type message to send with content.');
+        } else {
+          app.notify('Clipboard is empty');
+        }
+      }).catch(() => {
+        app.notify('Clipboard not available');
+      });
+      break;
+    }
+    
+    case 'apply': {
+      const messages = app.getMessages();
+      const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+      
+      if (!lastAssistant) {
+        app.notify('No assistant response to apply');
+        return;
+      }
+      
+      // Find file changes in the response
+      const filePattern = /```(\w+)?\s*\n\/\/\s*(?:File:|Path:)\s*([^\n]+)\n([\s\S]*?)```/g;
+      const changes: Array<{ path: string; content: string }> = [];
+      
+      let match;
+      while ((match = filePattern.exec(lastAssistant.content)) !== null) {
+        changes.push({ path: match[2].trim(), content: match[3] });
+      }
+      
+      if (changes.length === 0) {
+        app.notify('No file changes found in response');
+        return;
+      }
+      
+      if (!hasWriteAccess) {
+        app.notify('Write access required. Use /grant first.');
+        return;
+      }
+      
+      import('fs').then(fs => {
+        import('path').then(path => {
+          let applied = 0;
+          for (const change of changes) {
+            try {
+              const fullPath = path.isAbsolute(change.path) 
+                ? change.path 
+                : path.join(projectPath, change.path);
+              fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+              fs.writeFileSync(fullPath, change.content);
+              applied++;
+            } catch (err) {
+              // Skip failed writes
+            }
+          }
+          app.notify(`Applied ${applied}/${changes.length} file(s)`);
+        });
+      });
+      break;
+    }
+    
+    // Agent history and changes
+    case 'history': {
+      import('../utils/agent').then(({ getAgentHistory }) => {
+        const history = getAgentHistory();
+        if (history.length === 0) {
+          app.notify('No agent history');
+          return;
+        }
+        
+        const items = history.slice(0, 10).map(h => 
+          `${new Date(h.timestamp).toLocaleString()} - ${h.task.slice(0, 30)}...`
+        );
+        app.showList('Agent History', items, (index) => {
+          const selected = history[index];
+          app.addMessage({
+            role: 'system',
+            content: `# Agent Session\n\n**Task:** ${selected.task}\n**Actions:** ${selected.actions.length}\n**Status:** ${selected.success ? '✓ Success' : '✗ Failed'}`,
+          });
+        });
+      }).catch(() => {
+        app.notify('No agent history available');
+      });
+      break;
+    }
+    
+    case 'changes': {
+      import('../utils/agent').then(({ getCurrentSessionActions }) => {
+        const actions = getCurrentSessionActions();
+        if (actions.length === 0) {
+          app.notify('No changes in current session');
+          return;
+        }
+        
+        const summary = actions.map(a => 
+          `• ${a.type}: ${a.target} (${a.result})`
+        ).join('\n');
+        
+        app.addMessage({
+          role: 'system',
+          content: `# Session Changes\n\n${summary}`,
+        });
+      }).catch(() => {
+        app.notify('No changes tracked');
+      });
+      break;
+    }
+    
+    // Context persistence
+    case 'context-save': {
+      const messages = app.getMessages();
+      if (saveSession(`context-${sessionId}`, messages, projectPath)) {
+        app.notify('Context saved');
+      } else {
+        app.notify('Failed to save context');
+      }
+      break;
+    }
+    
+    case 'context-load': {
+      const contextName = `context-${sessionId}`;
+      const loaded = loadSession(contextName, projectPath);
+      if (loaded) {
+        app.setMessages(loaded as Message[]);
+        app.notify('Context loaded');
+      } else {
+        app.notify('No saved context found');
+      }
+      break;
+    }
+    
+    case 'context-clear': {
+      deleteSession(`context-${sessionId}`, projectPath);
+      app.notify('Context cleared');
+      break;
+    }
+    
+    // Learning mode
+    case 'learn': {
+      if (args[0] === 'status') {
+        import('../utils/learning').then(({ getLearningStatus }) => {
+          const status = getLearningStatus(projectPath);
+          app.addMessage({
+            role: 'system',
+            content: `# Learning Status\n\n${status}`,
+          });
+        }).catch(() => {
+          app.notify('Learning module not available');
+        });
+        return;
+      }
+      
+      if (args[0] === 'rule' && args.length > 1) {
+        import('../utils/learning').then(({ addCustomRule }) => {
+          addCustomRule(projectPath, args.slice(1).join(' '));
+          app.notify('Custom rule added');
+        }).catch(() => {
+          app.notify('Learning module not available');
+        });
+        return;
+      }
+      
+      if (!projectContext) {
+        app.notify('No project context');
+        return;
+      }
+      
+      app.notify('Learning from project...');
+      import('../utils/learning').then(({ learnFromProject, formatPreferencesForPrompt }) => {
+        // Get some source files to learn from
+        import('fs').then(fs => {
+          import('path').then(path => {
+            const files: string[] = [];
+            const extensions = ['.ts', '.js', '.tsx', '.jsx', '.py', '.go', '.rs'];
+            
+            const walkDir = (dir: string, depth = 0) => {
+              if (depth > 3 || files.length >= 20) return;
+              try {
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                  if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+                  const fullPath = path.join(dir, entry.name);
+                  if (entry.isDirectory()) {
+                    walkDir(fullPath, depth + 1);
+                  } else if (extensions.some(ext => entry.name.endsWith(ext))) {
+                    files.push(path.relative(projectContext!.root, fullPath));
+                  }
+                  if (files.length >= 20) break;
+                }
+              } catch {}
+            };
+            
+            walkDir(projectContext!.root);
+            
+            if (files.length === 0) {
+              app.notify('No source files found to learn from');
+              return;
+            }
+            
+            const prefs = learnFromProject(projectContext!.root, files);
+            const formatted = formatPreferencesForPrompt(prefs);
+            app.addMessage({
+              role: 'system',
+              content: `# Learned Preferences\n\n${formatted}`,
+            });
+            app.notify(`Learned from ${files.length} files`);
+          });
+        });
+      }).catch(() => {
+        app.notify('Learning module not available');
+      });
+      break;
+    }
+    
+    // Skills shortcuts
+    case 'c': {
+      handleCommand('commit', []);
+      break;
+    }
+    
+    case 't': {
+      if (!projectContext) {
+        app.notify('No project context');
+        return;
+      }
+      app.addMessage({ role: 'user', content: '/test' });
+      handleSubmit('Generate and run tests for the current project. Focus on untested code.');
+      break;
+    }
+    
+    case 'd': {
+      if (!projectContext) {
+        app.notify('No project context');
+        return;
+      }
+      app.addMessage({ role: 'user', content: '/docs' });
+      handleSubmit('Add documentation to the code. Focus on functions and classes that lack proper documentation.');
+      break;
+    }
+    
+    case 'r': {
+      if (!projectContext) {
+        app.notify('No project context');
+        return;
+      }
+      app.addMessage({ role: 'user', content: '/refactor' });
+      handleSubmit('Refactor the code to improve quality, readability, and maintainability.');
+      break;
+    }
+    
+    case 'f': {
+      if (!projectContext) {
+        app.notify('No project context');
+        return;
+      }
+      app.addMessage({ role: 'user', content: '/fix' });
+      handleSubmit('Debug and fix any issues in the current code. Look for bugs, errors, and potential problems.');
+      break;
+    }
+    
+    case 'e': {
+      if (!args.length) {
+        app.notify('Usage: /e <file or code to explain>');
+        return;
+      }
+      app.addMessage({ role: 'user', content: `/explain ${args.join(' ')}` });
+      handleSubmit(`Explain this code or concept: ${args.join(' ')}`);
+      break;
+    }
+    
+    case 'o': {
+      if (!projectContext) {
+        app.notify('No project context');
+        return;
+      }
+      app.addMessage({ role: 'user', content: '/optimize' });
+      handleSubmit('Optimize the code for better performance. Focus on efficiency and speed improvements.');
+      break;
+    }
+    
+    case 'b': {
+      if (!projectContext) {
+        app.notify('No project context');
+        return;
+      }
+      app.addMessage({ role: 'user', content: '/debug' });
+      handleSubmit('Help debug the current issue. Analyze the code and identify the root cause of problems.');
+      break;
+    }
+    
+    case 'p': {
+      // Push shortcut
+      import('child_process').then(({ execSync }) => {
+        try {
+          execSync('git push', { cwd: projectPath, encoding: 'utf-8' });
+          app.notify('Pushed successfully');
+        } catch (err) {
+          app.notify(`Push failed: ${(err as Error).message}`);
+        }
+      });
+      break;
+    }
+    
+    // Full skill names
+    case 'test':
+    case 'docs':
+    case 'refactor':
+    case 'fix':
+    case 'explain':
+    case 'optimize':
+    case 'debug': {
+      const skillMap: Record<string, string> = {
+        test: 't',
+        docs: 'd',
+        refactor: 'r',
+        fix: 'f',
+        explain: 'e',
+        optimize: 'o',
+        debug: 'b',
+      };
+      handleCommand(skillMap[command], args);
+      break;
+    }
+    
+    case 'push': {
+      handleCommand('p', args);
+      break;
+    }
+    
+    case 'pull': {
+      import('child_process').then(({ execSync }) => {
+        try {
+          execSync('git pull', { cwd: projectPath, encoding: 'utf-8' });
+          app.notify('Pulled successfully');
+        } catch (err) {
+          app.notify(`Pull failed: ${(err as Error).message}`);
+        }
+      });
+      break;
+    }
+    
+    case 'skills': {
+      const query = args.join(' ').toLowerCase();
+      const allSkills = [
+        { name: 'commit', shortcut: 'c', desc: 'Generate commit message' },
+        { name: 'test', shortcut: 't', desc: 'Generate/run tests' },
+        { name: 'docs', shortcut: 'd', desc: 'Add documentation' },
+        { name: 'refactor', shortcut: 'r', desc: 'Improve code quality' },
+        { name: 'fix', shortcut: 'f', desc: 'Debug and fix issues' },
+        { name: 'explain', shortcut: 'e', desc: 'Explain code' },
+        { name: 'optimize', shortcut: 'o', desc: 'Optimize performance' },
+        { name: 'debug', shortcut: 'b', desc: 'Debug problems' },
+        { name: 'push', shortcut: 'p', desc: 'Git push' },
+        { name: 'pull', shortcut: '-', desc: 'Git pull' },
+        { name: 'diff', shortcut: '-', desc: 'Review git diff' },
+        { name: 'review', shortcut: '-', desc: 'Code review' },
+        { name: 'scan', shortcut: '-', desc: 'Scan project' },
+      ];
+      
+      const filtered = query 
+        ? allSkills.filter(s => s.name.includes(query) || s.desc.toLowerCase().includes(query))
+        : allSkills;
+      
+      if (filtered.length === 0) {
+        app.notify(`No skills matching "${query}"`);
+        return;
+      }
+      
+      app.addMessage({
+        role: 'system',
+        content: `# Available Skills\n\n${filtered.map(s => 
+          `• **/${s.name}**${s.shortcut !== '-' ? ` (/${s.shortcut})` : ''} - ${s.desc}`
+        ).join('\n')}`,
       });
       break;
     }

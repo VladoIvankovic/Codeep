@@ -6,6 +6,9 @@ import { Screen } from '../Screen';
 import { fg, style } from '../ansi';
 import { renderHelpModal } from './Modal';
 
+// Primary color: #f02a30 (Codeep red)
+const PRIMARY_COLOR = fg.rgb(240, 42, 48);
+
 export interface HelpCategory {
   title: string;
   items: Array<{ key: string; description: string }>;
@@ -31,6 +34,9 @@ export const helpCategories: HelpCategory[] = [
     items: [
       { key: '/sessions', description: 'List and load sessions' },
       { key: '/new', description: 'Start new session' },
+      { key: '/rename <name>', description: 'Rename current session' },
+      { key: '/search <term>', description: 'Search chat history' },
+      { key: '/export [md|json|txt]', description: 'Export chat' },
     ],
   },
   {
@@ -41,6 +47,8 @@ export const helpCategories: HelpCategory[] = [
       { key: '/stop', description: 'Stop running agent' },
       { key: '/undo', description: 'Undo last agent action' },
       { key: '/undo-all', description: 'Undo all agent actions' },
+      { key: '/history', description: 'Show agent history' },
+      { key: '/changes', description: 'Show session changes' },
     ],
   },
   {
@@ -48,9 +56,33 @@ export const helpCategories: HelpCategory[] = [
     items: [
       { key: '/diff', description: 'Review git diff with AI' },
       { key: '/diff --staged', description: 'Review staged changes' },
-      { key: '/commit', description: 'Generate commit message' },
+      { key: '/commit (/c)', description: 'Generate commit message' },
+      { key: '/git-commit <msg>', description: 'Commit with message' },
+      { key: '/push (/p)', description: 'Git push' },
+      { key: '/pull', description: 'Git pull' },
       { key: '/scan', description: 'Scan project structure' },
       { key: '/review', description: 'Code review' },
+    ],
+  },
+  {
+    title: 'Code Operations',
+    items: [
+      { key: '/copy [n]', description: 'Copy code block to clipboard' },
+      { key: '/paste', description: 'Paste from clipboard' },
+      { key: '/apply', description: 'Apply file changes from AI' },
+    ],
+  },
+  {
+    title: 'Skills (Shortcuts)',
+    items: [
+      { key: '/test (/t)', description: 'Generate/run tests' },
+      { key: '/docs (/d)', description: 'Add documentation' },
+      { key: '/refactor (/r)', description: 'Improve code quality' },
+      { key: '/fix (/f)', description: 'Debug and fix issues' },
+      { key: '/explain (/e)', description: 'Explain code' },
+      { key: '/optimize (/o)', description: 'Optimize performance' },
+      { key: '/debug (/b)', description: 'Debug problems' },
+      { key: '/skills', description: 'List all skills' },
     ],
   },
   {
@@ -58,7 +90,22 @@ export const helpCategories: HelpCategory[] = [
     items: [
       { key: '/provider', description: 'Change AI provider' },
       { key: '/model', description: 'Change model' },
-      { key: '/grant', description: 'Manage permissions' },
+      { key: '/protocol', description: 'Switch API protocol' },
+      { key: '/lang', description: 'Set response language' },
+      { key: '/grant', description: 'Grant write permission' },
+      { key: '/login', description: 'Login with API key' },
+      { key: '/logout', description: 'Logout from provider' },
+    ],
+  },
+  {
+    title: 'Context',
+    items: [
+      { key: '/context-save', description: 'Save conversation' },
+      { key: '/context-load', description: 'Load conversation' },
+      { key: '/context-clear', description: 'Clear saved context' },
+      { key: '/learn', description: 'Learn code preferences' },
+      { key: '/learn status', description: 'Show learned prefs' },
+      { key: '/learn rule <text>', description: 'Add custom rule' },
     ],
   },
 ];
@@ -76,6 +123,24 @@ export const keyboardShortcuts = [
 ];
 
 /**
+ * Get total number of help pages
+ */
+export function getHelpTotalPages(screenHeight: number): number {
+  const availableHeight = screenHeight - 5; // Account for title and footer
+  
+  // Count all items
+  let itemCount = 0;
+  for (const category of helpCategories) {
+    itemCount += 2; // Empty line + category header
+    itemCount += category.items.length;
+  }
+  itemCount += 2; // Keyboard shortcuts header
+  itemCount += keyboardShortcuts.length;
+  
+  return Math.max(1, Math.ceil(itemCount / availableHeight));
+}
+
+/**
  * Render full help screen
  */
 export function renderHelpScreen(screen: Screen, page: number = 0): void {
@@ -86,7 +151,7 @@ export function renderHelpScreen(screen: Screen, page: number = 0): void {
   // Title
   const title = '═══ Codeep Help ═══';
   const titleX = Math.floor((width - title.length) / 2);
-  screen.write(titleX, 0, title, fg.cyan + style.bold);
+  screen.write(titleX, 0, title, PRIMARY_COLOR + style.bold);
   
   // Calculate layout
   const contentStartY = 2;
@@ -146,8 +211,8 @@ export function renderHelpScreen(screen: Screen, page: number = 0): void {
   
   // Footer
   const footerY = height - 1;
-  const pageInfo = totalPages > 1 ? `Page ${page + 1}/${totalPages} | ` : '';
-  const footer = `${pageInfo}Press Esc to close`;
+  const pageInfo = totalPages > 1 ? `Page ${page + 1}/${totalPages} | ←→ Navigate | ` : '';
+  const footer = `${pageInfo}Esc Close`;
   screen.write(2, footerY, footer, fg.gray);
   
   screen.showCursor(false);

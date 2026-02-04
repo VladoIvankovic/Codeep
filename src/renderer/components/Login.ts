@@ -7,6 +7,10 @@ import { Input, LineEditor, KeyEvent } from '../Input';
 import { fg, style } from '../ansi';
 import { createBox, centerBox } from './Box';
 
+// Primary color: #f02a30 (Codeep red)
+const PRIMARY_COLOR = fg.rgb(240, 42, 48);
+const PRIMARY_BRIGHT = fg.rgb(255, 80, 85);
+
 export interface LoginOptions {
   onSubmit: (apiKey: string) => void;
   onCancel: () => void;
@@ -77,7 +81,7 @@ export class LoginScreen {
     // Title
     const title = '═══ Codeep Setup ═══';
     const titleX = Math.floor((width - title.length) / 2);
-    this.screen.write(titleX, 1, title, fg.cyan + style.bold);
+    this.screen.write(titleX, 1, title, PRIMARY_COLOR + style.bold);
     
     // Box dimensions
     const boxWidth = Math.min(60, width - 4);
@@ -92,8 +96,8 @@ export class LoginScreen {
       height: boxHeight,
       style: 'rounded',
       title: ` ${this.options.providerName} API Key `,
-      borderColor: fg.cyan,
-      titleColor: fg.brightCyan,
+      borderColor: PRIMARY_COLOR,
+      titleColor: PRIMARY_BRIGHT,
     });
     
     for (const line of boxLines) {
@@ -176,7 +180,7 @@ export function renderProviderSelect(
   // Title
   const title = '═══ Codeep Setup ═══';
   const titleX = Math.floor((width - title.length) / 2);
-  screen.write(titleX, 1, title, fg.cyan + style.bold);
+  screen.write(titleX, 1, title, PRIMARY_COLOR + style.bold);
   
   // Subtitle
   const subtitle = 'Select your AI provider';
@@ -194,7 +198,7 @@ export function renderProviderSelect(
     width: boxWidth,
     height: boxHeight,
     style: 'rounded',
-    borderColor: fg.cyan,
+    borderColor: PRIMARY_COLOR,
   });
   
   for (const line of boxLines) {
@@ -209,7 +213,7 @@ export function renderProviderSelect(
     const provider = providers[i];
     const isSelected = i === selectedIndex;
     const prefix = isSelected ? '► ' : '  ';
-    const itemStyle = isSelected ? fg.brightCyan + style.bold : fg.white;
+    const itemStyle = isSelected ? PRIMARY_BRIGHT + style.bold : fg.white;
     
     screen.write(contentX, contentY + i, prefix + provider.name, itemStyle);
   }
