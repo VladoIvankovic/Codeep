@@ -64,6 +64,18 @@ export function stopSpinner(): void {
   }
 }
 
+// Track if agent is running for auto-restart spinner
+let agentRunning = false;
+let lastDryRun = false;
+
+/**
+ * Set agent running state
+ */
+export function setAgentRunning(running: boolean, dryRun: boolean = false): void {
+  agentRunning = running;
+  lastDryRun = dryRun;
+}
+
 /**
  * Log agent action
  */
@@ -140,6 +152,11 @@ export function logAction(type: string, target: string, result: 'success' | 'err
     : chalk.bold(filename);
   
   console.log(`${color(icon)} ${verb} ${displayTarget}${lineInfo}`);
+  
+  // Restart spinner if agent is still running
+  if (agentRunning) {
+    startAgentSpinner('Working...', lastDryRun);
+  }
 }
 
 /**

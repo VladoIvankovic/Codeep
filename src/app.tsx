@@ -71,7 +71,7 @@ import { getAllSkills, findSkill, formatSkillsList, formatSkillHelp, generateSki
 import { ChangesList } from './components/AgentProgress';
 import { ActionLog, ToolCall, ToolResult, createActionLog } from './utils/tools';
 import { scanProject, saveProjectIntelligence, loadProjectIntelligence, generateContextFromIntelligence, isIntelligenceFresh, ProjectIntelligence } from './utils/projectIntelligence';
-import { logAction, startAgentSpinner, updateSpinner, stopSpinner, logAgentComplete, logSeparator } from './utils/console';
+import { logAction, startAgentSpinner, updateSpinner, stopSpinner, logAgentComplete, logSeparator, setAgentRunning } from './utils/console';
 
 type Screen = 'chat' | 'login' | 'help' | 'status' | 'sessions' | 'sessions-delete' | 'model' | 'protocol' | 'language' | 'settings' | 'permission' | 'provider' | 'search' | 'export' | 'session-picker' | 'logout';
 export const App: React.FC = () => {
@@ -335,6 +335,7 @@ export const App: React.FC = () => {
     
     // Start console spinner for agent
     logSeparator();
+    setAgentRunning(true, dryRun);
     startAgentSpinner('Starting...', dryRun);
     
     // Add user message
@@ -429,6 +430,7 @@ export const App: React.FC = () => {
       };
       
       // Log completion to console (chalk/ora)
+      setAgentRunning(false);
       logAgentComplete(stats, result.success);
       logSeparator();
       
@@ -451,9 +453,11 @@ export const App: React.FC = () => {
       }
     } catch (error) {
       const err = error as Error;
+      setAgentRunning(false);
       stopSpinner();
       notify(`Agent error: ${err.message}`);
     } finally {
+      setAgentRunning(false);
       stopSpinner();
       setIsAgentRunning(false);
       setAbortController(null);
