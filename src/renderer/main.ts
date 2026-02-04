@@ -9,6 +9,7 @@ import { Screen } from './Screen';
 import { Input, KeyEvent } from './Input';
 import { StatusInfo } from './components/Status';
 import { LoginScreen, renderProviderSelect } from './components/Login';
+import { renderPermissionScreen, getPermissionOptions, PermissionLevel } from './components/Permission';
 import { chat, setProjectContext } from '../api/index';
 import { runAgent, AgentResult } from '../utils/agent';
 import { ActionLog } from '../utils/tools';
@@ -310,6 +311,126 @@ function handleCommand(command: string, args: string[]): void {
       break;
     }
     
+    case 'diff': {
+      if (!projectContext) {
+        app.notify('No project context');
+        return;
+      }
+      const staged = args.includes('--staged') || args.includes('-s');
+      app.notify(staged ? 'Getting staged diff...' : 'Getting diff...');
+      
+      // Import dynamically to avoid circular deps
+      import('../utils/git').then(({ getGitDiff, formatDiffForDisplay }) => {
+        const result = getGitDiff(staged, projectPath);
+        if (!result.success || !result.diff) {
+          app.notify(result.error || 'No changes');
+          return;
+        }
+        
+        const preview = formatDiffForDisplay(result.diff, 50);
+        app.addMessage({ role: 'user', content: `/diff ${staged ? '--staged' : ''}` });
+        
+        // Send to AI for review
+        handleSubmit(`Review this git diff and provide feedback:\n\n\`\`\`diff\n${preview}\n\`\`\``);
+      });
+      break;
+    }
+    
+    case 'commit': {
+      if (!projectContext) {
+        app.notify('No project context');
+        return;
+      }
+      
+      import('../utils/git').then(({ getGitDiff, getGitStatus, suggestCommitMessage }) => {
+        const status = getGitStatus(projectPath);
+        if (!status.isRepo) {
+          app.notify('Not a git repository');
+          return;
+        }
+        
+        const diff = getGitDiff(true, projectPath);
+        if (!diff.success || !diff.diff) {
+          app.notify('No staged changes. Use git add first.');
+          return;
+        }
+        
+        const suggestion = suggestCommitMessage(diff.diff);
+        app.addMessage({ role: 'user', content: '/commit' });
+        handleSubmit(`Generate a commit message for these staged changes. Suggestion: "${suggestion}"\n\nDiff:\n\`\`\`diff\n${diff.diff.slice(0, 2000)}\n\`\`\``);
+      });
+      break;
+    }
+    
+    case 'undo': {
+      import('../utils/agent').then(({ undoLastAction }) => {
+        const result = undoLastAction();
+        app.notify(result.success ? `Undo: ${result.message}` : `Cannot undo: ${result.message}`);
+      });
+      break;
+    }
+    
+    case 'undo-all': {
+      import('../utils/agent').then(({ undoAllActions }) => {
+        const result = undoAllActions();
+        app.notify(result.success ? `Undone ${result.results.length} action(s)` : 'Nothing to undo');
+      });
+      break;
+    }
+    
+    case 'scan': {
+      if (!projectContext) {
+        app.notify('No project context');
+        return;
+      }
+      
+      app.notify('Scanning project...');
+      import('../utils/projectIntelligence').then(({ scanProject, saveProjectIntelligence, generateContextFromIntelligence }) => {
+        scanProject(projectContext!.root).then(intelligence => {
+          saveProjectIntelligence(projectContext!.root, intelligence);
+          const context = generateContextFromIntelligence(intelligence);
+          app.addMessage({
+            role: 'assistant',
+            content: `# Project Scan Complete\n\n${context}`,
+          });
+          app.notify(`Scanned: ${intelligence.structure.totalFiles} files`);
+        }).catch(err => {
+          app.notify(`Scan failed: ${err.message}`);
+        });
+      });
+      break;
+    }
+    
+    case 'review': {
+      if (!projectContext) {
+        app.notify('No project context');
+        return;
+      }
+      
+      import('../utils/codeReview').then(({ performCodeReview, formatReviewResult }) => {
+        const reviewFiles = args.length > 0 ? args : undefined;
+        const result = performCodeReview(projectContext!, reviewFiles);
+        app.addMessage({
+          role: 'assistant',
+          content: formatReviewResult(result),
+        });
+      });
+      break;
+    }
+    
+    case 'update': {
+      app.notify('Checking for updates...');
+      import('../utils/update').then(({ checkForUpdates, formatVersionInfo }) => {
+        checkForUpdates().then(info => {
+          const message = formatVersionInfo(info);
+          app.notify(message.split('\n')[0], 5000);
+        }).catch(() => {
+          app.notify('Failed to check for updates');
+        });
+      });
+      break;
+    }
+    
     default:
       app.notify(`Unknown command: /${command}`);
   }
@@ -410,6 +531,62 @@ async function showLoginFlow(): Promise<string | null> {
 }
 
 /**
+ * Show permission screen
+ */
+async function showPermissionFlow(): Promise<PermissionLevel> {
+  return new Promise((resolve) => {
+    const screen = new Screen();
+    const input = new Input();
+    
+    let selectedIndex = 0;
+    const options = getPermissionOptions();
+    const isProject = isProjectDirectory(projectPath);
+    const currentPermission: PermissionLevel = hasWritePermission(projectPath) 
+      ? 'write' 
+      : hasReadPermission(projectPath) 
+        ? 'read' 
+        : 'none';
+    
+    screen.init();
+    input.start();
+    
+    const cleanup = () => {
+      input.stop();
+      screen.cleanup();
+    };
+    
+    const render = () => {
+      renderPermissionScreen(screen, {
+        projectPath,
+        isProject,
+        currentPermission,
+        onSelect: () => {},
+        onCancel: () => {},
+      }, selectedIndex);
+    };
+    
+    input.onKey((event: KeyEvent) => {
+      if (event.key === 'up') {
+        selectedIndex = Math.max(0, selectedIndex - 1);
+        render();
+      } else if (event.key === 'down') {
+        selectedIndex = Math.min(options.length - 1, selectedIndex + 1);
+        render();
+      } else if (event.key === 'enter') {
+        const selected = options[selectedIndex];
+        cleanup();
+        resolve(selected);
+      } else if (event.key === 'escape') {
+        cleanup();
+        resolve('none');
+      }
+    });
+    
+    render();
+  });
+}
+
+/**
  * Initialize and start
  */
 async function main(): Promise<void> {
@@ -455,7 +632,25 @@ Commands (in chat):
   
   // Check project permissions
   const isProject = isProjectDirectory(projectPath);
-  const hasRead = hasReadPermission(projectPath);
+  let hasRead = hasReadPermission(projectPath);
+  
+  // If no permission yet, show permission screen
+  if (!hasRead && isProject) {
+    const permission = await showPermissionFlow();
+    
+    if (permission === 'read') {
+      setProjectPermission(projectPath, true, false);
+      hasRead = true;
+      hasWriteAccess = false;
+    } else if (permission === 'write') {
+      setProjectPermission(projectPath, true, true);
+      hasRead = true;
+      hasWriteAccess = true;
+    }
+    // 'none' - continue without access
+    
+    console.clear();
+  }
   
   if (hasRead) {
     hasWriteAccess = hasWritePermission(projectPath);
