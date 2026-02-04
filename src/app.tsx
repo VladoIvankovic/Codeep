@@ -69,9 +69,10 @@ import { performCodeReview, formatReviewResult } from './utils/codeReview';
 import { loadProjectPreferences, learnFromProject, formatPreferencesForPrompt, addCustomRule, getLearningStatus } from './utils/learning';
 import { getAllSkills, findSkill, formatSkillsList, formatSkillHelp, generateSkillPrompt, saveCustomSkill, deleteCustomSkill, parseSkillDefinition, parseSkillChain, parseSkillArgs, searchSkills, trackSkillUsage, getSkillStats, Skill } from './utils/skills';
 import { ChangesList } from './components/AgentProgress';
+import { AgentActions } from './components/AgentActions';
 import { ActionLog, ToolCall, ToolResult, createActionLog } from './utils/tools';
 import { scanProject, saveProjectIntelligence, loadProjectIntelligence, generateContextFromIntelligence, isIntelligenceFresh, ProjectIntelligence } from './utils/projectIntelligence';
-import { logAction, startAgentSpinner, updateSpinner, stopSpinner, logAgentComplete, logSeparator, setAgentRunning } from './utils/console';
+// Console utils no longer needed - using Ink Static component instead
 
 type Screen = 'chat' | 'login' | 'help' | 'status' | 'sessions' | 'sessions-delete' | 'model' | 'protocol' | 'language' | 'settings' | 'permission' | 'provider' | 'search' | 'export' | 'session-picker' | 'logout';
 export const App: React.FC = () => {
@@ -333,11 +334,6 @@ export const App: React.FC = () => {
     setAgentDryRun(dryRun);
     setAgentStreamingContent(''); // Reset streaming content
     
-    // Start console spinner for agent
-    logSeparator();
-    setAgentRunning(true, dryRun);
-    startAgentSpinner('Starting...', dryRun);
-    
     // Add user message
     const userMessage: Message = { 
       role: 'user', 
@@ -354,7 +350,6 @@ export const App: React.FC = () => {
         dryRun,
         onIteration: (iteration, message) => {
           setAgentIteration(iteration);
-          updateSpinner(`Step ${iteration}`, dryRun);
         },
         onToolCall: (tool: ToolCall) => {
           // Create action log with content for live code preview
@@ -399,8 +394,7 @@ export const App: React.FC = () => {
             return updated;
           });
           
-          // Use console.log with chalk for agent actions - no Ink re-rendering!
-          logAction(actionLog.type, actionLog.target, actionLog.result, actionLog.details);
+          // Actions are now displayed via AgentActions component with Static
         },
         onThinking: (text: string) => {
           // Strip <think> and <tool_call> tags from thinking text
@@ -429,12 +423,7 @@ export const App: React.FC = () => {
         errors: result.actions.filter(a => a.result === 'error').length,
       };
       
-      // Log completion to console (chalk/ora)
-      setAgentRunning(false);
-      logAgentComplete(stats, result.success);
-      logSeparator();
-      
-      // Add agent summary as assistant message (without duplicate stats - they're in console)
+      // Add agent summary as assistant message
       const summaryMessage: Message = {
         role: 'assistant',
         content: result.finalResponse || formatAgentResult(result),
@@ -453,12 +442,8 @@ export const App: React.FC = () => {
       }
     } catch (error) {
       const err = error as Error;
-      setAgentRunning(false);
-      stopSpinner();
       notify(`Agent error: ${err.message}`);
     } finally {
-      setAgentRunning(false);
-      stopSpinner();
       setIsAgentRunning(false);
       setAbortController(null);
       setAgentThinking('');
@@ -1642,7 +1627,15 @@ export const App: React.FC = () => {
       {/* Loading - show while waiting or streaming */}
       {isLoading && !isAgentRunning && <Loading isStreaming={!!streamingContent} />}
 
-      {/* Agent status now uses console.log with chalk/ora - no Ink component needed */}
+      {/* Agent actions with Static component to prevent jumping */}
+      {isAgentRunning && (
+        <AgentActions
+          actions={agentActions}
+          isRunning={isAgentRunning}
+          currentStep={agentIteration}
+          dryRun={agentDryRun}
+        />
+      )}
 
       {/* File changes prompt */}
       {pendingFileChanges.length > 0 && !isLoading && (

@@ -845,10 +845,6 @@ export async function runAgent(
           toolResult = executeTool(toolCall, projectContext.root || process.cwd());
         }
         
-        // Debug - write to file since Ink captures stdout/stderr
-        const fs = require('fs');
-        fs.appendFileSync('/tmp/codeep-debug.log', `[${new Date().toISOString()}] Tool executed: ${toolCall.tool}, onToolResult exists: ${!!opts.onToolResult}\n`);
-        
         opts.onToolResult?.(toolResult, toolCall);
         
         // Log action

@@ -81,10 +81,6 @@ export function setAgentRunning(running: boolean, dryRun: boolean = false): void
  * Log agent action
  */
 export function logAction(type: string, target: string, result: 'success' | 'error' | 'pending', details?: string): void {
-  // Debug - write to file since Ink captures stdout/stderr
-  const fs = require('fs');
-  fs.appendFileSync('/tmp/codeep-debug.log', `[${new Date().toISOString()}] logAction called: ${type} ${target} ${result}\n`);
-  
   stopSpinner(); // Stop spinner before logging
   
   const filename = target.split('/').pop() || target;
