@@ -29,8 +29,8 @@ export const helpCategories: HelpCategory[] = [
   {
     title: 'Sessions',
     items: [
-      { key: '/sessions', description: 'List saved sessions' },
-      { key: '/rename <name>', description: 'Rename current session' },
+      { key: '/sessions', description: 'List and load sessions' },
+      { key: '/new', description: 'Start new session' },
     ],
   },
   {
@@ -38,24 +38,24 @@ export const helpCategories: HelpCategory[] = [
     items: [
       { key: '/agent <task>', description: 'Run agent with task' },
       { key: '/agent-dry <task>', description: 'Dry run (no changes)' },
-      { key: '/agent-stop', description: 'Stop running agent' },
+      { key: '/stop', description: 'Stop running agent' },
       { key: '/undo', description: 'Undo last agent action' },
-      { key: '/changes', description: 'Show agent changes' },
+      { key: '/undo-all', description: 'Undo all agent actions' },
     ],
   },
   {
-    title: 'Project',
+    title: 'Git & Project',
     items: [
+      { key: '/diff', description: 'Review git diff with AI' },
+      { key: '/diff --staged', description: 'Review staged changes' },
+      { key: '/commit', description: 'Generate commit message' },
       { key: '/scan', description: 'Scan project structure' },
       { key: '/review', description: 'Code review' },
-      { key: '/diff', description: 'Show git diff' },
-      { key: '/commit', description: 'Generate commit message' },
     ],
   },
   {
     title: 'Settings',
     items: [
-      { key: '/settings', description: 'Open settings' },
       { key: '/provider', description: 'Change AI provider' },
       { key: '/model', description: 'Change model' },
       { key: '/grant', description: 'Manage permissions' },
