@@ -5,7 +5,10 @@
  */
 
 import { App, Message } from './App';
+import { Screen } from './Screen';
+import { Input, KeyEvent } from './Input';
 import { StatusInfo } from './components/Status';
+import { LoginScreen, renderProviderSelect } from './components/Login';
 import { chat, setProjectContext } from '../api/index';
 import { runAgent, AgentResult } from '../utils/agent';
 import { ActionLog } from '../utils/tools';
@@ -18,6 +21,7 @@ import {
   getModelsForCurrentProvider,
   PROVIDERS,
   setProvider,
+  setApiKey,
   autoSaveSession,
   startNewSession,
   getCurrentSessionId,
@@ -312,6 +316,100 @@ function handleCommand(command: string, args: string[]): void {
 }
 
 /**
+ * Show login flow for API key setup
+ */
+async function showLoginFlow(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const screen = new Screen();
+    const input = new Input();
+    const providers = getProviderList();
+    
+    let currentStep: 'provider' | 'apikey' = 'provider';
+    let selectedProviderIndex = 0;
+    let selectedProvider = providers[0];
+    let loginScreen: LoginScreen | null = null;
+    let loginError = '';
+    
+    screen.init();
+    input.start();
+    
+    const cleanup = () => {
+      input.stop();
+      screen.cleanup();
+    };
+    
+    const renderCurrentStep = () => {
+      if (currentStep === 'provider') {
+        renderProviderSelect(screen, providers, selectedProviderIndex);
+      } else if (loginScreen) {
+        loginScreen.render();
+      }
+    };
+    
+    input.onKey((event: KeyEvent) => {
+      if (currentStep === 'provider') {
+        // Provider selection
+        if (event.key === 'up') {
+          selectedProviderIndex = Math.max(0, selectedProviderIndex - 1);
+          renderCurrentStep();
+        } else if (event.key === 'down') {
+          selectedProviderIndex = Math.min(providers.length - 1, selectedProviderIndex + 1);
+          renderCurrentStep();
+        } else if (event.key === 'enter') {
+          selectedProvider = providers[selectedProviderIndex];
+          setProvider(selectedProvider.id);
+          
+          // Move to API key entry
+          currentStep = 'apikey';
+          loginScreen = new LoginScreen(screen, input, {
+            providerName: selectedProvider.name,
+            error: loginError,
+            onSubmit: async (key) => {
+              // Validate and save key
+              if (key.length < 10) {
+                loginError = 'API key too short';
+                loginScreen = new LoginScreen(screen, input, {
+                  providerName: selectedProvider.name,
+                  error: loginError,
+                  onSubmit: () => {},
+                  onCancel: () => {
+                    cleanup();
+                    resolve(null);
+                  },
+                });
+                renderCurrentStep();
+                return;
+              }
+              
+              // Save the key
+              await setApiKey(key);
+              cleanup();
+              resolve(key);
+            },
+            onCancel: () => {
+              // Go back to provider selection
+              currentStep = 'provider';
+              loginScreen = null;
+              loginError = '';
+              renderCurrentStep();
+            },
+          });
+          renderCurrentStep();
+        } else if (event.key === 'escape') {
+          cleanup();
+          resolve(null);
+        }
+      } else if (loginScreen) {
+        loginScreen.handleKey(event);
+      }
+    });
+    
+    // Initial render
+    renderCurrentStep();
+  });
+}
+
+/**
  * Initialize and start
  */
 async function main(): Promise<void> {
@@ -343,11 +441,16 @@ Commands (in chat):
   
   // Load API keys
   await loadAllApiKeys();
-  const apiKey = await loadApiKey();
+  let apiKey: string | null = await loadApiKey();
   
+  // If no API key, show login screen
   if (!apiKey) {
-    console.error('No API key configured. Run: codeep (with Ink UI) to set up.');
-    process.exit(1);
+    const newKey = await showLoginFlow();
+    if (!newKey) {
+      console.log('\nSetup cancelled.');
+      process.exit(0);
+    }
+    apiKey = newKey;
   }
   
   // Check project permissions
