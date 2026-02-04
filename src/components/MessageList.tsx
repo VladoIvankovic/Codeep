@@ -7,7 +7,6 @@ import { Message } from '../config/index';
 interface MessageListProps {
   messages: Message[];
   streamingContent?: string;
-  agentStreamingContent?: string; // Live agent actions log
   scrollOffset?: number;
   terminalHeight?: number;
 }
@@ -38,7 +37,6 @@ MemoizedMessage.displayName = 'MemoizedMessage';
 export const MessageList: React.FC<MessageListProps> = memo(({
   messages,
   streamingContent,
-  agentStreamingContent,
 }) => {
   // Memoize the messages array rendering
   const renderedMessages = useMemo(() => (
@@ -57,10 +55,7 @@ export const MessageList: React.FC<MessageListProps> = memo(({
         <StreamingMessage content={streamingContent} />
       )}
       
-      {/* Agent actions log - stays in chat while agent runs */}
-      {agentStreamingContent && (
-        <StreamingMessage content={`**Agent Actions:**\n${agentStreamingContent}`} />
-      )}
+      {/* Agent actions now use console.log with chalk/ora - no Ink re-rendering */}
     </Box>
   );
 });
