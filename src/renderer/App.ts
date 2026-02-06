@@ -556,8 +556,10 @@ export class App {
       this.agentIteration = 0;
       this.agentActions = [];
       this.agentThinking = '';
+      this.isLoading = false; // Clear loading state when agent takes over
       this.startSpinner();
     } else {
+      this.isLoading = false; // Ensure loading is cleared when agent finishes
       this.stopSpinner();
     }
     this.render();
