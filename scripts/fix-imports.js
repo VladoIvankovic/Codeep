@@ -65,6 +65,26 @@ async function fixImports() {
       }
     );
     
+    // Fix dynamic imports: await import('./module') to await import('./module.js')
+    content = content.replace(
+      /import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g,
+      (match, path) => {
+        if (path.endsWith('.js') || path.endsWith('.json')) {
+          return match;
+        }
+        const fullPath = join(dirname(file), path);
+        try {
+          const stat = require('fs').statSync(fullPath);
+          if (stat.isDirectory()) {
+            return match.replace(path, `${path}/index.js`);
+          }
+        } catch (e) {
+          // Not a directory, treat as file
+        }
+        return match.replace(path, `${path}.js`);
+      }
+    );
+    
     await writeFile(file, content, 'utf-8');
   }
   
