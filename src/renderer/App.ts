@@ -1802,7 +1802,7 @@ export class App {
       const previewLines = Math.min(this.pasteInfo.preview.split('\n').length, 5);
       bottomPanelHeight = previewLines + 6; // title + preview + extra line indicator + options
     } else if (this.isAgentRunning) {
-      bottomPanelHeight = 8; // Agent progress box
+      bottomPanelHeight = 6; // Agent progress box (5 lines + 1 margin)
     } else if (this.permissionOpen) {
       bottomPanelHeight = 10; // Permission dialog
     } else if (this.sessionPickerOpen) {
@@ -2503,7 +2503,7 @@ export class App {
   private renderInlineAgentProgress(startY: number, width: number): void {
     let y = startY;
     const spinner = SPINNER_FRAMES[this.spinnerFrame];
-    const boxWidth = Math.min(width - 4, 60);
+    const boxWidth = width - 2; // Use full width minus small margin
     
     // Calculate stats
     const stats = {
@@ -2517,27 +2517,37 @@ export class App {
     };
     
     // Top border with title
+    // Helper to draw a box line with content
+    const drawBoxLine = (content: string, contentStyle: string = fg.white) => {
+      this.screen.write(0, y, '│', PRIMARY_COLOR);
+      this.screen.write(2, y, content, contentStyle);
+      this.screen.write(boxWidth - 1, y, '│', PRIMARY_COLOR);
+      y++;
+    };
+    
+    // Top border with title
     const title = ` ${spinner} AGENT `;
-    const borderLeft = '╭' + '─'.repeat(2);
-    const borderRight = '─'.repeat(Math.max(0, boxWidth - title.length - 4)) + '╮';
-    this.screen.write(0, y, borderLeft, PRIMARY_COLOR);
-    this.screen.write(borderLeft.length, y, title, PRIMARY_COLOR + style.bold);
-    this.screen.write(borderLeft.length + title.length, y, borderRight, PRIMARY_COLOR);
+    const titlePadLeft = 3;
+    const titlePadRight = boxWidth - titlePadLeft - title.length - 1;
+    this.screen.write(0, y, '╭' + '─'.repeat(titlePadLeft), PRIMARY_COLOR);
+    this.screen.write(titlePadLeft + 1, y, title, PRIMARY_COLOR + style.bold);
+    this.screen.write(titlePadLeft + 1 + title.length, y, '─'.repeat(Math.max(0, titlePadRight)) + '╮', PRIMARY_COLOR);
     y++;
     
     // Current action line
-    this.screen.write(0, y, '│ ', PRIMARY_COLOR);
+    this.screen.write(0, y, '│', PRIMARY_COLOR);
     if (this.agentActions.length > 0) {
       const lastAction = this.agentActions[this.agentActions.length - 1];
       const actionLabel = this.getActionLabel(lastAction.type);
       const actionColor = this.getActionColor(lastAction.type);
-      const target = this.formatActionTarget(lastAction.target, boxWidth - actionLabel.length - 6);
-      this.screen.write(2, y, actionLabel + ' ', actionColor + style.bold);
+      const maxTargetLen = boxWidth - actionLabel.length - 6;
+      const target = this.formatActionTarget(lastAction.target, maxTargetLen);
+      this.screen.write(2, y, actionLabel, actionColor + style.bold);
       this.screen.write(2 + actionLabel.length + 1, y, target, fg.white);
     } else {
       this.screen.write(2, y, 'Starting...', fg.gray);
     }
-    this.screen.write(boxWidth - 1, y, ' │', PRIMARY_COLOR);
+    this.screen.write(boxWidth - 1, y, '│', PRIMARY_COLOR);
     y++;
     
     // Separator
@@ -2545,33 +2555,33 @@ export class App {
     y++;
     
     // File changes line
-    this.screen.write(0, y, '│ ', PRIMARY_COLOR);
-    this.screen.write(2, y, 'Files: ', fg.cyan);
+    this.screen.write(0, y, '│', PRIMARY_COLOR);
+    this.screen.write(2, y, 'Files:', fg.cyan);
     let fileX = 9;
     if (stats.writes > 0) {
-      const txt = `+${stats.writes} `;
+      const txt = `+${stats.writes}`;
       this.screen.write(fileX, y, txt, fg.green);
-      fileX += txt.length;
+      fileX += txt.length + 1;
     }
     if (stats.edits > 0) {
-      const txt = `~${stats.edits} `;
+      const txt = `~${stats.edits}`;
       this.screen.write(fileX, y, txt, fg.yellow);
-      fileX += txt.length;
+      fileX += txt.length + 1;
     }
     if (stats.deletes > 0) {
-      const txt = `-${stats.deletes} `;
+      const txt = `-${stats.deletes}`;
       this.screen.write(fileX, y, txt, fg.red);
-      fileX += txt.length;
+      fileX += txt.length + 1;
     }
     if (stats.writes === 0 && stats.edits === 0 && stats.deletes === 0) {
       this.screen.write(fileX, y, 'no changes yet', fg.gray);
     }
-    this.screen.write(boxWidth - 1, y, ' │', PRIMARY_COLOR);
+    this.screen.write(boxWidth - 1, y, '│', PRIMARY_COLOR);
     y++;
     
     // Stats line
-    this.screen.write(0, y, '│ ', PRIMARY_COLOR);
-    this.screen.write(2, y, 'Stats: ', fg.cyan);
+    this.screen.write(0, y, '│', PRIMARY_COLOR);
+    this.screen.write(2, y, 'Stats:', fg.cyan);
     let statX = 9;
     const statParts: Array<{text: string, color: string}> = [];
     if (stats.reads > 0) statParts.push({text: `${stats.reads}R`, color: fg.blue});
@@ -2581,35 +2591,22 @@ export class App {
     
     for (let i = 0; i < statParts.length; i++) {
       if (i > 0) {
-        this.screen.write(statX, y, ' | ', fg.gray);
-        statX += 3;
+        this.screen.write(statX, y, '|', fg.gray);
+        statX += 2;
       }
       this.screen.write(statX, y, statParts[i].text, statParts[i].color);
-      statX += statParts[i].text.length;
+      statX += statParts[i].text.length + 1;
     }
-    this.screen.write(boxWidth - 1, y, ' │', PRIMARY_COLOR);
-    y++;
-    
-    // Errors line (if any)
-    this.screen.write(0, y, '│ ', PRIMARY_COLOR);
-    if (stats.errors > 0) {
-      this.screen.write(2, y, `${stats.errors} error(s)`, fg.red);
-    } else if (this.agentThinking) {
-      const thinking = this.agentThinking.length > boxWidth - 6 
-        ? this.agentThinking.slice(0, boxWidth - 9) + '...'
-        : this.agentThinking;
-      this.screen.write(2, y, '> ' + thinking, fg.gray);
-    }
-    this.screen.write(boxWidth - 1, y, ' │', PRIMARY_COLOR);
+    this.screen.write(boxWidth - 1, y, '│', PRIMARY_COLOR);
     y++;
     
     // Bottom border with help
     const helpText = ' Esc to stop ';
-    const bottomLeft = '╰' + '─'.repeat(Math.floor((boxWidth - helpText.length - 2) / 2));
-    const bottomRight = '─'.repeat(Math.ceil((boxWidth - helpText.length - 2) / 2)) + '╯';
-    this.screen.write(0, y, bottomLeft, PRIMARY_COLOR);
-    this.screen.write(bottomLeft.length, y, helpText, fg.gray);
-    this.screen.write(bottomLeft.length + helpText.length, y, bottomRight, PRIMARY_COLOR);
+    const helpPadLeft = Math.floor((boxWidth - helpText.length - 2) / 2);
+    const helpPadRight = Math.ceil((boxWidth - helpText.length - 2) / 2);
+    this.screen.write(0, y, '╰' + '─'.repeat(helpPadLeft), PRIMARY_COLOR);
+    this.screen.write(helpPadLeft + 1, y, helpText, fg.gray);
+    this.screen.write(helpPadLeft + 1 + helpText.length, y, '─'.repeat(helpPadRight) + '╯', PRIMARY_COLOR);
   }
   
   /**
