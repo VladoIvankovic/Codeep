@@ -1691,7 +1691,8 @@ Commands (in chat):
   // Check project permissions
   const isProject = isProjectDirectory(projectPath);
   let hasRead = hasReadPermission(projectPath);
-  const needsPermissionDialog = !hasRead && isProject;
+  // Always ask for permission if not already granted (for both projects and regular folders)
+  const needsPermissionDialog = !hasRead;
   
   // If already has permission, load context
   if (hasRead) {
