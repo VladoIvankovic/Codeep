@@ -96,11 +96,61 @@ export class Screen {
    * Write a line, clearing rest of line
    */
   writeLine(y: number, text: string, textStyle = ''): void {
+    if (y < 0 || y >= this.height) return;
+    
     // Clear the line first
     for (let x = 0; x < this.width; x++) {
       this.buffer[y][x] = { char: ' ', style: '' };
     }
     this.write(0, y, text, textStyle);
+  }
+  
+  /**
+   * Write raw line with pre-formatted ANSI codes (for syntax highlighted content)
+   * This writes directly without parsing for styles since the text already contains ANSI escapes
+   */
+  writeRaw(y: number, text: string, prefixStyle = ''): void {
+    if (y < 0 || y >= this.height) return;
+    
+    // Clear the line first
+    for (let x = 0; x < this.width; x++) {
+      this.buffer[y][x] = { char: ' ', style: '' };
+    }
+    
+    // Parse text character by character, tracking ANSI escape sequences
+    let col = 0;
+    let i = 0;
+    let currentStyle = prefixStyle;
+    
+    while (i < text.length && col < this.width) {
+      // Check for ANSI escape sequence
+      if (text[i] === '\x1b' && text[i + 1] === '[') {
+        // Find end of escape sequence (ends with letter)
+        let escEnd = i + 2;
+        while (escEnd < text.length && !text[escEnd].match(/[a-zA-Z]/)) {
+          escEnd++;
+        }
+        if (escEnd < text.length) {
+          const escSeq = text.slice(i, escEnd + 1);
+          // Reset code clears style, otherwise accumulate
+          if (escSeq === '\x1b[0m') {
+            currentStyle = prefixStyle;
+          } else {
+            currentStyle += escSeq;
+          }
+          i = escEnd + 1;
+        } else {
+          i++;
+        }
+      } else {
+        // Regular character
+        if (col < this.width) {
+          this.buffer[y][col] = { char: text[i], style: currentStyle };
+          col++;
+        }
+        i++;
+      }
+    }
   }
   
   /**
