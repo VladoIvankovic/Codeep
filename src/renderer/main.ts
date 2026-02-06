@@ -37,6 +37,8 @@ import {
   hasReadPermission,
   hasWritePermission,
   setProjectPermission,
+  initializeAsProject,
+  isManuallyInitializedProject,
 } from '../config/index';
 import { 
   isProjectDirectory, 
@@ -1764,35 +1766,64 @@ Commands (in chat):
   // Show intro animation first (if terminal is large enough)
   const showIntroAnimation = process.stdout.rows >= 20;
   
-  const continueStartup = () => {
-    // Show permission dialog inline if needed
-    if (needsPermissionDialog) {
-      app.showPermission(projectPath, isProject, (permission) => {
-        if (permission === 'read') {
-          setProjectPermission(projectPath, true, false);
-          hasWriteAccess = false;
-          projectContext = getProjectContext(projectPath);
-          if (projectContext) {
-            projectContext.hasWriteAccess = false;
-            setProjectContext(projectContext);
-          }
-          app.notify('Read-only access granted');
-        } else if (permission === 'write') {
-          setProjectPermission(projectPath, true, true);
-          hasWriteAccess = true;
-          projectContext = getProjectContext(projectPath);
-          if (projectContext) {
-            projectContext.hasWriteAccess = true;
-            setProjectContext(projectContext);
-          }
-          app.notify('Read & Write access granted');
-        } else {
-          app.notify('No project access - chat only mode');
+  const showPermissionAndContinue = () => {
+    app.showPermission(projectPath, isProject, (permission) => {
+      if (permission === 'read') {
+        setProjectPermission(projectPath, true, false);
+        hasWriteAccess = false;
+        projectContext = getProjectContext(projectPath);
+        if (projectContext) {
+          projectContext.hasWriteAccess = false;
+          setProjectContext(projectContext);
         }
-        
-        // After permission, show session picker
-        showSessionPickerInline();
+        app.notify('Read-only access granted');
+      } else if (permission === 'write') {
+        setProjectPermission(projectPath, true, true);
+        hasWriteAccess = true;
+        projectContext = getProjectContext(projectPath);
+        if (projectContext) {
+          projectContext.hasWriteAccess = true;
+          setProjectContext(projectContext);
+        }
+        app.notify('Read & Write access granted');
+      } else {
+        app.notify('No project access - chat only mode');
+      }
+      
+      // After permission, show session picker
+      showSessionPickerInline();
+    });
+  };
+  
+  const continueStartup = () => {
+    // If not a git project and not manually initialized, ask if user wants to set it as project
+    const isManualProject = isManuallyInitializedProject(projectPath);
+    
+    if (needsPermissionDialog && !isProject && !isManualProject) {
+      // Ask user if they want to use this folder as a project
+      app.showConfirm({
+        title: 'Set as Project?',
+        message: [
+          `Current folder: ${projectPath}`,
+          '',
+          'This folder is not a Git repository.',
+          'Would you like to use it as a Codeep project?',
+        ],
+        confirmLabel: 'Yes, set as project',
+        cancelLabel: 'No, chat only',
+        onConfirm: () => {
+          initializeAsProject(projectPath);
+          app.notify('Folder initialized as project');
+          showPermissionAndContinue();
+        },
+        onCancel: () => {
+          app.notify('Chat only mode - no project context');
+          showSessionPickerInline();
+        },
       });
+    } else if (needsPermissionDialog) {
+      // Is a project (git or manual), just ask for permissions
+      showPermissionAndContinue();
     } else {
       // No permission needed, show session picker directly
       showSessionPickerInline();
