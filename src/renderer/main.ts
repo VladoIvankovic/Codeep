@@ -1714,6 +1714,12 @@ Commands (in chat):
       console.log('\nGoodbye!');
       process.exit(0);
     },
+    onStopAgent: () => {
+      if (isAgentRunning && agentAbortController) {
+        agentAbortController.abort();
+        app.notify('Stopping agent...');
+      }
+    },
     getStatus,
     hasWriteAccess: () => hasWriteAccess,
     hasProjectContext: () => projectContext !== null,

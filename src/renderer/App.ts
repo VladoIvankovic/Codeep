@@ -240,6 +240,7 @@ export interface AppOptions {
   onSubmit: (message: string) => Promise<void>;
   onCommand: (command: string, args: string[]) => void;
   onExit: () => void;
+  onStopAgent?: () => void;
   getStatus: () => StatusInfo;
   hasWriteAccess?: () => boolean;
   hasProjectContext?: () => boolean;
@@ -1021,11 +1022,15 @@ export class App {
       return;
     }
     
-    // Escape to cancel streaming/loading or close autocomplete
+    // Escape to cancel streaming/loading/agent or close autocomplete
     if (event.key === 'escape') {
       if (this.showAutocomplete) {
         this.showAutocomplete = false;
         this.render();
+        return;
+      }
+      if (this.isAgentRunning && this.options.onStopAgent) {
+        this.options.onStopAgent();
         return;
       }
       if (this.isStreaming) {
