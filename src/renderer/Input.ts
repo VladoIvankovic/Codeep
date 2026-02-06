@@ -11,6 +11,7 @@ export interface KeyEvent {
   alt: boolean;
   shift: boolean;
   raw: string;
+  isPaste?: boolean; // True if this is a paste event (multiple chars at once)
 }
 
 export type KeyHandler = (event: KeyEvent) => void;
@@ -30,6 +31,11 @@ export class Input {
     process.stdin.resume();
     process.stdin.setEncoding('utf8');
     
+    // Enable mouse tracking (SGR mode for better compatibility)
+    // \x1b[?1000h - enable basic mouse tracking
+    // \x1b[?1006h - enable SGR extended mouse mode
+    process.stdout.write('\x1b[?1000h\x1b[?1006h');
+    
     process.stdin.on('data', (data: string) => {
       const event = this.parseKey(data);
       this.emit(event);
@@ -40,6 +46,9 @@ export class Input {
    * Stop listening
    */
   stop(): void {
+    // Disable mouse tracking
+    process.stdout.write('\x1b[?1006l\x1b[?1000l');
+    
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(false);
     }
@@ -78,7 +87,43 @@ export class Input {
       alt: false,
       shift: false,
       raw: data,
+      isPaste: false,
     };
+    
+    // Check for mouse scroll events (SGR format: \x1b[<button;x;yM or \x1b[<button;x;ym)
+    // Button 64 = scroll up, Button 65 = scroll down
+    const mouseMatch = data.match(/\x1b\[<(\d+);(\d+);(\d+)([Mm])/);
+    if (mouseMatch) {
+      const button = parseInt(mouseMatch[1], 10);
+      // const x = parseInt(mouseMatch[2], 10);
+      // const y = parseInt(mouseMatch[3], 10);
+      // const release = mouseMatch[4] === 'm';
+      
+      if (button === 64) {
+        // Scroll up
+        event.key = 'scrollup';
+        return event;
+      } else if (button === 65) {
+        // Scroll down
+        event.key = 'scrolldown';
+        return event;
+      }
+      // Ignore other mouse events (clicks, etc.)
+      event.key = 'mouse';
+      return event;
+    }
+    
+    // Detect paste: multiple printable characters at once (not escape sequences)
+    if (data.length > 1 && !data.startsWith('\x1b')) {
+      // Check if it's all printable characters (paste event)
+      const isPrintable = /^[\x20-\x7E\n\r\t]+$/.test(data) || 
+                         data.split('').every(c => c.charCodeAt(0) >= 32 || c === '\n' || c === '\r' || c === '\t');
+      if (isPrintable) {
+        event.key = data;
+        event.isPaste = true;
+        return event;
+      }
+    }
     
     // Ctrl+C
     if (data === '\x03') {
@@ -97,6 +142,48 @@ export class Input {
     // Ctrl+L
     if (data === '\x0c') {
       event.key = 'l';
+      event.ctrl = true;
+      return event;
+    }
+    
+    // Ctrl+V (paste)
+    if (data === '\x16') {
+      event.key = 'v';
+      event.ctrl = true;
+      return event;
+    }
+    
+    // Ctrl+A (go to beginning)
+    if (data === '\x01') {
+      event.key = 'a';
+      event.ctrl = true;
+      return event;
+    }
+    
+    // Ctrl+E (go to end)
+    if (data === '\x05') {
+      event.key = 'e';
+      event.ctrl = true;
+      return event;
+    }
+    
+    // Ctrl+U (clear line)
+    if (data === '\x15') {
+      event.key = 'u';
+      event.ctrl = true;
+      return event;
+    }
+    
+    // Ctrl+W (delete word)
+    if (data === '\x17') {
+      event.key = 'w';
+      event.ctrl = true;
+      return event;
+    }
+    
+    // Ctrl+K (delete to end of line)
+    if (data === '\x0b') {
+      event.key = 'k';
       event.ctrl = true;
       return event;
     }
@@ -213,6 +300,47 @@ export class LineEditor {
     this.value = '';
     this.cursorPos = 0;
     this.historyIndex = -1;
+  }
+  
+  /**
+   * Insert text at cursor position
+   */
+  insert(text: string): void {
+    this.value = this.value.slice(0, this.cursorPos) + text + this.value.slice(this.cursorPos);
+    this.cursorPos += text.length;
+  }
+  
+  /**
+   * Set cursor position
+   */
+  setCursorPos(pos: number): void {
+    this.cursorPos = Math.max(0, Math.min(pos, this.value.length));
+  }
+  
+  /**
+   * Delete word backward (Ctrl+W)
+   */
+  deleteWordBackward(): void {
+    if (this.cursorPos === 0) return;
+    
+    const beforeCursor = this.value.slice(0, this.cursorPos);
+    const afterCursor = this.value.slice(this.cursorPos);
+    
+    // Find last word boundary (skip trailing spaces, then find space)
+    let i = beforeCursor.length - 1;
+    while (i >= 0 && beforeCursor[i] === ' ') i--;
+    while (i >= 0 && beforeCursor[i] !== ' ') i--;
+    
+    const newBefore = beforeCursor.slice(0, i + 1);
+    this.value = newBefore + afterCursor;
+    this.cursorPos = newBefore.length;
+  }
+  
+  /**
+   * Delete to end of line (Ctrl+K)
+   */
+  deleteToEnd(): void {
+    this.value = this.value.slice(0, this.cursorPos);
   }
   
   addToHistory(value: string): void {

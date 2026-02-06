@@ -295,16 +295,16 @@ const apiKeyCache = new Map<string, string>();
 export const LANGUAGES: Record<string, string> = {
   'auto': 'Auto-detect',
   'en': 'English',
-  'zh': 'Chinese (中文)',
-  'es': 'Spanish (Español)',
-  'hi': 'Hindi (हिन्दी)',
-  'ar': 'Arabic (العربية)',
-  'pt': 'Portuguese (Português)',
-  'fr': 'French (Français)',
-  'de': 'German (Deutsch)',
-  'ja': 'Japanese (日本語)',
-  'ru': 'Russian (Русский)',
-  'hr': 'Croatian (Hrvatski)',
+  'zh': 'Chinese',
+  'es': 'Spanish',
+  'hi': 'Hindi',
+  'ar': 'Arabic',
+  'pt': 'Portuguese',
+  'fr': 'French',
+  'de': 'German',
+  'ja': 'Japanese',
+  'ru': 'Russian',
+  'hr': 'Croatian',
 };
 
 export const PROTOCOLS: Record<string, string> = {

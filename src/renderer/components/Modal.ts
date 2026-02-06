@@ -151,6 +151,75 @@ export function renderHelpModal(
 }
 
 /**
+ * Render a confirmation modal with Yes/No options
+ */
+export function renderConfirmModal(
+  screen: Screen,
+  title: string,
+  message: string[],
+  selectedOption: 'yes' | 'no',
+  confirmLabel: string = 'Yes',
+  cancelLabel: string = 'No'
+): void {
+  const { width: screenWidth, height: screenHeight } = screen.getSize();
+  
+  // Calculate size
+  const contentWidth = Math.max(
+    ...message.map(l => l.length),
+    title.length + 4,
+    confirmLabel.length + cancelLabel.length + 12
+  );
+  const modalWidth = Math.min(contentWidth + 8, screenWidth - 4);
+  const modalHeight = Math.min(message.length + 6, screenHeight - 4);
+  
+  const { x, y } = centerBox(screenWidth, screenHeight, modalWidth, modalHeight);
+  
+  // Draw box
+  const boxLines = createBox({
+    x,
+    y,
+    width: modalWidth,
+    height: modalHeight,
+    style: 'rounded',
+    title,
+    borderColor: fg.yellow,
+    titleColor: fg.yellow + style.bold,
+  });
+  
+  for (const line of boxLines) {
+    screen.writeLine(line.y, line.text, line.style);
+  }
+  
+  // Draw message
+  const contentStartY = y + 1;
+  const contentStartX = x + 2;
+  
+  for (let i = 0; i < message.length; i++) {
+    screen.write(contentStartX, contentStartY + i, message[i], fg.white);
+  }
+  
+  // Draw buttons
+  const buttonsY = y + modalHeight - 2;
+  const yesButton = selectedOption === 'yes' 
+    ? `${style.inverse} ${confirmLabel} ${style.reset}`
+    : ` ${confirmLabel} `;
+  const noButton = selectedOption === 'no'
+    ? `${style.inverse} ${cancelLabel} ${style.reset}`
+    : ` ${cancelLabel} `;
+  
+  const buttonsWidth = confirmLabel.length + cancelLabel.length + 8;
+  const buttonsX = x + Math.floor((modalWidth - buttonsWidth) / 2);
+  
+  screen.write(buttonsX, buttonsY, yesButton, selectedOption === 'yes' ? PRIMARY_BRIGHT : fg.gray);
+  screen.write(buttonsX + confirmLabel.length + 4, buttonsY, noButton, selectedOption === 'no' ? PRIMARY_BRIGHT : fg.gray);
+  
+  // Help text
+  const helpText = '←/→ Select | Enter Confirm | Esc Cancel';
+  const helpX = x + Math.floor((modalWidth - helpText.length) / 2);
+  screen.write(helpX, y + modalHeight - 1, helpText, fg.gray);
+}
+
+/**
  * Render a list selection modal
  */
 export function renderListModal(
@@ -162,6 +231,10 @@ export function renderListModal(
 ): void {
   const { width: screenWidth, height: screenHeight } = screen.getSize();
   
+  // Calculate max visible items (leave room for border, title, footer)
+  const maxVisibleItems = Math.max(3, screenHeight - 10);
+  const visibleItemCount = Math.min(items.length, maxVisibleItems);
+  
   // Calculate size - include footer in width calculation
   const contentWidth = Math.max(
     ...items.map(l => l.length + 4), 
@@ -169,8 +242,8 @@ export function renderListModal(
     footer ? footer.length + 2 : 0
   );
   const modalWidth = Math.min(contentWidth + 6, screenWidth - 4);
-  const maxVisibleItems = screenHeight - 8;
-  const modalHeight = Math.min(items.length + 4 + (footer ? 2 : 0), screenHeight - 4);
+  // Height: 2 for borders + visibleItemCount + 1 for padding + (footer ? 1 : 0)
+  const modalHeight = visibleItemCount + 3 + (footer ? 1 : 0);
   
   const { x, y } = centerBox(screenWidth, screenHeight, modalWidth, modalHeight);
   
@@ -192,14 +265,14 @@ export function renderListModal(
   
   // Calculate visible range (scroll if needed)
   let startIndex = 0;
-  if (items.length > maxVisibleItems) {
-    startIndex = Math.max(0, Math.min(selectedIndex - Math.floor(maxVisibleItems / 2), items.length - maxVisibleItems));
+  if (items.length > visibleItemCount) {
+    startIndex = Math.max(0, Math.min(selectedIndex - Math.floor(visibleItemCount / 2), items.length - visibleItemCount));
   }
   
   // Draw items
   const contentStartY = y + 1;
   const contentStartX = x + 2;
-  const visibleItems = items.slice(startIndex, startIndex + maxVisibleItems);
+  const visibleItems = items.slice(startIndex, startIndex + visibleItemCount);
   
   for (let i = 0; i < visibleItems.length; i++) {
     const item = visibleItems[i];

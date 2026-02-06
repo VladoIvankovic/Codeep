@@ -23,6 +23,7 @@ export const helpCategories: HelpCategory[] = [
     items: [
       { key: '/help', description: 'Show this help' },
       { key: '/status', description: 'Current status' },
+      { key: '/settings', description: 'Open settings' },
       { key: '/version', description: 'Show version' },
       { key: '/update', description: 'Check for updates' },
       { key: '/clear', description: 'Clear chat' },
