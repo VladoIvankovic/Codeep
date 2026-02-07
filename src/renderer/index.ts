@@ -10,7 +10,7 @@ export { cursor, screen, fg, bg, style, styled, stripAnsi, visibleLength, trunca
 export { Screen, Cell } from './Screen';
 export { Input, LineEditor, KeyEvent, KeyHandler } from './Input';
 export { ChatUI, ChatMessage, ChatUIOptions } from './ChatUI';
-export { App, AppScreen, AppOptions, Message } from './App';
+export { App, AppOptions, Message } from './App';
 
 // Components
 export { createBox, centerBox, BoxStyle, BoxOptions } from './components/Box';
