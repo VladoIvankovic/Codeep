@@ -188,6 +188,27 @@ export class Input {
       return event;
     }
     
+    // Ctrl+G
+    if (data === '\x07') {
+      event.key = 'g';
+      event.ctrl = true;
+      return event;
+    }
+    
+    // Ctrl+O
+    if (data === '\x0f') {
+      event.key = 'o';
+      event.ctrl = true;
+      return event;
+    }
+    
+    // Ctrl+T
+    if (data === '\x14') {
+      event.key = 't';
+      event.ctrl = true;
+      return event;
+    }
+    
     // Enter
     if (data === '\r' || data === '\n') {
       event.key = 'enter';

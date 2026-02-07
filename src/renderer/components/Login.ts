@@ -50,7 +50,7 @@ export class LoginScreen {
     }
     
     // Open subscribe URL in browser
-    if (event.ctrl && event.key === 'o' && this.options.subscribeUrl) {
+    if (event.ctrl && event.key === 'g' && this.options.subscribeUrl) {
       openUrl(this.options.subscribeUrl);
       return true;
     }
@@ -153,7 +153,7 @@ export class LoginScreen {
     // Help text
     const helpParts = ['Ctrl+T: Toggle visibility'];
     if (this.options.subscribeUrl) {
-      helpParts.push('Ctrl+O: Get API key');
+      helpParts.push('Ctrl+G: Get API key');
     }
     helpParts.push('Esc: Cancel');
     this.screen.write(contentX, contentY, helpParts.join(' | '), fg.gray);
