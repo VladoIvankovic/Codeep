@@ -2750,30 +2750,154 @@ export class App {
   }
   
   /**
-   * Format plain text lines
+   * Apply inline markdown formatting (bold, italic, inline code) to a line
    */
-  private formatTextLines(text: string, maxWidth: number, firstPrefix: string, firstStyle: string): Array<{ text: string; style: string }> {
-    const lines: Array<{ text: string; style: string }> = [];
+  private applyInlineMarkdown(text: string): { formatted: string; hasFormatting: boolean } {
+    let result = '';
+    let hasFormatting = false;
+    let i = 0;
+
+    while (i < text.length) {
+      // Inline code: `code`
+      if (text[i] === '`' && text[i + 1] !== '`') {
+        const end = text.indexOf('`', i + 1);
+        if (end !== -1) {
+          const code = text.slice(i + 1, end);
+          result += fg.rgb(209, 154, 102) + code + '\x1b[0m';
+          hasFormatting = true;
+          i = end + 1;
+          continue;
+        }
+      }
+
+      // Bold + italic: ***text***
+      if (text.slice(i, i + 3) === '***') {
+        const end = text.indexOf('***', i + 3);
+        if (end !== -1) {
+          const inner = text.slice(i + 3, end);
+          result += style.bold + style.italic + fg.white + inner + '\x1b[0m';
+          hasFormatting = true;
+          i = end + 3;
+          continue;
+        }
+      }
+
+      // Bold: **text**
+      if (text.slice(i, i + 2) === '**') {
+        const end = text.indexOf('**', i + 2);
+        if (end !== -1) {
+          const inner = text.slice(i + 2, end);
+          result += style.bold + fg.white + inner + '\x1b[0m';
+          hasFormatting = true;
+          i = end + 2;
+          continue;
+        }
+      }
+
+      // Italic: *text*
+      if (text[i] === '*' && text[i + 1] !== '*') {
+        const end = text.indexOf('*', i + 1);
+        if (end !== -1 && end > i + 1) {
+          const inner = text.slice(i + 1, end);
+          result += style.italic + inner + '\x1b[0m';
+          hasFormatting = true;
+          i = end + 1;
+          continue;
+        }
+      }
+
+      result += text[i];
+      i++;
+    }
+
+    return { formatted: result, hasFormatting };
+  }
+
+  /**
+   * Format plain text lines with markdown support
+   */
+  private formatTextLines(text: string, maxWidth: number, firstPrefix: string, firstStyle: string): Array<{ text: string; style: string; raw?: boolean }> {
+    const lines: Array<{ text: string; style: string; raw?: boolean }> = [];
     const contentLines = text.split('\n');
     
     for (let i = 0; i < contentLines.length; i++) {
       const line = contentLines[i];
       const prefix = i === 0 ? firstPrefix : '  ';
       const prefixStyle = i === 0 ? firstStyle : '';
-      
-      if (line.length > maxWidth - prefix.length) {
-        const wrapped = this.wordWrap(line, maxWidth - prefix.length);
-        for (let j = 0; j < wrapped.length; j++) {
+
+      // Heading: ## or ### etc.
+      const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+      if (headingMatch) {
+        const level = headingMatch[1].length;
+        const headingText = headingMatch[2];
+        const headingColor = level <= 2 ? fg.rgb(97, 175, 239) : fg.rgb(198, 120, 221);
+        lines.push({
+          text: prefix + headingColor + style.bold + headingText + '\x1b[0m',
+          style: prefixStyle,
+          raw: true,
+        });
+        continue;
+      }
+
+      // Horizontal rule: --- or *** or ___
+      if (/^[-*_]{3,}\s*$/.test(line)) {
+        const ruleWidth = Math.min(maxWidth - 4, 40);
+        lines.push({
+          text: prefix + fg.gray + '─'.repeat(ruleWidth) + '\x1b[0m',
+          style: prefixStyle,
+          raw: true,
+        });
+        continue;
+      }
+
+      // List items: - item or * item or numbered 1. item
+      const listMatch = line.match(/^(\s*)([-*]|\d+\.)\s+(.+)$/);
+      if (listMatch) {
+        const indent = listMatch[1];
+        const bullet = listMatch[2];
+        const content = listMatch[3];
+        const { formatted, hasFormatting } = this.applyInlineMarkdown(content);
+        const bulletChar = bullet === '-' || bullet === '*' ? '•' : bullet;
+        if (hasFormatting) {
           lines.push({
-            text: (j === 0 ? prefix : '  ') + wrapped[j],
-            style: j === 0 ? prefixStyle : '',
+            text: prefix + indent + fg.gray + bulletChar + '\x1b[0m' + ' ' + formatted,
+            style: prefixStyle,
+            raw: true,
+          });
+        } else {
+          lines.push({
+            text: prefix + indent + bulletChar + ' ' + content,
+            style: prefixStyle,
           });
         }
-      } else {
+        continue;
+      }
+
+      // Regular text with possible inline markdown
+      const { formatted, hasFormatting } = this.applyInlineMarkdown(line);
+
+      if (hasFormatting) {
         lines.push({
-          text: prefix + line,
+          text: prefix + formatted,
           style: prefixStyle,
+          raw: true,
         });
+      } else {
+        // Plain text - word wrap as before
+        if (line.length > maxWidth - prefix.length) {
+          const wrapped = this.wordWrap(line, maxWidth - prefix.length);
+          for (let j = 0; j < wrapped.length; j++) {
+            lines.push({
+              text: (j === 0 ? prefix : '  ') + wrapped[j],
+              style: j === 0 ? prefixStyle : '',
+            });
+          }
+        } else {
+          lines.push({
+            text: prefix + line,
+            style: prefixStyle,
+          });
+        }
       }
     }
     
