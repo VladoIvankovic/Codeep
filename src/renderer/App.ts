@@ -7,6 +7,7 @@ import { Screen } from './Screen';
 import { Input, LineEditor, KeyEvent } from './Input';
 import { fg, bg, style, stringWidth } from './ansi';
 import clipboardy from 'clipboardy';
+import { spawn } from 'child_process';
 
 // Primary color: #f02a30 (Codeep red)
 const PRIMARY_COLOR = fg.rgb(240, 42, 48);
@@ -1519,7 +1520,6 @@ export class App {
             const cmd = process.platform === 'darwin' ? 'open' 
               : process.platform === 'win32' ? 'start' 
               : 'xdg-open';
-            const { spawn } = require('child_process');
             const child = spawn(cmd, [provider.subscribeUrl], { detached: true, stdio: 'ignore' });
             child.unref();
           } catch { /* ignore */ }
