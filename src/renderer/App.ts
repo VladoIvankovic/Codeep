@@ -1519,7 +1519,9 @@ export class App {
             const cmd = process.platform === 'darwin' ? 'open' 
               : process.platform === 'win32' ? 'start' 
               : 'xdg-open';
-            require('child_process').execSync(`${cmd} "${provider.subscribeUrl}"`, { stdio: 'ignore' });
+            const { spawn } = require('child_process');
+            const child = spawn(cmd, [provider.subscribeUrl], { detached: true, stdio: 'ignore' });
+            child.unref();
           } catch { /* ignore */ }
         }
         return;

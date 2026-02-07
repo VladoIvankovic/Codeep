@@ -6,7 +6,7 @@ import { Screen } from '../Screen';
 import { Input, LineEditor, KeyEvent } from '../Input';
 import { fg, style } from '../ansi';
 import { createBox, centerBox } from './Box';
-import { execSync } from 'child_process';
+import { spawn } from 'child_process';
 
 // Primary color: #f02a30 (Codeep red)
 const PRIMARY_COLOR = fg.rgb(240, 42, 48);
@@ -182,7 +182,8 @@ function openUrl(url: string): void {
     const cmd = process.platform === 'darwin' ? 'open' 
       : process.platform === 'win32' ? 'start' 
       : 'xdg-open';
-    execSync(`${cmd} "${url}"`, { stdio: 'ignore' });
+    const child = spawn(cmd, [url], { detached: true, stdio: 'ignore' });
+    child.unref();
   } catch {
     // Silently fail if browser can't be opened
   }
