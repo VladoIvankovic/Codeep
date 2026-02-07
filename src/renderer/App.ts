@@ -34,12 +34,15 @@ const KEYWORDS: Record<string, string[]> = {
   go: ['func', 'return', 'if', 'else', 'for', 'range', 'switch', 'case', 'break', 'continue', 'fallthrough', 'default', 'go', 'select', 'chan', 'defer', 'panic', 'recover', 'type', 'struct', 'interface', 'map', 'package', 'import', 'const', 'var', 'nil', 'true', 'false', 'iota', 'make', 'new', 'append', 'len', 'cap', 'copy', 'delete'],
   rust: ['fn', 'let', 'mut', 'const', 'static', 'return', 'if', 'else', 'match', 'for', 'while', 'loop', 'break', 'continue', 'struct', 'enum', 'trait', 'impl', 'type', 'where', 'use', 'mod', 'pub', 'crate', 'self', 'super', 'async', 'await', 'move', 'ref', 'true', 'false', 'Some', 'None', 'Ok', 'Err', 'Self', 'dyn', 'unsafe', 'extern'],
   sh: ['if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'while', 'until', 'do', 'done', 'in', 'function', 'return', 'local', 'export', 'readonly', 'declare', 'typeset', 'unset', 'shift', 'exit', 'break', 'continue', 'source', 'alias', 'echo', 'printf', 'read', 'test', 'true', 'false'],
+  html: ['html', 'head', 'body', 'div', 'span', 'p', 'a', 'img', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'tr', 'td', 'th', 'form', 'input', 'button', 'select', 'option', 'textarea', 'label', 'section', 'article', 'nav', 'header', 'footer', 'main', 'aside', 'meta', 'link', 'script', 'style', 'title', 'DOCTYPE'],
+  css: ['import', 'media', 'keyframes', 'font-face', 'supports', 'charset', 'namespace', 'page', 'inherit', 'initial', 'unset', 'none', 'auto', 'block', 'inline', 'flex', 'grid', 'absolute', 'relative', 'fixed', 'sticky', 'static', 'hidden', 'visible', 'solid', 'dashed', 'dotted', 'transparent', 'important'],
 };
 
 // Map language aliases
 const LANG_ALIASES: Record<string, string> = {
   javascript: 'js', typescript: 'ts', python: 'py', golang: 'go',
   bash: 'sh', shell: 'sh', zsh: 'sh', tsx: 'ts', jsx: 'js',
+  htm: 'html', scss: 'css', sass: 'css', less: 'css',
 };
 
 /**
@@ -49,6 +52,31 @@ function highlightCode(code: string, lang: string): string {
   const normalizedLang = LANG_ALIASES[lang.toLowerCase()] || lang.toLowerCase();
   const keywords = KEYWORDS[normalizedLang] || KEYWORDS['js'] || [];
   
+
+  // HTML: highlight tags, attributes, and values
+  if (normalizedLang === 'html' || normalizedLang === 'xml' || normalizedLang === 'svg') {
+    return code.replace(/(<\/?)(\w[\w-]*)((?:\s+[\w-]+(?:=(?:"[^"]*"|'[^']*'|\S+))?)*)(\s*\/?>)/g,
+      (_match, open, tag, attrs, close) => {
+        const highlightedAttrs = attrs.replace(/([\w-]+)(=)("[^"]*"|'[^']*')/g,
+          (_m: string, attr: string, eq: string, val: string) => SYNTAX.function + attr + '\x1b[0m' + SYNTAX.operator + eq + '\x1b[0m' + SYNTAX.string + val + '\x1b[0m'
+        );
+        return SYNTAX.punctuation + open + '\x1b[0m' + SYNTAX.keyword + tag + '\x1b[0m' + highlightedAttrs + SYNTAX.punctuation + close + '\x1b[0m';
+      }
+    ).replace(/<!--[\s\S]*?-->/g, (comment) => SYNTAX.comment + comment + '\x1b[0m');
+  }
+
+  // CSS: highlight selectors, properties, and values
+  if (normalizedLang === 'css') {
+    return code
+      .replace(/\/\*[\s\S]*?\*\//g, (comment) => SYNTAX.comment + comment + '\x1b[0m')
+      .replace(/([\w-]+)(\s*:\s*)([^;{}]+)/g,
+        (_m, prop, colon, val) => SYNTAX.function + prop + '\x1b[0m' + colon + SYNTAX.string + val + '\x1b[0m'
+      )
+      .replace(/([.#]?[\w-]+(?:\s*[,>+~]\s*[.#]?[\w-]+)*)\s*\{/g,
+        (match, selector) => SYNTAX.keyword + selector + '\x1b[0m' + ' {'
+      );
+  }
+
   // Tokenize and highlight
   let result = '';
   let i = 0;
@@ -2737,7 +2765,7 @@ export class App {
     const roleLabel = role === 'user' ? '> ' : role === 'assistant' ? '  ' : '# ';
     
     // Parse content for code blocks
-    const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+    const codeBlockRegex = /```([^\n]*)\n([\s\S]*?)```/g;
     let lastIndex = 0;
     let match;
     let isFirstLine = true;
@@ -2752,7 +2780,13 @@ export class App {
       }
       
       // Add code block with syntax highlighting
-      const lang = match[1] || 'text';
+      const rawLang = (match[1] || 'text').trim();
+      // Handle filepath:name.ext format - extract extension as language
+      let lang = rawLang;
+      if (rawLang.includes(':') || rawLang.includes('.')) {
+        const ext = rawLang.split('.').pop() || rawLang;
+        lang = ext;
+      }
       const code = match[2];
       const codeLines = this.formatCodeBlock(code, lang, maxWidth);
       lines.push(...codeLines);
