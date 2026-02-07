@@ -1831,34 +1831,13 @@ export class App {
     }
     const mainHeight = height - bottomPanelHeight;
     
-    // Determine if we have enough space for logo (need at least 20 lines)
-    const showLogo = height >= 24;
-    const logoSpace = showLogo ? LOGO_HEIGHT + 1 : 1; // +1 for tagline or simple header
-    
     // Layout - main UI takes top portion
-    const headerLine = 0;
-    const messagesStart = logoSpace;
+    const messagesStart = 0;
     const messagesEnd = mainHeight - 4;
     const separatorLine = mainHeight - 3;
     const inputLine = mainHeight - 2;
     const statusLine = mainHeight - 1;
-    
-    // Header - show logo if space permits, otherwise simple text
-    if (showLogo) {
-      // Center the logo
-      const logoWidth = LOGO_LINES[0].length;
-      const logoX = Math.max(0, Math.floor((width - logoWidth) / 2));
-      
-      for (let i = 0; i < LOGO_LINES.length; i++) {
-        this.screen.write(logoX, headerLine + i, LOGO_LINES[i], PRIMARY_COLOR);
-      }
-    } else {
-      // Simple header for small terminals
-      const header = ' Codeep ';
-      const headerPadding = '─'.repeat(Math.max(0, (width - header.length) / 2));
-      this.screen.writeLine(headerLine, headerPadding + header + headerPadding, PRIMARY_COLOR);
-    }
-    
+
     // Messages
     const messagesHeight = messagesEnd - messagesStart + 1;
     const messagesToRender = this.getVisibleMessages(messagesHeight, width - 2);
@@ -2709,31 +2688,42 @@ export class App {
    */
   private getVisibleMessages(height: number, width: number): Array<{ text: string; style: string; raw?: boolean }> {
     const allLines: Array<{ text: string; style: string; raw?: boolean }> = [];
-    
+
+    // Logo at the top, scrolls with content
+    if (height >= 20) {
+      const logoWidth = LOGO_LINES[0].length;
+      const logoX = Math.max(0, Math.floor((width - logoWidth) / 2));
+      const pad = ' '.repeat(logoX);
+      for (const line of LOGO_LINES) {
+        allLines.push({ text: pad + line, style: PRIMARY_COLOR, raw: false });
+      }
+      allLines.push({ text: '', style: '' });
+    } else {
+      allLines.push({ text: ' Codeep', style: PRIMARY_COLOR, raw: false });
+      allLines.push({ text: '', style: '' });
+    }
+
     for (const msg of this.messages) {
       const msgLines = this.formatMessage(msg.role, msg.content, width);
       allLines.push(...msgLines);
     }
-    
+
     if (this.isStreaming && this.streamingContent) {
       const streamLines = this.formatMessage('assistant', this.streamingContent + '▊', width);
       allLines.push(...streamLines);
     }
-    
+
     // Calculate visible window based on scroll offset
-    // scrollOffset=0 means show the most recent (bottom) lines
-    // scrollOffset>0 means scroll up to see older messages
     const totalLines = allLines.length;
-    
-    // Clamp scrollOffset to valid range
+
     const maxScroll = Math.max(0, totalLines - height);
     if (this.scrollOffset > maxScroll) {
       this.scrollOffset = maxScroll;
     }
-    
+
     const endIndex = totalLines - this.scrollOffset;
     const startIndex = Math.max(0, endIndex - height);
-    
+
     return allLines.slice(startIndex, endIndex);
   }
   
