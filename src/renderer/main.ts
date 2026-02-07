@@ -751,6 +751,13 @@ function handleCommand(command: string, args: string[]): void {
         return;
       }
       const newName = args.join('-');
+      // Save current session first so there's a file to rename
+      const messages = app.getMessages();
+      if (messages.length === 0) {
+        app.notify('No messages to save. Start a conversation first.');
+        return;
+      }
+      saveSession(sessionId, messages, projectPath);
       if (renameSession(sessionId, newName, projectPath)) {
         sessionId = newName;
         app.notify(`Session renamed to: ${newName}`);
