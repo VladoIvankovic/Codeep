@@ -215,7 +215,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
 };
 
 import { helpCategories, keyboardShortcuts } from './components/Help';
-import { renderStatusScreen, StatusInfo } from './components/Status';
+import { StatusInfo } from './components/Status';
 
 import { renderSettingsScreen, handleSettingsKey, SettingsState, SETTINGS } from './components/Settings';
 import { SelectItem } from './components/SelectScreen';
@@ -224,8 +224,6 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
 }
-
-export type AppScreen = 'chat' | 'status';
 
 export interface ConfirmOptions {
   title: string;
@@ -254,7 +252,6 @@ export class App {
   private streamingContent = '';
   private isStreaming = false;
   private isLoading = false;
-  private currentScreen: AppScreen = 'chat';
   private options: AppOptions;
   private scrollOffset = 0;
   private notification = '';
@@ -277,6 +274,9 @@ export class App {
   // Inline help state
   private helpOpen = false;
   private helpScrollIndex = 0;
+
+  // Inline status state
+  private statusOpen = false;
   
   // Settings screen state
   private settingsState: SettingsState = {
@@ -930,20 +930,7 @@ export class App {
       return;
     }
     
-    // Screen-specific handling
-    switch (this.currentScreen) {
-      case 'status':
-        if (event.key === 'escape' || event.key === 'q') {
-          this.currentScreen = 'chat';
-          this.render();
-        }
-        break;
-        
-      case 'chat':
-      default:
-        this.handleChatKey(event);
-        break;
-    }
+    this.handleChatKey(event);
   }
   
   /**
@@ -974,6 +961,12 @@ export class App {
       return;
     }
     
+    // If status is open, handle status keys first
+    if (this.statusOpen) {
+      this.handleInlineStatusKey(event);
+      return;
+    }
+
     // If help is open, handle help keys first
     if (this.helpOpen) {
       this.handleInlineHelpKey(event);
@@ -1219,6 +1212,16 @@ export class App {
     }
   }
   
+  /**
+   * Handle inline status keys
+   */
+  private handleInlineStatusKey(event: KeyEvent): void {
+    if (event.key === 'escape' || event.key === 'q') {
+      this.statusOpen = false;
+      this.render();
+    }
+  }
+
   /**
    * Handle help screen keys
    */
@@ -1751,7 +1754,7 @@ export class App {
         break;
         
       case 'status':
-        this.currentScreen = 'status';
+        this.statusOpen = true;
         this.render();
         break;
         
@@ -1783,16 +1786,7 @@ export class App {
       return;
     }
     
-    switch (this.currentScreen) {
-      case 'status':
-        renderStatusScreen(this.screen, this.options.getStatus());
-        break;
-        
-      case 'chat':
-      default:
-        this.renderChat();
-        break;
-    }
+    this.renderChat();
   }
   
   /**
@@ -1905,6 +1899,11 @@ export class App {
     // Inline help renders BELOW status bar
     if (this.helpOpen) {
       this.renderInlineHelp(statusLine + 1, width, height - statusLine - 1);
+    }
+
+    // Inline status renders BELOW status bar
+    if (this.statusOpen) {
+      this.renderInlineStatus(statusLine + 1, width);
     }
     
     // Inline search renders BELOW status bar
@@ -2246,6 +2245,41 @@ export class App {
   /**
    * Render inline help below status bar
    */
+  private renderInlineStatus(startY: number, width: number): void {
+    const status = this.options.getStatus();
+    let y = startY;
+
+    // Separator line
+    this.screen.horizontalLine(y++, '─', PRIMARY_COLOR);
+
+    // Title
+    this.screen.writeLine(y++, 'Status', PRIMARY_COLOR + style.bold);
+
+    const items = [
+      { label: 'Version', value: 'v' + status.version, color: fg.white },
+      { label: 'Provider', value: status.provider, color: fg.white },
+      { label: 'Model', value: status.model, color: fg.white },
+      { label: 'Agent Mode', value: status.agentMode.toUpperCase(), color: status.agentMode === 'on' ? fg.green : status.agentMode === 'manual' ? fg.yellow : fg.gray },
+      { label: 'Project', value: status.projectPath, color: fg.white },
+      { label: 'Write Access', value: status.hasWriteAccess ? 'Yes' : 'No', color: status.hasWriteAccess ? fg.green : fg.red },
+      { label: 'Session', value: status.sessionId || 'New', color: fg.white },
+      { label: 'Messages', value: status.messageCount.toString(), color: fg.white },
+      { label: 'Platform', value: process.platform, color: fg.white },
+      { label: 'Node', value: process.version, color: fg.white },
+      { label: 'Terminal', value: width + 'x' + this.screen.getSize().height, color: fg.white },
+    ];
+
+    const labelWidth = Math.max(...items.map(i => i.label.length)) + 2;
+    for (const item of items) {
+      this.screen.write(2, y, item.label + ':', fg.gray);
+      this.screen.write(2 + labelWidth, y, item.value, item.color);
+      y++;
+    }
+
+    y++;
+    this.screen.writeLine(y, 'Esc close', fg.gray);
+  }
+
   private renderInlineHelp(startY: number, width: number, availableHeight: number): void {
     // Build all help items
     const allItems: Array<{ text: string; isHeader: boolean }> = [];
