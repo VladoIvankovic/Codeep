@@ -1511,8 +1511,8 @@ export class App {
         return;
       }
       
-      // Ctrl+G to open subscribe URL
-      if (event.ctrl && event.key === 'g') {
+      // Ctrl+B to open subscribe URL
+      if (event.ctrl && event.key === 'b') {
         const provider = this.loginProviders[this.loginProviderIndex];
         if (provider.subscribeUrl) {
           try {
@@ -3207,7 +3207,7 @@ export class App {
       y++;
       const hints = ['Ctrl+V Paste'];
       if (selectedProvider.subscribeUrl) {
-        hints.push('Ctrl+G Get API key');
+        hints.push('Ctrl+B Get API key');
       }
       hints.push('Enter Submit', 'Esc Back');
       this.screen.writeLine(y, hints.join(' • '), fg.gray);
