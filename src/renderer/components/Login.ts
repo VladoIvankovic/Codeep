@@ -16,6 +16,7 @@ export interface LoginOptions {
   onCancel: () => void;
   providerName: string;
   error?: string;
+  subscribeUrl?: string;
 }
 
 /**
@@ -147,7 +148,12 @@ export class LoginScreen {
     
     // Footer
     const footerY = height - 2;
-    this.screen.write(2, footerY, 'Get your API key from your provider\'s dashboard', fg.gray);
+    if (this.options.subscribeUrl) {
+      this.screen.write(2, footerY, 'Get your API key: ', fg.gray);
+      this.screen.write(20, footerY, this.options.subscribeUrl, fg.cyan);
+    } else {
+      this.screen.write(2, footerY, 'Get your API key from your provider\'s dashboard', fg.gray);
+    }
     
     // Position cursor
     this.screen.setCursor(cursorX, boxY + 5);

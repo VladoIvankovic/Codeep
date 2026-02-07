@@ -871,7 +871,7 @@ function handleCommand(command: string, args: string[]): void {
     // Login/Logout
     case 'login': {
       const providers = getProviderList();
-      app.showLogin(providers.map(p => ({ id: p.id, name: p.name })), async (result) => {
+      app.showLogin(providers.map(p => ({ id: p.id, name: p.name, subscribeUrl: p.subscribeUrl })), async (result) => {
         if (result) {
           setProvider(result.providerId);
           await setApiKey(result.apiKey);
@@ -1552,6 +1552,7 @@ async function showLoginFlow(): Promise<string | null> {
           loginScreen = new LoginScreen(screen, input, {
             providerName: selectedProvider.name,
             error: loginError,
+            subscribeUrl: selectedProvider.subscribeUrl,
             onSubmit: async (key) => {
               // Validate and save key
               if (key.length < 10) {
@@ -1559,6 +1560,7 @@ async function showLoginFlow(): Promise<string | null> {
                 loginScreen = new LoginScreen(screen, input, {
                   providerName: selectedProvider.name,
                   error: loginError,
+                  subscribeUrl: selectedProvider.subscribeUrl,
                   onSubmit: () => {},
                   onCancel: () => {
                     cleanup();
