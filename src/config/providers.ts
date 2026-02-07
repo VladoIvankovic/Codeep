@@ -25,6 +25,7 @@ export interface ProviderConfig {
   defaultModel: string;
   defaultProtocol: 'openai' | 'anthropic';
   envKey?: string; // Environment variable name for API key
+  subscribeUrl?: string; // URL to get API key
 }
 
 export const PROVIDERS: Record<string, ProviderConfig> = {
@@ -50,6 +51,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultModel: 'glm-4.7',
     defaultProtocol: 'openai',
     envKey: 'ZAI_API_KEY',
+    subscribeUrl: 'https://z.ai/subscribe?ic=NXYNXZOV14',
   },
   'minimax': {
     name: 'MiniMax',
@@ -72,6 +74,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultModel: 'MiniMax-M2.1',
     defaultProtocol: 'anthropic',
     envKey: 'MINIMAX_API_KEY',
+    subscribeUrl: 'https://platform.minimax.io/subscribe/coding-plan?code=2lWvoWUhrp&source=link',
   },
 };
 
@@ -81,11 +84,12 @@ export function getProvider(id: string): ProviderConfig | null {
   return PROVIDERS[id] || null;
 }
 
-export function getProviderList(): { id: string; name: string; description: string }[] {
+export function getProviderList(): { id: string; name: string; description: string; subscribeUrl?: string }[] {
   return Object.entries(PROVIDERS).map(([id, config]) => ({
     id,
     name: config.name,
     description: config.description,
+    subscribeUrl: config.subscribeUrl,
   }));
 }
 

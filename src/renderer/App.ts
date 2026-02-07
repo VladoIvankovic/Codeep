@@ -377,7 +377,7 @@ export class App {
   // Inline login state
   private loginOpen = false;
   private loginStep: 'provider' | 'apikey' = 'provider';
-  private loginProviders: Array<{ id: string; name: string }> = [];
+  private loginProviders: Array<{ id: string; name: string; subscribeUrl?: string }> = [];
   private loginProviderIndex = 0;
   private loginApiKey = '';
   private loginError = '';
@@ -901,7 +901,7 @@ export class App {
    * Show inline login dialog
    */
   showLogin(
-    providers: Array<{ id: string; name: string }>,
+    providers: Array<{ id: string; name: string; subscribeUrl?: string }>,
     callback: (result: { providerId: string; apiKey: string } | null) => void
   ): void {
     this.loginProviders = providers;
@@ -1849,7 +1849,7 @@ export class App {
     } else if (this.loginOpen) {
       bottomPanelHeight = this.loginStep === 'provider' 
         ? Math.min(this.loginProviders.length + 5, 14) 
-        : 8; // Login dialog
+        : 10; // Login dialog
     } else if (this.menuOpen) {
       bottomPanelHeight = Math.min(this.menuItems.length + 4, 14);
     } else if (this.settingsOpen) {
@@ -3181,6 +3181,13 @@ export class App {
       this.screen.write(0, y, 'Key: ', fg.white);
       this.screen.write(5, y, maskedKey, this.loginApiKey.length > 0 ? fg.green : fg.gray);
       y++;
+      
+      // Subscribe URL
+      if (selectedProvider.subscribeUrl) {
+        y++;
+        this.screen.write(0, y, 'Get key: ', fg.gray);
+        this.screen.write(9, y, selectedProvider.subscribeUrl, fg.cyan);
+      }
       
       // Error message
       if (this.loginError) {
