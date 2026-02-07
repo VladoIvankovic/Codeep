@@ -6,6 +6,7 @@ import { Screen } from '../Screen';
 import { Input, LineEditor, KeyEvent } from '../Input';
 import { fg, style } from '../ansi';
 import { createBox, centerBox } from './Box';
+import { execSync } from 'child_process';
 
 // Primary color: #f02a30 (Codeep red)
 const PRIMARY_COLOR = fg.rgb(240, 42, 48);
@@ -45,6 +46,12 @@ export class LoginScreen {
     if (event.ctrl && event.key === 't') {
       this.showKey = !this.showKey;
       this.render();
+      return true;
+    }
+    
+    // Open subscribe URL in browser
+    if (event.ctrl && event.key === 'o' && this.options.subscribeUrl) {
+      openUrl(this.options.subscribeUrl);
       return true;
     }
     
@@ -144,16 +151,12 @@ export class LoginScreen {
     }
     
     // Help text
-    this.screen.write(contentX, contentY, 'Ctrl+T: Toggle visibility | Esc: Cancel', fg.gray);
-    
-    // Footer
-    const footerY = height - 2;
+    const helpParts = ['Ctrl+T: Toggle visibility'];
     if (this.options.subscribeUrl) {
-      this.screen.write(2, footerY, 'Get your API key: ', fg.gray);
-      this.screen.write(20, footerY, this.options.subscribeUrl, fg.cyan);
-    } else {
-      this.screen.write(2, footerY, 'Get your API key from your provider\'s dashboard', fg.gray);
+      helpParts.push('Ctrl+O: Get API key');
     }
+    helpParts.push('Esc: Cancel');
+    this.screen.write(contentX, contentY, helpParts.join(' | '), fg.gray);
     
     // Position cursor
     this.screen.setCursor(cursorX, boxY + 5);
@@ -168,6 +171,20 @@ export class LoginScreen {
   reset(): void {
     this.editor.clear();
     this.showKey = false;
+  }
+}
+
+/**
+ * Open URL in the default browser
+ */
+function openUrl(url: string): void {
+  try {
+    const cmd = process.platform === 'darwin' ? 'open' 
+      : process.platform === 'win32' ? 'start' 
+      : 'xdg-open';
+    execSync(`${cmd} "${url}"`, { stdio: 'ignore' });
+  } catch {
+    // Silently fail if browser can't be opened
   }
 }
 

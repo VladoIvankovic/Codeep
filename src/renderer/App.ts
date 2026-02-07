@@ -1511,6 +1511,20 @@ export class App {
         return;
       }
       
+      // Ctrl+O to open subscribe URL
+      if (event.ctrl && event.key === 'o') {
+        const provider = this.loginProviders[this.loginProviderIndex];
+        if (provider.subscribeUrl) {
+          try {
+            const cmd = process.platform === 'darwin' ? 'open' 
+              : process.platform === 'win32' ? 'start' 
+              : 'xdg-open';
+            require('child_process').execSync(`${cmd} "${provider.subscribeUrl}"`, { stdio: 'ignore' });
+          } catch { /* ignore */ }
+        }
+        return;
+      }
+      
       // Handle paste detection (fast input)
       if (event.isPaste && event.key.length > 1) {
         this.loginApiKey += event.key.trim();
@@ -1849,7 +1863,7 @@ export class App {
     } else if (this.loginOpen) {
       bottomPanelHeight = this.loginStep === 'provider' 
         ? Math.min(this.loginProviders.length + 5, 14) 
-        : 10; // Login dialog
+        : 8; // Login dialog
     } else if (this.menuOpen) {
       bottomPanelHeight = Math.min(this.menuItems.length + 4, 14);
     } else if (this.settingsOpen) {
@@ -3182,13 +3196,6 @@ export class App {
       this.screen.write(5, y, maskedKey, this.loginApiKey.length > 0 ? fg.green : fg.gray);
       y++;
       
-      // Subscribe URL
-      if (selectedProvider.subscribeUrl) {
-        y++;
-        this.screen.write(0, y, 'Get key: ', fg.gray);
-        this.screen.write(9, y, selectedProvider.subscribeUrl, fg.cyan);
-      }
-      
       // Error message
       if (this.loginError) {
         y++;
@@ -3196,7 +3203,12 @@ export class App {
       }
       
       y++;
-      this.screen.writeLine(y, 'Ctrl+V Paste • Enter Submit • Esc Back', fg.gray);
+      const hints = ['Ctrl+V Paste'];
+      if (selectedProvider.subscribeUrl) {
+        hints.push('Ctrl+O Get API key');
+      }
+      hints.push('Enter Submit', 'Esc Back');
+      this.screen.writeLine(y, hints.join(' • '), fg.gray);
     }
   }
   
