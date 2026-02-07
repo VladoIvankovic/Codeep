@@ -5,7 +5,7 @@
 
 import { Screen } from './Screen';
 import { Input, LineEditor, KeyEvent } from './Input';
-import { fg, bg, style } from './ansi';
+import { fg, bg, style, stringWidth } from './ansi';
 import clipboardy from 'clipboardy';
 
 // Primary color: #f02a30 (Codeep red)
@@ -2884,7 +2884,7 @@ export class App {
         });
       } else {
         // Plain text - word wrap as before
-        if (line.length > maxWidth - prefix.length) {
+        if (stringWidth(line) > maxWidth - prefix.length) {
           const wrapped = this.wordWrap(line, maxWidth - prefix.length);
           for (let j = 0; j < wrapped.length; j++) {
             lines.push({
@@ -3217,7 +3217,7 @@ export class App {
     let currentLine = '';
     
     for (const word of words) {
-      if (currentLine.length + word.length + 1 > maxWidth && currentLine) {
+      if (stringWidth(currentLine) + stringWidth(word) + 1 > maxWidth && currentLine) {
         lines.push(currentLine);
         currentLine = word;
       } else {

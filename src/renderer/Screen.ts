@@ -3,7 +3,7 @@
  * Only writes changes to terminal - minimizes flickering
  */
 
-import { cursor, screen, style, stripAnsi, visibleLength } from './ansi';
+import { cursor, screen, style, stripAnsi, visibleLength, charWidth } from './ansi';
 
 export interface Cell {
   char: string;
@@ -84,10 +84,15 @@ export class Screen {
         // Newline - would need to handle multi-line writes
         break;
       } else {
+        const w = charWidth(char);
         if (col >= 0 && col < this.width) {
           this.buffer[y][col] = { char, style: currentStyle };
+          // Wide char: fill next cell with empty placeholder
+          if (w === 2 && col + 1 < this.width) {
+            this.buffer[y][col + 1] = { char: '', style: currentStyle };
+          }
         }
-        col++;
+        col += w;
       }
     }
   }
@@ -144,10 +149,15 @@ export class Screen {
         }
       } else {
         // Regular character
+        const w = charWidth(text[i]);
         if (col < this.width) {
           this.buffer[y][col] = { char: text[i], style: currentStyle };
-          col++;
+          // Wide char: fill next cell with empty placeholder
+          if (w === 2 && col + 1 < this.width) {
+            this.buffer[y][col + 1] = { char: '', style: currentStyle };
+          }
         }
+        col += w;
         i++;
       }
     }
@@ -235,6 +245,12 @@ export class Screen {
         
         // Skip if unchanged
         if (cell.char === renderedCell.char && cell.style === renderedCell.style) {
+          continue;
+        }
+
+        // Skip wide-char placeholder cells
+        if (cell.char === '') {
+          this.rendered[y][x] = { ...cell };
           continue;
         }
         

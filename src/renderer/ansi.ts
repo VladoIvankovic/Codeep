@@ -120,6 +120,67 @@ export function styled(text: string, ...styles: string[]): string {
 }
 
 /**
+ * Get terminal display width of a single character
+ * CJK, fullwidth, and emoji characters take 2 columns
+ */
+export function charWidth(char: string): number {
+  const code = char.codePointAt(0);
+  if (code === undefined) return 0;
+
+  // Control characters
+  if (code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
+
+  // CJK Unified Ideographs
+  if (code >= 0x4e00 && code <= 0x9fff) return 2;
+  // CJK Unified Ideographs Extension A
+  if (code >= 0x3400 && code <= 0x4dbf) return 2;
+  // CJK Unified Ideographs Extension B
+  if (code >= 0x20000 && code <= 0x2a6df) return 2;
+  // CJK Compatibility Ideographs
+  if (code >= 0xf900 && code <= 0xfaff) return 2;
+  // CJK Radicals / Kangxi Radicals
+  if (code >= 0x2e80 && code <= 0x2fdf) return 2;
+  // CJK Strokes / Enclosed CJK
+  if (code >= 0x31c0 && code <= 0x33ff) return 2;
+  // CJK Symbols and Punctuation
+  if (code >= 0x3000 && code <= 0x303f) return 2;
+  // Hiragana, Katakana
+  if (code >= 0x3040 && code <= 0x30ff) return 2;
+  // Katakana Phonetic Extensions
+  if (code >= 0x31f0 && code <= 0x31ff) return 2;
+  // Hangul Jamo
+  if (code >= 0x1100 && code <= 0x11ff) return 2;
+  // Hangul Syllables
+  if (code >= 0xac00 && code <= 0xd7af) return 2;
+  // Hangul Jamo Extended-A/B
+  if (code >= 0xa960 && code <= 0xa97f) return 2;
+  if (code >= 0xd7b0 && code <= 0xd7ff) return 2;
+  // Fullwidth Forms
+  if (code >= 0xff01 && code <= 0xff60) return 2;
+  if (code >= 0xffe0 && code <= 0xffe6) return 2;
+  // Bopomofo
+  if (code >= 0x3100 && code <= 0x312f) return 2;
+  // Emoji ranges (common)
+  if (code >= 0x1f300 && code <= 0x1f9ff) return 2;
+  if (code >= 0x1fa00 && code <= 0x1fa6f) return 2;
+  if (code >= 0x1fa70 && code <= 0x1faff) return 2;
+  if (code >= 0x2600 && code <= 0x27bf) return 2;
+
+  return 1;
+}
+
+/**
+ * Get terminal display width of a string (excluding ANSI codes)
+ */
+export function stringWidth(str: string): number {
+  let width = 0;
+  for (const char of str) {
+    width += charWidth(char);
+  }
+  return width;
+}
+
+/**
  * Strip ANSI codes from string (for length calculation)
  */
 export function stripAnsi(str: string): string {
@@ -131,7 +192,7 @@ export function stripAnsi(str: string): string {
  * Get visible length of string (excluding ANSI codes)
  */
 export function visibleLength(str: string): number {
-  return stripAnsi(str).length;
+  return stringWidth(stripAnsi(str));
 }
 
 /**
@@ -139,7 +200,7 @@ export function visibleLength(str: string): number {
  */
 export function truncate(str: string, maxLength: number, suffix = '...'): string {
   const visible = stripAnsi(str);
-  if (visible.length <= maxLength) return str;
+  if (stringWidth(visible) <= maxLength) return str;
   
   // Simple truncation - may cut ANSI codes
   // For proper handling, we'd need to parse ANSI sequences
@@ -157,12 +218,10 @@ export function truncate(str: string, maxLength: number, suffix = '...'): string
         inEscape = false;
       }
     } else {
-      if (visibleCount < maxLength - suffix.length) {
-        result += char;
-        visibleCount++;
-      } else {
-        break;
-      }
+      const w = charWidth(char);
+      if (visibleCount + w > maxLength - suffix.length) break;
+      result += char;
+      visibleCount += w;
     }
   }
   
