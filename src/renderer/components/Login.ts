@@ -7,6 +7,7 @@ import { Input, LineEditor, KeyEvent } from '../Input';
 import { fg, style } from '../ansi';
 import { createBox, centerBox } from './Box';
 import { spawn } from 'child_process';
+import clipboardy from 'clipboardy';
 
 // Primary color: #f02a30 (Codeep red)
 const PRIMARY_COLOR = fg.rgb(240, 42, 48);
@@ -55,6 +56,19 @@ export class LoginScreen {
       return true;
     }
     
+    // Ctrl+V paste from clipboard
+    if (event.ctrl && event.key === 'v') {
+      this.pasteFromClipboard();
+      return true;
+    }
+    
+    // Paste detection (fast input)
+    if (event.isPaste && event.key.length > 1) {
+      this.editor.setValue(event.key.trim());
+      this.render();
+      return true;
+    }
+    
     // Submit
     if (event.key === 'enter') {
       const value = this.editor.getValue().trim();
@@ -93,7 +107,7 @@ export class LoginScreen {
     
     // Box dimensions
     const boxWidth = Math.min(60, width - 4);
-    const boxHeight = 12;
+    const boxHeight = 14;
     const { x: boxX, y: boxY } = centerBox(width, height, boxWidth, boxHeight);
     
     // Draw box
@@ -151,18 +165,35 @@ export class LoginScreen {
     }
     
     // Help text
-    const helpParts = ['Ctrl+T: Toggle visibility'];
+    this.screen.write(contentX, contentY, 'Ctrl+V: Paste | Ctrl+T: Toggle visibility', fg.gray);
+    contentY++;
+    const helpParts2: string[] = [];
     if (this.options.subscribeUrl) {
-      helpParts.push('Ctrl+B: Get API key');
+      helpParts2.push('Ctrl+B: Get API key');
     }
-    helpParts.push('Esc: Cancel');
-    this.screen.write(contentX, contentY, helpParts.join(' | '), fg.gray);
+    helpParts2.push('Esc: Cancel');
+    this.screen.write(contentX, contentY, helpParts2.join(' | '), fg.gray);
     
     // Position cursor
     this.screen.setCursor(cursorX, boxY + 5);
     this.screen.showCursor(true);
     
     this.screen.fullRender();
+  }
+  
+  /**
+   * Paste from clipboard
+   */
+  private async pasteFromClipboard(): Promise<void> {
+    try {
+      const text = await clipboardy.read();
+      if (text) {
+        this.editor.setValue(text.trim());
+        this.render();
+      }
+    } catch {
+      // Clipboard not available
+    }
   }
   
   /**
