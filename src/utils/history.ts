@@ -2,7 +2,7 @@
  * Agent action history for undo/rollback functionality
  */
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync, statSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync, statSync, readdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
 
@@ -332,7 +332,7 @@ export function getRecentSessions(limit: number = 10): ActionSession[] {
   ensureHistoryDir();
   
   try {
-    const files = require('fs').readdirSync(HISTORY_DIR)
+    const files = readdirSync(HISTORY_DIR)
       .filter((f: string) => f.endsWith('.json'))
       .sort()
       .reverse()
@@ -402,7 +402,7 @@ export function clearHistory(): void {
   ensureHistoryDir();
   
   try {
-    const files = require('fs').readdirSync(HISTORY_DIR);
+    const files = readdirSync(HISTORY_DIR);
     for (const f of files) {
       unlinkSync(join(HISTORY_DIR, f));
     }
