@@ -1854,6 +1854,8 @@ export class App {
       bottomPanelHeight = Math.min(this.sessionPickerItems.length + 6, 14); // Session picker
     } else if (this.confirmOpen && this.confirmOptions) {
       bottomPanelHeight = this.confirmOptions.message.length + 5; // title + messages + buttons + padding
+    } else if (this.statusOpen) {
+      bottomPanelHeight = 16; // Status info panel
     } else if (this.helpOpen) {
       bottomPanelHeight = Math.min(height - 6, 20); // Help takes more space
     } else if (this.searchOpen) {
