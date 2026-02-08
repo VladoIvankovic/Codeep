@@ -19,6 +19,7 @@ export type KeyHandler = (event: KeyEvent) => void;
 export class Input {
   private handlers: KeyHandler[] = [];
   private rl: readline.Interface | null = null;
+  private dataHandler: ((data: string) => void) | null = null;
   
   /**
    * Start listening for input
@@ -36,16 +37,23 @@ export class Input {
     // \x1b[?1006h - enable SGR extended mouse mode
     process.stdout.write('\x1b[?1000h\x1b[?1006h');
     
-    process.stdin.on('data', (data: string) => {
+    this.dataHandler = (data: string) => {
       const event = this.parseKey(data);
       this.emit(event);
-    });
+    };
+    process.stdin.on('data', this.dataHandler);
   }
   
   /**
    * Stop listening
    */
   stop(): void {
+    // Remove data listener
+    if (this.dataHandler) {
+      process.stdin.removeListener('data', this.dataHandler);
+      this.dataHandler = null;
+    }
+    
     // Disable mouse tracking
     process.stdout.write('\x1b[?1006l\x1b[?1000l');
     
