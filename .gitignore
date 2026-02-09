@@ -31,6 +31,7 @@ coverage/
 *.snap
 
 # Codeep
+todo.md
 .claude/
 .codeep/
 .junie/
