@@ -295,6 +295,14 @@ export class App {
   private agentIteration = 0;
   private agentActions: Array<{ type: string; target: string; result: string }> = [];
   private agentThinking = '';
+  private agentCodePreview: {
+    path: string;
+    actionType: 'write' | 'edit';
+    content: string;
+    oldContent?: string;
+    lang: string;
+    totalLines: number;
+  } | null = null;
   
   // Paste detection state
   private pasteInfo: { chars: number; lines: number; preview: string; fullText: string } | null = null;
@@ -586,9 +594,11 @@ export class App {
       this.agentIteration = 0;
       this.agentActions = [];
       this.agentThinking = '';
+      this.agentCodePreview = null;
       this.isLoading = false; // Clear loading state when agent takes over
       this.startSpinner();
     } else {
+      this.agentCodePreview = null;
       this.isLoading = false; // Ensure loading is cleared when agent finishes
       this.stopSpinner();
     }
@@ -611,6 +621,41 @@ export class App {
    */
   setAgentThinking(text: string): void {
     this.agentThinking = text;
+    // Clear code preview when agent moves to a non-write/edit action
+    if (text && !text.startsWith('write:') && !text.startsWith('edit:')) {
+      this.agentCodePreview = null;
+    }
+    this.render();
+  }
+  
+  /**
+   * Set code preview for agent progress panel
+   */
+  setAgentCodePreview(preview: {
+    path: string;
+    actionType: 'write' | 'edit';
+    content: string;
+    oldContent?: string;
+  } | null): void {
+    if (preview && preview.content) {
+      const ext = preview.path.split('.').pop()?.toLowerCase() || '';
+      const lang = LANG_ALIASES[ext] || ext;
+      const lines = preview.content.split('\n');
+      const MAX_STORED_LINES = 50;
+      const trimmedContent = lines.length > MAX_STORED_LINES
+        ? lines.slice(-MAX_STORED_LINES).join('\n')
+        : preview.content;
+      this.agentCodePreview = {
+        path: preview.path,
+        actionType: preview.actionType,
+        content: trimmedContent,
+        oldContent: preview.oldContent,
+        lang,
+        totalLines: lines.length,
+      };
+    } else {
+      this.agentCodePreview = null;
+    }
     this.render();
   }
   
@@ -1847,7 +1892,19 @@ export class App {
       const previewLines = Math.min(this.pasteInfo.preview.split('\n').length, 5);
       bottomPanelHeight = previewLines + 6; // title + preview + extra line indicator + options
     } else if (this.isAgentRunning) {
-      bottomPanelHeight = 5; // Agent progress box (4 lines + 1 margin)
+      if (this.agentCodePreview) {
+        const MAX_PREVIEW_LINES = 12;
+        const storedLines = this.agentCodePreview.content.split('\n').length;
+        const visibleCodeLines = Math.min(storedLines, MAX_PREVIEW_LINES);
+        const startIdx = Math.max(0, storedLines - MAX_PREVIEW_LINES);
+        const startLineNum = this.agentCodePreview.totalLines - storedLines + startIdx;
+        const hasOverflow = startLineNum > 0 ? 1 : 0;
+        // top border + action + code separator + code lines + overflow + stats + bottom border + margin
+        bottomPanelHeight = 1 + 1 + 1 + visibleCodeLines + hasOverflow + 1 + 1 + 1;
+        bottomPanelHeight = Math.min(bottomPanelHeight, Math.floor(height * 0.6));
+      } else {
+        bottomPanelHeight = 5; // Agent progress box (4 lines + 1 margin)
+      }
     } else if (this.permissionOpen) {
       bottomPanelHeight = 10; // Permission dialog
     } else if (this.sessionPickerOpen) {
@@ -2603,6 +2660,54 @@ export class App {
       this.screen.write(1, y, 'Starting...', fg.gray);
     }
     y++;
+    
+    // Code preview section (for write/edit operations)
+    if (this.agentCodePreview) {
+      const MAX_PREVIEW_LINES = 12;
+      
+      // Code separator with language label
+      const langLabel = this.agentCodePreview.lang ? ` ${this.agentCodePreview.lang} ` : '';
+      const sepPadLeft = 2;
+      const sepPadRight = width - sepPadLeft - langLabel.length - 1;
+      this.screen.write(0, y, '─'.repeat(sepPadLeft), SYNTAX.codeFrame);
+      this.screen.write(sepPadLeft, y, langLabel, SYNTAX.codeLang);
+      this.screen.write(sepPadLeft + langLabel.length, y, '─'.repeat(Math.max(0, sepPadRight)), SYNTAX.codeFrame);
+      y++;
+      
+      // Determine visible code lines (show tail for long content)
+      const codeLines = this.agentCodePreview.content.split('\n');
+      const totalLines = this.agentCodePreview.totalLines;
+      const displayCount = Math.min(codeLines.length, MAX_PREVIEW_LINES);
+      const startIdx = Math.max(0, codeLines.length - MAX_PREVIEW_LINES);
+      const startLineNum = totalLines - codeLines.length + startIdx;
+      
+      // Overflow indicator if truncated from top
+      if (startLineNum > 0) {
+        this.screen.write(1, y, `... (${startLineNum} lines above)`, fg.gray);
+        y++;
+      }
+      
+      // Render highlighted code lines with line numbers
+      const lineNumWidth = String(totalLines).length;
+      const codeAreaWidth = width - lineNumWidth - 4;
+      
+      for (let i = 0; i < displayCount; i++) {
+        const lineNum = startLineNum + i + 1;
+        const lineNumStr = String(lineNum).padStart(lineNumWidth, ' ');
+        
+        // Truncate wide lines
+        let codeLine = codeLines[startIdx + i];
+        if (codeLine.length > codeAreaWidth) {
+          codeLine = codeLine.slice(0, codeAreaWidth - 1) + '\u2026';
+        }
+        
+        const highlighted = highlightCode(codeLine, this.agentCodePreview.lang);
+        // Use writeRaw with line number embedded as ANSI since writeRaw clears the full line
+        const lineNumAnsi = SYNTAX.comment + lineNumStr + '\x1b[0m' + ' ';
+        this.screen.writeRaw(y, ' ' + lineNumAnsi + highlighted);
+        y++;
+      }
+    }
     
     // Stats line: Files and step info
     let x = 1;
