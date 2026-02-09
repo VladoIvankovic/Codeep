@@ -68,6 +68,7 @@ Codeep works as a **full AI coding agent** that autonomously:
 - Reads and analyzes your codebase
 - Loops until the task is complete
 - Reports all actions taken
+- **Live code display** - Shows syntax-highlighted code in chat as it writes/edits files
 
 **Auto mode (default)**: Just describe what you want - no special commands needed:
 ```
@@ -389,7 +390,7 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 | `/version` | Show version and current provider/model |
 | `/update` | Check for updates |
 | `/clear` | Clear chat history and start new session |
-| `/exit` | Quit application |
+| `/exit` or `/quit` | Quit application |
 
 ### AI Configuration
 
@@ -417,6 +418,7 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 |---------|-------------|
 | `/apply` | Apply file changes from AI response |
 | `/copy [n]` | Copy code block to clipboard (n = block number, -1 = last) |
+| `/paste` | Paste content from clipboard into chat |
 
 ### Agent Mode
 
@@ -439,6 +441,8 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 | `/diff --staged` | Review staged git changes |
 | `/commit` | Generate commit message for staged changes |
 | `/git-commit [msg]` | Commit current changes with message |
+| `/push` | Push to remote repository |
+| `/pull` | Pull from remote repository |
 
 ### Context Persistence
 
@@ -493,9 +497,17 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 | Key | Action |
 |-----|--------|
 | `Enter` | Submit message |
-| `↑` / `↓` | Navigate input history |
+| `↑` / `↓` | Navigate input history (or scroll chat when input is empty) |
 | `Ctrl+L` | Clear chat (same as `/clear`) |
-| `Escape` | Cancel current request |
+| `Ctrl+V` | Paste from clipboard with preview |
+| `Ctrl+A` | Move cursor to beginning of line |
+| `Ctrl+E` | Move cursor to end of line |
+| `Ctrl+U` | Clear input line |
+| `Ctrl+W` | Delete word backward |
+| `Ctrl+K` | Delete to end of line |
+| `PageUp` / `PageDown` | Scroll chat history (10 lines) |
+| `Mouse Scroll` | Scroll chat history |
+| `Escape` | Cancel current request / Stop agent |
 
 ## Supported Languages
 
@@ -649,7 +661,7 @@ Session renamed to: feature-auth-implementation
 
 Codeep is built with:
 
-- **React + Ink** - Terminal UI framework
+- **Custom ANSI Renderer** - Hand-built terminal UI with virtual screen buffer, diff-based rendering, and syntax highlighting (no React/Ink dependency)
 - **TypeScript** - Type-safe codebase
 - **Conf** - Configuration management
 - **Node.js Keychain** - Secure credential storage
