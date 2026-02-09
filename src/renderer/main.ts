@@ -413,6 +413,24 @@ async function executeAgentTask(task: string, dryRun: boolean = false): Promise<
         // Update agent thinking
         const shortTarget = target.length > 50 ? '...' + target.slice(-47) : target;
         app.setAgentThinking(`${actionType}: ${shortTarget}`);
+        
+        // Set code preview for write/edit operations
+        if (actionType === 'write' && tool.parameters.content) {
+          app.setAgentCodePreview({
+            path: tool.parameters.path as string,
+            actionType: 'write',
+            content: tool.parameters.content as string,
+          });
+        } else if (actionType === 'edit' && tool.parameters.new_text) {
+          app.setAgentCodePreview({
+            path: tool.parameters.path as string,
+            actionType: 'edit',
+            content: tool.parameters.new_text as string,
+            oldContent: tool.parameters.old_text as string,
+          });
+        } else {
+          app.setAgentCodePreview(null);
+        }
       },
       onToolResult: (result, toolCall) => {
         const toolName = toolCall.tool.toLowerCase();
