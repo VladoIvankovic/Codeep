@@ -414,16 +414,28 @@ async function executeAgentTask(task: string, dryRun: boolean = false): Promise<
         const shortTarget = target.length > 50 ? '...' + target.slice(-47) : target;
         app.setAgentThinking(`${actionType}: ${shortTarget}`);
         
-        // Set code preview for write/edit operations
+        // Set code preview and add chat message for write/edit operations
         if (actionType === 'write' && tool.parameters.content) {
+          const filePath = tool.parameters.path as string;
+          const ext = filePath.split('.').pop() || '';
+          app.addMessage({
+            role: 'system',
+            content: `**Write** \`${filePath}\`\n\n\`\`\`${ext}\n${tool.parameters.content as string}\n\`\`\``,
+          });
           app.setAgentCodePreview({
-            path: tool.parameters.path as string,
+            path: filePath,
             actionType: 'write',
             content: tool.parameters.content as string,
           });
         } else if (actionType === 'edit' && tool.parameters.new_text) {
+          const filePath = tool.parameters.path as string;
+          const ext = filePath.split('.').pop() || '';
+          app.addMessage({
+            role: 'system',
+            content: `**Edit** \`${filePath}\`\n\n\`\`\`${ext}\n${tool.parameters.new_text as string}\n\`\`\``,
+          });
           app.setAgentCodePreview({
-            path: tool.parameters.path as string,
+            path: filePath,
             actionType: 'edit',
             content: tool.parameters.new_text as string,
             oldContent: tool.parameters.old_text as string,
