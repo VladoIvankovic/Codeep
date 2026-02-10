@@ -47,7 +47,7 @@ import {
   ProjectContext 
 } from '../utils/project';
 import { getCurrentVersion } from '../utils/update';
-import { getProviderList } from '../config/providers';
+import { getProviderList, getProvider } from '../config/providers';
 import { getSessionStats } from '../utils/tokenTracker';
 
 // State
@@ -1044,10 +1044,18 @@ function handleCommand(command: string, args: string[]): void {
     
     // Protocol and language
     case 'protocol': {
-      const protocols = Object.entries(PROTOCOLS).map(([key, name]) => ({
-        key,
-        label: name,
-      }));
+      const currentProvider = getCurrentProvider();
+      const providerConfig = getProvider(currentProvider.id);
+      const protocols = Object.entries(PROTOCOLS)
+        .filter(([key]) => providerConfig?.protocols[key as 'openai' | 'anthropic'])
+        .map(([key, name]) => ({
+          key,
+          label: name,
+        }));
+      if (protocols.length <= 1) {
+        app.notify(`${currentProvider.name} only supports ${protocols[0]?.label || 'one'} protocol`);
+        break;
+      }
       const currentProtocol = config.get('protocol') || 'openai';
       app.showSelect('Select Protocol', protocols, currentProtocol, (item) => {
         config.set('protocol', item.key as any);
