@@ -604,41 +604,36 @@ async function runSkill(nameOrShortcut: string, args: string[]): Promise<boolean
 
   trackSkillUsage(skill.name);
 
-  const { execSync } = await import('child_process');
+  const { spawnSync } = await import('child_process');
 
   try {
     const result = await executeSkill(skill, params, {
       onCommand: async (cmd: string) => {
-        try {
-          const output = execSync(cmd, {
-            cwd: projectPath || process.cwd(),
-            encoding: 'utf-8',
-            timeout: 60000,
-            stdio: ['pipe', 'pipe', 'pipe'],
-          });
-          const result = output.trim();
-          if (result) {
-            app.addMessage({ role: 'system', content: `\`${cmd}\`\n\`\`\`\n${result}\n\`\`\`` });
+        // Use spawnSync via shell for reliable stdout+stderr capture
+        const proc = spawnSync(cmd, {
+          cwd: projectPath || process.cwd(),
+          encoding: 'utf-8',
+          timeout: 60000,
+          shell: true,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        
+        const stdout = (proc.stdout || '').trim();
+        const stderr = (proc.stderr || '').trim();
+        const output = stdout || stderr || '';
+        
+        if (proc.status === 0) {
+          if (output) {
+            app.addMessage({ role: 'system', content: `\`${cmd}\`\n\`\`\`\n${output}\n\`\`\`` });
           }
-          return result;
-        } catch (err) {
-          const error = err as { status?: number; stdout?: string; stderr?: string; message?: string };
-          const stderr = (error.stderr || '').trim();
-          const stdout = (error.stdout || '').trim();
-          // Git commands output progress/info to stderr even on success
-          if (error.status === 0 || stderr.includes('up-to-date') || stderr.includes('up to date') || stderr.includes('Already up to date')) {
-            const result = stdout || stderr;
-            if (result) {
-              app.addMessage({ role: 'system', content: `\`${cmd}\`\n\`\`\`\n${result}\n\`\`\`` });
-            }
-            return result;
-          }
-          const errOutput = stderr || stdout;
-          if (errOutput) {
-            app.addMessage({ role: 'system', content: `\`${cmd}\` failed:\n\`\`\`\n${errOutput}\n\`\`\`` });
-          }
-          throw new Error(errOutput || error.message || 'Command failed');
+          return output;
         }
+        
+        // Non-zero exit
+        if (output) {
+          app.addMessage({ role: 'system', content: `\`${cmd}\` failed:\n\`\`\`\n${output}\n\`\`\`` });
+        }
+        throw new Error(output || `Command exited with code ${proc.status}`);
       },
 
       onPrompt: (prompt: string) => {
