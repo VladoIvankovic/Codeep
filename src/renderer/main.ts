@@ -47,6 +47,7 @@ import {
 } from '../utils/project';
 import { getCurrentVersion } from '../utils/update';
 import { getProviderList } from '../config/providers';
+import { getSessionStats } from '../utils/tokenTracker';
 
 // State
 let projectPath = process.cwd();
@@ -55,6 +56,9 @@ let hasWriteAccess = false;
 let sessionId = getCurrentSessionId();
 let app: App;
 
+// Added file context (/add, /drop)
+const addedFiles: Map<string, { relativePath: string; content: string }> = new Map();
+
 /**
  * Get current status
  */
@@ -62,6 +66,7 @@ function getStatus(): StatusInfo {
   const provider = getCurrentProvider();
   const providers = getProviderList();
   const providerInfo = providers.find(p => p.id === provider.id);
+  const stats = getSessionStats();
   
   return {
     version: getCurrentVersion(),
@@ -72,6 +77,12 @@ function getStatus(): StatusInfo {
     hasWriteAccess,
     sessionId,
     messageCount: 0, // Will be updated
+    tokenStats: {
+      totalTokens: stats.totalTokens,
+      promptTokens: stats.totalPromptTokens,
+      completionTokens: stats.totalCompletionTokens,
+      requestCount: stats.requestCount,
+    },
   };
 }
 
@@ -80,8 +91,17 @@ let isAgentRunning = false;
 let agentAbortController: AbortController | null = null;
 
 /**
- * Handle chat submission
+ * Format added files as context to prepend to user messages
  */
+function formatAddedFilesContext(): string {
+  if (addedFiles.size === 0) return '';
+  const parts: string[] = ['[Attached files]'];
+  for (const [, file] of addedFiles) {
+    parts.push(`\nFile: ${file.relativePath}\n\`\`\`\n${file.content}\n\`\`\``);
+  }
+  return parts.join('\n') + '\n\n';
+}
+
 async function handleSubmit(message: string): Promise<void> {
   // Check if we're waiting for interactive mode answers
   if (pendingInteractiveContext) {
@@ -165,8 +185,12 @@ async function handleSubmit(message: string): Promise<void> {
     // Get conversation history for context
     const history = app.getChatHistory();
     
+    // Prepend added file context if any
+    const fileContext = formatAddedFilesContext();
+    const enrichedMessage = fileContext ? fileContext + message : message;
+    
     const response = await chat(
-      message,
+      enrichedMessage,
       history,
       (chunk) => {
         app.addStreamChunk(chunk);
@@ -389,7 +413,11 @@ async function executeAgentTask(task: string, dryRun: boolean = false): Promise<
   const context = projectContext;
   
   try {
-    const result = await runAgent(task, context, {
+    // Enrich task with added file context if any
+    const fileContext = formatAddedFilesContext();
+    const enrichedTask = fileContext ? fileContext + task : task;
+    
+    const result = await runAgent(enrichedTask, context, {
       dryRun,
       onIteration: (iteration) => {
         app.updateAgentProgress(iteration);
@@ -414,20 +442,57 @@ async function executeAgentTask(task: string, dryRun: boolean = false): Promise<
         const shortTarget = target.length > 50 ? '...' + target.slice(-47) : target;
         app.setAgentThinking(`${actionType}: ${shortTarget}`);
         
-        // Add chat message for write/edit operations
+        // Add chat message with diff preview for write/edit operations
         if (actionType === 'write' && tool.parameters.content) {
           const filePath = tool.parameters.path as string;
-          const ext = filePath.split('.').pop() || '';
-          app.addMessage({
-            role: 'system',
-            content: `**Write** \`${filePath}\`\n\n\`\`\`${ext}\n${tool.parameters.content as string}\n\`\`\``,
-          });
+          try {
+            const { createFileDiff, formatDiffForDisplay } = require('../utils/diffPreview');
+            const diff = createFileDiff(filePath, tool.parameters.content as string, context.root);
+            const diffText = formatDiffForDisplay(diff);
+            const additions = diff.hunks.reduce((sum: number, h: any) => sum + h.lines.filter((l: any) => l.type === 'add').length, 0);
+            const deletions = diff.hunks.reduce((sum: number, h: any) => sum + h.lines.filter((l: any) => l.type === 'remove').length, 0);
+            app.addMessage({
+              role: 'system',
+              content: `**${diff.type === 'create' ? 'Create' : 'Write'}** \`${filePath}\` (+${additions} -${deletions})\n\n\`\`\`diff\n${diffText}\n\`\`\``,
+            });
+          } catch {
+            const ext = filePath.split('.').pop() || '';
+            app.addMessage({
+              role: 'system',
+              content: `**Write** \`${filePath}\`\n\n\`\`\`${ext}\n${tool.parameters.content as string}\n\`\`\``,
+            });
+          }
         } else if (actionType === 'edit' && tool.parameters.new_text) {
           const filePath = tool.parameters.path as string;
-          const ext = filePath.split('.').pop() || '';
+          try {
+            const { createEditDiff, formatDiffForDisplay } = require('../utils/diffPreview');
+            const diff = createEditDiff(filePath, tool.parameters.old_text as string, tool.parameters.new_text as string, context.root);
+            if (diff) {
+              const additions = diff.hunks.reduce((sum: number, h: any) => sum + h.lines.filter((l: any) => l.type === 'add').length, 0);
+              const deletions = diff.hunks.reduce((sum: number, h: any) => sum + h.lines.filter((l: any) => l.type === 'remove').length, 0);
+              app.addMessage({
+                role: 'system',
+                content: `**Edit** \`${filePath}\` (+${additions} -${deletions})\n\n\`\`\`diff\n${formatDiffForDisplay(diff)}\n\`\`\``,
+              });
+            } else {
+              const ext = filePath.split('.').pop() || '';
+              app.addMessage({
+                role: 'system',
+                content: `**Edit** \`${filePath}\`\n\n\`\`\`${ext}\n${tool.parameters.new_text as string}\n\`\`\``,
+              });
+            }
+          } catch {
+            const ext = filePath.split('.').pop() || '';
+            app.addMessage({
+              role: 'system',
+              content: `**Edit** \`${filePath}\`\n\n\`\`\`${ext}\n${tool.parameters.new_text as string}\n\`\`\``,
+            });
+          }
+        } else if (actionType === 'delete') {
+          const filePath = tool.parameters.path as string;
           app.addMessage({
             role: 'system',
-            content: `**Edit** \`${filePath}\`\n\n\`\`\`${ext}\n${tool.parameters.new_text as string}\n\`\`\``,
+            content: `**Delete** \`${filePath}\``,
           });
         }
       },
@@ -464,6 +529,32 @@ async function executeAgentTask(task: string, dryRun: boolean = false): Promise<
       const summary = result.finalResponse || `Completed ${result.actions.length} actions in ${result.iterations} steps.`;
       app.addMessage({ role: 'assistant', content: summary });
       app.notify(`Agent completed: ${result.actions.length} actions`);
+      
+      // Auto-commit if enabled and there were file changes
+      if (!dryRun && config.get('agentAutoCommit') && result.actions.length > 0) {
+        try {
+          const { autoCommitAgentChanges, createBranchAndCommit } = await import('../utils/git');
+          const useBranch = config.get('agentAutoCommitBranch');
+          
+          if (useBranch) {
+            const commitResult = createBranchAndCommit(task, result.actions, context.root);
+            if (commitResult.success) {
+              app.addMessage({ role: 'system', content: `Auto-committed on branch \`${commitResult.branch}\` (${commitResult.hash?.slice(0, 7)})` });
+            } else if (commitResult.error !== 'No changes detected by git') {
+              app.addMessage({ role: 'system', content: `Auto-commit failed: ${commitResult.error}` });
+            }
+          } else {
+            const commitResult = autoCommitAgentChanges(task, result.actions, context.root);
+            if (commitResult.success) {
+              app.addMessage({ role: 'system', content: `Auto-committed: ${commitResult.hash?.slice(0, 7)}` });
+            } else if (commitResult.error !== 'No changes detected by git') {
+              app.addMessage({ role: 'system', content: `Auto-commit failed: ${commitResult.error}` });
+            }
+          }
+        } catch {
+          // Silently ignore commit errors
+        }
+      }
     } else if (result.aborted) {
       app.addMessage({ role: 'assistant', content: 'Agent stopped by user.' });
       app.notify('Agent stopped');
@@ -484,6 +575,100 @@ async function executeAgentTask(task: string, dryRun: boolean = false): Promise<
     agentAbortController = null;
     app.setAgentRunning(false);
   }
+}
+
+/**
+ * Run a skill by name or shortcut with the given args.
+ * Wires the skill execution engine to App's UI.
+ */
+async function runSkill(nameOrShortcut: string, args: string[]): Promise<boolean> {
+  const { findSkill, parseSkillArgs, executeSkill, trackSkillUsage } = await import('../utils/skills');
+  const skill = findSkill(nameOrShortcut);
+  if (!skill) return false;
+
+  // Pre-flight checks
+  if (skill.requiresGit) {
+    const { getGitStatus } = await import('../utils/git');
+    if (!projectPath || !getGitStatus(projectPath).isRepo) {
+      app.notify('This skill requires a git repository');
+      return true;
+    }
+  }
+  if (skill.requiresWriteAccess && !hasWriteAccess) {
+    app.notify('This skill requires write access. Use /grant first.');
+    return true;
+  }
+
+  const params = parseSkillArgs(args.join(' '), skill);
+  app.addMessage({ role: 'user', content: `/${skill.name}${args.length ? ' ' + args.join(' ') : ''}` });
+
+  trackSkillUsage(skill.name);
+
+  const { execSync } = await import('child_process');
+
+  try {
+    const result = await executeSkill(skill, params, {
+      onCommand: async (cmd: string) => {
+        try {
+          const output = execSync(cmd, {
+            cwd: projectPath || process.cwd(),
+            encoding: 'utf-8',
+            timeout: 60000,
+          });
+          return output.trim();
+        } catch (err) {
+          const error = err as { stderr?: string; message?: string };
+          throw new Error(error.stderr || error.message || 'Command failed');
+        }
+      },
+
+      onPrompt: (prompt: string) => {
+        return new Promise<string>((resolve, reject) => {
+          handleSubmit(prompt).then(() => {
+            // The AI response will be displayed in chat.
+            // We resolve with an empty string since the response is already shown.
+            resolve('');
+          }).catch(reject);
+        });
+      },
+
+      onAgent: (task: string) => {
+        return new Promise<string>((resolve, reject) => {
+          if (!projectContext) {
+            reject(new Error('Agent requires project context'));
+            return;
+          }
+          runAgentTask(task).then(() => resolve('Agent completed')).catch(reject);
+        });
+      },
+
+      onConfirm: (message: string) => {
+        return new Promise<boolean>((resolve) => {
+          app.showConfirm({
+            title: 'Confirm',
+            message: [message],
+            confirmLabel: 'Yes',
+            cancelLabel: 'No',
+            onConfirm: () => resolve(true),
+            onCancel: () => resolve(false),
+          });
+        });
+      },
+
+      onNotify: (message: string) => {
+        app.notify(message);
+      },
+    });
+
+    if (!result.success && result.output !== 'Cancelled by user') {
+      app.notify(`Skill failed: ${result.output}`);
+    }
+  } catch (err) {
+    app.notify(`Skill error: ${(err as Error).message}`);
+    trackSkillUsage(skill.name, false);
+  }
+
+  return true;
 }
 
 /**
@@ -666,31 +851,6 @@ function handleCommand(command: string, args: string[]): void {
       break;
     }
     
-    case 'commit': {
-      if (!projectContext) {
-        app.notify('No project context');
-        return;
-      }
-      
-      import('../utils/git').then(({ getGitDiff, getGitStatus, suggestCommitMessage }) => {
-        const status = getGitStatus(projectPath);
-        if (!status.isRepo) {
-          app.notify('Not a git repository');
-          return;
-        }
-        
-        const diff = getGitDiff(true, projectPath);
-        if (!diff.success || !diff.diff) {
-          app.notify('No staged changes. Use git add first.');
-          return;
-        }
-        
-        const suggestion = suggestCommitMessage(diff.diff);
-        app.addMessage({ role: 'user', content: '/commit' });
-        handleSubmit(`Generate a commit message for these staged changes. Suggestion: "${suggestion}"\n\nDiff:\n\`\`\`diff\n${diff.diff.slice(0, 2000)}\n\`\`\``);
-      });
-      break;
-    }
     
     case 'undo': {
       import('../utils/agent').then(({ undoLastAction }) => {
@@ -1122,6 +1282,86 @@ function handleCommand(command: string, args: string[]): void {
       break;
     }
     
+    // File context commands
+    case 'add': {
+      if (!args.length) {
+        if (addedFiles.size === 0) {
+          app.notify('Usage: /add <file-path> [file2] ... | No files added');
+        } else {
+          const fileList = Array.from(addedFiles.values()).map(f => f.relativePath).join(', ');
+          app.notify(`Added files (${addedFiles.size}): ${fileList}`);
+        }
+        return;
+      }
+      
+      const path = require('path');
+      const fs = require('fs');
+      const root = projectContext?.root || projectPath;
+      let added = 0;
+      const errors: string[] = [];
+      
+      for (const filePath of args) {
+        const fullPath = path.isAbsolute(filePath) ? filePath : path.join(root, filePath);
+        const relativePath = path.isAbsolute(filePath) ? path.relative(root, filePath) : filePath;
+        
+        try {
+          const stat = fs.statSync(fullPath);
+          if (!stat.isFile()) {
+            errors.push(`${filePath}: not a file`);
+            continue;
+          }
+          if (stat.size > 100000) {
+            errors.push(`${filePath}: too large (${Math.round(stat.size / 1024)}KB, max 100KB)`);
+            continue;
+          }
+          const content = fs.readFileSync(fullPath, 'utf-8');
+          addedFiles.set(fullPath, { relativePath, content });
+          added++;
+        } catch {
+          errors.push(`${filePath}: file not found`);
+        }
+      }
+      
+      if (added > 0) {
+        app.notify(`Added ${added} file(s) to context (${addedFiles.size} total)`);
+      }
+      if (errors.length > 0) {
+        app.notify(errors.join(', '));
+      }
+      break;
+    }
+    
+    case 'drop': {
+      if (!args.length) {
+        if (addedFiles.size === 0) {
+          app.notify('No files in context');
+        } else {
+          const count = addedFiles.size;
+          addedFiles.clear();
+          app.notify(`Dropped all ${count} file(s) from context`);
+        }
+        return;
+      }
+      
+      const path = require('path');
+      const root = projectContext?.root || projectPath;
+      let dropped = 0;
+      
+      for (const filePath of args) {
+        const fullPath = path.isAbsolute(filePath) ? filePath : path.join(root, filePath);
+        if (addedFiles.delete(fullPath)) {
+          dropped++;
+        }
+      }
+      
+      if (dropped > 0) {
+        app.notify(`Dropped ${dropped} file(s) (${addedFiles.size} remaining)`);
+      } else {
+        app.notify('File not found in context. Use /add to see added files.');
+      }
+      break;
+    }
+    
     // Agent history and changes
     case 'history': {
       import('../utils/agent').then(({ getAgentHistory }) => {
@@ -1276,129 +1516,37 @@ function handleCommand(command: string, args: string[]): void {
     }
     
     // Skills shortcuts
-    case 'c': {
-      handleCommand('commit', []);
-      break;
-    }
-    
-    case 't': {
-      if (!projectContext) {
-        app.notify('No project context');
-        return;
-      }
-      app.addMessage({ role: 'user', content: '/test' });
-      handleSubmit('Generate and run tests for the current project. Focus on untested code.');
-      break;
-    }
-    
-    case 'd': {
-      if (!projectContext) {
-        app.notify('No project context');
-        return;
-      }
-      app.addMessage({ role: 'user', content: '/docs' });
-      handleSubmit('Add documentation to the code. Focus on functions and classes that lack proper documentation.');
-      break;
-    }
-    
-    case 'r': {
-      if (!projectContext) {
-        app.notify('No project context');
-        return;
-      }
-      app.addMessage({ role: 'user', content: '/refactor' });
-      handleSubmit('Refactor the code to improve quality, readability, and maintainability.');
-      break;
-    }
-    
-    case 'f': {
-      if (!projectContext) {
-        app.notify('No project context');
-        return;
-      }
-      app.addMessage({ role: 'user', content: '/fix' });
-      handleSubmit('Debug and fix any issues in the current code. Look for bugs, errors, and potential problems.');
-      break;
-    }
-    
-    case 'e': {
-      if (!args.length) {
-        app.notify('Usage: /e <file or code to explain>');
-        return;
-      }
-      app.addMessage({ role: 'user', content: `/explain ${args.join(' ')}` });
-      handleSubmit(`Explain this code or concept: ${args.join(' ')}`);
-      break;
-    }
-    
-    case 'o': {
-      if (!projectContext) {
-        app.notify('No project context');
-        return;
-      }
-      app.addMessage({ role: 'user', content: '/optimize' });
-      handleSubmit('Optimize the code for better performance. Focus on efficiency and speed improvements.');
-      break;
-    }
-    
-    case 'b': {
-      if (!projectContext) {
-        app.notify('No project context');
-        return;
-      }
-      app.addMessage({ role: 'user', content: '/debug' });
-      handleSubmit('Help debug the current issue. Analyze the code and identify the root cause of problems.');
-      break;
-    }
-    
-    case 'p': {
-      // Push shortcut
-      import('child_process').then(({ execSync }) => {
-        try {
-          execSync('git push', { cwd: projectPath, encoding: 'utf-8' });
-          app.notify('Pushed successfully');
-        } catch (err) {
-          app.notify(`Push failed: ${(err as Error).message}`);
-        }
-      });
-      break;
-    }
-    
-    // Full skill names
+    // Skill shortcuts and full names — delegated to skill execution engine
+    case 'c':
+    case 'commit':
+    case 't':
     case 'test':
+    case 'd':
     case 'docs':
+    case 'r':
     case 'refactor':
+    case 'f':
     case 'fix':
+    case 'e':
     case 'explain':
+    case 'o':
     case 'optimize':
-    case 'debug': {
-      const skillMap: Record<string, string> = {
-        test: 't',
-        docs: 'd',
-        refactor: 'r',
-        fix: 'f',
-        explain: 'e',
-        optimize: 'o',
-        debug: 'b',
-      };
-      handleCommand(skillMap[command], args);
-      break;
-    }
-    
-    case 'push': {
-      handleCommand('p', args);
-      break;
-    }
-    
-    case 'pull': {
-      import('child_process').then(({ execSync }) => {
-        try {
-          execSync('git pull', { cwd: projectPath, encoding: 'utf-8' });
-          app.notify('Pulled successfully');
-        } catch (err) {
-          app.notify(`Pull failed: ${(err as Error).message}`);
-        }
-      });
+    case 'b':
+    case 'debug':
+    case 'p':
+    case 'push':
+    case 'pull':
+    case 'amend':
+    case 'pr':
+    case 'changelog':
+    case 'branch':
+    case 'stash':
+    case 'unstash':
+    case 'build':
+    case 'deploy':
+    case 'release':
+    case 'publish': {
+      runSkill(command, args);
       break;
     }
     
@@ -1516,7 +1664,12 @@ function handleCommand(command: string, args: string[]): void {
     }
     
     default:
-      app.notify(`Unknown command: /${command}`);
+      // Try to run as a skill (handles custom skills and any built-in not in the switch)
+      runSkill(command, args).then(handled => {
+        if (!handled) {
+          app.notify(`Unknown command: /${command}`);
+        }
+      });
   }
 }
 

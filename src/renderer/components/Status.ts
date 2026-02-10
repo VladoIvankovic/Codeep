@@ -18,6 +18,12 @@ export interface StatusInfo {
   hasWriteAccess: boolean;
   sessionId: string;
   messageCount: number;
+  tokenStats?: {
+    totalTokens: number;
+    promptTokens: number;
+    completionTokens: number;
+    requestCount: number;
+  };
 }
 
 /**
@@ -62,8 +68,30 @@ export function renderStatusScreen(screen: Screen, status: StatusInfo): void {
     screen.write(4 + labelWidth, y, item.value, valueColor);
   }
   
+  // Token usage
+  if (status.tokenStats && status.tokenStats.requestCount > 0) {
+    const tokenY = contentStartY + items.length + 2;
+    screen.write(4, tokenY, 'Token Usage', fg.yellow + style.bold);
+    
+    const fmt = (n: number) => n < 1000 ? n.toString() : (n / 1000).toFixed(1) + 'K';
+    const tokenItems = [
+      { label: 'Requests', value: status.tokenStats.requestCount.toString() },
+      { label: 'Prompt', value: fmt(status.tokenStats.promptTokens) },
+      { label: 'Completion', value: fmt(status.tokenStats.completionTokens) },
+      { label: 'Total', value: fmt(status.tokenStats.totalTokens) },
+    ];
+    
+    for (let i = 0; i < tokenItems.length; i++) {
+      const item = tokenItems[i];
+      const y = tokenY + 1 + i;
+      screen.write(4, y, item.label + ':', fg.gray);
+      screen.write(4 + labelWidth, y, item.value, fg.white);
+    }
+  }
+
   // System info
-  const sysInfoY = contentStartY + items.length + 2;
+  const tokenSectionHeight = (status.tokenStats && status.tokenStats.requestCount > 0) ? 7 : 0;
+  const sysInfoY = contentStartY + items.length + 2 + tokenSectionHeight;
   screen.write(4, sysInfoY, 'System', fg.yellow + style.bold);
   
   const sysItems = [

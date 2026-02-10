@@ -181,56 +181,135 @@ function finalizeHunk(hunk: DiffHunk): void {
 }
 
 /**
- * Simple LCS algorithm for diff
+ * Myers diff algorithm — finds the shortest edit script (SES).
+ * Returns matched line pairs as [oldIndex, newIndex][].
+ * The final entry is the sentinel [old.length, new.length].
  */
 function longestCommonSubsequence(
-  old: string[],
+  oldArr: string[],
   newArr: string[]
 ): [number, number][] {
-  const result: [number, number][] = [];
-  let oldIdx = 0;
-  let newIdx = 0;
-  
-  while (oldIdx < old.length && newIdx < newArr.length) {
-    if (old[oldIdx] === newArr[newIdx]) {
-      result.push([oldIdx, newIdx]);
-      oldIdx++;
-      newIdx++;
-    } else {
-      // Try to find match
-      let foundOld = -1;
-      let foundNew = -1;
-      
-      // Look ahead in new array
-      for (let i = newIdx + 1; i < Math.min(newIdx + 10, newArr.length); i++) {
-        if (old[oldIdx] === newArr[i]) {
-          foundNew = i;
-          break;
-        }
-      }
-      
-      // Look ahead in old array
-      for (let i = oldIdx + 1; i < Math.min(oldIdx + 10, old.length); i++) {
-        if (old[i] === newArr[newIdx]) {
-          foundOld = i;
-          break;
-        }
-      }
-      
-      if (foundNew !== -1 && (foundOld === -1 || foundNew - newIdx < foundOld - oldIdx)) {
-        newIdx = foundNew;
-      } else if (foundOld !== -1) {
-        oldIdx = foundOld;
+  const N = oldArr.length;
+  const M = newArr.length;
+
+  // Trivial cases
+  if (N === 0 && M === 0) return [[0, 0]];
+  if (N === 0) return [[0, M]];
+  if (M === 0) return [[N, M]];
+
+  const MAX = N + M;
+  // V[k] stores the furthest-reaching x on diagonal k.
+  // Diagonals range from -MAX to +MAX, index with offset MAX.
+  const size = 2 * MAX + 1;
+  const V = new Int32Array(size);
+  V.fill(-1);
+  V[MAX + 1] = 0; // V[1] = 0
+
+  // Store each step's V snapshot for backtracking
+  const trace: Int32Array[] = [];
+
+  let found = false;
+  for (let d = 0; d <= MAX; d++) {
+    // Save current V before mutation
+    trace.push(V.slice());
+
+    for (let k = -d; k <= d; k += 2) {
+      const kIdx = k + MAX;
+      let x: number;
+      if (k === -d || (k !== d && V[kIdx - 1] < V[kIdx + 1])) {
+        x = V[kIdx + 1]; // move down
       } else {
-        oldIdx++;
-        newIdx++;
+        x = V[kIdx - 1] + 1; // move right
+      }
+      let y = x - k;
+
+      // Follow diagonal (matching lines)
+      while (x < N && y < M && oldArr[x] === newArr[y]) {
+        x++;
+        y++;
+      }
+
+      V[kIdx] = x;
+
+      if (x >= N && y >= M) {
+        found = true;
+        break;
       }
     }
+    if (found) break;
   }
-  
-  // Add end markers
-  result.push([old.length, newArr.length]);
-  
+
+  // Backtrack through trace to recover the edit path
+  let x = N;
+  let y = M;
+  const edits: Array<{ prevX: number; prevY: number; x: number; y: number }> = [];
+
+  for (let d = trace.length - 1; d >= 0; d--) {
+    const Vd = trace[d];
+    const k = x - y;
+    const kIdx = k + MAX;
+
+    let prevK: number;
+    if (k === -d || (k !== d && Vd[kIdx - 1] < Vd[kIdx + 1])) {
+      prevK = k + 1; // came from above (insertion)
+    } else {
+      prevK = k - 1; // came from left (deletion)
+    }
+
+    const prevX = Vd[prevK + MAX];
+    const prevY = prevX - prevK;
+
+    // Record diagonal moves (matches) between prevX,prevY and x,y
+    edits.push({ prevX, prevY, x, y });
+
+    x = prevX;
+    y = prevY;
+  }
+
+  edits.reverse();
+
+  // Extract matched pairs from the diagonal segments
+  const result: [number, number][] = [];
+  for (const edit of edits) {
+    // The diagonal portion: from (edit.prevX, edit.prevY) moving diagonally to where the non-diagonal step leads to (edit.x, edit.y)
+    // The non-diagonal step comes first, then diagonal. So diagonal is from (startX, startY) to (edit.x, edit.y)
+    // where startX/startY is one step from prevX/prevY.
+    let sx = edit.prevX;
+    let sy = edit.prevY;
+
+    // The non-diagonal step
+    if (sx < edit.x && sy < edit.y) {
+      // Both moved — this is diagonal only if lines match
+      // Actually in Myers, the non-diagonal step is exactly 1 move (right or down)
+      // followed by diagonal matches. Let's just skip non-diagonal and collect diagonals.
+    }
+
+    // Determine the start of diagonal: prevX,prevY + one step
+    const k = edit.x - edit.y;
+    const prevK = edit.prevX - edit.prevY;
+    if (prevK !== k) {
+      // There was a non-diagonal step
+      if (k === prevK + 1) {
+        // Moved right (deletion in old)
+        sx = edit.prevX + 1;
+        sy = edit.prevY;
+      } else {
+        // Moved down (insertion in new)
+        sx = edit.prevX;
+        sy = edit.prevY + 1;
+      }
+    }
+
+    // Collect diagonal matches
+    while (sx < edit.x && sy < edit.y) {
+      result.push([sx, sy]);
+      sx++;
+      sy++;
+    }
+  }
+
+  // Sentinel
+  result.push([N, M]);
   return result;
 }
 

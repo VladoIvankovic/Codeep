@@ -4,6 +4,8 @@ import { ProjectContext } from '../utils/project';
 import { getProvider, getProviderBaseUrl, getProviderAuthHeader } from '../config/providers';
 import { logApiRequest, logApiResponse, logAppError } from '../utils/logger';
 import { loadProjectIntelligence, generateContextFromIntelligence, ProjectIntelligence } from '../utils/projectIntelligence';
+import { loadProjectRules } from '../utils/agent';
+import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from '../utils/tokenTracker';
 
 // Error messages by language
 const ERROR_MESSAGES: Record<string, Record<string, string>> = {
@@ -12,6 +14,60 @@ const ERROR_MESSAGES: Record<string, Record<string, string>> = {
     timeout: 'Request timed out. Please try again.',
     retrying: 'Connection failed, retrying...',
     apiError: 'API error',
+  },
+  zh: {
+    noInternet: '没有网络连接。请检查您的网络。',
+    timeout: '请求超时。请重试。',
+    retrying: '连接失败，正在重试...',
+    apiError: 'API 错误',
+  },
+  es: {
+    noInternet: 'Sin conexión a internet. Verifique su red.',
+    timeout: 'La solicitud ha expirado. Inténtelo de nuevo.',
+    retrying: 'Conexión fallida, reintentando...',
+    apiError: 'Error de API',
+  },
+  hi: {
+    noInternet: 'इंटरनेट कनेक्शन नहीं है। कृपया अपना नेटवर्क जाँचें।',
+    timeout: 'अनुरोध का समय समाप्त हो गया। कृपया पुनः प्रयास करें।',
+    retrying: 'कनेक्शन विफल, पुनः प्रयास हो रहा है...',
+    apiError: 'API त्रुटि',
+  },
+  ar: {
+    noInternet: 'لا يوجد اتصال بالإنترنت. يرجى التحقق من شبكتك.',
+    timeout: 'انتهت مهلة الطلب. يرجى المحاولة مرة أخرى.',
+    retrying: 'فشل الاتصال، جارٍ إعادة المحاولة...',
+    apiError: 'خطأ في API',
+  },
+  pt: {
+    noInternet: 'Sem conexão com a internet. Verifique sua rede.',
+    timeout: 'A solicitação expirou. Tente novamente.',
+    retrying: 'Conexão falhou, tentando novamente...',
+    apiError: 'Erro de API',
+  },
+  fr: {
+    noInternet: 'Pas de connexion internet. Vérifiez votre réseau.',
+    timeout: 'La requête a expiré. Veuillez réessayer.',
+    retrying: 'Connexion échouée, nouvelle tentative...',
+    apiError: 'Erreur API',
+  },
+  de: {
+    noInternet: 'Keine Internetverbindung. Überprüfen Sie Ihr Netzwerk.',
+    timeout: 'Zeitüberschreitung der Anfrage. Bitte versuchen Sie es erneut.',
+    retrying: 'Verbindung fehlgeschlagen, erneuter Versuch...',
+    apiError: 'API-Fehler',
+  },
+  ja: {
+    noInternet: 'インターネット接続がありません。ネットワークを確認してください。',
+    timeout: 'リクエストがタイムアウトしました。もう一度お試しください。',
+    retrying: '接続に失敗しました。再試行中...',
+    apiError: 'APIエラー',
+  },
+  ru: {
+    noInternet: 'Нет подключения к интернету. Проверьте сеть.',
+    timeout: 'Время запроса истекло. Попробуйте снова.',
+    retrying: 'Сбой подключения, повторная попытка...',
+    apiError: 'Ошибка API',
   },
   hr: {
     noInternet: 'Nema internet konekcije. Provjerite mrežu.',
@@ -196,7 +252,7 @@ ${writeInfo}
 When the user mentions a file path, the file content will be automatically attached to their message.
 You can analyze, explain, or suggest improvements to the code.`;
       
-      return basePrompt + projectInfo;
+      return basePrompt + projectInfo + loadProjectRules(currentProjectContext.root);
     }
 
     // Fallback to basic project context
@@ -215,7 +271,7 @@ ${currentProjectContext.structure}
 When the user mentions a file path, the file content will be automatically attached to their message.
 You can analyze, explain, or suggest improvements to the code.`;
 
-    return basePrompt + projectInfo;
+    return basePrompt + projectInfo + loadProjectRules(currentProjectContext.root);
   }
 
   return basePrompt;
@@ -293,6 +349,8 @@ async function chatOpenAI(
       return handleOpenAIStream(response.body, onChunk!);
     } else {
       const data = await response.json() as OpenAIResponse;
+      const usage = extractOpenAIUsage(data);
+      if (usage) recordTokenUsage(usage, model, config.get('provider'));
       const content = data.choices[0]?.message?.content || '';
       return stripThinkTags(content);
     }
@@ -416,6 +474,8 @@ async function chatAnthropic(
       return handleAnthropicStream(response.body, onChunk!);
     } else {
       const data = await response.json() as AnthropicResponse;
+      const usage = extractAnthropicUsage(data);
+      if (usage) recordTokenUsage(usage, model, config.get('provider'));
       const content = data.content[0]?.text || '';
       return stripThinkTags(content);
     }

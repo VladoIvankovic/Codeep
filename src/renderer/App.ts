@@ -222,6 +222,9 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'copy': 'Copy code block',
   'paste': 'Paste from clipboard',
   'apply': 'Apply file changes',
+  'add': 'Add file to context',
+  'drop': 'Remove file from context',
+  'multiline': 'Toggle multi-line input',
   'test': 'Generate/run tests',
   'docs': 'Add documentation',
   'refactor': 'Improve code quality',
@@ -248,6 +251,9 @@ import { StatusInfo } from './components/Status';
 
 import { renderSettingsScreen, handleSettingsKey, SettingsState, SETTINGS } from './components/Settings';
 import { SelectItem } from './components/SelectScreen';
+import { renderExportPanel, handleExportKey as handleExportKeyComponent, ExportState } from './components/Export';
+import { renderLogoutPanel, handleLogoutKey as handleLogoutKeyComponent, LogoutState } from './components/Logout';
+import { renderSearchPanel, handleSearchKey as handleSearchKeyComponent, SearchState } from './components/Search';
 
 export interface Message {
   role: 'user' | 'assistant' | 'system';
@@ -375,6 +381,9 @@ export class App {
   private introInterval: NodeJS.Timeout | null = null;
   private introCallback: (() => void) | null = null;
   
+  // Multi-line input state
+  private isMultilineMode = false;
+
   // Inline login state
   private loginOpen = false;
   private loginStep: 'provider' | 'apikey' = 'provider';
@@ -393,8 +402,16 @@ export class App {
     'sessions', 'new', 'rename', 'search', 'export',
     'agent', 'agent-dry', 'stop', 'undo', 'undo-all', 'history', 'changes',
     'diff', 'commit', 'git-commit', 'push', 'pull', 'scan', 'review',
-    'copy', 'paste', 'apply',
+    'copy', 'paste', 'apply', 'add', 'drop',
     'test', 'docs', 'refactor', 'fix', 'explain', 'optimize', 'debug', 'skills',
+    'amend', 'pr', 'changelog', 'branch', 'stash', 'unstash',
+    'build', 'deploy', 'release', 'publish',
+    'component', 'api', 'model', 'hook', 'service', 'page', 'form', 'crud',
+    'security', 'profile', 'log', 'types', 'cleanup', 'modernize', 'migrate',
+    'split', 'rename', 'coverage', 'e2e', 'mock', 'readme', 'translate',
+    'docker', 'ci', 'env', 'k8s', 'terraform', 'nginx', 'monitor',
+    'test-fix', 'api-docs',
+    'multiline',
     'provider', 'model', 'protocol', 'lang', 'grant', 'login', 'logout',
     'context-save', 'context-load', 'context-clear', 'learn',
     'c', 't', 'd', 'r', 'f', 'e', 'o', 'b', 'p',
@@ -1051,6 +1068,13 @@ export class App {
         this.render();
         return;
       }
+      // In multiline mode, Escape submits the buffered input
+      if (this.isMultilineMode && !this.isLoading && !this.isStreaming) {
+        if (this.editor.getValue().trim()) {
+          this.submitInput();
+          return;
+        }
+      }
       if (this.isAgentRunning && this.options.onStopAgent) {
         this.options.onStopAgent();
         return;
@@ -1184,25 +1208,23 @@ export class App {
     
     // Enter to submit (only if not in autocomplete)
     if (event.key === 'enter' && !this.isLoading && !this.isStreaming && !this.showAutocomplete) {
-      const value = this.editor.getValue().trim();
-      if (value) {
-        this.editor.addToHistory(value);
-        this.editor.clear();
-        this.showAutocomplete = false;
-        
-        // Check for commands
-        if (value.startsWith('/')) {
-          this.handleCommand(value);
-        } else {
-          // Regular message
-          this.addMessage({ role: 'user', content: value });
-          this.setLoading(true);
-          this.options.onSubmit(value).catch(err => {
-            this.notify(`Error: ${err.message}`);
-            this.setLoading(false);
-          });
-        }
+      const rawValue = this.editor.getValue();
+
+      // Backslash continuation: if line ends with \, add newline instead of submitting
+      if (rawValue.endsWith('\\')) {
+        this.editor.setValue(rawValue.slice(0, -1) + '\n');
+        this.render();
+        return;
       }
+
+      // Multiline mode: Enter adds newline, Ctrl+Enter submits
+      if (this.isMultilineMode && !event.ctrl) {
+        this.editor.insert('\n');
+        this.render();
+        return;
+      }
+
+      this.submitInput();
       return;
     }
     
@@ -1315,122 +1337,77 @@ export class App {
    * Handle search screen keys
    */
   private handleSearchKey(event: KeyEvent): void {
-    if (event.key === 'escape') {
-      this.searchOpen = false;
-      this.searchCallback = null;
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'up') {
-      this.searchIndex = Math.max(0, this.searchIndex - 1);
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'down') {
-      this.searchIndex = Math.min(this.searchResults.length - 1, this.searchIndex + 1);
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'enter' && this.searchResults.length > 0) {
-      const selectedResult = this.searchResults[this.searchIndex];
-      const callback = this.searchCallback;
-      this.searchOpen = false;
-      this.searchCallback = null;
-      this.render();
-      if (callback) {
-        callback(selectedResult.messageIndex);
-      }
-      return;
-    }
+    const state: SearchState = {
+      searchOpen: this.searchOpen,
+      searchQuery: this.searchQuery,
+      searchResults: this.searchResults,
+      searchIndex: this.searchIndex,
+      searchCallback: this.searchCallback,
+    };
+    const callback = this.searchCallback;
+    handleSearchKeyComponent(event, state, {
+      onClose: () => {
+        this.searchOpen = false;
+        this.searchCallback = null;
+      },
+      onRender: () => {
+        this.searchIndex = state.searchIndex;
+        this.render();
+      },
+      onResult: (messageIndex: number) => {
+        if (callback) {
+          callback(messageIndex);
+        }
+      },
+    });
   }
   
   /**
    * Handle export screen keys
    */
   private handleExportKey(event: KeyEvent): void {
-    const formats: Array<'md' | 'json' | 'txt'> = ['md', 'json', 'txt'];
-    
-    if (event.key === 'escape') {
-      this.exportOpen = false;
-      this.exportCallback = null;
+    const state: ExportState = {
+      exportOpen: this.exportOpen,
+      exportIndex: this.exportIndex,
+      exportCallback: this.exportCallback,
+    };
+    const syncState = () => {
+      this.exportOpen = state.exportOpen;
+      this.exportIndex = state.exportIndex;
+      this.exportCallback = state.exportCallback;
       this.render();
-      return;
-    }
-    
-    if (event.key === 'up') {
-      this.exportIndex = this.exportIndex > 0 ? this.exportIndex - 1 : formats.length - 1;
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'down') {
-      this.exportIndex = this.exportIndex < formats.length - 1 ? this.exportIndex + 1 : 0;
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'enter') {
-      const selectedFormat = formats[this.exportIndex];
-      const callback = this.exportCallback;
-      this.exportOpen = false;
-      this.exportCallback = null;
-      this.render();
-      if (callback) {
-        callback(selectedFormat);
-      }
-      return;
-    }
+    };
+    handleExportKeyComponent(event, state, {
+      onClose: syncState,
+      onRender: syncState,
+      onExport: (format: 'md' | 'json' | 'txt') => {
+        const callback = this.exportCallback;
+        syncState();
+        if (callback) {
+          callback(format);
+        }
+      },
+    });
   }
   
   /**
    * Handle logout picker keys
    */
   private handleLogoutKey(event: KeyEvent): void {
-    // Options: providers + "all" + "cancel"
-    const totalOptions = this.logoutProviders.length + 2;
-    
-    if (event.key === 'escape') {
-      this.logoutOpen = false;
-      this.logoutCallback = null;
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'up') {
-      this.logoutIndex = Math.max(0, this.logoutIndex - 1);
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'down') {
-      this.logoutIndex = Math.min(totalOptions - 1, this.logoutIndex + 1);
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'enter') {
-      const callback = this.logoutCallback;
-      this.logoutOpen = false;
-      this.logoutCallback = null;
-      
-      let result: string | 'all' | null = null;
-      if (this.logoutIndex < this.logoutProviders.length) {
-        result = this.logoutProviders[this.logoutIndex].id;
-      } else if (this.logoutIndex === this.logoutProviders.length) {
-        result = 'all';
-      } else {
-        result = null; // Cancel
-      }
-      
-      this.render();
-      if (callback) {
-        callback(result);
-      }
-      return;
-    }
+    const state: LogoutState = {
+      logoutOpen: this.logoutOpen,
+      logoutIndex: this.logoutIndex,
+      logoutProviders: this.logoutProviders,
+      logoutCallback: this.logoutCallback,
+    };
+    handleLogoutKeyComponent(event, state, {
+      onClose: () => {},
+      onRender: () => this.render(),
+      onSelect: () => {},
+    });
+    this.logoutOpen = state.logoutOpen;
+    this.logoutIndex = state.logoutIndex;
+    this.logoutCallback = state.logoutCallback;
   }
   
   /**
@@ -1783,6 +1760,27 @@ export class App {
   }
   
   /**
+   * Submit the current input buffer (used by Enter and Escape-in-multiline)
+   */
+  private submitInput(): void {
+    const value = this.editor.getValue().trim();
+    if (!value) return;
+    this.editor.addToHistory(value);
+    this.editor.clear();
+    this.showAutocomplete = false;
+    if (value.startsWith('/')) {
+      this.handleCommand(value);
+    } else {
+      this.addMessage({ role: 'user', content: value });
+      this.setLoading(true);
+      this.options.onSubmit(value).catch(err => {
+        this.notify(`Error: ${err.message}`);
+        this.setLoading(false);
+      });
+    }
+  }
+
+  /**
    * Handle command
    */
   private handleCommand(input: string): void {
@@ -1805,6 +1803,13 @@ export class App {
       case 'clear':
         this.clearMessages();
         this.notify('Chat cleared');
+        break;
+
+      case 'multiline':
+        this.isMultilineMode = !this.isMultilineMode;
+        this.notify(this.isMultilineMode
+          ? 'Multi-line mode ON — Enter adds line, Esc sends'
+          : 'Multi-line mode OFF — Enter sends');
         break;
         
       case 'exit':
@@ -2114,13 +2119,19 @@ export class App {
       return;
     }
     
-    const prompt = '> ';
+    // Build prompt prefix — show line count for multi-line buffers
+    const lines = inputValue.split('\n');
+    const lineCount = lines.length;
+    const prompt = lineCount > 1 ? `[${lineCount}] > ` : this.isMultilineMode ? 'M> ' : '> ';
     const maxInputWidth = width - prompt.length - 1;
     
     // Show placeholder when input is empty
     if (!inputValue) {
       this.screen.write(0, y, prompt, fg.green);
-      this.screen.write(prompt.length, y, 'Type a message or /command...', fg.gray);
+      const placeholder = this.isMultilineMode
+        ? 'Multi-line mode (Enter=newline, Esc=send)...'
+        : 'Type a message or /command...';
+      this.screen.write(prompt.length, y, placeholder, fg.gray);
       
       if (!hideCursor) {
         this.screen.setCursor(prompt.length, y);
@@ -2131,23 +2142,31 @@ export class App {
       return;
     }
     
+    // For multi-line content, show the last line being edited
+    const lastLine = lines[lines.length - 1];
+    const displayInput = lineCount > 1 ? lastLine : inputValue;
+    // Cursor position within the last line
+    const charsBeforeLastLine = lineCount > 1 ? inputValue.lastIndexOf('\n') + 1 : 0;
+    const cursorInLine = cursorPos - charsBeforeLastLine;
+    
     let displayValue: string;
     let cursorX: number;
     
-    if (inputValue.length <= maxInputWidth) {
-      displayValue = inputValue;
-      cursorX = prompt.length + cursorPos;
+    if (displayInput.length <= maxInputWidth) {
+      displayValue = displayInput;
+      cursorX = prompt.length + Math.max(0, cursorInLine);
     } else {
-      const visibleStart = Math.max(0, cursorPos - Math.floor(maxInputWidth * 0.7));
+      const effectiveCursor = Math.max(0, cursorInLine);
+      const visibleStart = Math.max(0, effectiveCursor - Math.floor(maxInputWidth * 0.7));
       const visibleEnd = visibleStart + maxInputWidth;
       
       if (visibleStart > 0) {
-        displayValue = '…' + inputValue.slice(visibleStart + 1, visibleEnd);
+        displayValue = '…' + displayInput.slice(visibleStart + 1, visibleEnd);
       } else {
-        displayValue = inputValue.slice(0, maxInputWidth);
+        displayValue = displayInput.slice(0, maxInputWidth);
       }
       
-      cursorX = prompt.length + (cursorPos - visibleStart);
+      cursorX = prompt.length + (effectiveCursor - visibleStart);
     }
     
     this.screen.writeLine(y, prompt + displayValue, fg.green);
@@ -2156,7 +2175,7 @@ export class App {
     if (hideCursor) {
       this.screen.showCursor(false);
     } else {
-      this.screen.setCursor(cursorX, y);
+      this.screen.setCursor(Math.min(cursorX, width - 1), y);
       this.screen.showCursor(true);
     }
   }
@@ -3017,147 +3036,36 @@ export class App {
    * Render inline search screen
    */
   private renderInlineSearch(startY: number, width: number, availableHeight: number): void {
-    let y = startY;
-    
-    // Separator line
-    this.screen.horizontalLine(y++, '─', PRIMARY_COLOR);
-    
-    // Title
-    this.screen.writeLine(y++, 'Search Results', PRIMARY_COLOR + style.bold);
-    
-    // Query
-    this.screen.write(0, y, 'Query: ', fg.white);
-    this.screen.write(7, y, `"${this.searchQuery}"`, fg.cyan);
-    if (this.searchResults.length > 0) {
-      this.screen.write(9 + this.searchQuery.length, y, ` (${this.searchResults.length} ${this.searchResults.length === 1 ? 'result' : 'results'})`, fg.gray);
-    }
-    y++;
-    y++;
-    
-    if (this.searchResults.length === 0) {
-      this.screen.writeLine(y++, 'No results found.', fg.yellow);
-    } else {
-      const maxVisible = availableHeight - 6;
-      const visibleStart = Math.max(0, this.searchIndex - Math.floor(maxVisible / 2));
-      const visibleResults = this.searchResults.slice(visibleStart, visibleStart + maxVisible);
-      
-      for (let i = 0; i < visibleResults.length; i++) {
-        const result = visibleResults[i];
-        const actualIndex = visibleStart + i;
-        const isSelected = actualIndex === this.searchIndex;
-        
-        const prefix = isSelected ? '▸ ' : '  ';
-        const roleColor = result.role === 'user' ? fg.green : fg.blue;
-        
-        // First line: role and message number
-        this.screen.write(0, y, prefix, isSelected ? PRIMARY_COLOR : '');
-        this.screen.write(2, y, `[${result.role.toUpperCase()}]`, roleColor + style.bold);
-        this.screen.write(2 + result.role.length + 2, y, ` Message #${result.messageIndex + 1}`, fg.gray);
-        y++;
-        
-        // Second line: matched text (truncated)
-        const maxTextWidth = width - 4;
-        const matchedText = result.matchedText.length > maxTextWidth 
-          ? result.matchedText.slice(0, maxTextWidth - 3) + '...'
-          : result.matchedText;
-        this.screen.writeLine(y, '  ' + matchedText, fg.white);
-        y++;
-        
-        if (i < visibleResults.length - 1) y++; // spacing between results
-      }
-    }
-    
-    // Footer
-    y = startY + availableHeight - 1;
-    this.screen.writeLine(y, '↑↓ Navigate • Enter Jump to message • Esc Close', fg.gray);
+    renderSearchPanel(this.screen, startY, width, availableHeight, {
+      searchOpen: this.searchOpen,
+      searchQuery: this.searchQuery,
+      searchResults: this.searchResults,
+      searchIndex: this.searchIndex,
+      searchCallback: this.searchCallback,
+    });
   }
   
   /**
    * Render inline export screen
    */
   private renderInlineExport(startY: number, width: number): void {
-    const formats = [
-      { id: 'md', name: 'Markdown', desc: 'Formatted with headers and separators' },
-      { id: 'json', name: 'JSON', desc: 'Structured data format' },
-      { id: 'txt', name: 'Plain Text', desc: 'Simple text format' },
-    ];
-    
-    let y = startY;
-    
-    // Separator line
-    this.screen.horizontalLine(y++, '─', fg.green);
-    
-    // Title
-    this.screen.writeLine(y++, 'Export Chat', fg.green + style.bold);
-    y++;
-    
-    this.screen.writeLine(y++, 'Select export format:', fg.white);
-    y++;
-    
-    for (let i = 0; i < formats.length; i++) {
-      const format = formats[i];
-      const isSelected = i === this.exportIndex;
-      const prefix = isSelected ? '› ' : '  ';
-      
-      this.screen.write(0, y, prefix, isSelected ? fg.green : '');
-      this.screen.write(2, y, format.name.padEnd(12), isSelected ? fg.green + style.bold : fg.white);
-      this.screen.write(14, y, ' - ' + format.desc, fg.gray);
-      y++;
-    }
-    
-    y++;
-    this.screen.writeLine(y, '↑↓ Navigate • Enter Export • Esc Cancel', fg.gray);
+    renderExportPanel(this.screen, startY, width, {
+      exportOpen: this.exportOpen,
+      exportIndex: this.exportIndex,
+      exportCallback: this.exportCallback,
+    });
   }
   
   /**
    * Render inline logout picker
    */
   private renderInlineLogout(startY: number, width: number): void {
-    let y = startY;
-    
-    // Separator line
-    this.screen.horizontalLine(y++, '─', fg.cyan);
-    
-    // Title
-    this.screen.writeLine(y++, 'Select provider to logout:', fg.cyan + style.bold);
-    y++;
-    
-    if (this.logoutProviders.length === 0) {
-      this.screen.writeLine(y++, 'No providers configured.', fg.yellow);
-      this.screen.writeLine(y++, 'Press Escape to go back.', fg.gray);
-      return;
-    }
-    
-    // Provider options
-    for (let i = 0; i < this.logoutProviders.length; i++) {
-      const provider = this.logoutProviders[i];
-      const isSelected = i === this.logoutIndex;
-      const prefix = isSelected ? '→ ' : '  ';
-      
-      this.screen.write(0, y, prefix, isSelected ? fg.green : '');
-      this.screen.write(2, y, provider.name, isSelected ? fg.green + style.bold : fg.white);
-      if (provider.isCurrent) {
-        this.screen.write(2 + provider.name.length + 1, y, '(current)', fg.cyan);
-      }
-      y++;
-    }
-    
-    // "All" option
-    const allIndex = this.logoutProviders.length;
-    const isAllSelected = this.logoutIndex === allIndex;
-    this.screen.write(0, y, isAllSelected ? '→ ' : '  ', isAllSelected ? fg.red : '');
-    this.screen.write(2, y, 'Logout from all providers', isAllSelected ? fg.red + style.bold : fg.yellow);
-    y++;
-    
-    // "Cancel" option
-    const cancelIndex = this.logoutProviders.length + 1;
-    const isCancelSelected = this.logoutIndex === cancelIndex;
-    this.screen.write(0, y, isCancelSelected ? '→ ' : '  ', isCancelSelected ? fg.blue : '');
-    this.screen.write(2, y, 'Cancel', isCancelSelected ? fg.blue + style.bold : fg.gray);
-    y++;
-    
-    y++;
-    this.screen.writeLine(y, '↑↓ Navigate • Enter Select • Esc Cancel', fg.gray);
+    renderLogoutPanel(this.screen, startY, width, {
+      logoutOpen: this.logoutOpen,
+      logoutIndex: this.logoutIndex,
+      logoutProviders: this.logoutProviders,
+      logoutCallback: this.logoutCallback,
+    });
   }
   
   /**
