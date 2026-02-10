@@ -121,6 +121,12 @@ export class Input {
       return event;
     }
     
+    // Enter (also handle \r\n sent by some terminals)
+    if (data === '\r' || data === '\n' || data === '\r\n') {
+      event.key = 'enter';
+      return event;
+    }
+    
     // Detect paste: multiple printable characters at once (not escape sequences)
     if (data.length > 1 && !data.startsWith('\x1b')) {
       // Check if it's all printable characters (paste event)
@@ -214,12 +220,6 @@ export class Input {
     if (data === '\x14') {
       event.key = 't';
       event.ctrl = true;
-      return event;
-    }
-    
-    // Enter
-    if (data === '\r' || data === '\n') {
-      event.key = 'enter';
       return event;
     }
     
