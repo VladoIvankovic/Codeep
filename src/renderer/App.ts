@@ -1400,14 +1400,17 @@ export class App {
       logoutProviders: this.logoutProviders,
       logoutCallback: this.logoutCallback,
     };
+    const syncState = () => {
+      this.logoutOpen = state.logoutOpen;
+      this.logoutIndex = state.logoutIndex;
+      this.logoutCallback = state.logoutCallback;
+    };
     handleLogoutKeyComponent(event, state, {
       onClose: () => {},
-      onRender: () => this.render(),
+      onRender: () => { syncState(); this.render(); },
       onSelect: () => {},
     });
-    this.logoutOpen = state.logoutOpen;
-    this.logoutIndex = state.logoutIndex;
-    this.logoutCallback = state.logoutCallback;
+    syncState();
   }
   
   /**
