@@ -77,7 +77,7 @@ function getStatus(): StatusInfo {
     projectPath,
     hasWriteAccess,
     sessionId,
-    messageCount: 0, // Will be updated
+    messageCount: app ? app.getMessages().length : 0,
     tokenStats: {
       totalTokens: stats.totalTokens,
       promptTokens: stats.totalPromptTokens,
