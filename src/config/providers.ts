@@ -76,6 +76,25 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'MINIMAX_API_KEY',
     subscribeUrl: 'https://platform.minimax.io/subscribe/coding-plan?code=2lWvoWUhrp&source=link',
   },
+  'anthropic': {
+    name: 'Anthropic',
+    description: 'Claude AI models',
+    protocols: {
+      anthropic: {
+        baseUrl: 'https://api.anthropic.com',
+        authHeader: 'x-api-key',
+        supportsNativeTools: true,
+      },
+    },
+    models: [
+      { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', description: 'Best balance of speed and intelligence' },
+      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', description: 'Fastest and most affordable' },
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', description: 'Most capable model' },
+    ],
+    defaultModel: 'claude-sonnet-4-5-20250929',
+    defaultProtocol: 'anthropic',
+    envKey: 'ANTHROPIC_API_KEY',
+  },
 };
 
 export type ProviderId = keyof typeof PROVIDERS;
