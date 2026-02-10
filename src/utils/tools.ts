@@ -13,6 +13,7 @@ const debug = (...args: any[]) => {
 import { join, dirname, relative, resolve, isAbsolute } from 'path';
 import { executeCommand, CommandResult } from './shell';
 import { recordWrite, recordEdit, recordDelete, recordMkdir, recordCommand } from './history';
+import { loadIgnoreRules, isIgnored } from './gitignore';
 
 // OpenAI Function Calling format
 export interface OpenAITool {
@@ -83,10 +84,10 @@ export const AGENT_TOOLS = {
   },
   edit_file: {
     name: 'edit_file',
-    description: 'Edit an existing file by replacing specific text. Use for targeted changes.',
+    description: 'Edit an existing file by replacing specific text. The old_text must match exactly ONE location in the file. If it matches multiple locations, include more surrounding context to make it unique.',
     parameters: {
       path: { type: 'string', description: 'Path to the file relative to project root', required: true },
-      old_text: { type: 'string', description: 'The exact text to find and replace', required: true },
+      old_text: { type: 'string', description: 'The exact text to find and replace. Must be unique in the file - include enough context lines.', required: true },
       new_text: { type: 'string', description: 'The new text to replace with', required: true },
     },
   },
@@ -122,10 +123,18 @@ export const AGENT_TOOLS = {
   },
   search_code: {
     name: 'search_code',
-    description: 'Search for a text pattern in the codebase. Returns matching files and lines.',
+    description: 'Search for a text pattern in the codebase. Searches across common file types: TypeScript, JavaScript, JSON, Markdown, CSS, HTML, Python, Go, Rust, Ruby, Kotlin, Swift, PHP, Java, C#, C/C++, Vue, Svelte, YAML, TOML, Shell, SQL, XML, SCSS, LESS.',
     parameters: {
       pattern: { type: 'string', description: 'Text or regex pattern to search for', required: true },
       path: { type: 'string', description: 'Path to search in (default: entire project)', required: false },
+    },
+  },
+  find_files: {
+    name: 'find_files',
+    description: 'Find files matching a glob pattern. Use to find files by name or extension (e.g., "**/*.test.ts", "src/**/*.css", "*.json").',
+    parameters: {
+      pattern: { type: 'string', description: 'Glob pattern to match (e.g., "**/*.test.ts", "src/**/*.css")', required: true },
+      path: { type: 'string', description: 'Directory to search in relative to project root (default: ".")', required: false },
     },
   },
   fetch_url: {
@@ -266,6 +275,8 @@ function normalizeToolName(name: string): string {
     'search_code': 'search_code',
     'createdirectory': 'create_directory',
     'create_directory': 'create_directory',
+    'findfiles': 'find_files',
+    'find_files': 'find_files',
     'fetchurl': 'fetch_url',
     'fetch_url': 'fetch_url',
   };
@@ -488,6 +499,8 @@ export function parseToolCalls(response: string): ToolCall[] {
       'list_files': 'list_files',
       'searchcode': 'search_code',
       'search_code': 'search_code',
+      'findfiles': 'find_files',
+      'find_files': 'find_files',
     };
     
     const actualToolName = toolNameMap[toolName] || toolName;
@@ -524,6 +537,7 @@ export function parseToolCalls(response: string): ToolCall[] {
       'deletefile': 'delete_file',
       'listfiles': 'list_files',
       'searchcode': 'search_code',
+      'findfiles': 'find_files',
     };
     const actualToolName = toolNameMap[toolName] || toolName;
     
@@ -802,6 +816,18 @@ export function executeTool(toolCall: ToolCall, projectRoot: string): ToolResult
           return { success: false, output: '', error: `Text not found in file. Make sure old_text matches exactly.`, tool, parameters };
         }
         
+        // Count occurrences to prevent ambiguous replacements
+        let matchCount = 0;
+        let searchPos = 0;
+        while ((searchPos = content.indexOf(oldText, searchPos)) !== -1) {
+          matchCount++;
+          searchPos += oldText.length;
+        }
+        
+        if (matchCount > 1) {
+          return { success: false, output: '', error: `old_text matches ${matchCount} locations in the file. Provide more surrounding context to make it unique (only 1 match allowed).`, tool, parameters };
+        }
+        
         // Record for undo
         recordEdit(validation.absolutePath);
         
@@ -929,7 +955,7 @@ export function executeTool(toolCall: ToolCall, projectRoot: string): ToolResult
         }
         
         // Use grep for search
-        const result = executeCommand('grep', ['-rn', '--include=*.{ts,tsx,js,jsx,json,md,css,html,py,go,rs}', pattern, validation.absolutePath], {
+        const result = executeCommand('grep', ['-rn', '--include=*.{ts,tsx,js,jsx,json,md,css,html,py,go,rs,rb,kt,kts,swift,php,java,cs,c,cpp,h,hpp,vue,svelte,yaml,yml,toml,sh,sql,xml,scss,less}', pattern, validation.absolutePath], {
           cwd: projectRoot,
           projectRoot,
           timeout: 30000,
@@ -943,6 +969,58 @@ export function executeTool(toolCall: ToolCall, projectRoot: string): ToolResult
           return { success: true, output: 'No matches found', tool, parameters };
         } else {
           return { success: false, output: '', error: result.stderr || 'Search failed', tool, parameters };
+        }
+      }
+      
+      case 'find_files': {
+        const pattern = parameters.pattern as string;
+        const searchPath = (parameters.path as string) || '.';
+        
+        if (!pattern) {
+          return { success: false, output: '', error: 'Missing required parameter: pattern', tool, parameters };
+        }
+        
+        const validation = validatePath(searchPath, projectRoot);
+        if (!validation.valid) {
+          return { success: false, output: '', error: validation.error, tool, parameters };
+        }
+        
+        // Use find with -name or -path for glob matching
+        // Convert glob pattern to find-compatible format
+        const findArgs: string[] = [validation.absolutePath];
+        
+        // Ignore common directories
+        findArgs.push('(', '-name', 'node_modules', '-o', '-name', '.git', '-o', '-name', '.codeep', '-o', '-name', 'dist', '-o', '-name', 'build', '-o', '-name', '.next', ')', '-prune', '-o');
+        
+        if (pattern.includes('/')) {
+          // Path-based pattern: use -path
+          findArgs.push('-path', `*/${pattern}`, '-print');
+        } else {
+          // Name-based pattern: use -name
+          findArgs.push('-name', pattern, '-print');
+        }
+        
+        const result = executeCommand('find', findArgs, {
+          cwd: projectRoot,
+          projectRoot,
+          timeout: 15000,
+        });
+        
+        if (result.exitCode === 0 || result.stdout) {
+          const files = result.stdout.split('\n').filter(Boolean);
+          // Make paths relative to project root
+          const relativePaths = files.map(f => {
+            const rel = relative(projectRoot, f);
+            return rel || f;
+          }).slice(0, 100); // Limit to 100 results
+          
+          if (relativePaths.length === 0) {
+            return { success: true, output: `No files matching "${pattern}"`, tool, parameters };
+          }
+          
+          return { success: true, output: `Found ${relativePaths.length} file(s):\n${relativePaths.join('\n')}`, tool, parameters };
+        } else {
+          return { success: false, output: '', error: result.stderr || 'Find failed', tool, parameters };
         }
       }
       
@@ -977,15 +1055,9 @@ export function executeTool(toolCall: ToolCall, projectRoot: string): ToolResult
           // Try to extract text content (strip HTML tags for basic display)
           let content = result.stdout;
           
-          // If it looks like HTML, try to extract text
+          // If it looks like HTML, convert to readable text
           if (content.includes('<html') || content.includes('<!DOCTYPE')) {
-            // Simple HTML to text - remove script/style and tags
-            content = content
-              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-              .replace(/<[^>]+>/g, ' ')
-              .replace(/\s+/g, ' ')
-              .trim();
+            content = htmlToText(content);
           }
           
           // Limit output
@@ -1011,23 +1083,22 @@ export function executeTool(toolCall: ToolCall, projectRoot: string): ToolResult
 /**
  * List directory contents
  */
-function listDirectory(dir: string, projectRoot: string, recursive: boolean, prefix: string = ''): string[] {
+function listDirectory(dir: string, projectRoot: string, recursive: boolean, prefix: string = '', ignoreRules?: ReturnType<typeof loadIgnoreRules>): string[] {
   const entries = readdirSync(dir, { withFileTypes: true });
   const files: string[] = [];
-  
-  // Skip common directories
-  const skipDirs = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.venv', 'venv']);
+  const rules = ignoreRules || loadIgnoreRules(projectRoot);
   
   for (const entry of entries) {
-    const relativePath = relative(projectRoot, join(dir, entry.name));
+    const fullPath = join(dir, entry.name);
+    
+    // Skip ignored paths
+    if (isIgnored(fullPath, rules)) continue;
     
     if (entry.isDirectory()) {
-      if (skipDirs.has(entry.name)) continue;
-      
       files.push(`${prefix}${entry.name}/`);
       
       if (recursive) {
-        const subFiles = listDirectory(join(dir, entry.name), projectRoot, true, prefix + '  ');
+        const subFiles = listDirectory(fullPath, projectRoot, true, prefix + '  ', rules);
         files.push(...subFiles);
       }
     } else {
@@ -1036,6 +1107,82 @@ function listDirectory(dir: string, projectRoot: string, recursive: boolean, pre
   }
   
   return files;
+}
+
+/**
+ * Convert HTML to readable plain text, preserving structure.
+ */
+function htmlToText(html: string): string {
+  // Remove invisible elements
+  let text = html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+    .replace(/<svg[^>]*>[\s\S]*?<\/svg>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+
+  // Try to extract <main>, <article>, or <body> content for less noise
+  const mainMatch = text.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
+  const articleMatch = text.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+  const bodyMatch = text.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  text = mainMatch?.[1] || articleMatch?.[1] || bodyMatch?.[1] || text;
+
+  // Headings → prefix with # markers + newlines
+  text = text.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n\n# $1\n\n');
+  text = text.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n\n## $1\n\n');
+  text = text.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n\n### $1\n\n');
+  text = text.replace(/<h[4-6][^>]*>([\s\S]*?)<\/h[4-6]>/gi, '\n\n#### $1\n\n');
+
+  // Links → [text](href)
+  text = text.replace(/<a[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)');
+
+  // Code blocks
+  text = text.replace(/<pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>/gi, '\n```\n$1\n```\n');
+  text = text.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, '\n```\n$1\n```\n');
+  text = text.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`');
+
+  // Lists
+  text = text.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '\n- $1');
+  text = text.replace(/<\/[uo]l>/gi, '\n');
+  text = text.replace(/<[uo]l[^>]*>/gi, '\n');
+
+  // Block elements → newlines
+  text = text.replace(/<\/p>/gi, '\n\n');
+  text = text.replace(/<br\s*\/?>/gi, '\n');
+  text = text.replace(/<\/div>/gi, '\n');
+  text = text.replace(/<\/tr>/gi, '\n');
+  text = text.replace(/<\/th>/gi, '\t');
+  text = text.replace(/<\/td>/gi, '\t');
+  text = text.replace(/<hr[^>]*>/gi, '\n---\n');
+  text = text.replace(/<\/blockquote>/gi, '\n');
+  text = text.replace(/<blockquote[^>]*>/gi, '\n> ');
+
+  // Bold/italic
+  text = text.replace(/<(strong|b)[^>]*>([\s\S]*?)<\/\1>/gi, '**$2**');
+  text = text.replace(/<(em|i)[^>]*>([\s\S]*?)<\/\1>/gi, '*$2*');
+
+  // Strip remaining tags
+  text = text.replace(/<[^>]+>/g, '');
+
+  // Decode common HTML entities
+  text = text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
+
+  // Clean up whitespace
+  text = text
+    .replace(/[ \t]+/g, ' ')           // Collapse horizontal whitespace
+    .replace(/ *\n/g, '\n')            // Trim trailing spaces on lines
+    .replace(/\n{3,}/g, '\n\n')        // Max 2 consecutive newlines
+    .trim();
+
+  return text;
 }
 
 /**
@@ -1054,6 +1201,7 @@ export function createActionLog(toolCall: ToolCall, result: ToolResult): ActionL
     search_code: 'search',
     list_files: 'list',
     create_directory: 'mkdir',
+    find_files: 'search',
     fetch_url: 'fetch',
   };
   

@@ -71,6 +71,9 @@ export const helpCategories: HelpCategory[] = [
       { key: '/copy [n]', description: 'Copy code block to clipboard' },
       { key: '/paste', description: 'Paste from clipboard' },
       { key: '/apply', description: 'Apply file changes from AI' },
+      { key: '/add <path>', description: 'Add file to context' },
+      { key: '/drop [path]', description: 'Remove file (or all) from context' },
+      { key: '/multiline', description: 'Toggle multi-line input mode' },
     ],
   },
   {
@@ -116,7 +119,8 @@ export const helpCategories: HelpCategory[] = [
  */
 export const keyboardShortcuts = [
   { key: 'Enter', description: 'Send message' },
-  { key: 'Esc', description: 'Cancel/Close' },
+  { key: '\\+Enter', description: 'Continue on next line' },
+  { key: 'Esc', description: 'Cancel/Close (send in multiline)' },
   { key: 'Ctrl+L', description: 'Clear screen' },
   { key: 'Ctrl+C', description: 'Exit' },
   { key: '↑/↓', description: 'Input history' },

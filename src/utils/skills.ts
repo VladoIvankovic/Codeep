@@ -876,6 +876,86 @@ export function getExecutableSteps(skill: Skill): SkillStep[] {
 }
 
 /**
+ * Skill execution callbacks
+ */
+export interface SkillExecutionCallbacks {
+  /** Run a shell command, return stdout */
+  onCommand: (cmd: string) => Promise<string>;
+  /** Send a prompt to AI chat, return AI response */
+  onPrompt: (prompt: string) => Promise<string>;
+  /** Run an agent task autonomously */
+  onAgent: (task: string) => Promise<string>;
+  /** Show confirmation dialog, return true if user confirms */
+  onConfirm: (message: string) => Promise<boolean>;
+  /** Show a notification to the user */
+  onNotify: (message: string) => void;
+}
+
+/**
+ * Execute a skill's steps sequentially.
+ * Each step's output is available as ${_prev} in the next step's content.
+ * Returns the collected results from all steps.
+ */
+export async function executeSkill(
+  skill: Skill,
+  params: Record<string, string>,
+  callbacks: SkillExecutionCallbacks
+): Promise<SkillExecutionResult> {
+  const stepResults: SkillExecutionResult['steps'] = [];
+  let lastOutput = '';
+
+  for (const step of skill.steps) {
+    // Interpolate params and ${_prev} into step content
+    const allParams = { ...params, _prev: lastOutput };
+    const content = interpolateParams(step.content, allParams);
+
+    try {
+      let result = '';
+
+      switch (step.type) {
+        case 'command':
+          result = await callbacks.onCommand(content);
+          break;
+
+        case 'prompt':
+          result = await callbacks.onPrompt(content);
+          break;
+
+        case 'agent':
+          result = await callbacks.onAgent(content);
+          break;
+
+        case 'confirm': {
+          const confirmed = await callbacks.onConfirm(content);
+          if (!confirmed) {
+            stepResults.push({ step, result: 'cancelled', success: false });
+            return { success: false, output: 'Cancelled by user', steps: stepResults };
+          }
+          result = 'confirmed';
+          break;
+        }
+
+        case 'notify':
+          callbacks.onNotify(content);
+          result = 'notified';
+          break;
+      }
+
+      lastOutput = result;
+      stepResults.push({ step, result, success: true });
+    } catch (err) {
+      const errMsg = (err as Error).message || String(err);
+      stepResults.push({ step, result: errMsg, success: false });
+      if (!step.optional) {
+        return { success: false, output: errMsg, steps: stepResults };
+      }
+    }
+  }
+
+  return { success: true, output: lastOutput, steps: stepResults };
+}
+
+/**
  * Format skills list for display
  */
 export function formatSkillsList(skills: Skill[]): string {

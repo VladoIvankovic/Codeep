@@ -2,7 +2,10 @@
  * Agent loop - autonomous task execution
  */
 
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 import { ProjectContext } from './project';
+import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 
 // Debug logging helper - only logs when CODEEP_DEBUG=1
 const debug = (...args: any[]) => {
@@ -94,6 +97,33 @@ const DEFAULT_OPTIONS: AgentOptions = {
   maxDuration: 20 * 60 * 1000, // 20 minutes
   usePlanning: false, // Disable task planning - causes more problems than it solves
 };
+
+/**
+ * Load project rules from .codeep/rules.md or CODEEP.md
+ * Returns the rules content formatted for system prompt, or empty string if no rules found
+ */
+export function loadProjectRules(projectRoot: string): string {
+  const candidates = [
+    join(projectRoot, '.codeep', 'rules.md'),
+    join(projectRoot, 'CODEEP.md'),
+  ];
+
+  for (const filePath of candidates) {
+    if (existsSync(filePath)) {
+      try {
+        const content = readFileSync(filePath, 'utf-8').trim();
+        if (content) {
+          debug('Loaded project rules from', filePath);
+          return `\n\n## Project Rules\nThe following rules are defined by the project owner. You MUST follow these rules:\n\n${content}`;
+        }
+      } catch (err) {
+        debug('Failed to read project rules from', filePath, err);
+      }
+    }
+  }
+
+  return '';
+}
 
 /**
  * Generate system prompt for agent mode (used with native tool calling)
@@ -275,6 +305,8 @@ async function agentChat(
     let endpoint: string;
     let body: Record<string, unknown>;
     
+    const useStreaming = Boolean(onChunk);
+    
     if (protocol === 'openai') {
       endpoint = `${baseUrl}/chat/completions`;
       body = {
@@ -285,8 +317,9 @@ async function agentChat(
         ],
         tools: getOpenAITools(),
         tool_choice: 'auto',
+        stream: useStreaming,
         temperature: config.get('temperature'),
-        max_tokens: Math.max(config.get('maxTokens'), 16384), // Ensure enough tokens for large file generation
+        max_tokens: Math.max(config.get('maxTokens'), 16384),
       };
     } else {
       endpoint = `${baseUrl}/v1/messages`;
@@ -295,8 +328,9 @@ async function agentChat(
         system: systemPrompt,
         messages: messages,
         tools: getAnthropicTools(),
+        stream: useStreaming,
         temperature: config.get('temperature'),
-        max_tokens: Math.max(config.get('maxTokens'), 16384), // Ensure enough tokens for large file generation
+        max_tokens: Math.max(config.get('maxTokens'), 16384),
       };
     }
     
@@ -318,7 +352,22 @@ async function agentChat(
       throw new Error(`API error: ${response.status} - ${errorText}`);
     }
     
+    // Streaming path — parse tool calls from SSE deltas
+    if (useStreaming && response.body) {
+      if (protocol === 'openai') {
+        return await handleOpenAIAgentStream(response.body, onChunk!, model, providerId);
+      } else {
+        return await handleAnthropicAgentStream(response.body, onChunk!, model, providerId);
+      }
+    }
+    
+    // Non-streaming path (fallback if no body)
     const data = await response.json();
+    
+    // Track token usage
+    const usageExtractor = protocol === 'openai' ? extractOpenAIUsage : extractAnthropicUsage;
+    const usage = usageExtractor(data);
+    if (usage) recordTokenUsage(usage, model, providerId);
     
     debug('Raw API response:', JSON.stringify(data, null, 2).substring(0, 1500));
     
@@ -494,6 +543,10 @@ async function agentChatFallback(
       content = await handleStream(response.body, protocol, onChunk);
     } else {
       const data = await response.json();
+      // Track token usage
+      const fallbackUsageExtractor = protocol === 'openai' ? extractOpenAIUsage : extractAnthropicUsage;
+      const fallbackUsage = fallbackUsageExtractor(data);
+      if (fallbackUsage) recordTokenUsage(fallbackUsage, model, providerId);
       if (protocol === 'openai') {
         content = data.choices?.[0]?.message?.content || '';
       } else {
@@ -524,7 +577,206 @@ async function agentChatFallback(
 }
 
 /**
- * Handle streaming response
+ * Handle OpenAI streaming response with tool call accumulation
+ */
+async function handleOpenAIAgentStream(
+  body: ReadableStream<Uint8Array>,
+  onChunk: (chunk: string) => void,
+  model: string,
+  providerId: string
+): Promise<AgentChatResponse> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  
+  // Accumulate tool calls from deltas
+  const toolCallMap: Map<number, { id: string; name: string; arguments: string }> = new Map();
+  let usageData: any = null;
+  
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6);
+      if (data === '[DONE]') continue;
+      
+      try {
+        const parsed = JSON.parse(data);
+        
+        // Track usage from final chunk
+        if (parsed.usage) {
+          usageData = parsed;
+        }
+        
+        const delta = parsed.choices?.[0]?.delta;
+        if (!delta) continue;
+        
+        // Accumulate text content
+        if (delta.content) {
+          content += delta.content;
+          onChunk(delta.content);
+        }
+        
+        // Accumulate tool calls
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            if (!toolCallMap.has(idx)) {
+              toolCallMap.set(idx, {
+                id: tc.id || '',
+                name: tc.function?.name || '',
+                arguments: '',
+              });
+            }
+            const entry = toolCallMap.get(idx)!;
+            if (tc.id) entry.id = tc.id;
+            if (tc.function?.name) entry.name = tc.function.name;
+            if (tc.function?.arguments) entry.arguments += tc.function.arguments;
+          }
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+  }
+  
+  // Track token usage if available
+  if (usageData) {
+    const usage = extractOpenAIUsage(usageData);
+    if (usage) recordTokenUsage(usage, model, providerId);
+  }
+  
+  // Convert accumulated tool calls
+  const rawToolCalls = Array.from(toolCallMap.values()).map(tc => ({
+    id: tc.id,
+    type: 'function' as const,
+    function: { name: tc.name, arguments: tc.arguments },
+  }));
+  
+  const toolCalls = parseOpenAIToolCalls(rawToolCalls);
+  
+  debug('Stream parsed tool calls:', toolCalls.length, toolCalls.map(t => t.tool));
+  
+  // If no native tool calls, try text-based parsing
+  if (toolCalls.length === 0 && content) {
+    const textToolCalls = parseToolCalls(content);
+    if (textToolCalls.length > 0) {
+      return { content, toolCalls: textToolCalls, usedNativeTools: false };
+    }
+  }
+  
+  return { content, toolCalls, usedNativeTools: true };
+}
+
+/**
+ * Handle Anthropic streaming response with tool call accumulation
+ */
+async function handleAnthropicAgentStream(
+  body: ReadableStream<Uint8Array>,
+  onChunk: (chunk: string) => void,
+  model: string,
+  providerId: string
+): Promise<AgentChatResponse> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  
+  // Accumulate content blocks for tool use
+  const contentBlocks: any[] = [];
+  let currentBlockIndex = -1;
+  let currentBlockType = '';
+  let currentToolName = '';
+  let currentToolId = '';
+  let currentToolInput = '';
+  let usageData: any = null;
+  
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6);
+      
+      try {
+        const parsed = JSON.parse(data);
+        
+        // Track usage
+        if (parsed.usage) {
+          usageData = parsed;
+        }
+        if (parsed.type === 'message_delta' && parsed.usage) {
+          usageData = parsed;
+        }
+        
+        if (parsed.type === 'content_block_start') {
+          currentBlockIndex = parsed.index;
+          const block = parsed.content_block;
+          if (block.type === 'text') {
+            currentBlockType = 'text';
+          } else if (block.type === 'tool_use') {
+            currentBlockType = 'tool_use';
+            currentToolName = block.name || '';
+            currentToolId = block.id || '';
+            currentToolInput = '';
+          }
+        } else if (parsed.type === 'content_block_delta') {
+          if (currentBlockType === 'text' && parsed.delta?.text) {
+            content += parsed.delta.text;
+            onChunk(parsed.delta.text);
+          } else if (currentBlockType === 'tool_use' && parsed.delta?.partial_json) {
+            currentToolInput += parsed.delta.partial_json;
+          }
+        } else if (parsed.type === 'content_block_stop') {
+          if (currentBlockType === 'tool_use') {
+            contentBlocks.push({
+              type: 'tool_use',
+              id: currentToolId,
+              name: currentToolName,
+              input: tryParseJSON(currentToolInput),
+            });
+          }
+          currentBlockType = '';
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+  }
+  
+  // Track token usage
+  if (usageData) {
+    const usage = extractAnthropicUsage(usageData);
+    if (usage) recordTokenUsage(usage, model, providerId);
+  }
+  
+  const toolCalls = parseAnthropicToolCalls(contentBlocks);
+  
+  return { content, toolCalls, usedNativeTools: true };
+}
+
+function tryParseJSON(str: string): any {
+  try {
+    return JSON.parse(str);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Handle streaming response (text-based fallback)
  */
 async function handleStream(
   body: ReadableStream<Uint8Array>,
@@ -641,6 +893,13 @@ export async function runAgent(
   let systemPrompt = useNativeTools 
     ? getAgentSystemPrompt(projectContext)
     : getFallbackSystemPrompt(projectContext);
+  
+  // Inject project rules (from .codeep/rules.md or CODEEP.md)
+  const projectRules = loadProjectRules(projectContext.root);
+  if (projectRules) {
+    systemPrompt += projectRules;
+  }
+  
   if (smartContextStr) {
     systemPrompt += '\n\n' + smartContextStr;
   }

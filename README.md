@@ -60,6 +60,44 @@ When started in a project directory, Codeep automatically:
 - Press Enter to send, Escape to cancel
 - Works reliably in all terminals (no Ctrl+V issues)
 
+### File Context (`/add`, `/drop`)
+Explicitly add files to the conversation context:
+
+- **`/add <path>`** - Add one or more files to context
+- **`/add`** (no args) - Show currently added files
+- **`/drop <path>`** - Remove a specific file from context
+- **`/drop`** (no args) - Remove all files from context
+
+Added files are automatically attached to every message (both chat and agent mode) until dropped. Useful for giving the AI specific files to work with.
+
+```
+> /add src/utils/api.ts src/types/index.ts
+Added 2 file(s) to context (2 total)
+
+> refactor the API client to use async/await
+# AI sees both files attached to your message
+
+> /drop
+Dropped all 2 file(s) from context
+```
+
+### Multi-line Input
+Write multi-line messages using backslash continuation or `/multiline` mode:
+
+- **Backslash continuation** — end a line with `\` and press Enter to continue on the next line
+- **`/multiline`** — toggle multi-line mode where Enter adds a new line and Esc sends the message
+
+```
+> Write a function that\
+  takes two arguments and\
+  returns their sum
+# Sent as a single 3-line message
+
+> /multiline
+Multi-line mode ON — Enter adds line, Esc sends
+M> (type freely, Enter = newline, Esc = send)
+```
+
 ### Autonomous Agent Mode
 
 Codeep works as a **full AI coding agent** that autonomously:
@@ -146,6 +184,39 @@ Agent learns your coding preferences:
 - Naming conventions
 - Preferred libraries
 - Custom rules you define
+
+### Project Rules
+Define project-specific instructions that the AI always follows. Create a rules file in your project root:
+
+- **`.codeep/rules.md`** - Primary location (inside `.codeep/` folder)
+- **`CODEEP.md`** - Alternative location (project root, similar to `CLAUDE.md` or `.cursorrules`)
+
+The rules file content is automatically included in every system prompt — both chat and agent mode. Use it to define:
+
+- Coding standards and conventions
+- Preferred libraries and frameworks
+- Architecture guidelines
+- Language-specific instructions
+- Any custom rules for AI behavior in your project
+
+**Example `.codeep/rules.md`:**
+```markdown
+## Code Style
+- Use 2 spaces for indentation
+- Prefer arrow functions
+- Always use TypeScript strict mode
+
+## Architecture
+- Follow MVC pattern
+- Keep controllers thin, logic in services
+- All API responses use the ApiResponse wrapper
+
+## Libraries
+- Use Zod for validation
+- Use date-fns instead of moment.js
+```
+
+Rules are loaded automatically when Codeep starts — no commands needed.
 
 ### Skills System
 Predefined workflows for common development tasks. Execute with a single command:
@@ -419,6 +490,9 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 | `/apply` | Apply file changes from AI response |
 | `/copy [n]` | Copy code block to clipboard (n = block number, -1 = last) |
 | `/paste` | Paste content from clipboard into chat |
+| `/add <path>` | Add file(s) to conversation context |
+| `/drop [path]` | Remove file (or all) from context |
+| `/multiline` | Toggle multi-line input mode |
 
 ### Agent Mode
 

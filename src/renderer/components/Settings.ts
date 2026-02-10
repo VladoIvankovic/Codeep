@@ -138,6 +138,26 @@ export const SETTINGS: SettingItem[] = [
     ],
   },
   {
+    key: 'agentAutoCommit',
+    label: 'Agent Auto-Commit',
+    getValue: () => config.get('agentAutoCommit'),
+    type: 'select',
+    options: [
+      { value: true, label: 'On' },
+      { value: false, label: 'Off' },
+    ],
+  },
+  {
+    key: 'agentAutoCommitBranch',
+    label: 'Auto-Commit on New Branch',
+    getValue: () => config.get('agentAutoCommitBranch'),
+    type: 'select',
+    options: [
+      { value: true, label: 'On' },
+      { value: false, label: 'Off' },
+    ],
+  },
+  {
     key: 'agentMaxFixAttempts',
     label: 'Agent Max Fix Attempts',
     getValue: () => config.get('agentMaxFixAttempts') || 3,

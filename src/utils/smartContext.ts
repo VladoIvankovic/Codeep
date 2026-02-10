@@ -5,6 +5,7 @@
 import { existsSync, readFileSync, statSync } from 'fs';
 import { join, dirname, basename, extname, relative } from 'path';
 import { ProjectContext } from './project';
+import { loadIgnoreRules, isIgnored, IgnoreRules } from './gitignore';
 
 export interface RelatedFile {
   path: string;
@@ -318,6 +319,7 @@ export function gatherSmartContext(
   taskDescription?: string
 ): SmartContextResult {
   const projectRoot = projectContext.root || process.cwd();
+  const ignoreRules = loadIgnoreRules(projectRoot);
   const allRelated: Map<string, RelatedFile> = new Map();
   
   // If we have a target file, analyze it
@@ -395,6 +397,13 @@ export function gatherSmartContext(
     }
   }
   
+  // Filter out ignored files (except the target file itself)
+  for (const [key, file] of allRelated) {
+    if (file.reason !== 'target file' && isIgnored(file.path, ignoreRules)) {
+      allRelated.delete(key);
+    }
+  }
+
   // Sort by priority and limit
   let files = Array.from(allRelated.values())
     .sort((a, b) => b.priority - a.priority)
