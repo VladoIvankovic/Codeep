@@ -82,9 +82,10 @@ const BUILT_IN_SKILLS: Skill[] = [
       { name: 'message', description: 'Optional commit message (skips AI generation)', required: false },
     ],
     steps: [
-      { type: 'prompt', content: 'Analyze the git diff and generate a conventional commit message following this format: type(scope): description. Types: feat, fix, docs, style, refactor, test, chore. Be concise.' },
+      { type: 'command', content: 'git diff --cached --stat || git diff --stat' },
+      { type: 'prompt', content: 'Based on this git diff, generate ONLY a conventional commit message (no explanation, no markdown). Format: type(scope): description. Types: feat, fix, docs, style, refactor, test, chore. Be concise. One line only.\n\n${_prev}' },
       { type: 'confirm', content: 'Commit with this message?' },
-      { type: 'command', content: 'git add -A && git commit -m "${message}"' },
+      { type: 'command', content: 'git add -A && git commit -m "${_prev}"' },
       { type: 'notify', content: 'Changes committed successfully!' },
     ],
   },
@@ -799,6 +800,24 @@ export function parseSkillArgs(args: string, skill: Skill): Record<string, strin
 }
 
 /**
+ * Sanitize text for safe use inside shell commands.
+ * Strips markdown formatting and escapes double quotes.
+ */
+function sanitizeForShell(text: string): string {
+  return text
+    // Strip markdown code blocks
+    .replace(/```[\s\S]*?```/g, '')
+    // Strip inline backticks
+    .replace(/`([^`]*)`/g, '$1')
+    // Strip bold/italic markers
+    .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
+    // Take only the first non-empty line (commit messages should be one line)
+    .split('\n').map(l => l.trim()).filter(Boolean)[0] || text.trim()
+    // Escape double quotes for shell safety
+    .replace(/"/g, '\\"');
+}
+
+/**
  * Interpolate parameters into skill step content
  */
 export function interpolateParams(content: string, params: Record<string, string>): string {
@@ -906,7 +925,9 @@ export async function executeSkill(
 
   for (const step of skill.steps) {
     // Interpolate params and ${_prev} into step content
-    const allParams = { ...params, _prev: lastOutput };
+    // For command steps, sanitize _prev for safe shell usage
+    const sanitizedPrev = step.type === 'command' ? sanitizeForShell(lastOutput) : lastOutput;
+    const allParams = { ...params, _prev: sanitizedPrev };
     const content = interpolateParams(step.content, allParams);
 
     try {

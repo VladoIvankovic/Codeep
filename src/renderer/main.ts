@@ -636,14 +636,23 @@ async function runSkill(nameOrShortcut: string, args: string[]): Promise<boolean
         throw new Error(output || `Command exited with code ${proc.status}`);
       },
 
-      onPrompt: (prompt: string) => {
-        return new Promise<string>((resolve, reject) => {
-          handleSubmit(prompt).then(() => {
-            // The AI response will be displayed in chat.
-            // We resolve with an empty string since the response is already shown.
-            resolve('');
-          }).catch(reject);
-        });
+      onPrompt: async (prompt: string) => {
+        try {
+          app.addMessage({ role: 'user', content: prompt });
+          app.startStreaming();
+          const history = app.getChatHistory();
+          const response = await chat(prompt, history, (chunk) => {
+            app.addStreamChunk(chunk);
+          }, undefined, projectContext, undefined);
+          app.endStreaming();
+          // Return the AI response text for use in subsequent steps
+          const lastMsg = app.getMessages();
+          const assistantMsg = lastMsg[lastMsg.length - 1];
+          return (assistantMsg?.role === 'assistant' ? assistantMsg.content : response || '').trim();
+        } catch (err) {
+          app.endStreaming();
+          throw err;
+        }
       },
 
       onAgent: (task: string) => {
