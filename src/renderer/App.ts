@@ -2733,7 +2733,11 @@ export class App {
     if (this.notification) {
       leftText = ` ${this.notification}`;
     } else {
-      leftText = ` ${this.messages.length} messages`;
+      const stats = this.options.getStatus().tokenStats;
+      const tokenInfo = stats && stats.totalTokens > 0
+        ? ` | ${stats.totalTokens < 1000 ? stats.totalTokens : (stats.totalTokens / 1000).toFixed(1) + 'K'} tokens`
+        : '';
+      leftText = ` ${this.messages.length} messages${tokenInfo}`;
     }
     
     if (this.isStreaming) {
