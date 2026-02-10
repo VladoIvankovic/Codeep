@@ -614,11 +614,30 @@ async function runSkill(nameOrShortcut: string, args: string[]): Promise<boolean
             cwd: projectPath || process.cwd(),
             encoding: 'utf-8',
             timeout: 60000,
+            stdio: ['pipe', 'pipe', 'pipe'],
           });
-          return output.trim();
+          const result = output.trim();
+          if (result) {
+            app.addMessage({ role: 'system', content: `\`${cmd}\`\n\`\`\`\n${result}\n\`\`\`` });
+          }
+          return result;
         } catch (err) {
-          const error = err as { stderr?: string; message?: string };
-          throw new Error(error.stderr || error.message || 'Command failed');
+          const error = err as { status?: number; stdout?: string; stderr?: string; message?: string };
+          const stderr = (error.stderr || '').trim();
+          const stdout = (error.stdout || '').trim();
+          // Git commands output progress/info to stderr even on success
+          if (error.status === 0 || stderr.includes('up-to-date') || stderr.includes('up to date') || stderr.includes('Already up to date')) {
+            const result = stdout || stderr;
+            if (result) {
+              app.addMessage({ role: 'system', content: `\`${cmd}\`\n\`\`\`\n${result}\n\`\`\`` });
+            }
+            return result;
+          }
+          const errOutput = stderr || stdout;
+          if (errOutput) {
+            app.addMessage({ role: 'system', content: `\`${cmd}\` failed:\n\`\`\`\n${errOutput}\n\`\`\`` });
+          }
+          throw new Error(errOutput || error.message || 'Command failed');
         }
       },
 
@@ -1546,7 +1565,9 @@ function handleCommand(command: string, args: string[]): void {
     case 'deploy':
     case 'release':
     case 'publish': {
-      runSkill(command, args);
+      runSkill(command, args).catch((err: Error) => {
+        app.notify(`Skill error: ${err.message}`);
+      });
       break;
     }
     
