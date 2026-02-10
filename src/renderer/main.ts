@@ -26,6 +26,7 @@ import {
   setProvider,
   setApiKey,
   clearApiKey,
+  getApiKey,
   autoSaveSession,
   saveSession,
   startNewSession,
@@ -1085,15 +1086,7 @@ function handleCommand(command: string, args: string[]): void {
       const providers = getProviderList();
       const currentProvider = getCurrentProvider();
       const configuredProviders = providers
-        .filter(p => {
-          // Check if provider has an API key configured
-          try {
-            const key = config.get(`apiKey_${p.id}`) || config.get('apiKey');
-            return !!key;
-          } catch {
-            return false;
-          }
-        })
+        .filter(p => !!getApiKey(p.id))
         .map(p => ({
           id: p.id,
           name: p.name,
