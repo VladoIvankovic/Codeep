@@ -332,6 +332,7 @@ async function chatOpenAI(
         model,
         messages,
         stream,
+        ...(stream ? { stream_options: { include_usage: true } } : {}),
         temperature,
         max_tokens: maxTokens,
       }),
@@ -387,6 +388,11 @@ async function handleOpenAIStream(
           if (content) {
             chunks.push(content);
             onChunk(content);
+          }
+          // Capture usage from final chunk (stream_options: include_usage)
+          if (parsed.usage) {
+            const usage = extractOpenAIUsage(parsed);
+            if (usage) recordTokenUsage(usage, parsed.model || 'unknown', config.get('provider'));
           }
         } catch {
           // Ignore parse errors
@@ -501,6 +507,9 @@ async function handleAnthropicStream(
   const decoder = new TextDecoder();
   const chunks: string[] = [];
   let buffer = '';
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let streamModel = '';
 
   while (true) {
     const { done, value } = await reader.read();
@@ -523,11 +532,29 @@ async function handleAnthropicStream(
               onChunk(text);
             }
           }
+          // message_start contains input_tokens
+          if (parsed.type === 'message_start' && parsed.message?.usage) {
+            inputTokens = parsed.message.usage.input_tokens || 0;
+            streamModel = parsed.message.model || '';
+          }
+          // message_delta contains output_tokens
+          if (parsed.type === 'message_delta' && parsed.usage) {
+            outputTokens = parsed.usage.output_tokens || 0;
+          }
         } catch {
           // Ignore parse errors
         }
       }
     }
+  }
+
+  // Record token usage
+  if (inputTokens > 0 || outputTokens > 0) {
+    recordTokenUsage(
+      { promptTokens: inputTokens, completionTokens: outputTokens, totalTokens: inputTokens + outputTokens },
+      streamModel || 'unknown',
+      config.get('provider')
+    );
   }
 
   // Strip <think> tags from MiniMax responses
