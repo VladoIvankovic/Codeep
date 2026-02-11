@@ -76,6 +76,25 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'MINIMAX_API_KEY',
     subscribeUrl: 'https://platform.minimax.io/subscribe/coding-plan?code=2lWvoWUhrp&source=link',
   },
+  'deepseek': {
+    name: 'DeepSeek',
+    description: 'DeepSeek AI models',
+    protocols: {
+      openai: {
+        baseUrl: 'https://api.deepseek.com',
+        authHeader: 'Bearer',
+        supportsNativeTools: true,
+      },
+    },
+    models: [
+      { id: 'deepseek-chat', name: 'DeepSeek V3', description: 'Latest general-purpose model' },
+      { id: 'deepseek-reasoner', name: 'DeepSeek R1', description: 'Reasoning model with chain-of-thought' },
+    ],
+    defaultModel: 'deepseek-chat',
+    defaultProtocol: 'openai',
+    envKey: 'DEEPSEEK_API_KEY',
+    subscribeUrl: 'https://platform.deepseek.com/sign_up',
+  },
   'anthropic': {
     name: 'Anthropic',
     description: 'Claude AI models',
