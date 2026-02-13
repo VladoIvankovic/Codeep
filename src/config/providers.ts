@@ -70,9 +70,9 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', description: 'Latest MiniMax coding model' },
+      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', description: 'Latest MiniMax coding model' },
     ],
-    defaultModel: 'MiniMax-M2.1',
+    defaultModel: 'MiniMax-M2.5',
     defaultProtocol: 'anthropic',
     envKey: 'MINIMAX_API_KEY',
     subscribeUrl: 'https://platform.minimax.io/subscribe/coding-plan?code=2lWvoWUhrp&source=link',
