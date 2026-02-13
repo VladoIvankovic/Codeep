@@ -45,6 +45,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
+      { id: 'glm-5', name: 'GLM-5', description: 'Most capable GLM model (Pro/Max subscription)' },
       { id: 'glm-4.7', name: 'GLM-4.7', description: 'Latest GLM model' },
       { id: 'glm-4.7-flash', name: 'GLM-4.7 Flash', description: 'Faster, lighter version' },
     ],
