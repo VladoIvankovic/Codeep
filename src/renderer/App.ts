@@ -406,7 +406,7 @@ export class App {
     'test', 'docs', 'refactor', 'fix', 'explain', 'optimize', 'debug', 'skills',
     'amend', 'pr', 'changelog', 'branch', 'stash', 'unstash',
     'build', 'deploy', 'release', 'publish',
-    'component', 'api', 'model', 'hook', 'service', 'page', 'form', 'crud',
+    'component', 'api', 'hook', 'service', 'page', 'form', 'crud',
     'security', 'profile', 'log', 'types', 'cleanup', 'modernize', 'migrate',
     'split', 'rename', 'coverage', 'e2e', 'mock', 'readme', 'translate',
     'docker', 'ci', 'env', 'k8s', 'terraform', 'nginx', 'monitor',
