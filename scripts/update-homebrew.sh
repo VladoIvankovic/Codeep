@@ -14,7 +14,7 @@ if [ -z "$VERSION" ]; then
   exit 1
 fi
 
-HOMEBREW_REPO_PATH="/Users/vladoivankovic/GitHub/homebrew-codeep"
+HOMEBREW_REPO_PATH="/Users/vladoivankovic/github/Codeep/homebrew-codeep"
 FORMULA_FILE="$HOMEBREW_REPO_PATH/Formula/codeep.rb"
 
 echo "🔍 Fetching SHA256 for codeep@${VERSION}..."

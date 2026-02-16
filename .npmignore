@@ -1,8 +1,9 @@
 # Dependencies
 node_modules/
 
-# Build output
-dist/
+# Source (only ship dist)
+src/
+scripts/
 homebrew-codeep/
 Codeep-web/
 
@@ -28,6 +29,9 @@ npm-debug.log*
 coverage/
 .vitest-cache/
 *.snap
+*.test.ts
+vitest.config.ts
+tsconfig.json
 
 # Codeep
 todo.md
@@ -36,7 +40,7 @@ todo.md
 .junie/
 codeep-debug.log
 
-# Package manager
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
+# Git
+.git/
+.github/
+.gitignore
