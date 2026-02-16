@@ -305,6 +305,7 @@ export class App {
   // Paste detection state
   private pasteInfo: { chars: number; lines: number; preview: string; fullText: string } | null = null;
   private pasteInfoOpen = false;
+  private codeBlockCounter = 0; // Global code block counter for /copy numbering
   
   // Inline help state
   private helpOpen = false;
@@ -2760,6 +2761,7 @@ export class App {
    */
   private getVisibleMessages(height: number, width: number): Array<{ text: string; style: string; raw?: boolean }> {
     const allLines: Array<{ text: string; style: string; raw?: boolean }> = [];
+    this.codeBlockCounter = 0; // Reset block counter for each render pass
 
     // Logo at the top, scrolls with content
     if (height >= 20) {
@@ -2824,6 +2826,7 @@ export class App {
       }
       
       // Add code block with syntax highlighting
+      this.codeBlockCounter++;
       const rawLang = (match[1] || 'text').trim();
       // Handle filepath:name.ext format - extract extension as language
       let lang = rawLang;
@@ -2832,7 +2835,7 @@ export class App {
         lang = ext;
       }
       const code = match[2];
-      const codeLines = this.formatCodeBlock(code, lang, maxWidth);
+      const codeLines = this.formatCodeBlock(code, lang, maxWidth, this.codeBlockCounter);
       lines.push(...codeLines);
       
       lastIndex = match.index + match[0].length;
@@ -3009,7 +3012,7 @@ export class App {
   /**
    * Format code block with syntax highlighting (no border)
    */
-  private formatCodeBlock(code: string, lang: string, maxWidth: number): Array<{ text: string; style: string; raw?: boolean }> {
+  private formatCodeBlock(code: string, lang: string, maxWidth: number, blockNum?: number): Array<{ text: string; style: string; raw?: boolean }> {
     const lines: Array<{ text: string; style: string; raw?: boolean }> = [];
     const codeLines = code.split('\n');
     
@@ -3018,9 +3021,10 @@ export class App {
       codeLines.pop();
     }
     
-    // Language label (if present)
-    if (lang) {
-      lines.push({ text: '  ' + lang, style: SYNTAX.codeLang, raw: false });
+    // Language label with block number for /copy
+    const label = blockNum ? (lang ? `  ${lang} [${blockNum}]` : `  [${blockNum}]`) : (lang ? '  ' + lang : '');
+    if (label) {
+      lines.push({ text: label, style: SYNTAX.codeLang, raw: false });
     }
     
     // Code lines with highlighting and indent
