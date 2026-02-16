@@ -127,6 +127,16 @@ export class Input {
       return event;
     }
     
+    // Bracketed paste mode: terminal wraps Cmd+V paste in \x1b[200~ ... \x1b[201~
+    if (data.includes('\x1b[200~') || data.includes('\x1b[201~')) {
+      const pasteContent = data.replace(/\x1b\[200~/g, '').replace(/\x1b\[201~/g, '');
+      if (pasteContent.length > 0) {
+        event.key = pasteContent;
+        event.isPaste = true;
+        return event;
+      }
+    }
+    
     // Detect paste: multiple printable characters at once (not escape sequences)
     if (data.length > 1 && !data.startsWith('\x1b')) {
       // Check if it's all printable characters (paste event)
