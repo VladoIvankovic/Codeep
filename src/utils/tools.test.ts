@@ -17,12 +17,17 @@ import {
 
 const ALL_TOOL_NAMES = Object.keys(AGENT_TOOLS);
 
+// MCP tools are filtered out when no Z.AI API key is configured (e.g. in tests)
+const ZAI_MCP_TOOLS = ['web_search', 'web_read', 'github_read'];
+const CORE_TOOL_NAMES = ALL_TOOL_NAMES.filter(n => !ZAI_MCP_TOOLS.includes(n));
+
 // ─── getOpenAITools ──────────────────────────────────────────────────────────
 
 describe('getOpenAITools', () => {
   it('should return one entry per AGENT_TOOLS definition', () => {
     const tools = getOpenAITools();
-    expect(tools).toHaveLength(ALL_TOOL_NAMES.length);
+    // MCP tools are excluded when no Z.AI API key is configured
+    expect(tools).toHaveLength(CORE_TOOL_NAMES.length);
   });
 
   it('should wrap every tool in the OpenAI function-calling envelope', () => {
@@ -38,10 +43,10 @@ describe('getOpenAITools', () => {
     }
   });
 
-  it('should include all tool names from AGENT_TOOLS', () => {
+  it('should include all core tool names from AGENT_TOOLS', () => {
     const tools = getOpenAITools();
     const names = tools.map(t => t.function.name);
-    for (const name of ALL_TOOL_NAMES) {
+    for (const name of CORE_TOOL_NAMES) {
       expect(names).toContain(name);
     }
   });
@@ -97,7 +102,8 @@ describe('getOpenAITools', () => {
 describe('getAnthropicTools', () => {
   it('should return one entry per AGENT_TOOLS definition', () => {
     const tools = getAnthropicTools();
-    expect(tools).toHaveLength(ALL_TOOL_NAMES.length);
+    // MCP tools are excluded when no Z.AI API key is configured
+    expect(tools).toHaveLength(CORE_TOOL_NAMES.length);
   });
 
   it('should use Anthropic tool-use shape (name, description, input_schema)', () => {
@@ -112,10 +118,10 @@ describe('getAnthropicTools', () => {
     }
   });
 
-  it('should include all tool names from AGENT_TOOLS', () => {
+  it('should include all core tool names from AGENT_TOOLS', () => {
     const tools = getAnthropicTools();
     const names = tools.map(t => t.name);
-    for (const name of ALL_TOOL_NAMES) {
+    for (const name of CORE_TOOL_NAMES) {
       expect(names).toContain(name);
     }
   });
@@ -124,7 +130,7 @@ describe('getAnthropicTools', () => {
     const openai = getOpenAITools();
     const anthropic = getAnthropicTools();
 
-    for (const name of ALL_TOOL_NAMES) {
+    for (const name of CORE_TOOL_NAMES) {
       const oTool = openai.find(t => t.function.name === name)!;
       const aTool = anthropic.find(t => t.name === name)!;
       expect(aTool.input_schema.required).toEqual(oTool.function.parameters.required);

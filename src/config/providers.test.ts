@@ -6,6 +6,7 @@ import {
   getProviderModels,
   getProviderBaseUrl,
   getProviderAuthHeader,
+  getProviderMcpEndpoints,
 } from './providers';
 
 describe('providers', () => {
@@ -13,6 +14,11 @@ describe('providers', () => {
     it('should have z.ai provider', () => {
       expect(PROVIDERS['z.ai']).toBeDefined();
       expect(PROVIDERS['z.ai'].name).toBe('Z.AI (ZhipuAI)');
+    });
+
+    it('should have z.ai-cn provider', () => {
+      expect(PROVIDERS['z.ai-cn']).toBeDefined();
+      expect(PROVIDERS['z.ai-cn'].name).toBe('Z.AI China (ZhipuAI)');
     });
 
     it('should have minimax provider', () => {
@@ -85,10 +91,11 @@ describe('providers', () => {
       }
     });
 
-    it('should include z.ai and minimax', () => {
+    it('should include z.ai, z.ai-cn, and minimax', () => {
       const list = getProviderList();
       const ids = list.map(p => p.id);
       expect(ids).toContain('z.ai');
+      expect(ids).toContain('z.ai-cn');
       expect(ids).toContain('minimax');
     });
   });
@@ -153,8 +160,36 @@ describe('providers', () => {
       expect(PROVIDERS['z.ai'].envKey).toBe('ZAI_API_KEY');
     });
 
+    it('should have env key for z.ai-cn', () => {
+      expect(PROVIDERS['z.ai-cn'].envKey).toBe('ZAI_CN_API_KEY');
+    });
+
     it('should have env key for minimax', () => {
       expect(PROVIDERS['minimax'].envKey).toBe('MINIMAX_API_KEY');
+    });
+  });
+
+  describe('MCP endpoints', () => {
+    it('should have MCP endpoints for z.ai', () => {
+      const endpoints = getProviderMcpEndpoints('z.ai');
+      expect(endpoints).not.toBeNull();
+      expect(endpoints!.webSearch).toContain('api.z.ai');
+      expect(endpoints!.webReader).toContain('api.z.ai');
+      expect(endpoints!.zread).toContain('api.z.ai');
+    });
+
+    it('should have MCP endpoints for z.ai-cn', () => {
+      const endpoints = getProviderMcpEndpoints('z.ai-cn');
+      expect(endpoints).not.toBeNull();
+      expect(endpoints!.webSearch).toContain('open.bigmodel.cn');
+      expect(endpoints!.webReader).toContain('open.bigmodel.cn');
+      expect(endpoints!.zread).toContain('open.bigmodel.cn');
+    });
+
+    it('should return null for providers without MCP endpoints', () => {
+      expect(getProviderMcpEndpoints('minimax')).toBeNull();
+      expect(getProviderMcpEndpoints('deepseek')).toBeNull();
+      expect(getProviderMcpEndpoints('nonexistent')).toBeNull();
     });
   });
 });

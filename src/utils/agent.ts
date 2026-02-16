@@ -1101,7 +1101,7 @@ export async function runAgent(
           };
         } else {
           // Actually execute the tool
-          toolResult = executeTool(toolCall, projectContext.root || process.cwd());
+          toolResult = await executeTool(toolCall, projectContext.root || process.cwd());
         }
         
         opts.onToolResult?.(toolResult, toolCall);
@@ -1221,7 +1221,7 @@ export async function runAgent(
             for (const toolCall of fixToolCalls) {
               opts.onToolCall?.(toolCall);
               
-              const toolResult = executeTool(toolCall, projectContext.root || process.cwd());
+              const toolResult = await executeTool(toolCall, projectContext.root || process.cwd());
               opts.onToolResult?.(toolResult, toolCall);
               
               const actionLog = createActionLog(toolCall, toolResult);

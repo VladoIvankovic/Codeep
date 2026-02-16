@@ -14,6 +14,8 @@ import { join, dirname, relative, resolve, isAbsolute } from 'path';
 import { executeCommand, CommandResult } from './shell';
 import { recordWrite, recordEdit, recordDelete, recordMkdir, recordCommand } from './history';
 import { loadIgnoreRules, isIgnored } from './gitignore';
+import { config, getApiKey } from '../config/index';
+import { getProviderMcpEndpoints, PROVIDERS } from '../config/providers';
 
 // OpenAI Function Calling format
 export interface OpenAITool {
@@ -63,6 +65,93 @@ export interface ActionLog {
   result: 'success' | 'error';
   details?: string;
   timestamp: number;
+}
+
+// Z.AI MCP tool names (available when user has any Z.AI API key)
+const ZAI_MCP_TOOLS = ['web_search', 'web_read', 'github_read'];
+
+// Z.AI provider IDs that have MCP endpoints
+const ZAI_PROVIDER_IDS = ['z.ai', 'z.ai-cn'];
+
+/**
+ * Find a Z.AI provider that has an API key configured.
+ * Returns the provider ID and API key, or null if none found.
+ * Prefers the active provider if it's Z.AI, otherwise checks all Z.AI providers.
+ */
+function getZaiMcpConfig(): { providerId: string; apiKey: string; endpoints: { webSearch: string; webReader: string; zread: string } } | null {
+  // First check if active provider is Z.AI
+  const activeProvider = config.get('provider');
+  if (ZAI_PROVIDER_IDS.includes(activeProvider)) {
+    const key = getApiKey(activeProvider);
+    const endpoints = getProviderMcpEndpoints(activeProvider);
+    if (key && endpoints?.webSearch && endpoints?.webReader && endpoints?.zread) {
+      return { providerId: activeProvider, apiKey: key, endpoints: endpoints as { webSearch: string; webReader: string; zread: string } };
+    }
+  }
+
+  // Otherwise check all Z.AI providers for a configured key
+  for (const pid of ZAI_PROVIDER_IDS) {
+    const key = getApiKey(pid);
+    const endpoints = getProviderMcpEndpoints(pid);
+    if (key && endpoints?.webSearch && endpoints?.webReader && endpoints?.zread) {
+      return { providerId: pid, apiKey: key, endpoints: endpoints as { webSearch: string; webReader: string; zread: string } };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Check if Z.AI MCP tools are available (user has any Z.AI API key)
+ */
+function hasZaiMcpAccess(): boolean {
+  return getZaiMcpConfig() !== null;
+}
+
+/**
+ * Call a Z.AI MCP endpoint via JSON-RPC 2.0
+ */
+async function callZaiMcp(endpoint: string, toolName: string, args: Record<string, unknown>, apiKey: string): Promise<string> {
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: Date.now().toString(),
+        method: 'tools/call',
+        params: { name: toolName, arguments: args },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(`MCP error ${response.status}: ${errorText || response.statusText}`);
+    }
+
+    const data = await response.json() as any;
+    if (data.error) {
+      throw new Error(data.error.message || JSON.stringify(data.error));
+    }
+
+    // MCP returns result.content as array of {type, text} blocks
+    const content = data.result?.content;
+    if (Array.isArray(content)) {
+      return content.map((c: any) => c.text || '').join('\n');
+    }
+    return typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // Tool definitions for system prompt
@@ -144,15 +233,53 @@ export const AGENT_TOOLS = {
       url: { type: 'string', description: 'The URL to fetch content from', required: true },
     },
   },
+  web_search: {
+    name: 'web_search',
+    description: 'Search the web for real-time information. Returns titles, URLs, and summaries. Requires a Z.AI API key.',
+    parameters: {
+      query: { type: 'string', description: 'Search query', required: true },
+      domain_filter: { type: 'string', description: 'Limit results to specific domain (e.g. github.com)', required: false },
+      recency: { type: 'string', description: 'Time filter: oneDay, oneWeek, oneMonth, oneYear, noLimit', required: false },
+    },
+  },
+  web_read: {
+    name: 'web_read',
+    description: 'Fetch and parse a web page into clean readable text/markdown. Better than fetch_url for documentation and articles. Requires a Z.AI API key.',
+    parameters: {
+      url: { type: 'string', description: 'The URL to read', required: true },
+      format: { type: 'string', description: 'Output format: markdown or text (default: markdown)', required: false },
+    },
+  },
+  github_read: {
+    name: 'github_read',
+    description: 'Search documentation/code or read files from a public GitHub repository. Requires a Z.AI API key.',
+    parameters: {
+      repo: { type: 'string', description: 'GitHub repository in owner/repo format (e.g. facebook/react)', required: true },
+      action: { type: 'string', description: 'Action: search, tree, or read_file', required: true },
+      query: { type: 'string', description: 'Search query (for action=search)', required: false },
+      path: { type: 'string', description: 'File path (for action=read_file) or directory path (for action=tree)', required: false },
+    },
+  },
 };
 
 /**
  * Format tool definitions for system prompt (text-based fallback)
  */
+/**
+ * Get filtered tool entries (excludes Z.AI-only tools when not using Z.AI provider)
+ */
+function getFilteredToolEntries(): [string, typeof AGENT_TOOLS[keyof typeof AGENT_TOOLS]][] {
+  const hasMcp = hasZaiMcpAccess();
+  return Object.entries(AGENT_TOOLS).filter(([name]) => {
+    if (ZAI_MCP_TOOLS.includes(name)) return hasMcp;
+    return true;
+  });
+}
+
 export function formatToolDefinitions(): string {
   const lines: string[] = [];
   
-  for (const [name, tool] of Object.entries(AGENT_TOOLS)) {
+  for (const [name, tool] of getFilteredToolEntries()) {
     lines.push(`### ${name}`);
     lines.push(tool.description);
     lines.push('Parameters:');
@@ -170,7 +297,7 @@ export function formatToolDefinitions(): string {
  * Get tools in OpenAI Function Calling format
  */
 export function getOpenAITools(): OpenAITool[] {
-  return Object.entries(AGENT_TOOLS).map(([name, tool]) => {
+  return getFilteredToolEntries().map(([name, tool]) => {
     const properties: Record<string, { type: string; description: string; items?: { type: string } }> = {};
     const required: string[] = [];
     
@@ -214,7 +341,7 @@ export function getOpenAITools(): OpenAITool[] {
  * Get tools in Anthropic Tool Use format
  */
 export function getAnthropicTools(): AnthropicTool[] {
-  return Object.entries(AGENT_TOOLS).map(([name, tool]) => {
+  return getFilteredToolEntries().map(([name, tool]) => {
     const properties: Record<string, { type: string; description: string; items?: { type: string } }> = {};
     const required: string[] = [];
     
@@ -719,7 +846,7 @@ function validatePath(path: string, projectRoot: string): { valid: boolean; abso
 /**
  * Execute a tool call
  */
-export function executeTool(toolCall: ToolCall, projectRoot: string): ToolResult {
+export async function executeTool(toolCall: ToolCall, projectRoot: string): Promise<ToolResult> {
   // Normalize tool name to handle case variations (WRITE_FILE -> write_file)
   const tool = normalizeToolName(toolCall.tool);
   const parameters = toolCall.parameters;
@@ -1071,6 +1198,92 @@ export function executeTool(toolCall: ToolCall, projectRoot: string): ToolResult
         }
       }
       
+      // === Z.AI MCP Tools ===
+
+      case 'web_search': {
+        const mcpConfig = getZaiMcpConfig();
+        if (!mcpConfig) {
+          return { success: false, output: '', error: 'web_search requires a Z.AI API key. Configure one via /provider z.ai', tool, parameters };
+        }
+        const query = parameters.query as string;
+        if (!query) {
+          return { success: false, output: '', error: 'Missing required parameter: query', tool, parameters };
+        }
+        const args: Record<string, unknown> = { search_query: query };
+        if (parameters.domain_filter) args.search_domain_filter = parameters.domain_filter;
+        if (parameters.recency) args.search_recency_filter = parameters.recency;
+
+        const result = await callZaiMcp(mcpConfig.endpoints.webSearch, 'webSearchPrime', args, mcpConfig.apiKey);
+        const output = result.length > 15000 ? result.substring(0, 15000) + '\n\n... (truncated)' : result;
+        return { success: true, output, tool, parameters };
+      }
+
+      case 'web_read': {
+        const mcpConfig = getZaiMcpConfig();
+        if (!mcpConfig) {
+          return { success: false, output: '', error: 'web_read requires a Z.AI API key. Configure one via /provider z.ai', tool, parameters };
+        }
+        const url = parameters.url as string;
+        if (!url) {
+          return { success: false, output: '', error: 'Missing required parameter: url', tool, parameters };
+        }
+        try {
+          new URL(url);
+        } catch {
+          return { success: false, output: '', error: 'Invalid URL format', tool, parameters };
+        }
+        const args: Record<string, unknown> = { url };
+        if (parameters.format) args.return_format = parameters.format;
+
+        const result = await callZaiMcp(mcpConfig.endpoints.webReader, 'webReader', args, mcpConfig.apiKey);
+        const output = result.length > 15000 ? result.substring(0, 15000) + '\n\n... (truncated)' : result;
+        return { success: true, output, tool, parameters };
+      }
+
+      case 'github_read': {
+        const mcpConfig = getZaiMcpConfig();
+        if (!mcpConfig) {
+          return { success: false, output: '', error: 'github_read requires a Z.AI API key. Configure one via /provider z.ai', tool, parameters };
+        }
+        const repo = parameters.repo as string;
+        const action = parameters.action as string;
+        if (!repo) {
+          return { success: false, output: '', error: 'Missing required parameter: repo', tool, parameters };
+        }
+        if (!repo.includes('/')) {
+          return { success: false, output: '', error: 'Invalid repo format. Use owner/repo (e.g. facebook/react)', tool, parameters };
+        }
+        if (!action || !['search', 'tree', 'read_file'].includes(action)) {
+          return { success: false, output: '', error: 'Invalid action. Must be: search, tree, or read_file', tool, parameters };
+        }
+
+        let mcpToolName: string;
+        const args: Record<string, unknown> = { repo_name: repo };
+
+        if (action === 'search') {
+          mcpToolName = 'search_doc';
+          const query = parameters.query as string;
+          if (!query) {
+            return { success: false, output: '', error: 'Missing required parameter: query (for action=search)', tool, parameters };
+          }
+          args.query = query;
+        } else if (action === 'tree') {
+          mcpToolName = 'get_repo_structure';
+          if (parameters.path) args.dir_path = parameters.path;
+        } else {
+          mcpToolName = 'read_file';
+          const filePath = parameters.path as string;
+          if (!filePath) {
+            return { success: false, output: '', error: 'Missing required parameter: path (for action=read_file)', tool, parameters };
+          }
+          args.file_path = filePath;
+        }
+
+        const result = await callZaiMcp(mcpConfig.endpoints.zread, mcpToolName, args, mcpConfig.apiKey);
+        const output = result.length > 15000 ? result.substring(0, 15000) + '\n\n... (truncated)' : result;
+        return { success: true, output, tool, parameters };
+      }
+
       default:
         return { success: false, output: '', error: `Unknown tool: ${tool}`, tool, parameters };
     }
@@ -1203,12 +1416,17 @@ export function createActionLog(toolCall: ToolCall, result: ToolResult): ActionL
     create_directory: 'mkdir',
     find_files: 'search',
     fetch_url: 'fetch',
+    web_search: 'fetch',
+    web_read: 'fetch',
+    github_read: 'fetch',
   };
   
   const target = (toolCall.parameters.path as string) || 
                  (toolCall.parameters.command as string) ||
                  (toolCall.parameters.pattern as string) ||
                  (toolCall.parameters.url as string) ||
+                 (toolCall.parameters.query as string) ||
+                 (toolCall.parameters.repo as string) ||
                  'unknown';
   
   // For write/edit actions, include FULL content in details for live code view
