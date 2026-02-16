@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "node --import tsx src/renderer/main.ts",
+    "prepack": "tsc; node scripts/fix-imports.js",
     "build": "tsc && node scripts/fix-imports.js",
     "start": "node dist/renderer/main.js",
     "demo:renderer": "node --import tsx src/renderer/demo.ts",
