@@ -26,6 +26,11 @@ export interface ProviderConfig {
   defaultProtocol: 'openai' | 'anthropic';
   envKey?: string; // Environment variable name for API key
   subscribeUrl?: string; // URL to get API key
+  mcpEndpoints?: { // Z.AI MCP service endpoints
+    webSearch?: string;
+    webReader?: string;
+    zread?: string;
+  };
 }
 
 export const PROVIDERS: Record<string, ProviderConfig> = {
@@ -53,6 +58,41 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultProtocol: 'openai',
     envKey: 'ZAI_API_KEY',
     subscribeUrl: 'https://z.ai/subscribe?ic=NXYNXZOV14',
+    mcpEndpoints: {
+      webSearch: 'https://api.z.ai/api/mcp/web_search_prime/mcp',
+      webReader: 'https://api.z.ai/api/mcp/web_reader/mcp',
+      zread: 'https://api.z.ai/api/mcp/zread/mcp',
+    },
+  },
+  'z.ai-cn': {
+    name: 'Z.AI China (ZhipuAI)',
+    description: 'GLM Coding Plan (China)',
+    protocols: {
+      openai: {
+        baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+        authHeader: 'Bearer',
+        supportsNativeTools: true,
+      },
+      anthropic: {
+        baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+        authHeader: 'x-api-key',
+        supportsNativeTools: true,
+      },
+    },
+    models: [
+      { id: 'glm-5', name: 'GLM-5', description: 'Most capable GLM model (Pro/Max subscription)' },
+      { id: 'glm-4.7', name: 'GLM-4.7', description: 'Latest GLM model' },
+      { id: 'glm-4.7-flash', name: 'GLM-4.7 Flash', description: 'Faster, lighter version' },
+    ],
+    defaultModel: 'glm-4.7',
+    defaultProtocol: 'openai',
+    envKey: 'ZAI_CN_API_KEY',
+    subscribeUrl: 'https://open.bigmodel.cn/glm-coding',
+    mcpEndpoints: {
+      webSearch: 'https://open.bigmodel.cn/api/mcp/web_search_prime/mcp',
+      webReader: 'https://open.bigmodel.cn/api/mcp/web_reader/mcp',
+      zread: 'https://open.bigmodel.cn/api/mcp/zread/mcp',
+    },
   },
   'minimax': {
     name: 'MiniMax',
@@ -147,6 +187,11 @@ export function getProviderAuthHeader(providerId: string, protocol: 'openai' | '
   const provider = PROVIDERS[providerId];
   if (!provider) return 'Bearer';
   return provider.protocols[protocol]?.authHeader || 'Bearer';
+}
+
+export function getProviderMcpEndpoints(providerId: string): ProviderConfig['mcpEndpoints'] | null {
+  const provider = PROVIDERS[providerId];
+  return provider?.mcpEndpoints || null;
 }
 
 export function supportsNativeTools(providerId: string, protocol: 'openai' | 'anthropic'): boolean {
