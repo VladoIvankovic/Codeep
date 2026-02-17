@@ -13,7 +13,7 @@ vi.mock('fs', async (importOriginal) => {
 
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { loadProjectRules, formatAgentResult, AgentResult } from './agent';
+import { loadProjectRules, formatAgentResult, formatChatHistoryForAgent, AgentResult } from './agent';
 
 // Cast mocked functions for convenience
 const mockExistsSync = existsSync as ReturnType<typeof vi.fn>;
@@ -315,5 +315,90 @@ describe('formatAgentResult', () => {
     for (const type of actionTypes) {
       expect(formatted).toContain(`${type}: target-for-${type}`);
     }
+  });
+});
+
+describe('formatChatHistoryForAgent', () => {
+  it('should return empty string for undefined input', () => {
+    expect(formatChatHistoryForAgent(undefined)).toBe('');
+  });
+
+  it('should return empty string for empty array', () => {
+    expect(formatChatHistoryForAgent([])).toBe('');
+  });
+
+  it('should format simple chat history', () => {
+    const history = [
+      { role: 'user' as const, content: 'How do I fix the login bug?' },
+      { role: 'assistant' as const, content: 'Check the auth middleware in src/auth.ts' },
+    ];
+
+    const result = formatChatHistoryForAgent(history);
+
+    expect(result).toContain('## Prior Conversation Context');
+    expect(result).toContain('**User:** How do I fix the login bug?');
+    expect(result).toContain('**Assistant:** Check the auth middleware in src/auth.ts');
+  });
+
+  it('should filter out [AGENT] messages', () => {
+    const history = [
+      { role: 'user' as const, content: 'Hello' },
+      { role: 'user' as const, content: '[AGENT] fix the bug' },
+      { role: 'assistant' as const, content: 'Agent completed in 3 iteration(s)' },
+      { role: 'user' as const, content: 'Thanks' },
+    ];
+
+    const result = formatChatHistoryForAgent(history);
+
+    expect(result).toContain('**User:** Hello');
+    expect(result).toContain('**User:** Thanks');
+    expect(result).not.toContain('[AGENT]');
+    expect(result).not.toContain('Agent completed');
+  });
+
+  it('should filter out [DRY RUN] messages', () => {
+    const history = [
+      { role: 'user' as const, content: '[DRY RUN] test task' },
+    ];
+
+    const result = formatChatHistoryForAgent(history);
+
+    expect(result).toBe('');
+  });
+
+  it('should filter out Agent failed/stopped messages', () => {
+    const history = [
+      { role: 'assistant' as const, content: 'Agent failed: timeout' },
+      { role: 'assistant' as const, content: 'Agent stopped by user' },
+    ];
+
+    const result = formatChatHistoryForAgent(history);
+
+    expect(result).toBe('');
+  });
+
+  it('should respect character budget and keep newest messages', () => {
+    const history = [
+      { role: 'user' as const, content: 'A'.repeat(5000) },
+      { role: 'assistant' as const, content: 'B'.repeat(5000) },
+      { role: 'user' as const, content: 'Most recent message' },
+    ];
+
+    const result = formatChatHistoryForAgent(history, 6000);
+
+    expect(result).toContain('Most recent message');
+    // The first 5000-char message should be dropped due to budget
+    expect(result).not.toContain('AAAAA');
+  });
+
+  it('should truncate a single very long message', () => {
+    const history = [
+      { role: 'user' as const, content: 'X'.repeat(20000) },
+    ];
+
+    const result = formatChatHistoryForAgent(history, 8000);
+
+    expect(result).toContain('[truncated]');
+    expect(result.length).toBeLessThan(9000);
   });
 });

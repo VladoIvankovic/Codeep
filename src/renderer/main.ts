@@ -420,6 +420,7 @@ async function executeAgentTask(task: string, dryRun: boolean = false): Promise<
     
     const result = await runAgent(enrichedTask, context, {
       dryRun,
+      chatHistory: app.getChatHistory(),
       onIteration: (iteration) => {
         app.updateAgentProgress(iteration);
       },
