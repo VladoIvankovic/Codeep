@@ -133,7 +133,7 @@ export function loadProjectRules(projectRoot: string): string {
  */
 export function formatChatHistoryForAgent(
   history?: Array<{ role: 'user' | 'assistant'; content: string }>,
-  maxChars: number = 8000
+  maxChars: number = 16000
 ): string {
   if (!history || history.length === 0) return '';
 
