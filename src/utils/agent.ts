@@ -81,6 +81,7 @@ export interface AgentOptions {
   autoVerify?: boolean;
   maxFixAttempts?: number;
   usePlanning?: boolean; // Enable task planning for complex tasks
+  chatHistory?: Array<{ role: 'user' | 'assistant'; content: string }>; // Prior chat session context
 }
 
 export interface AgentResult {
@@ -123,6 +124,53 @@ export function loadProjectRules(projectRoot: string): string {
   }
 
   return '';
+}
+
+/**
+ * Format chat session history for inclusion in agent system prompt.
+ * Keeps the most recent messages within a character budget so the agent
+ * has conversational context without overwhelming the context window.
+ */
+export function formatChatHistoryForAgent(
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>,
+  maxChars: number = 8000
+): string {
+  if (!history || history.length === 0) return '';
+
+  // Filter out agent execution messages
+  const filtered = history.filter(m => {
+    const content = m.content.trimStart();
+    if (content.startsWith('[AGENT]') || content.startsWith('[DRY RUN]')) return false;
+    if (content.startsWith('Agent completed') || content.startsWith('Agent failed') || content.startsWith('Agent stopped')) return false;
+    return true;
+  });
+
+  if (filtered.length === 0) return '';
+
+  // Walk backward (newest first) and accumulate within budget
+  const selected: Array<{ role: string; content: string }> = [];
+  let totalChars = 0;
+
+  for (let i = filtered.length - 1; i >= 0; i--) {
+    const msg = filtered[i];
+    const entry = `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`;
+    if (totalChars + entry.length > maxChars && selected.length > 0) break;
+    // If single message exceeds budget, truncate it
+    if (entry.length > maxChars) {
+      selected.unshift({ role: msg.role, content: msg.content.slice(0, maxChars - 100) + '\n[truncated]' });
+      break;
+    }
+    selected.unshift(msg);
+    totalChars += entry.length;
+  }
+
+  if (selected.length === 0) return '';
+
+  const lines = selected.map(m =>
+    `**${m.role === 'user' ? 'User' : 'Assistant'}:** ${m.content}`
+  ).join('\n\n');
+
+  return `\n\n## Prior Conversation Context\nThe following is the recent chat history from this session. Use it as background context to understand the user's intent, but focus on completing the current task.\n\n${lines}`;
 }
 
 /**
@@ -902,6 +950,12 @@ export async function runAgent(
   
   if (smartContextStr) {
     systemPrompt += '\n\n' + smartContextStr;
+  }
+
+  // Inject prior chat session context
+  const chatHistoryStr = formatChatHistoryForAgent(opts.chatHistory);
+  if (chatHistoryStr) {
+    systemPrompt += chatHistoryStr;
   }
   
   // Initial user message with optional task plan
