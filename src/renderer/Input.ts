@@ -513,8 +513,14 @@ export class LineEditor {
         break;
         
       default:
+        // Alt+b / Alt+f — word jump (macOS Option+Left/Right)
+        if (event.alt && event.key === 'b') {
+          this.wordLeft();
+        } else if (event.alt && event.key === 'f') {
+          this.wordRight();
+        }
         // Regular character (single char, not control)
-        if (event.key.length === 1 && !event.ctrl && !event.alt) {
+        else if (event.key.length === 1 && !event.ctrl && !event.alt) {
           this.value = this.value.slice(0, this.cursorPos) + event.key + this.value.slice(this.cursorPos);
           this.cursorPos++;
         }

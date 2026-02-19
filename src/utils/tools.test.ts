@@ -19,7 +19,7 @@ const ALL_TOOL_NAMES = Object.keys(AGENT_TOOLS);
 
 // MCP tools are filtered out when no API key is configured (e.g. in tests)
 const ZAI_MCP_TOOLS = ['web_search', 'web_read', 'github_read'];
-const MINIMAX_MCP_TOOLS = ['minimax_web_search'];
+const MINIMAX_MCP_TOOLS = ['minimax_web_search', 'minimax_understand_image'];
 const MCP_TOOLS = [...ZAI_MCP_TOOLS, ...MINIMAX_MCP_TOOLS];
 const CORE_TOOL_NAMES = ALL_TOOL_NAMES.filter(n => !MCP_TOOLS.includes(n));
 
@@ -689,6 +689,12 @@ describe('createActionLog', () => {
   it('should map minimax_web_search to type "fetch"', () => {
     const tc: ToolCall = { tool: 'minimax_web_search', parameters: { query: 'test' } };
     const log = createActionLog(tc, makeResult({ tool: 'minimax_web_search' }));
+    expect(log.type).toBe('fetch');
+  });
+
+  it('should map minimax_understand_image to type "fetch"', () => {
+    const tc: ToolCall = { tool: 'minimax_understand_image', parameters: { prompt: 'describe', image_url: 'https://example.com/img.png' } };
+    const log = createActionLog(tc, makeResult({ tool: 'minimax_understand_image' }));
     expect(log.type).toBe('fetch');
   });
 
