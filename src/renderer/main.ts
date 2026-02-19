@@ -49,6 +49,7 @@ import {
 import { getCurrentVersion } from '../utils/update';
 import { getProviderList, getProvider } from '../config/providers';
 import { getSessionStats } from '../utils/tokenTracker';
+import { checkApiRateLimit } from '../utils/ratelimit';
 
 // State
 let projectPath = process.cwd();
@@ -180,6 +181,13 @@ async function handleSubmit(message: string): Promise<void> {
     return;
   }
   
+  // Check API rate limit
+  const rateCheck = checkApiRateLimit();
+  if (!rateCheck.allowed) {
+    app.notify(rateCheck.message || 'Rate limit exceeded', 5000);
+    return;
+  }
+
   try {
     app.startStreaming();
     
@@ -1226,13 +1234,26 @@ function handleCommand(command: string, args: string[]): void {
         return;
       }
       
-      // Find file changes in the response
-      const filePattern = /```(\w+)?\s*\n\/\/\s*(?:File:|Path:)\s*([^\n]+)\n([\s\S]*?)```/g;
+      // Find file changes in the response using multiple patterns
       const changes: Array<{ path: string; content: string }> = [];
       
+      // Pattern 1: ```lang filepath\n...\n``` (most common AI format)
+      const fenceFilePattern = /```\w*\s+([\w./\\-]+(?:\.\w+))\n([\s\S]*?)```/g;
       let match;
-      while ((match = filePattern.exec(lastAssistant.content)) !== null) {
-        changes.push({ path: match[2].trim(), content: match[3] });
+      while ((match = fenceFilePattern.exec(lastAssistant.content)) !== null) {
+        const path = match[1].trim();
+        // Must look like a file path (has extension, no spaces)
+        if (path.includes('.') && !path.includes(' ')) {
+          changes.push({ path, content: match[2] });
+        }
+      }
+      
+      // Pattern 2: // File: or // Path: comment on first line of code block
+      if (changes.length === 0) {
+        const commentPattern = /```(\w+)?\s*\n(?:\/\/|#|--|\/\*)\s*(?:File|Path|file|path):\s*([^\n*]+)\n([\s\S]*?)```/g;
+        while ((match = commentPattern.exec(lastAssistant.content)) !== null) {
+          changes.push({ path: match[2].trim(), content: match[3] });
+        }
       }
       
       if (changes.length === 0) {
