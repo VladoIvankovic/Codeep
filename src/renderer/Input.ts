@@ -284,6 +284,16 @@ export class Input {
         case '6~':
           event.key = 'pagedown';
           break;
+        // Ctrl+Right (word jump forward)
+        case '1;5C':
+          event.key = 'ctrl-right';
+          event.ctrl = true;
+          break;
+        // Ctrl+Left (word jump backward)
+        case '1;5D':
+          event.key = 'ctrl-left';
+          event.ctrl = true;
+          break;
         default:
           event.key = 'unknown';
       }
@@ -358,20 +368,53 @@ export class LineEditor {
   }
   
   /**
-   * Delete word backward (Ctrl+W)
+   * Check if character is a word boundary (space, path separator, punctuation)
+   */
+  private isWordBoundary(ch: string): boolean {
+    return ' \t/\\.-_:'.includes(ch);
+  }
+
+  /**
+   * Move cursor to previous word boundary (Ctrl+Left)
+   */
+  wordLeft(): void {
+    if (this.cursorPos === 0) return;
+    let i = this.cursorPos - 1;
+    // Skip current boundary chars
+    while (i > 0 && this.isWordBoundary(this.value[i])) i--;
+    // Move to start of word
+    while (i > 0 && !this.isWordBoundary(this.value[i - 1])) i--;
+    this.cursorPos = i;
+  }
+
+  /**
+   * Move cursor to next word boundary (Ctrl+Right)
+   */
+  wordRight(): void {
+    const len = this.value.length;
+    if (this.cursorPos >= len) return;
+    let i = this.cursorPos;
+    // Skip current word chars
+    while (i < len && !this.isWordBoundary(this.value[i])) i++;
+    // Skip boundary chars
+    while (i < len && this.isWordBoundary(this.value[i])) i++;
+    this.cursorPos = i;
+  }
+
+  /**
+   * Delete word backward (Ctrl+W) — respects path separators
    */
   deleteWordBackward(): void {
     if (this.cursorPos === 0) return;
     
-    const beforeCursor = this.value.slice(0, this.cursorPos);
     const afterCursor = this.value.slice(this.cursorPos);
+    let i = this.cursorPos - 1;
+    // Skip trailing spaces
+    while (i >= 0 && this.value[i] === ' ') i--;
+    // Delete back to next word boundary
+    while (i >= 0 && !this.isWordBoundary(this.value[i])) i--;
     
-    // Find last word boundary (skip trailing spaces, then find space)
-    let i = beforeCursor.length - 1;
-    while (i >= 0 && beforeCursor[i] === ' ') i--;
-    while (i >= 0 && beforeCursor[i] !== ' ') i--;
-    
-    const newBefore = beforeCursor.slice(0, i + 1);
+    const newBefore = this.value.slice(0, i + 1);
     this.value = newBefore + afterCursor;
     this.cursorPos = newBefore.length;
   }
@@ -425,6 +468,14 @@ export class LineEditor {
         if (this.cursorPos < this.value.length) {
           this.cursorPos++;
         }
+        break;
+        
+      case 'ctrl-left':
+        this.wordLeft();
+        break;
+        
+      case 'ctrl-right':
+        this.wordRight();
         break;
         
       case 'home':
