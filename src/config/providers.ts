@@ -117,6 +117,29 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'MINIMAX_API_KEY',
     subscribeUrl: 'https://platform.minimax.io/subscribe/coding-plan?code=2lWvoWUhrp&source=link',
   },
+  'minimax-cn': {
+    name: 'MiniMax China',
+    description: 'MiniMax Coding Plan (China)',
+    protocols: {
+      openai: {
+        baseUrl: 'https://api.minimaxi.com/v1',
+        authHeader: 'Bearer',
+        supportsNativeTools: true,
+      },
+      anthropic: {
+        baseUrl: 'https://api.minimaxi.com/anthropic',
+        authHeader: 'x-api-key',
+        supportsNativeTools: false,
+      },
+    },
+    models: [
+      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', description: 'Latest MiniMax coding model' },
+    ],
+    defaultModel: 'MiniMax-M2.5',
+    defaultProtocol: 'anthropic',
+    envKey: 'MINIMAX_CN_API_KEY',
+    subscribeUrl: 'https://platform.minimaxi.com',
+  },
   'deepseek': {
     name: 'DeepSeek',
     description: 'DeepSeek AI models',
@@ -147,11 +170,12 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', description: 'Best balance of speed and intelligence' },
-      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', description: 'Fastest and most affordable' },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', description: 'Latest Sonnet — best balance of speed and intelligence' },
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', description: 'Most capable model' },
+      { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', description: 'Previous generation Sonnet' },
+      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', description: 'Fastest and most affordable' },
     ],
-    defaultModel: 'claude-sonnet-4-5-20250929',
+    defaultModel: 'claude-sonnet-4-6',
     defaultProtocol: 'anthropic',
     envKey: 'ANTHROPIC_API_KEY',
   },
