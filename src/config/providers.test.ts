@@ -91,12 +91,14 @@ describe('providers', () => {
       }
     });
 
-    it('should include z.ai, z.ai-cn, and minimax', () => {
+    it('should include z.ai, z.ai-cn, minimax, minimax-cn, and anthropic', () => {
       const list = getProviderList();
       const ids = list.map(p => p.id);
       expect(ids).toContain('z.ai');
       expect(ids).toContain('z.ai-cn');
       expect(ids).toContain('minimax');
+      expect(ids).toContain('minimax-cn');
+      expect(ids).toContain('anthropic');
     });
   });
 
@@ -166,6 +168,34 @@ describe('providers', () => {
 
     it('should have env key for minimax', () => {
       expect(PROVIDERS['minimax'].envKey).toBe('MINIMAX_API_KEY');
+    });
+
+    it('should have env key for minimax-cn', () => {
+      expect(PROVIDERS['minimax-cn'].envKey).toBe('MINIMAX_CN_API_KEY');
+    });
+
+    it('should have env key for anthropic', () => {
+      expect(PROVIDERS['anthropic'].envKey).toBe('ANTHROPIC_API_KEY');
+    });
+  });
+
+  describe('minimax-cn provider', () => {
+    it('should have correct name and endpoints', () => {
+      expect(PROVIDERS['minimax-cn']).toBeDefined();
+      expect(PROVIDERS['minimax-cn'].name).toBe('MiniMax China');
+      expect(getProviderBaseUrl('minimax-cn', 'openai')).toContain('api.minimaxi.com');
+      expect(getProviderBaseUrl('minimax-cn', 'anthropic')).toContain('api.minimaxi.com');
+    });
+  });
+
+  describe('anthropic provider', () => {
+    it('should include Claude Sonnet 4.6 as default model', () => {
+      expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-sonnet-4-6');
+      const modelIds = PROVIDERS['anthropic'].models.map(m => m.id);
+      expect(modelIds).toContain('claude-sonnet-4-6');
+      expect(modelIds).toContain('claude-opus-4-6');
+      expect(modelIds).toContain('claude-sonnet-4-5-20250929');
+      expect(modelIds).toContain('claude-haiku-4-5-20251001');
     });
   });
 
