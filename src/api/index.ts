@@ -117,6 +117,27 @@ export function setProjectContext(ctx: ProjectContext | null): void {
   }
 }
 
+/**
+ * Parse API error response body into a human-readable message.
+ * Handles JSON error responses from OpenAI, Anthropic, and other providers.
+ */
+function parseApiError(status: number, body: string): string {
+  try {
+    const json = JSON.parse(body);
+    // OpenAI format: { error: { message: "..." } }
+    if (json.error?.message) return `${status} - ${json.error.message}`;
+    // Anthropic format: { error: { type: "...", message: "..." } }
+    if (json.message) return `${status} - ${json.message}`;
+    // Other: { detail: "..." }
+    if (json.detail) return `${status} - ${json.detail}`;
+  } catch {
+    // Not JSON — use raw body but truncate
+  }
+  // Truncate long raw error bodies
+  const truncated = body.length > 200 ? body.slice(0, 200) + '...' : body;
+  return `${status} - ${truncated}`;
+}
+
 export async function chat(
   message: string,
   history: Message[] = [],
@@ -156,11 +177,12 @@ export async function chat(
         }
       },
       shouldRetry: (error) => {
-        // Don't retry on user abort
+        // Don't retry on user abort or timeout
         if (error.name === 'AbortError') return false;
+        if ((error as any).isTimeout) return false;
         // Don't retry on 4xx client errors (except 429 rate limit)
         if (error.status >= 400 && error.status < 500 && error.status !== 429) return false;
-        // Retry on network errors, timeouts, 5xx, and rate limits
+        // Retry on network errors, 5xx, and rate limits
         return true;
       },
     });
@@ -169,10 +191,17 @@ export async function chat(
     logApiResponse(providerId, true, response.length);
     return response;
   } catch (error: unknown) {
-    const err = error as Error;
-    // Don't log or throw if request was aborted by user
+    const err = error as any;
+    
+    // Timeout errors (from chatOpenAI/chatAnthropic) — show user-friendly message
+    if (err.isTimeout) {
+      logApiResponse(providerId, false, undefined, 'timeout');
+      throw error;
+    }
+    
+    // User cancel (Escape key) — re-throw silently without logging
     if (err.name === 'AbortError' || err.message?.includes('aborted')) {
-      throw error; // Re-throw abort errors silently
+      throw error;
     }
     
     // Log error
@@ -181,9 +210,6 @@ export async function chat(
     // Translate errors to user-friendly messages
     if (isNetworkError(error)) {
       throw new Error(getErrorMessage('noInternet'));
-    }
-    if (isTimeoutError(error)) {
-      throw new Error(getErrorMessage('timeout'));
     }
     throw error;
   }
@@ -305,11 +331,12 @@ async function chatOpenAI(
     throw new Error(`Provider ${providerId} does not support OpenAI protocol`);
   }
 
-  // Create abort controller for timeout or use provided one
-  const controller = abortSignal ? new AbortController() : new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  // Create abort controller with timeout flag to distinguish from user cancel
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
   
-  // Listen to external abort signal if provided
+  // Listen to external abort signal if provided (user cancel)
   if (abortSignal) {
     abortSignal.addEventListener('abort', () => controller.abort());
   }
@@ -340,8 +367,8 @@ async function chatOpenAI(
     });
 
     if (!response.ok) {
-      const error = await response.text();
-      const err = new Error(`${getErrorMessage('apiError')}: ${response.status} - ${error}`);
+      const body = await response.text();
+      const err = new Error(`${getErrorMessage('apiError')}: ${parseApiError(response.status, body)}`);
       (err as any).status = response.status;
       throw err;
     }
@@ -355,6 +382,13 @@ async function chatOpenAI(
       const content = data.choices[0]?.message?.content || '';
       return stripThinkTags(content);
     }
+  } catch (error) {
+    if (timedOut) {
+      const err = new Error(getErrorMessage('timeout'));
+      (err as any).isTimeout = true;
+      throw err;
+    }
+    throw error;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -414,20 +448,23 @@ async function chatAnthropic(
   abortSignal?: AbortSignal
 ): Promise<string> {
   const systemPrompt = getSystemPrompt();
-  const messages = [
-    { role: 'user' as const, content: systemPrompt },
-    { role: 'assistant' as const, content: 'Understood. I will follow your language instructions.' },
-    ...history,
-    { role: 'user' as const, content: message },
-  ];
+  const providerId = config.get('provider');
+  
+  // Use native system parameter for Anthropic, fake turns for other providers
+  const useNativeSystem = providerId === 'anthropic';
+  const messages = useNativeSystem
+    ? [...history, { role: 'user' as const, content: message }]
+    : [
+        { role: 'user' as const, content: systemPrompt },
+        { role: 'assistant' as const, content: 'Understood.' },
+        ...history,
+        { role: 'user' as const, content: message },
+      ];
 
   const stream = Boolean(onChunk);
   const timeout = config.get('apiTimeout');
   const temperature = config.get('temperature');
   const maxTokens = config.get('maxTokens');
-
-  // Get provider-specific URL and auth
-  const providerId = config.get('provider');
   const baseUrl = getProviderBaseUrl(providerId, 'anthropic');
   const authHeader = getProviderAuthHeader(providerId, 'anthropic');
 
@@ -435,11 +472,12 @@ async function chatAnthropic(
     throw new Error(`Provider ${providerId} does not support Anthropic protocol`);
   }
 
-  // Create abort controller for timeout or use provided one
+  // Create abort controller with timeout flag to distinguish from user cancel
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  let timedOut = false;
+  const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
   
-  // Listen to external abort signal if provided
+  // Listen to external abort signal if provided (user cancel)
   if (abortSignal) {
     abortSignal.addEventListener('abort', () => controller.abort());
   }
@@ -465,13 +503,14 @@ async function chatAnthropic(
         max_tokens: maxTokens,
         temperature,
         stream,
+        ...(useNativeSystem ? { system: systemPrompt } : {}),
       }),
       signal: controller.signal,
     });
 
     if (!response.ok) {
-      const error = await response.text();
-      const err = new Error(`${getErrorMessage('apiError')}: ${response.status} - ${error}`);
+      const body = await response.text();
+      const err = new Error(`${getErrorMessage('apiError')}: ${parseApiError(response.status, body)}`);
       (err as any).status = response.status;
       throw err;
     }
@@ -485,6 +524,13 @@ async function chatAnthropic(
       const content = data.content[0]?.text || '';
       return stripThinkTags(content);
     }
+  } catch (error) {
+    if (timedOut) {
+      const err = new Error(getErrorMessage('timeout'));
+      (err as any).isTimeout = true;
+      throw err;
+    }
+    throw error;
   } finally {
     clearTimeout(timeoutId);
   }

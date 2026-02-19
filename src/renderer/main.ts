@@ -208,7 +208,9 @@ async function handleSubmit(message: string): Promise<void> {
     
   } catch (error) {
     app.endStreaming();
-    const err = error as Error;
+    const err = error as any;
+    // Don't show error for user-cancelled requests
+    if (err.name === 'AbortError') return;
     app.notify(`Error: ${err.message}`, 5000);
   }
 }
@@ -1116,11 +1118,22 @@ function handleCommand(command: string, args: string[]): void {
           for (const p of configuredProviders) {
             clearApiKey(p.id);
           }
-          app.notify('Logged out from all providers');
+          app.notify('Logged out from all providers. Use /login to sign in.');
         } else {
           clearApiKey(result);
           const provider = configuredProviders.find(p => p.id === result);
           app.notify(`Logged out from ${provider?.name || result}`);
+          
+          // If we logged out from the active provider, switch to another configured one
+          if (result === currentProvider.id) {
+            const remaining = configuredProviders.filter(p => p.id !== result);
+            if (remaining.length > 0) {
+              setProvider(remaining[0].id);
+              app.notify(`Switched to ${remaining[0].name}`);
+            } else {
+              app.notify('No providers configured. Use /login to sign in.');
+            }
+          }
         }
       });
       break;

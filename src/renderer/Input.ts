@@ -35,7 +35,8 @@ export class Input {
     // Enable mouse tracking (SGR mode for better compatibility)
     // \x1b[?1000h - enable basic mouse tracking
     // \x1b[?1006h - enable SGR extended mouse mode
-    process.stdout.write('\x1b[?1000h\x1b[?1006h');
+    // \x1b[?2004h - enable bracketed paste mode (wraps pastes in \x1b[200~ ... \x1b[201~)
+    process.stdout.write('\x1b[?1000h\x1b[?1006h\x1b[?2004h');
     
     this.dataHandler = (data: string) => {
       const event = this.parseKey(data);
@@ -54,8 +55,8 @@ export class Input {
       this.dataHandler = null;
     }
     
-    // Disable mouse tracking
-    process.stdout.write('\x1b[?1006l\x1b[?1000l');
+    // Disable mouse tracking and bracketed paste mode
+    process.stdout.write('\x1b[?2004l\x1b[?1006l\x1b[?1000l');
     
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(false);
