@@ -433,6 +433,7 @@ export class App {
     this.input.start();
     
     this.input.onKey((event) => this.handleKey(event));
+    this.screen.onResize(() => this.render());
     
     this.render();
   }
@@ -1990,7 +1991,7 @@ export class App {
       this.renderInlinePasteInfo(statusLine + 1, width);
     }
     
-    this.screen.fullRender();
+    this.screen.render();
   }
   
   /**

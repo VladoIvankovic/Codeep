@@ -18,6 +18,7 @@ export class Screen {
   private cursorX = 0;
   private cursorY = 0;
   private cursorVisible = true;
+  private resizeCallback: (() => void) | null = null;
   
   constructor() {
     this.width = process.stdout.columns || 80;
@@ -31,8 +32,18 @@ export class Screen {
       this.height = process.stdout.rows || 24;
       this.buffer = this.createEmptyBuffer();
       this.rendered = this.createEmptyBuffer();
-      this.fullRender();
+      // Notify the app to re-render with new dimensions
+      if (this.resizeCallback) {
+        this.resizeCallback();
+      }
     });
+  }
+  
+  /**
+   * Register a callback to be called on terminal resize
+   */
+  onResize(callback: () => void): void {
+    this.resizeCallback = callback;
   }
   
   private createEmptyBuffer(): Cell[][] {
