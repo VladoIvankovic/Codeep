@@ -17,9 +17,11 @@ import {
 
 const ALL_TOOL_NAMES = Object.keys(AGENT_TOOLS);
 
-// MCP tools are filtered out when no Z.AI API key is configured (e.g. in tests)
+// MCP tools are filtered out when no API key is configured (e.g. in tests)
 const ZAI_MCP_TOOLS = ['web_search', 'web_read', 'github_read'];
-const CORE_TOOL_NAMES = ALL_TOOL_NAMES.filter(n => !ZAI_MCP_TOOLS.includes(n));
+const MINIMAX_MCP_TOOLS = ['minimax_web_search'];
+const MCP_TOOLS = [...ZAI_MCP_TOOLS, ...MINIMAX_MCP_TOOLS];
+const CORE_TOOL_NAMES = ALL_TOOL_NAMES.filter(n => !MCP_TOOLS.includes(n));
 
 // ─── getOpenAITools ──────────────────────────────────────────────────────────
 
@@ -681,6 +683,12 @@ describe('createActionLog', () => {
   it('should map fetch_url to type "fetch"', () => {
     const tc: ToolCall = { tool: 'fetch_url', parameters: { url: 'https://example.com' } };
     const log = createActionLog(tc, makeResult({ tool: 'fetch_url' }));
+    expect(log.type).toBe('fetch');
+  });
+
+  it('should map minimax_web_search to type "fetch"', () => {
+    const tc: ToolCall = { tool: 'minimax_web_search', parameters: { query: 'test' } };
+    const log = createActionLog(tc, makeResult({ tool: 'minimax_web_search' }));
     expect(log.type).toBe('fetch');
   });
 
