@@ -73,6 +73,12 @@ const ZAI_MCP_TOOLS = ['web_search', 'web_read', 'github_read'];
 // Z.AI provider IDs that have MCP endpoints
 const ZAI_PROVIDER_IDS = ['z.ai', 'z.ai-cn'];
 
+// MiniMax MCP tool names (available when user has any MiniMax API key)
+const MINIMAX_MCP_TOOLS = ['minimax_web_search'];
+
+// MiniMax provider IDs
+const MINIMAX_PROVIDER_IDS = ['minimax', 'minimax-cn'];
+
 /**
  * Find a Z.AI provider that has an API key configured.
  * Returns the provider ID and API key, or null if none found.
@@ -106,6 +112,85 @@ function getZaiMcpConfig(): { providerId: string; apiKey: string; endpoints: { w
  */
 function hasZaiMcpAccess(): boolean {
   return getZaiMcpConfig() !== null;
+}
+
+/**
+ * Find a MiniMax provider that has an API key configured.
+ * Returns the base host URL and API key, or null if none found.
+ */
+function getMinimaxMcpConfig(): { host: string; apiKey: string } | null {
+  // First check if active provider is MiniMax
+  const activeProvider = config.get('provider');
+  if (MINIMAX_PROVIDER_IDS.includes(activeProvider)) {
+    const key = getApiKey(activeProvider);
+    if (key) {
+      const provider = PROVIDERS[activeProvider];
+      const baseUrl = provider?.protocols?.openai?.baseUrl;
+      if (baseUrl) {
+        // Extract host from baseUrl (e.g. https://api.minimax.io/v1 -> https://api.minimax.io)
+        const host = baseUrl.replace(/\/v1\/?$/, '');
+        return { host, apiKey: key };
+      }
+    }
+  }
+
+  // Otherwise check all MiniMax providers
+  for (const pid of MINIMAX_PROVIDER_IDS) {
+    const key = getApiKey(pid);
+    if (key) {
+      const provider = PROVIDERS[pid];
+      const baseUrl = provider?.protocols?.openai?.baseUrl;
+      if (baseUrl) {
+        const host = baseUrl.replace(/\/v1\/?$/, '');
+        return { host, apiKey: key };
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Check if MiniMax MCP tools are available
+ */
+function hasMinimaxMcpAccess(): boolean {
+  return getMinimaxMcpConfig() !== null;
+}
+
+/**
+ * Call a MiniMax MCP REST API endpoint
+ */
+async function callMinimaxApi(host: string, path: string, body: Record<string, unknown>, apiKey: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+
+  try {
+    const response = await fetch(`${host}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(`MiniMax API error ${response.status}: ${errorText || response.statusText}`);
+    }
+
+    const data = await response.json() as any;
+
+    // MiniMax returns content array like MCP
+    if (data.content && Array.isArray(data.content)) {
+      return data.content.map((c: any) => c.text || '').join('\n');
+    }
+    // Fallback: return raw result
+    return typeof data === 'string' ? data : JSON.stringify(data);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /**
@@ -260,18 +345,27 @@ export const AGENT_TOOLS = {
       path: { type: 'string', description: 'File path (for action=read_file) or directory path (for action=tree)', required: false },
     },
   },
+  minimax_web_search: {
+    name: 'minimax_web_search',
+    description: 'Search the web using MiniMax search engine. Returns relevant results with summaries. Requires a MiniMax API key.',
+    parameters: {
+      query: { type: 'string', description: 'Search query', required: true },
+    },
+  },
 };
 
 /**
  * Format tool definitions for system prompt (text-based fallback)
  */
 /**
- * Get filtered tool entries (excludes Z.AI-only tools when not using Z.AI provider)
+ * Get filtered tool entries (excludes provider-specific tools when API key not available)
  */
 function getFilteredToolEntries(): [string, typeof AGENT_TOOLS[keyof typeof AGENT_TOOLS]][] {
   const hasMcp = hasZaiMcpAccess();
+  const hasMinimaxMcp = hasMinimaxMcpAccess();
   return Object.entries(AGENT_TOOLS).filter(([name]) => {
     if (ZAI_MCP_TOOLS.includes(name)) return hasMcp;
+    if (MINIMAX_MCP_TOOLS.includes(name)) return hasMinimaxMcp;
     return true;
   });
 }
@@ -1284,6 +1378,23 @@ export async function executeTool(toolCall: ToolCall, projectRoot: string): Prom
         return { success: true, output, tool, parameters };
       }
 
+      // === MiniMax MCP Tools ===
+
+      case 'minimax_web_search': {
+        const mmConfig = getMinimaxMcpConfig();
+        if (!mmConfig) {
+          return { success: false, output: '', error: 'minimax_web_search requires a MiniMax API key. Configure one via /provider minimax', tool, parameters };
+        }
+        const query = parameters.query as string;
+        if (!query) {
+          return { success: false, output: '', error: 'Missing required parameter: query', tool, parameters };
+        }
+
+        const result = await callMinimaxApi(mmConfig.host, '/v1/coding_plan/search', { q: query }, mmConfig.apiKey);
+        const output = result.length > 15000 ? result.substring(0, 15000) + '\n\n... (truncated)' : result;
+        return { success: true, output, tool, parameters };
+      }
+
       default:
         return { success: false, output: '', error: `Unknown tool: ${tool}`, tool, parameters };
     }
@@ -1419,6 +1530,7 @@ export function createActionLog(toolCall: ToolCall, result: ToolResult): ActionL
     web_search: 'fetch',
     web_read: 'fetch',
     github_read: 'fetch',
+    minimax_web_search: 'fetch',
   };
   
   const target = (toolCall.parameters.path as string) || 
