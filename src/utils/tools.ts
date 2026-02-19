@@ -74,7 +74,7 @@ const ZAI_MCP_TOOLS = ['web_search', 'web_read', 'github_read'];
 const ZAI_PROVIDER_IDS = ['z.ai', 'z.ai-cn'];
 
 // MiniMax MCP tool names (available when user has any MiniMax API key)
-const MINIMAX_MCP_TOOLS = ['minimax_web_search'];
+const MINIMAX_MCP_TOOLS = ['minimax_web_search', 'minimax_understand_image'];
 
 // MiniMax provider IDs
 const MINIMAX_PROVIDER_IDS = ['minimax', 'minimax-cn'];
@@ -350,6 +350,14 @@ export const AGENT_TOOLS = {
     description: 'Search the web using MiniMax search engine. Returns relevant results with summaries. Requires a MiniMax API key.',
     parameters: {
       query: { type: 'string', description: 'Search query', required: true },
+    },
+  },
+  minimax_understand_image: {
+    name: 'minimax_understand_image',
+    description: 'Analyze and understand an image using MiniMax vision model. Can describe images, read text from screenshots, understand diagrams, and answer questions about visual content. Requires a MiniMax API key.',
+    parameters: {
+      prompt: { type: 'string', description: 'Question or instruction about the image (e.g. "Describe this image", "What text is in this screenshot?")', required: true },
+      image_url: { type: 'string', description: 'URL of the image or base64-encoded image data', required: true },
     },
   },
 };
@@ -1395,6 +1403,25 @@ export async function executeTool(toolCall: ToolCall, projectRoot: string): Prom
         return { success: true, output, tool, parameters };
       }
 
+      case 'minimax_understand_image': {
+        const mmConfig = getMinimaxMcpConfig();
+        if (!mmConfig) {
+          return { success: false, output: '', error: 'minimax_understand_image requires a MiniMax API key. Configure one via /provider minimax', tool, parameters };
+        }
+        const prompt = parameters.prompt as string;
+        const imageUrl = parameters.image_url as string;
+        if (!prompt) {
+          return { success: false, output: '', error: 'Missing required parameter: prompt', tool, parameters };
+        }
+        if (!imageUrl) {
+          return { success: false, output: '', error: 'Missing required parameter: image_url', tool, parameters };
+        }
+
+        const result = await callMinimaxApi(mmConfig.host, '/v1/coding_plan/vlm', { prompt, image_url: imageUrl }, mmConfig.apiKey);
+        const output = result.length > 15000 ? result.substring(0, 15000) + '\n\n... (truncated)' : result;
+        return { success: true, output, tool, parameters };
+      }
+
       default:
         return { success: false, output: '', error: `Unknown tool: ${tool}`, tool, parameters };
     }
@@ -1531,6 +1558,7 @@ export function createActionLog(toolCall: ToolCall, result: ToolResult): ActionL
     web_read: 'fetch',
     github_read: 'fetch',
     minimax_web_search: 'fetch',
+    minimax_understand_image: 'fetch',
   };
   
   const target = (toolCall.parameters.path as string) || 
