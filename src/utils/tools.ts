@@ -17,6 +17,17 @@ import { loadIgnoreRules, isIgnored } from './gitignore';
 import { config, getApiKey } from '../config/index';
 import { getProviderMcpEndpoints, PROVIDERS } from '../config/providers';
 
+// MCP API response shapes
+interface McpContentItem { text?: string }
+interface MinimaxApiResponse { content?: McpContentItem[] }
+interface ZaiMcpResponse {
+  error?: { message?: string };
+  result?: { content?: McpContentItem[] } | string;
+}
+
+// Tool parameter info shape (used in formatToolDefinitions)
+interface ToolParamInfo { type: string; required?: boolean; description: string }
+
 // OpenAI Function Calling format
 export interface OpenAITool {
   type: 'function';
@@ -180,14 +191,14 @@ async function callMinimaxApi(host: string, path: string, body: Record<string, u
       throw new Error(`MiniMax API error ${response.status}: ${errorText || response.statusText}`);
     }
 
-    const data = await response.json() as any;
+    const data = await response.json() as MinimaxApiResponse;
 
     // MiniMax returns content array like MCP
     if (data.content && Array.isArray(data.content)) {
-      return data.content.map((c: any) => c.text || '').join('\n');
+      return data.content.map((c) => c.text || '').join('\n');
     }
     // Fallback: return raw result
-    return typeof data === 'string' ? data : JSON.stringify(data);
+    return JSON.stringify(data);
   } finally {
     clearTimeout(timeout);
   }
@@ -223,17 +234,17 @@ async function callZaiMcp(endpoint: string, toolName: string, args: Record<strin
       throw new Error(`MCP error ${response.status}: ${errorText || response.statusText}`);
     }
 
-    const data = await response.json() as any;
+    const data = await response.json() as ZaiMcpResponse;
     if (data.error) {
       throw new Error(data.error.message || JSON.stringify(data.error));
     }
 
     // MCP returns result.content as array of {type, text} blocks
-    const content = data.result?.content;
-    if (Array.isArray(content)) {
-      return content.map((c: any) => c.text || '').join('\n');
+    const result = data.result;
+    if (result && typeof result === 'object' && Array.isArray(result.content)) {
+      return result.content.map((c) => c.text || '').join('\n');
     }
-    return typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
+    return typeof result === 'string' ? result : JSON.stringify(result);
   } finally {
     clearTimeout(timeout);
   }
@@ -385,9 +396,9 @@ export function formatToolDefinitions(): string {
     lines.push(`### ${name}`);
     lines.push(tool.description);
     lines.push('Parameters:');
-    for (const [param, info] of Object.entries(tool.parameters)) {
-      const required = (info as any).required ? '(required)' : '(optional)';
-      lines.push(`  - ${param}: ${(info as any).type} ${required} - ${(info as any).description}`);
+    for (const [param, info] of Object.entries(tool.parameters) as [string, ToolParamInfo][]) {
+      const required = info.required ? '(required)' : '(optional)';
+      lines.push(`  - ${param}: ${info.type} ${required} - ${info.description}`);
     }
     lines.push('');
   }

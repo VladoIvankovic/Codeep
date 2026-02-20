@@ -275,7 +275,7 @@ function createConfig(): Conf<ConfigSchema> {
 export const config = createConfig();
 
 // Migrate old 'auto' value to 'on'
-if (config.get('agentMode') === 'auto' as any) {
+if ((config.get('agentMode') as string) === 'auto') {
   config.set('agentMode', 'on');
 }
 
