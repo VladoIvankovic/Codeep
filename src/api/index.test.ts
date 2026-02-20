@@ -64,7 +64,7 @@ import { getProviderBaseUrl, getProviderAuthHeader, getProvider } from '../confi
 import { withRetry } from '../utils/retry';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from '../utils/tokenTracker';
 
-const mockConfig = config as { get: ReturnType<typeof vi.fn> };
+const mockConfig = config as unknown as { get: ReturnType<typeof vi.fn> };
 const mockGetApiKey = getApiKey as ReturnType<typeof vi.fn>;
 const mockGetProviderBaseUrl = getProviderBaseUrl as ReturnType<typeof vi.fn>;
 const mockGetProviderAuthHeader = getProviderAuthHeader as ReturnType<typeof vi.fn>;
