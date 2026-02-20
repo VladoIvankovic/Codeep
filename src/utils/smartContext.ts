@@ -6,6 +6,7 @@ import { existsSync, readFileSync, statSync } from 'fs';
 import { join, dirname, basename, extname, relative } from 'path';
 import { ProjectContext } from './project';
 import { loadIgnoreRules, isIgnored, IgnoreRules } from './gitignore';
+import { logger } from './logger';
 
 export interface RelatedFile {
   path: string;
@@ -211,11 +212,13 @@ function findRelatedByNaming(
             priority: 8,
             size: stat.size,
           });
-        } catch {}
+        } catch (err) {
+          logger.debug('smartContext: statSync failed for main file', { path: basePath, err: String(err) });
+        }
       }
     }
   }
-  
+
   // Find files with same base name
   for (const pattern of patterns) {
     const relatedPath = join(fileDir, baseName + pattern.suffix + ext);
@@ -229,7 +232,9 @@ function findRelatedByNaming(
           priority: 5,
           size: stat.size,
         });
-      } catch {}
+      } catch (err) {
+        logger.debug('smartContext: statSync failed for related file', { path: relatedPath, err: String(err) });
+      }
     }
   }
   
@@ -267,7 +272,9 @@ function findTypeDefinitions(
           priority: 7,
           size: stat.size,
         });
-      } catch {}
+      } catch (err) {
+        logger.debug('smartContext: statSync failed for type definition', { path: fullPath, err: String(err) });
+      }
     }
   }
   
@@ -303,7 +310,9 @@ function findConfigFiles(projectRoot: string): RelatedFile[] {
           priority: 3,
           size: stat.size,
         });
-      } catch {}
+      } catch (err) {
+        logger.debug('smartContext: statSync failed for config file', { path: fullPath, err: String(err) });
+      }
     }
   }
   
@@ -356,10 +365,12 @@ export function gatherSmartContext(
                 priority: 8,
                 size: impStat.size,
               });
-            } catch {}
+            } catch (err) {
+              logger.debug('smartContext: statSync failed for import', { path: resolved, err: String(err) });
+            }
           }
         }
-        
+
         // Find related by naming
         const namedRelated = findRelatedByNaming(targetPath, projectRoot);
         for (const rel of namedRelated) {
@@ -367,7 +378,9 @@ export function gatherSmartContext(
             allRelated.set(rel.path, rel);
           }
         }
-      } catch {}
+      } catch (err) {
+        logger.debug('smartContext: failed to process target file', { path: targetPath, err: String(err) });
+      }
     }
   }
   
@@ -427,7 +440,9 @@ export function gatherSmartContext(
           totalSize = MAX_CONTEXT_SIZE;
           truncated = true;
         }
-      } catch {}
+      } catch (err) {
+        logger.debug('smartContext: readFileSync failed for context file', { path: file.path, err: String(err) });
+      }
     } else if (file.content) {
       totalSize += file.content.length;
     }
@@ -474,7 +489,9 @@ function extractMentionedFiles(
             size: stat.size,
           });
         }
-      } catch {}
+      } catch (err) {
+        logger.debug('smartContext: statSync failed for mentioned file', { path: fullPath, err: String(err) });
+      }
     }
   }
   
