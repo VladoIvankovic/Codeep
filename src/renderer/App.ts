@@ -2163,16 +2163,20 @@ export class App {
     let y = startY;
     const spinner = SPINNER_FRAMES[this.spinnerFrame];
     
-    // Calculate stats
-    const stats = {
-      reads: this.agentActions.filter(a => a.type === 'read').length,
-      writes: this.agentActions.filter(a => a.type === 'write').length,
-      edits: this.agentActions.filter(a => a.type === 'edit').length,
-      deletes: this.agentActions.filter(a => a.type === 'delete').length,
-      commands: this.agentActions.filter(a => a.type === 'command').length,
-      searches: this.agentActions.filter(a => a.type === 'search').length,
-      errors: this.agentActions.filter(a => a.result === 'error').length,
-    };
+    // Calculate stats in a single pass
+    const stats = this.agentActions.reduce(
+      (acc, a) => {
+        if (a.type === 'read') acc.reads++;
+        else if (a.type === 'write') acc.writes++;
+        else if (a.type === 'edit') acc.edits++;
+        else if (a.type === 'delete') acc.deletes++;
+        else if (a.type === 'command') acc.commands++;
+        else if (a.type === 'search') acc.searches++;
+        if (a.result === 'error') acc.errors++;
+        return acc;
+      },
+      { reads: 0, writes: 0, edits: 0, deletes: 0, commands: 0, searches: 0, errors: 0 },
+    );
     
     // Top border with title
     const title = ` ${spinner} AGENT `;

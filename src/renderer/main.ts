@@ -404,12 +404,16 @@ async function runAgentTask(task: string, dryRun: boolean = false): Promise<void
  * Run agent with task (internal - called after confirmation if needed)
  */
 async function executeAgentTask(task: string, dryRun: boolean = false): Promise<void> {
-  // Guard - should never happen since runAgentTask checks this
   if (!projectContext) {
     app.notify('Agent requires project context');
     return;
   }
-  
+
+  // Guard against concurrent execution — set flag immediately before any await
+  if (isAgentRunning) {
+    app.notify('Agent already running. Use /stop to cancel.');
+    return;
+  }
   isAgentRunning = true;
   agentAbortController = new AbortController();
   
