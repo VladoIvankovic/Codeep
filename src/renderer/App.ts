@@ -6,176 +6,21 @@
 import { Screen } from './Screen';
 import { Input, LineEditor, KeyEvent } from './Input';
 import { fg, bg, style, stringWidth } from './ansi';
+import { SYNTAX, highlightCode } from './highlight';
+import {
+  handleInlineStatusKey,
+  handleInlineHelpKey,
+  handleMenuKey,
+  handleInlinePermissionKey,
+  handleInlineSessionPickerKey,
+  handleInlineConfirmKey,
+  handleLoginKey,
+} from './handlers';
 import clipboardy from 'clipboardy';
 import { spawn } from 'child_process';
 
 // Primary color: #f02a30 (Codeep red)
 const PRIMARY_COLOR = fg.rgb(240, 42, 48);
-
-// Syntax highlighting colors (One Dark theme inspired)
-const SYNTAX = {
-  keyword: fg.rgb(198, 120, 221),    // Purple - keywords
-  string: fg.rgb(152, 195, 121),     // Green - strings
-  number: fg.rgb(209, 154, 102),     // Orange - numbers
-  comment: fg.rgb(92, 99, 112),      // Gray - comments
-  function: fg.rgb(97, 175, 239),    // Blue - functions
-  type: fg.rgb(229, 192, 123),       // Yellow - types
-  operator: fg.rgb(86, 182, 194),    // Cyan - operators
-  variable: fg.white,                 // White - variables
-  punctuation: fg.gray,               // Gray - punctuation
-  codeFrame: fg.rgb(100, 105, 115),  // Frame color
-  codeLang: fg.rgb(150, 155, 165),   // Language label
-};
-
-// Keywords for different languages
-const KEYWORDS: Record<string, string[]> = {
-  js: ['const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break', 'continue', 'try', 'catch', 'throw', 'finally', 'new', 'class', 'extends', 'import', 'export', 'from', 'default', 'async', 'await', 'yield', 'typeof', 'instanceof', 'in', 'of', 'delete', 'void', 'this', 'super', 'null', 'undefined', 'true', 'false', 'NaN', 'Infinity'],
-  ts: ['const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break', 'continue', 'try', 'catch', 'throw', 'finally', 'new', 'class', 'extends', 'import', 'export', 'from', 'default', 'async', 'await', 'yield', 'typeof', 'instanceof', 'in', 'of', 'delete', 'void', 'this', 'super', 'null', 'undefined', 'true', 'false', 'type', 'interface', 'enum', 'namespace', 'module', 'declare', 'abstract', 'implements', 'private', 'public', 'protected', 'readonly', 'static', 'as', 'is', 'keyof', 'infer', 'never', 'unknown', 'any'],
-  py: ['def', 'class', 'return', 'if', 'elif', 'else', 'for', 'while', 'try', 'except', 'finally', 'raise', 'import', 'from', 'as', 'with', 'yield', 'lambda', 'pass', 'break', 'continue', 'and', 'or', 'not', 'in', 'is', 'None', 'True', 'False', 'global', 'nonlocal', 'assert', 'del', 'async', 'await'],
-  go: ['func', 'return', 'if', 'else', 'for', 'range', 'switch', 'case', 'break', 'continue', 'fallthrough', 'default', 'go', 'select', 'chan', 'defer', 'panic', 'recover', 'type', 'struct', 'interface', 'map', 'package', 'import', 'const', 'var', 'nil', 'true', 'false', 'iota', 'make', 'new', 'append', 'len', 'cap', 'copy', 'delete'],
-  rust: ['fn', 'let', 'mut', 'const', 'static', 'return', 'if', 'else', 'match', 'for', 'while', 'loop', 'break', 'continue', 'struct', 'enum', 'trait', 'impl', 'type', 'where', 'use', 'mod', 'pub', 'crate', 'self', 'super', 'async', 'await', 'move', 'ref', 'true', 'false', 'Some', 'None', 'Ok', 'Err', 'Self', 'dyn', 'unsafe', 'extern'],
-  sh: ['if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'while', 'until', 'do', 'done', 'in', 'function', 'return', 'local', 'export', 'readonly', 'declare', 'typeset', 'unset', 'shift', 'exit', 'break', 'continue', 'source', 'alias', 'echo', 'printf', 'read', 'test', 'true', 'false'],
-  html: ['html', 'head', 'body', 'div', 'span', 'p', 'a', 'img', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'tr', 'td', 'th', 'form', 'input', 'button', 'select', 'option', 'textarea', 'label', 'section', 'article', 'nav', 'header', 'footer', 'main', 'aside', 'meta', 'link', 'script', 'style', 'title', 'DOCTYPE'],
-  css: ['import', 'media', 'keyframes', 'font-face', 'supports', 'charset', 'namespace', 'page', 'inherit', 'initial', 'unset', 'none', 'auto', 'block', 'inline', 'flex', 'grid', 'absolute', 'relative', 'fixed', 'sticky', 'static', 'hidden', 'visible', 'solid', 'dashed', 'dotted', 'transparent', 'important'],
-};
-
-// Map language aliases
-const LANG_ALIASES: Record<string, string> = {
-  javascript: 'js', typescript: 'ts', python: 'py', golang: 'go',
-  bash: 'sh', shell: 'sh', zsh: 'sh', tsx: 'ts', jsx: 'js',
-  htm: 'html', scss: 'css', sass: 'css', less: 'css',
-};
-
-/**
- * Syntax highlighter for code with better token handling
- */
-function highlightCode(code: string, lang: string): string {
-  const normalizedLang = LANG_ALIASES[lang.toLowerCase()] || lang.toLowerCase();
-  const keywords = KEYWORDS[normalizedLang] || KEYWORDS['js'] || [];
-  
-
-  // HTML: highlight tags, attributes, and values
-  if (normalizedLang === 'html' || normalizedLang === 'xml' || normalizedLang === 'svg') {
-    return code.replace(/(<\/?)(\w[\w-]*)((?:\s+[\w-]+(?:=(?:"[^"]*"|'[^']*'|\S+))?)*)(\s*\/?>)/g,
-      (_match, open, tag, attrs, close) => {
-        const highlightedAttrs = attrs.replace(/([\w-]+)(=)("[^"]*"|'[^']*')/g,
-          (_m: string, attr: string, eq: string, val: string) => SYNTAX.function + attr + '\x1b[0m' + SYNTAX.operator + eq + '\x1b[0m' + SYNTAX.string + val + '\x1b[0m'
-        );
-        return SYNTAX.punctuation + open + '\x1b[0m' + SYNTAX.keyword + tag + '\x1b[0m' + highlightedAttrs + SYNTAX.punctuation + close + '\x1b[0m';
-      }
-    ).replace(/<!--[\s\S]*?-->/g, (comment) => SYNTAX.comment + comment + '\x1b[0m');
-  }
-
-  // CSS: highlight selectors, properties, and values
-  if (normalizedLang === 'css') {
-    return code
-      .replace(/\/\*[\s\S]*?\*\//g, (comment) => SYNTAX.comment + comment + '\x1b[0m')
-      .replace(/([\w-]+)(\s*:\s*)([^;{}]+)/g,
-        (_m, prop, colon, val) => SYNTAX.function + prop + '\x1b[0m' + colon + SYNTAX.string + val + '\x1b[0m'
-      )
-      .replace(/([.#]?[\w-]+(?:\s*[,>+~]\s*[.#]?[\w-]+)*)\s*\{/g,
-        (match, selector) => SYNTAX.keyword + selector + '\x1b[0m' + ' {'
-      );
-  }
-
-  // Tokenize and highlight
-  let result = '';
-  let i = 0;
-  
-  while (i < code.length) {
-    // Check for comments first
-    if (code.slice(i, i + 2) === '//' || (normalizedLang === 'py' && code[i] === '#') || 
-        (normalizedLang === 'sh' && code[i] === '#')) {
-      // Line comment - highlight rest of line
-      let end = code.indexOf('\n', i);
-      if (end === -1) end = code.length;
-      result += SYNTAX.comment + code.slice(i, end) + '\x1b[0m';
-      i = end;
-      continue;
-    }
-    
-    // Multi-line comment /*
-    if (code.slice(i, i + 2) === '/*') {
-      let end = code.indexOf('*/', i + 2);
-      if (end === -1) end = code.length;
-      else end += 2;
-      result += SYNTAX.comment + code.slice(i, end) + '\x1b[0m';
-      i = end;
-      continue;
-    }
-    
-    // Strings
-    if (code[i] === '"' || code[i] === "'" || code[i] === '`') {
-      const quote = code[i];
-      let end = i + 1;
-      while (end < code.length) {
-        if (code[end] === '\\') {
-          end += 2; // Skip escaped char
-        } else if (code[end] === quote) {
-          end++;
-          break;
-        } else {
-          end++;
-        }
-      }
-      result += SYNTAX.string + code.slice(i, end) + '\x1b[0m';
-      i = end;
-      continue;
-    }
-    
-    // Numbers (including hex, binary, floats)
-    const numMatch = code.slice(i).match(/^(0x[0-9a-fA-F]+|0b[01]+|0o[0-7]+|\d+\.?\d*(?:e[+-]?\d+)?)/);
-    if (numMatch && (i === 0 || !/[a-zA-Z_]/.test(code[i - 1]))) {
-      result += SYNTAX.number + numMatch[1] + '\x1b[0m';
-      i += numMatch[1].length;
-      continue;
-    }
-    
-    // Identifiers (keywords, functions, variables)
-    const identMatch = code.slice(i).match(/^[a-zA-Z_][a-zA-Z0-9_]*/);
-    if (identMatch) {
-      const ident = identMatch[0];
-      const nextChar = code[i + ident.length];
-      
-      if (keywords.includes(ident)) {
-        // Keyword
-        result += SYNTAX.keyword + ident + '\x1b[0m';
-      } else if (nextChar === '(') {
-        // Function call
-        result += SYNTAX.function + ident + '\x1b[0m';
-      } else if (ident[0] === ident[0].toUpperCase() && /^[A-Z]/.test(ident)) {
-        // Type/Class (PascalCase)
-        result += SYNTAX.type + ident + '\x1b[0m';
-      } else {
-        // Regular identifier
-        result += ident;
-      }
-      i += ident.length;
-      continue;
-    }
-    
-    // Operators
-    const opMatch = code.slice(i).match(/^(===|!==|==|!=|<=|>=|=>|->|\+\+|--|&&|\|\||<<|>>|\+=|-=|\*=|\/=|[+\-*/%=<>!&|^~?:])/);
-    if (opMatch) {
-      result += SYNTAX.operator + opMatch[1] + '\x1b[0m';
-      i += opMatch[1].length;
-      continue;
-    }
-    
-    // Punctuation
-    if ('{}[]();,.'.includes(code[i])) {
-      result += SYNTAX.punctuation + code[i] + '\x1b[0m';
-      i++;
-      continue;
-    }
-    
-    // Default - just add the character
-    result += code[i];
-    i++;
-  }
-  
-  return result;
-}
 
 // Spinner frames for animation
 const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
@@ -1269,52 +1114,22 @@ export class App {
    * Handle inline status keys
    */
   private handleInlineStatusKey(event: KeyEvent): void {
-    if (event.key === 'escape' || event.key === 'q') {
-      this.statusOpen = false;
-      this.render();
-    }
+    handleInlineStatusKey(event, {
+      close: () => { this.statusOpen = false; },
+      render: () => this.render(),
+    });
   }
 
   /**
    * Handle help screen keys
    */
   private handleInlineHelpKey(event: KeyEvent): void {
-    if (event.key === 'escape' || event.key === 'q') {
-      this.helpOpen = false;
-      this.render();
-      return;
-    }
-    
-    // Calculate total help items
-    let totalItems = 0;
-    for (const cat of helpCategories) {
-      totalItems += 1 + cat.items.length; // category header + items
-    }
-    totalItems += 1 + keyboardShortcuts.length; // shortcuts header + items
-    
-    if (event.key === 'down') {
-      this.helpScrollIndex = Math.min(this.helpScrollIndex + 1, Math.max(0, totalItems - 5));
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'up') {
-      this.helpScrollIndex = Math.max(0, this.helpScrollIndex - 1);
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'pagedown') {
-      this.helpScrollIndex = Math.min(this.helpScrollIndex + 5, Math.max(0, totalItems - 5));
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'pageup') {
-      this.helpScrollIndex = Math.max(0, this.helpScrollIndex - 5);
-      this.render();
-      return;
-    }
+    handleInlineHelpKey(event, {
+      scrollIndex: this.helpScrollIndex,
+      setScrollIndex: (v) => { this.helpScrollIndex = v; },
+      close: () => { this.helpOpen = false; },
+      render: () => this.render(),
+    });
   }
   
   /**
@@ -1419,300 +1234,82 @@ export class App {
    * Handle login keys
    */
   private handleLoginKey(event: KeyEvent): void {
-    if (this.loginStep === 'provider') {
-      // Provider selection step
-      if (event.key === 'escape') {
-        this.loginOpen = false;
+    handleLoginKey(event, {
+      step: this.loginStep,
+      providerIndex: this.loginProviderIndex,
+      providers: this.loginProviders,
+      apiKey: this.loginApiKey,
+      setStep: (v) => { this.loginStep = v; },
+      setProviderIndex: (v) => { this.loginProviderIndex = v; },
+      setApiKey: (v) => { this.loginApiKey = v; },
+      setError: (msg) => { this.loginError = msg; },
+      close: (result) => {
         const callback = this.loginCallback;
-        this.loginCallback = null;
-        this.render();
-        if (callback) callback(null);
-        return;
-      }
-      
-      if (event.key === 'up') {
-        this.loginProviderIndex = Math.max(0, this.loginProviderIndex - 1);
-        this.render();
-        return;
-      }
-      
-      if (event.key === 'down') {
-        this.loginProviderIndex = Math.min(this.loginProviders.length - 1, this.loginProviderIndex + 1);
-        this.render();
-        return;
-      }
-      
-      if (event.key === 'enter') {
-        // Move to API key entry
-        this.loginStep = 'apikey';
-        this.loginApiKey = '';
-        this.loginError = '';
-        this.render();
-        return;
-      }
-    } else {
-      // API key entry step
-      if (event.key === 'escape') {
-        // Go back to provider selection
-        this.loginStep = 'provider';
-        this.loginApiKey = '';
-        this.loginError = '';
-        this.render();
-        return;
-      }
-      
-      if (event.key === 'enter') {
-        // Validate and submit
-        if (this.loginApiKey.length < 10) {
-          this.loginError = 'API key too short (min 10 characters)';
-          this.render();
-          return;
-        }
-        
-        const callback = this.loginCallback;
-        const result = {
-          providerId: this.loginProviders[this.loginProviderIndex].id,
-          apiKey: this.loginApiKey,
-        };
         this.loginOpen = false;
         this.loginCallback = null;
-        this.render();
         if (callback) callback(result);
-        return;
-      }
-      
-      if (event.key === 'backspace') {
-        this.loginApiKey = this.loginApiKey.slice(0, -1);
-        this.loginError = '';
-        this.render();
-        return;
-      }
-      
-      // Ctrl+V to paste
-      if (event.ctrl && event.key === 'v') {
-        this.pasteApiKey();
-        return;
-      }
-      
-      // Ctrl+B to open subscribe URL
-      if (event.ctrl && event.key === 'b') {
-        const provider = this.loginProviders[this.loginProviderIndex];
-        if (provider.subscribeUrl) {
-          try {
-            const cmd = process.platform === 'darwin' ? 'open' 
-              : process.platform === 'win32' ? 'start' 
-              : 'xdg-open';
-            const child = spawn(cmd, [provider.subscribeUrl], { detached: true, stdio: 'ignore' });
-            child.unref();
-          } catch { /* ignore */ }
-        }
-        return;
-      }
-      
-      // Handle paste detection (fast input)
-      if (event.isPaste && event.key.length > 1) {
-        this.loginApiKey += event.key.trim();
-        this.loginError = '';
-        this.render();
-        return;
-      }
-      
-      // Regular character input
-      if (event.key.length === 1 && !event.ctrl) {
-        this.loginApiKey += event.key;
-        this.loginError = '';
-        this.render();
-        return;
-      }
-    }
-  }
-  
-  /**
-   * Paste API key from clipboard
-   */
-  private async pasteApiKey(): Promise<void> {
-    try {
-      const text = await clipboardy.read();
-      if (text) {
-        this.loginApiKey = text.trim();
-        this.loginError = '';
-        this.render();
-      }
-    } catch {
-      this.loginError = 'Could not read clipboard';
-      this.render();
-    }
+      },
+      render: () => this.render(),
+    });
   }
   
   /**
    * Handle inline menu keys
    */
   private handleMenuKey(event: KeyEvent): void {
-    if (event.key === 'escape') {
-      this.menuOpen = false;
-      this.menuCallback = null;
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'up') {
-      this.menuIndex = Math.max(0, this.menuIndex - 1);
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'down') {
-      this.menuIndex = Math.min(this.menuItems.length - 1, this.menuIndex + 1);
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'enter') {
-      const selectedItem = this.menuItems[this.menuIndex];
-      const callback = this.menuCallback;
-      this.menuOpen = false;
-      this.menuCallback = null;
-      this.render();
-      if (callback) {
-        callback(selectedItem);
-      }
-      return;
-    }
-    
-    if (event.key === 'pageup') {
-      this.menuIndex = Math.max(0, this.menuIndex - 5);
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'pagedown') {
-      this.menuIndex = Math.min(this.menuItems.length - 1, this.menuIndex + 5);
-      this.render();
-      return;
-    }
-    
-    // Ignore other keys when menu is open
+    handleMenuKey(event, {
+      index: this.menuIndex,
+      items: this.menuItems,
+      setIndex: (v) => { this.menuIndex = v; },
+      close: (_cb, selected) => {
+        const callback = this.menuCallback;
+        this.menuOpen = false;
+        this.menuCallback = null;
+        if (selected && callback) callback(selected);
+      },
+      render: () => this.render(),
+    });
   }
   
   /**
-   * Handle confirmation dialog keys
+   * Handle permission dialog keys
    */
   private handleInlinePermissionKey(event: KeyEvent): void {
-    const options = ['read', 'write', 'none'] as const;
-    
-    if (event.key === 'escape') {
-      const callback = this.permissionCallback;
-      this.permissionOpen = false;
-      this.permissionCallback = null;
-      this.render();
-      if (callback) callback('none');
-      return;
-    }
-    
-    if (event.key === 'up') {
-      this.permissionIndex = Math.max(0, this.permissionIndex - 1);
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'down') {
-      this.permissionIndex = Math.min(options.length - 1, this.permissionIndex + 1);
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'enter') {
-      const selected = options[this.permissionIndex];
-      const callback = this.permissionCallback;
-      this.permissionOpen = false;
-      this.permissionCallback = null;
-      this.render();
-      if (callback) callback(selected);
-      return;
-    }
+    handleInlinePermissionKey(event, {
+      index: this.permissionIndex,
+      setIndex: (v) => { this.permissionIndex = v; },
+      close: (level) => {
+        const callback = this.permissionCallback;
+        this.permissionOpen = false;
+        this.permissionCallback = null;
+        if (callback) callback(level);
+      },
+      render: () => this.render(),
+    });
   }
   
   private handleInlineSessionPickerKey(event: KeyEvent): void {
-    // N = new session
-    if (event.key === 'n' && !this.sessionPickerDeleteMode) {
-      const callback = this.sessionPickerCallback;
-      this.sessionPickerOpen = false;
-      this.sessionPickerCallback = null;
-      this.sessionPickerDeleteMode = false;
-      this.render();
-      if (callback) callback(null); // null means new session
-      return;
-    }
-    
-    // D = toggle delete mode
-    if (event.key === 'd' && this.sessionPickerDeleteCallback && this.sessionPickerItems.length > 0) {
-      this.sessionPickerDeleteMode = !this.sessionPickerDeleteMode;
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'escape') {
-      if (this.sessionPickerDeleteMode) {
-        // Exit delete mode
+    handleInlineSessionPickerKey(event, {
+      index: this.sessionPickerIndex,
+      items: this.sessionPickerItems,
+      deleteMode: this.sessionPickerDeleteMode,
+      hasDeleteCallback: !!this.sessionPickerDeleteCallback,
+      setIndex: (v) => { this.sessionPickerIndex = v; },
+      setItems: (items) => { this.sessionPickerItems = items; },
+      setDeleteMode: (v) => { this.sessionPickerDeleteMode = v; },
+      close: (sessionName) => {
+        const callback = this.sessionPickerCallback;
+        this.sessionPickerOpen = false;
+        this.sessionPickerCallback = null;
         this.sessionPickerDeleteMode = false;
-        this.render();
-        return;
-      }
-      // Escape = new session
-      const callback = this.sessionPickerCallback;
-      this.sessionPickerOpen = false;
-      this.sessionPickerCallback = null;
-      this.sessionPickerDeleteMode = false;
-      this.render();
-      if (callback) callback(null);
-      return;
-    }
-    
-    if (event.key === 'up') {
-      this.sessionPickerIndex = Math.max(0, this.sessionPickerIndex - 1);
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'down') {
-      this.sessionPickerIndex = Math.min(this.sessionPickerItems.length - 1, this.sessionPickerIndex + 1);
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'enter' && this.sessionPickerItems.length > 0) {
-      const selected = this.sessionPickerItems[this.sessionPickerIndex];
-      
-      if (this.sessionPickerDeleteMode) {
-        // Delete the selected session
-        const deleteCallback = this.sessionPickerDeleteCallback;
-        if (deleteCallback) {
-          deleteCallback(selected.name);
-          // Remove from list
-          this.sessionPickerItems = this.sessionPickerItems.filter(s => s.name !== selected.name);
-          // Adjust index if needed
-          if (this.sessionPickerIndex >= this.sessionPickerItems.length) {
-            this.sessionPickerIndex = Math.max(0, this.sessionPickerItems.length - 1);
-          }
-          // Exit delete mode if no more items
-          if (this.sessionPickerItems.length === 0) {
-            this.sessionPickerDeleteMode = false;
-          }
-          this.notify(`Deleted: ${selected.name}`);
-          this.render();
-        }
-        return;
-      }
-      
-      // Load selected session
-      const callback = this.sessionPickerCallback;
-      this.sessionPickerOpen = false;
-      this.sessionPickerCallback = null;
-      this.sessionPickerDeleteMode = false;
-      this.render();
-      if (callback) callback(selected.name);
-      return;
-    }
+        if (callback) callback(sessionName);
+      },
+      onDelete: (name) => {
+        if (this.sessionPickerDeleteCallback) this.sessionPickerDeleteCallback(name);
+      },
+      notify: (msg) => this.notify(msg),
+      render: () => this.render(),
+    });
   }
   
   private handleInlineConfirmKey(event: KeyEvent): void {
@@ -1721,47 +1318,19 @@ export class App {
       this.render();
       return;
     }
-    
-    if (event.key === 'escape') {
-      const onCancel = this.confirmOptions.onCancel;
-      this.confirmOptions = null;
-      this.confirmOpen = false;
-      this.render();
-      if (onCancel) onCancel();
-      return;
-    }
-    
-    if (event.key === 'left' || event.key === 'right' || event.key === 'tab') {
-      this.confirmSelection = this.confirmSelection === 'yes' ? 'no' : 'yes';
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'y') {
-      this.confirmSelection = 'yes';
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'n') {
-      this.confirmSelection = 'no';
-      this.render();
-      return;
-    }
-    
-    if (event.key === 'enter') {
-      const options = this.confirmOptions;
-      this.confirmOptions = null;
-      this.confirmOpen = false;
-      this.render();
-      
-      if (this.confirmSelection === 'yes') {
-        options.onConfirm();
-      } else if (options.onCancel) {
-        options.onCancel();
-      }
-      return;
-    }
+    handleInlineConfirmKey(event, {
+      options: this.confirmOptions,
+      selection: this.confirmSelection,
+      setSelection: (v) => { this.confirmSelection = v; },
+      close: (confirmed) => {
+        const options = this.confirmOptions!;
+        this.confirmOptions = null;
+        this.confirmOpen = false;
+        if (confirmed) options.onConfirm();
+        else if (options.onCancel) options.onCancel();
+      },
+      render: () => this.render(),
+    });
   }
   
   /**

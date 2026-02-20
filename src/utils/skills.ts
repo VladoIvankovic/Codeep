@@ -756,10 +756,6 @@ export function parseSkillChain(input: string): SkillChain | null {
 export function parseSkillArgs(args: string, skill: Skill): Record<string, string> {
   const result: Record<string, string> = {};
   
-  if (!args.trim()) {
-    return result;
-  }
-  
   // Pattern to match key=value or key="value with spaces" or just "value"
   const keyValuePattern = /(\w+)=(?:"([^"]+)"|'([^']+)'|(\S+))/g;
   const quotedPattern = /^["'](.+)["']$/;
