@@ -734,7 +734,7 @@ function runCommandChain(commands: string[], index: number): void {
 /**
  * Handle commands
  */
-function handleCommand(command: string, args: string[]): void {
+async function handleCommand(command: string, args: string[]): Promise<void> {
   // Handle skill chaining (e.g., /commit+push)
   if (command.includes('+')) {
     const commands = command.split('+').filter(c => c.trim());
@@ -1049,8 +1049,11 @@ function handleCommand(command: string, args: string[]): void {
             }
             
             const exportPath = path.join(projectPath, filename);
-            fs.writeFileSync(exportPath, content);
-            app.notify(`Exported to ${filename}`);
+            fs.promises.writeFile(exportPath, content).then(() => {
+              app.notify(`Exported to ${filename}`);
+            }).catch((err: Error) => {
+              app.notify(`Export failed: ${err.message}`);
+            });
           });
         });
       });
@@ -1271,8 +1274,8 @@ function handleCommand(command: string, args: string[]): void {
       }
       
       // Show diff preview before applying
-      import('fs').then(fs => {
-        import('path').then(pathModule => {
+      import('fs').then(async (fs) => {
+        import('path').then(async (pathModule) => {
           // Generate diff preview
           const diffLines: string[] = [];
           
@@ -1288,7 +1291,7 @@ function handleCommand(command: string, args: string[]): void {
             // Check if file exists (create vs modify)
             let existingContent = '';
             try {
-              existingContent = fs.readFileSync(fullPath, 'utf-8');
+              existingContent = await fs.promises.readFile(fullPath, 'utf-8');
             } catch {
               // File doesn't exist - will be created
             }
@@ -1321,20 +1324,22 @@ function handleCommand(command: string, args: string[]): void {
             confirmLabel: 'Apply',
             cancelLabel: 'Cancel',
             onConfirm: () => {
-              let applied = 0;
-              for (const change of changes) {
-                try {
-                  const fullPath = pathModule.isAbsolute(change.path) 
-                    ? change.path 
-                    : pathModule.join(projectPath, change.path);
-                  fs.mkdirSync(pathModule.dirname(fullPath), { recursive: true });
-                  fs.writeFileSync(fullPath, change.content);
-                  applied++;
-                } catch (err) {
-                  // Skip failed writes
+              (async () => {
+                let applied = 0;
+                for (const change of changes) {
+                  try {
+                    const fullPath = pathModule.isAbsolute(change.path)
+                      ? change.path
+                      : pathModule.join(projectPath, change.path);
+                    await fs.promises.mkdir(pathModule.dirname(fullPath), { recursive: true });
+                    await fs.promises.writeFile(fullPath, change.content);
+                    applied++;
+                  } catch {
+                    // Skip failed writes
+                  }
                 }
-              }
-              app.notify(`Applied ${applied}/${changes.length} file(s)`);
+                app.notify(`Applied ${applied}/${changes.length} file(s)`);
+              })();
             },
             onCancel: () => {
               app.notify('Apply cancelled');
@@ -1368,7 +1373,7 @@ function handleCommand(command: string, args: string[]): void {
         const relativePath = path.isAbsolute(filePath) ? path.relative(root, filePath) : filePath;
         
         try {
-          const stat = fs.statSync(fullPath);
+          const stat = await fs.promises.stat(fullPath);
           if (!stat.isFile()) {
             errors.push(`${filePath}: not a file`);
             continue;
@@ -1377,7 +1382,7 @@ function handleCommand(command: string, args: string[]): void {
             errors.push(`${filePath}: too large (${Math.round(stat.size / 1024)}KB, max 100KB)`);
             continue;
           }
-          const content = fs.readFileSync(fullPath, 'utf-8');
+          const content = await fs.promises.readFile(fullPath, 'utf-8');
           addedFiles.set(fullPath, { relativePath, content });
           added++;
         } catch {
@@ -1534,20 +1539,20 @@ function handleCommand(command: string, args: string[]): void {
       app.notify('Learning from project...');
       import('../utils/learning').then(({ learnFromProject, formatPreferencesForPrompt }) => {
         // Get some source files to learn from
-        import('fs').then(fs => {
-          import('path').then(path => {
+        import('fs').then(async (fs) => {
+          import('path').then(async (path) => {
             const files: string[] = [];
             const extensions = ['.ts', '.js', '.tsx', '.jsx', '.py', '.go', '.rs'];
-            
-            const walkDir = (dir: string, depth = 0) => {
+
+            const walkDir = async (dir: string, depth = 0): Promise<void> => {
               if (depth > 3 || files.length >= 20) return;
               try {
-                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                const entries = await fs.promises.readdir(dir, { withFileTypes: true });
                 for (const entry of entries) {
                   if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
                   const fullPath = path.join(dir, entry.name);
                   if (entry.isDirectory()) {
-                    walkDir(fullPath, depth + 1);
+                    await walkDir(fullPath, depth + 1);
                   } else if (extensions.some(ext => entry.name.endsWith(ext))) {
                     files.push(path.relative(projectContext!.root, fullPath));
                   }
@@ -1555,8 +1560,8 @@ function handleCommand(command: string, args: string[]): void {
                 }
               } catch {}
             };
-            
-            walkDir(projectContext!.root);
+
+            await walkDir(projectContext!.root);
             
             if (files.length === 0) {
               app.notify('No source files found to learn from');
