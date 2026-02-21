@@ -374,6 +374,7 @@ Codeep - AI-powered coding assistant TUI
 
 Usage:
   codeep              Start interactive chat
+  codeep acp          Start ACP server (for Zed editor integration)
   codeep --version    Show version
   codeep --help       Show this help
 
@@ -384,6 +385,13 @@ Commands (in chat):
   /exit      Quit application
     `);
     process.exit(0);
+  }
+
+  // ACP server mode — started by Zed via Agent Client Protocol
+  if (args[0] === 'acp') {
+    const { startAcpServer } = await import('../acp/server.js');
+    await startAcpServer();
+    return;
   }
 
   await loadAllApiKeys();

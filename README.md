@@ -771,24 +771,30 @@ Codeep supports the [Agent Client Protocol (ACP)](https://agentclientprotocol.co
 
 ### Setup
 
-1. Add to your Zed `settings.json`:
+1. Install Codeep globally:
+
+```bash
+npm install -g codeep
+```
+
+2. Add to your Zed `settings.json`:
 
 ```json
 {
   "agent_servers": {
     "Codeep": {
       "type": "custom",
-      "command": "node",
-      "args": ["--import", "tsx/esm", "/absolute/path/to/Codeep/acp/index.ts"]
+      "command": "codeep",
+      "args": ["acp"]
     }
   }
 }
 ```
 
-2. Make sure your API key is set in the environment Zed uses:
+3. Make sure your API key is set in the environment Zed uses:
 
 ```bash
 export DEEPSEEK_API_KEY=your_key   # or whichever provider
 ```
 
-3. Open Zed's AI panel and select **Codeep** as the agent.
+4. Open Zed's AI panel and select **Codeep** as the agent.
