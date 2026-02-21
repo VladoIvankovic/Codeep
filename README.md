@@ -22,10 +22,13 @@
 ## Features
 
 ### Multi-Provider Support
-- **Z.AI (ZhipuAI)** - GLM-4.7, GLM-4.7 Flash models
-- **MiniMax** - MiniMax M2.1 model
+- **Z.AI (ZhipuAI)** — GLM-5, GLM-4.7, GLM-4.7 Flash (international & China endpoints)
+- **MiniMax** — MiniMax M2.5 (international & China endpoints)
+- **DeepSeek** — DeepSeek V3, DeepSeek R1 (reasoning)
+- **Anthropic** — Claude Sonnet 4.6, Claude Opus 4.6, Claude Haiku 4.5
 - Switch between providers with `/provider`
 - Configure different API keys per provider
+- Both OpenAI-compatible and Anthropic API protocols supported
 
 ### Project Context Awareness
 When started in a project directory, Codeep automatically:
@@ -140,10 +143,14 @@ Codeep works as a **full AI coding agent** that autonomously:
 - **Per-project context** - Each project maintains its own history
 - **Automatic summarization** - Old messages are summarized to save space
 
-### Web Fetch
+### Web & MCP Tools
 - Agent can fetch documentation and web content
-- Useful for looking up API docs, examples, etc.
 - Automatic HTML-to-text conversion
+- **MCP-powered tools** (for Z.AI and Z.AI China providers):
+  - `web_search` — Search the web for current information
+  - `web_reader` — Fetch and read any web page
+  - `understand_image` — Analyze images via MiniMax vision
+- MCP tools run as secure sub-processes with structured I/O
 
 ### Smart Context
 Agent automatically gathers relevant files before making changes:
@@ -579,6 +586,9 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 | `Ctrl+U` | Clear input line |
 | `Ctrl+W` | Delete word backward |
 | `Ctrl+K` | Delete to end of line |
+| `Alt+F` / `Opt+F` | Move cursor forward one word |
+| `Alt+B` / `Opt+B` | Move cursor backward one word |
+| `Alt+D` / `Opt+D` | Delete word forward |
 | `PageUp` / `PageDown` | Scroll chat history (10 lines) |
 | `Mouse Scroll` | Scroll chat history |
 | `Escape` | Cancel current request / Stop agent |
@@ -648,9 +658,12 @@ With write access enabled:
 
 | Variable | Description |
 |----------|-------------|
-| `ZAI_API_KEY` | Z.ai API key |
-| `ZHIPUAI_API_KEY` | ZhipuAI API key (alternative) |
-| `MINIMAX_API_KEY` | MiniMax API key |
+| `ZAI_API_KEY` | Z.AI (international) API key |
+| `ZAI_CN_API_KEY` | Z.AI China API key |
+| `MINIMAX_API_KEY` | MiniMax (international) API key |
+| `MINIMAX_CN_API_KEY` | MiniMax China API key |
+| `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `ANTHROPIC_API_KEY` | Anthropic Claude API key |
 
 ### Settings (`/settings`)
 
