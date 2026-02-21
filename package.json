@@ -58,6 +58,8 @@
   "files": [
     "bin/**/*",
     "dist/**/*",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts",
     "README.md",
     "LICENSE"
   ],
