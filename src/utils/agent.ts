@@ -22,9 +22,10 @@ import {
   TimeoutError,
   loadProjectRules,
   formatChatHistoryForAgent,
-  AgentChatResponse,
 } from './agentChat';
-export { loadProjectRules, formatChatHistoryForAgent, AgentChatResponse };
+import type { AgentChatResponse } from './agentChat';
+export { loadProjectRules, formatChatHistoryForAgent };
+export type { AgentChatResponse };
 
 /**
  * Calculate dynamic timeout based on task complexity

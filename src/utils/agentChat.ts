@@ -20,9 +20,10 @@ import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools, getEffe
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { formatToolDefinitions, getOpenAITools, getAnthropicTools } from './tools';
-import { handleStream, handleOpenAIAgentStream, handleAnthropicAgentStream, AgentChatResponse } from './agentStream';
+import { handleStream, handleOpenAIAgentStream, handleAnthropicAgentStream } from './agentStream';
+import type { AgentChatResponse } from './agentStream';
 
-export { AgentChatResponse };
+export type { AgentChatResponse };
 
 const debug = (...args: unknown[]) => {
   if (process.env.CODEEP_DEBUG === '1') {
