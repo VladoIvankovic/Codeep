@@ -7,7 +7,7 @@
  * createActionLog() converts a ToolCall+ToolResult into a history ActionLog.
  */
 
-import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync, realpathSync } from 'fs';
 import { join, dirname, relative, resolve, isAbsolute } from 'path';
 import { executeCommand } from './shell';
 import { recordWrite, recordEdit, recordDelete, recordMkdir, recordCommand } from './history';
@@ -24,6 +24,8 @@ const debug = (...args: unknown[]) => {
 
 /**
  * Validate path is within project root.
+ * Uses realpathSync to resolve symlinks, preventing symlink traversal attacks
+ * where a symlink inside the project could point to files outside it.
  */
 export function validatePath(path: string, projectRoot: string): { valid: boolean; absolutePath: string; error?: string } {
   let normalizedPath = path;
@@ -42,13 +44,35 @@ export function validatePath(path: string, projectRoot: string): { valid: boolea
     return { valid: false, absolutePath, error: `Path '${path}' is outside project directory` };
   }
 
+  // Resolve symlinks to prevent traversal attacks (only if path exists)
+  if (existsSync(absolutePath)) {
+    try {
+      const realPath = realpathSync(absolutePath);
+      const realRoot = realpathSync(projectRoot);
+      if (!realPath.startsWith(realRoot + '/') && realPath !== realRoot) {
+        return { valid: false, absolutePath, error: `Path '${path}' resolves outside project directory (symlink traversal)` };
+      }
+    } catch {
+      // realpathSync can fail on broken symlinks — treat as invalid
+      return { valid: false, absolutePath, error: `Path '${path}' could not be resolved` };
+    }
+  }
+
   return { valid: true, absolutePath };
 }
 
 /**
  * List directory contents, respecting .gitignore rules.
+ * Tracks visited inodes to prevent infinite loops caused by circular symlinks.
  */
-function listDirectory(dir: string, projectRoot: string, recursive: boolean, prefix: string = '', ignoreRules?: ReturnType<typeof loadIgnoreRules>): string[] {
+function listDirectory(
+  dir: string,
+  projectRoot: string,
+  recursive: boolean,
+  prefix: string = '',
+  ignoreRules?: ReturnType<typeof loadIgnoreRules>,
+  visitedInodes: Set<number> = new Set()
+): string[] {
   const entries = readdirSync(dir, { withFileTypes: true });
   const files: string[] = [];
   const rules = ignoreRules || loadIgnoreRules(projectRoot);
@@ -57,10 +81,22 @@ function listDirectory(dir: string, projectRoot: string, recursive: boolean, pre
     const fullPath = join(dir, entry.name);
     if (isIgnored(fullPath, rules)) continue;
 
-    if (entry.isDirectory()) {
-      files.push(`${prefix}${entry.name}/`);
-      if (recursive) {
-        files.push(...listDirectory(fullPath, projectRoot, true, prefix + '  ', rules));
+    if (entry.isDirectory() || entry.isSymbolicLink()) {
+      try {
+        const st = statSync(fullPath); // follows symlinks
+        if (st.isDirectory()) {
+          if (visitedInodes.has(st.ino)) continue; // circular symlink — skip
+          files.push(`${prefix}${entry.name}/`);
+          if (recursive) {
+            visitedInodes.add(st.ino);
+            files.push(...listDirectory(fullPath, projectRoot, true, prefix + '  ', rules, visitedInodes));
+            visitedInodes.delete(st.ino);
+          }
+        } else {
+          files.push(`${prefix}${entry.name}`);
+        }
+      } catch {
+        // Broken symlink or permission error — skip silently
       }
     } else {
       files.push(`${prefix}${entry.name}`);

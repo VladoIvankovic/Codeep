@@ -107,7 +107,7 @@ class SmartStorage implements SecureStorage {
 
   private async ensureKeychainTested(): Promise<void> {
     if (this.keychainTested) return;
-    
+
     try {
       const testKey = '__codeep_test__';
       await keytar.setPassword(SERVICE_NAME, testKey, 'test');
@@ -115,9 +115,12 @@ class SmartStorage implements SecureStorage {
       this.useKeychain = true;
     } catch {
       this.useKeychain = false;
-      // Silently fallback - don't warn user
+      logger.warn(
+        'System keychain is unavailable. API keys will be stored as plaintext in the config file. ' +
+        'Consider installing libsecret (Linux) or ensuring Keychain Access is available (macOS).'
+      );
     }
-    
+
     this.keychainTested = true;
   }
 
@@ -141,8 +144,10 @@ class SmartStorage implements SecureStorage {
         await this.fallback.deleteApiKey(providerId);
         return;
       } catch (error) {
-        // Keychain failed, fall back to config
         this.useKeychain = false;
+        logger.warn(
+          `Keychain write failed for '${providerId}'. API key will be stored as plaintext in config. Error: ${error}`
+        );
       }
     }
     await this.fallback.setApiKey(providerId, apiKey);

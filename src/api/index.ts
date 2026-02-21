@@ -103,6 +103,20 @@ interface AnthropicResponse {
   };
 }
 
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+export class TimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TimeoutError';
+  }
+}
+
 // Store project context for use in system prompt
 let currentProjectContext: ProjectContext | null = null;
 let cachedIntelligence: ProjectIntelligence | null = null;
@@ -178,32 +192,31 @@ export async function chat(
       },
       shouldRetry: (error) => {
         // Don't retry on user abort or timeout
-        if (error.name === 'AbortError') return false;
-        if ((error as any).isTimeout) return false;
+        if (error.name === 'AbortError' || error instanceof TimeoutError) return false;
         // Don't retry on 4xx client errors (except 429 rate limit)
-        if (error.status >= 400 && error.status < 500 && error.status !== 429) return false;
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 429) return false;
         // Retry on network errors, 5xx, and rate limits
         return true;
       },
     });
-    
+
     // Log successful response
     logApiResponse(providerId, true, response.length);
     return response;
   } catch (error: unknown) {
-    const err = error as any;
-    
+    const err = error as Error;
+
     // Timeout errors (from chatOpenAI/chatAnthropic) — show user-friendly message
-    if (err.isTimeout) {
+    if (error instanceof TimeoutError) {
       logApiResponse(providerId, false, undefined, 'timeout');
       throw error;
     }
-    
+
     // User cancel (Escape key) — re-throw silently without logging
     if (err.name === 'AbortError' || err.message?.includes('aborted')) {
       throw error;
     }
-    
+
     // Log error
     logApiResponse(providerId, false, undefined, err.message);
     
@@ -368,9 +381,7 @@ async function chatOpenAI(
 
     if (!response.ok) {
       const body = await response.text();
-      const err = new Error(`${getErrorMessage('apiError')}: ${parseApiError(response.status, body)}`);
-      (err as any).status = response.status;
-      throw err;
+      throw new ApiError(`${getErrorMessage('apiError')}: ${parseApiError(response.status, body)}`, response.status);
     }
 
     if (stream && response.body) {
@@ -384,9 +395,7 @@ async function chatOpenAI(
     }
   } catch (error) {
     if (timedOut) {
-      const err = new Error(getErrorMessage('timeout'));
-      (err as any).isTimeout = true;
-      throw err;
+      throw new TimeoutError(getErrorMessage('timeout'));
     }
     throw error;
   } finally {
@@ -510,9 +519,7 @@ async function chatAnthropic(
 
     if (!response.ok) {
       const body = await response.text();
-      const err = new Error(`${getErrorMessage('apiError')}: ${parseApiError(response.status, body)}`);
-      (err as any).status = response.status;
-      throw err;
+      throw new ApiError(`${getErrorMessage('apiError')}: ${parseApiError(response.status, body)}`, response.status);
     }
 
     if (stream && response.body) {
@@ -526,9 +533,7 @@ async function chatAnthropic(
     }
   } catch (error) {
     if (timedOut) {
-      const err = new Error(getErrorMessage('timeout'));
-      (err as any).isTimeout = true;
-      throw err;
+      throw new TimeoutError(getErrorMessage('timeout'));
     }
     throw error;
   } finally {

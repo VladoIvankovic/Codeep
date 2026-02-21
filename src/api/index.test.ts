@@ -204,11 +204,11 @@ describe('chat() — OpenAI protocol', () => {
   });
 
   it('re-throws timeout error without wrapping', async () => {
-    const timeoutErr = new Error('timed out');
-    (timeoutErr as any).isTimeout = true;
+    const { TimeoutError } = await import('./index');
+    const timeoutErr = new TimeoutError('timed out');
     mockWithRetry.mockRejectedValueOnce(timeoutErr);
 
-    await expect(chat('hi')).rejects.toMatchObject({ isTimeout: true });
+    await expect(chat('hi')).rejects.toBeInstanceOf(TimeoutError);
   });
 
   it('re-throws AbortError without network-error wrapping', async () => {
@@ -317,31 +317,36 @@ describe('chat() — shouldRetry predicate', () => {
 
   it('does not retry on timeout errors', async () => {
     await chat('hi');
-    const timeoutErr = Object.assign(new Error('timeout'), { isTimeout: true });
+    const { TimeoutError } = await import('./index');
+    const timeoutErr = new TimeoutError('timeout');
     expect(capturedShouldRetry?.(timeoutErr)).toBe(false);
   });
 
   it('does not retry on 400 client errors', async () => {
     await chat('hi');
-    const err = Object.assign(new Error('bad request'), { status: 400 });
+    const { ApiError } = await import('./index');
+    const err = new ApiError('bad request', 400);
     expect(capturedShouldRetry?.(err)).toBe(false);
   });
 
   it('does not retry on 401 client errors', async () => {
     await chat('hi');
-    const err = Object.assign(new Error('unauthorized'), { status: 401 });
+    const { ApiError } = await import('./index');
+    const err = new ApiError('unauthorized', 401);
     expect(capturedShouldRetry?.(err)).toBe(false);
   });
 
   it('retries on 429 rate limit', async () => {
     await chat('hi');
-    const err = Object.assign(new Error('rate limited'), { status: 429 });
+    const { ApiError } = await import('./index');
+    const err = new ApiError('rate limited', 429);
     expect(capturedShouldRetry?.(err)).toBe(true);
   });
 
   it('retries on 500 server error', async () => {
     await chat('hi');
-    const err = Object.assign(new Error('server error'), { status: 500 });
+    const { ApiError } = await import('./index');
+    const err = new ApiError('server error', 500);
     expect(capturedShouldRetry?.(err)).toBe(true);
   });
 

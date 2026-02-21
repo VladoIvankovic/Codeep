@@ -797,20 +797,34 @@ export function parseSkillArgs(args: string, skill: Skill): Record<string, strin
 
 /**
  * Sanitize text for safe use inside shell commands.
- * Strips markdown formatting and escapes double quotes.
+ * Strips markdown formatting and removes shell metacharacters to prevent
+ * command injection via $(), backtick subshells, semicolons, pipes, etc.
  */
 function sanitizeForShell(text: string): string {
-  return text
+  const firstLine = text
     // Strip markdown code blocks
     .replace(/```[\s\S]*?```/g, '')
-    // Strip inline backticks
-    .replace(/`([^`]*)`/g, '$1')
+    // Strip inline backtick code spans (remove content too, not just markers)
+    .replace(/`[^`]*`/g, '')
     // Strip bold/italic markers
     .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
-    // Take only the first non-empty line (commit messages should be one line)
-    .split('\n').map(l => l.trim()).filter(Boolean)[0] || text.trim()
-    // Escape double quotes for shell safety
-    .replace(/"/g, '\\"');
+    // Take only the first non-empty line
+    .split('\n').map(l => l.trim()).filter(Boolean)[0] || text.trim();
+
+  return firstLine
+    // Remove $(...) subshell expansion
+    .replace(/\$\([^)]*\)/g, '')
+    // Remove ${...} variable/subshell expansion
+    .replace(/\$\{[^}]*\}/g, '')
+    // Remove bare $var variable references
+    .replace(/\$\w+/g, '')
+    // Remove command chaining operators
+    .replace(/[;|]/g, '')
+    // Remove newlines and null bytes
+    .replace(/[\n\r\0]/g, ' ')
+    // Escape double quotes for safe embedding in "..." shell strings
+    .replace(/"/g, '\\"')
+    .trim();
 }
 
 /**
