@@ -24,6 +24,7 @@ export interface ProviderConfig {
   }[];
   defaultModel: string;
   defaultProtocol: 'openai' | 'anthropic';
+  maxOutputTokens?: number; // Provider-specific max output tokens limit
   envKey?: string; // Environment variable name for API key
   subscribeUrl?: string; // URL to get API key
   mcpEndpoints?: { // Z.AI MCP service endpoints
@@ -156,6 +157,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     ],
     defaultModel: 'deepseek-chat',
     defaultProtocol: 'openai',
+    maxOutputTokens: 8192, // DeepSeek API limit
     envKey: 'DEEPSEEK_API_KEY',
     subscribeUrl: 'https://platform.deepseek.com/sign_up',
   },
@@ -222,4 +224,14 @@ export function supportsNativeTools(providerId: string, protocol: 'openai' | 'an
   const provider = PROVIDERS[providerId];
   if (!provider) return false;
   return provider.protocols[protocol]?.supportsNativeTools ?? true; // Default to true
+}
+
+/**
+ * Returns the effective max output tokens for a provider, capped by the provider's limit.
+ * Falls back to the requested value if no provider limit is set.
+ */
+export function getEffectiveMaxTokens(providerId: string, requested: number): number {
+  const provider = PROVIDERS[providerId];
+  if (!provider?.maxOutputTokens) return requested;
+  return Math.min(requested, provider.maxOutputTokens);
 }
