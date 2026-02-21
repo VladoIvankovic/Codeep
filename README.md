@@ -764,3 +764,31 @@ Contributions are welcome! Please open an issue or submit a pull request on [Git
 ## Support
 
 - **Issues**: [GitHub Issues](https://github.com/VladoIvankovic/Codeep/issues)
+
+## Zed Editor Integration (ACP)
+
+Codeep supports the [Agent Client Protocol (ACP)](https://agentclientprotocol.com), letting you use it as an AI coding agent directly inside [Zed](https://zed.dev).
+
+### Setup
+
+1. Add to your Zed `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "Codeep": {
+      "type": "custom",
+      "command": "node",
+      "args": ["--import", "tsx/esm", "/absolute/path/to/Codeep/acp/index.ts"]
+    }
+  }
+}
+```
+
+2. Make sure your API key is set in the environment Zed uses:
+
+```bash
+export DEEPSEEK_API_KEY=your_key   # or whichever provider
+```
+
+3. Open Zed's AI panel and select **Codeep** as the agent.
