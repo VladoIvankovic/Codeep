@@ -112,30 +112,51 @@ function extractImports(content: string, ext: string): string[] {
   return imports;
 }
 
+// Cache for resolveImportPath — avoids redundant disk lookups across import graphs
+const importResolutionCache = new Map<string, string | null>();
+
 /**
- * Resolve import path to actual file path
+ * Resolve import path to actual file path.
+ * Results are cached by (fromFile, importPath) to avoid O(n²) disk I/O.
  */
 function resolveImportPath(
   importPath: string,
   fromFile: string,
   projectRoot: string
 ): string | null {
+  const cacheKey = `${fromFile}|${importPath}`;
+  if (importResolutionCache.has(cacheKey)) {
+    return importResolutionCache.get(cacheKey)!;
+  }
+
   const fromDir = dirname(fromFile);
   const ext = extname(fromFile);
-  
+  let result: string | null;
+
   // Skip external packages
   if (!importPath.startsWith('.') && !importPath.startsWith('/')) {
     // Could be a local alias like @/components
     if (importPath.startsWith('@/') || importPath.startsWith('~/')) {
       const aliasPath = importPath.replace(/^[@~]\//, 'src/');
-      return resolveWithExtensions(join(projectRoot, aliasPath), ext);
+      result = resolveWithExtensions(join(projectRoot, aliasPath), ext);
+    } else {
+      result = null;
     }
-    return null;
+  } else {
+    // Resolve relative path
+    const resolved = join(fromDir, importPath);
+    result = resolveWithExtensions(resolved, ext);
   }
-  
-  // Resolve relative path
-  const resolved = join(fromDir, importPath);
-  return resolveWithExtensions(resolved, ext);
+
+  importResolutionCache.set(cacheKey, result);
+  return result;
+}
+
+/**
+ * Clear the import resolution cache (useful between invocations in tests).
+ */
+export function clearImportResolutionCache(): void {
+  importResolutionCache.clear();
 }
 
 /**

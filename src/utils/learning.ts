@@ -165,9 +165,14 @@ export function saveProjectPreferences(projectRoot: string, prefs: Partial<UserP
   ensureLearningDir();
   const projectPrefsPath = getProjectPrefsPath(projectRoot);
   
-  const existing = existsSync(projectPrefsPath)
-    ? JSON.parse(readFileSync(projectPrefsPath, 'utf-8'))
-    : {};
+  let existing: Record<string, unknown> = {};
+  if (existsSync(projectPrefsPath)) {
+    try {
+      existing = JSON.parse(readFileSync(projectPrefsPath, 'utf-8'));
+    } catch {
+      // Corrupt prefs file — start fresh
+    }
+  }
   
   const merged = { ...existing, ...prefs, lastUpdated: Date.now() };
   writeFileSync(projectPrefsPath, JSON.stringify(merged, null, 2));

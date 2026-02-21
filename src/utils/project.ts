@@ -89,9 +89,13 @@ export function isProjectDirectory(dir: string = process.cwd()): boolean {
  */
 export function getProjectType(dir: string = process.cwd()): string {
   if (existsSync(join(dir, 'package.json'))) {
-    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8'));
-    if (pkg.dependencies?.typescript || pkg.devDependencies?.typescript || existsSync(join(dir, 'tsconfig.json'))) {
-      return 'TypeScript/Node.js';
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8'));
+      if (pkg.dependencies?.typescript || pkg.devDependencies?.typescript || existsSync(join(dir, 'tsconfig.json'))) {
+        return 'TypeScript/Node.js';
+      }
+    } catch {
+      // Corrupt package.json — fall through to return JavaScript/Node.js
     }
     return 'JavaScript/Node.js';
   }
