@@ -65,5 +65,10 @@
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "pkg": {
+    "assets": [
+      "dist/acp/**/*"
+    ]
   }
 }
