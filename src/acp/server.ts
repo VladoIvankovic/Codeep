@@ -32,14 +32,16 @@ export function startAcpServer(): Promise<void> {
   function handleInitialize(msg: JsonRpcRequest): void {
     const _params = msg.params as InitializeParams;
     const result: InitializeResult = {
-      capabilities: {
+      protocolVersion: 1,
+      agentCapabilities: {
         streaming: true,
         fileEditing: true,
       },
-      serverInfo: {
+      agentInfo: {
         name: 'codeep',
         version: '1.0.0',
       },
+      authMethods: [],
     };
     transport.respond(msg.id, result);
   }

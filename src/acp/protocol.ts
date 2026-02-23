@@ -29,14 +29,16 @@ export interface InitializeParams {
 
 // ACP initialize result
 export interface InitializeResult {
-  capabilities: {
+  protocolVersion: number;
+  agentCapabilities: {
     streaming?: boolean;
     fileEditing?: boolean;
   };
-  serverInfo: {
+  agentInfo: {
     name: string;
     version: string;
   };
+  authMethods: unknown[];
 }
 
 // ACP agent/run request params
