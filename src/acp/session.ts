@@ -1,7 +1,6 @@
 // acp/session.ts
 // Bridges ACP parameters to the Codeep agent loop.
 
-import { pathToFileURL } from 'url';
 import { join, isAbsolute } from 'path';
 import { runAgent } from '../utils/agent.js';
 import { getProjectContext, ProjectContext } from '../utils/project.js';
@@ -14,7 +13,6 @@ export interface AgentSessionOptions {
   onChunk: (text: string) => void;
   onThought?: (text: string) => void;
   onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[]) => void;
-  onFileEdit: (uri: string, newText: string) => void;
 }
 
 /**
@@ -82,13 +80,14 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
       const toolCallId = `tc_${++toolCallCounter}`;
 
       // Resolve file locations for edit/read/delete/move tools
+      // ToolCallLocation.path expects a filesystem path, not a file:// URI
       const locations: string[] = [];
       const filePath = params.path ?? params.file ?? '';
       if (filePath) {
         const absPath = isAbsolute(filePath)
           ? filePath
           : join(opts.workspaceRoot, filePath);
-        locations.push(pathToFileURL(absPath).href);
+        locations.push(absPath);
       }
 
       // Track this tool call so onToolResult can emit finished/error
@@ -98,16 +97,6 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
       // Emit tool_call notification (running state)
       opts.onToolCall?.(toolCallId, name, kind, title, 'running', locations.length ? locations : undefined);
 
-      // For file edits, also send structured file/edit notification
-      if (name === 'write_file' || name === 'edit_file') {
-        if (filePath) {
-          const absPath = isAbsolute(filePath)
-            ? filePath
-            : join(opts.workspaceRoot, filePath);
-          const newText = params.content ?? params.new_text ?? '';
-          opts.onFileEdit(pathToFileURL(absPath).href, newText);
-        }
-      }
     },
     onToolResult: (toolResult, toolCall) => {
       // Find the tracked entry: prefer exact id match, then first FIFO entry for same tool name
@@ -152,8 +141,3 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
   }
 }
 
-// Utility: convert an absolute file-system path to a file:// URI string.
-// Exported for use by callers that need to construct applyEdit URIs.
-export function pathToUri(absolutePath: string): string {
-  return pathToFileURL(absolutePath).href;
-}
