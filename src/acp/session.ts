@@ -63,8 +63,10 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
   // Maps tool call key → ACP toolCallId so onToolResult can emit finished/error status
   const toolCallIdMap = new Map<string, { toolCallId: string; kind: string; locations?: string[] }>();
 
+  let chunksEmitted = 0;
   const result = await runAgent(opts.prompt, projectContext, {
     abortSignal: opts.abortSignal,
+    onChunk: (text: string) => { chunksEmitted++; opts.onChunk(text); },
     onIteration: (_iteration: number, _message: string) => {
       // Intentionally not forwarded — iteration count is internal detail
     },
@@ -132,8 +134,9 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
     },
   });
 
-  // Emit the final response text if present
-  if (result.finalResponse) {
+  // result.finalResponse is already emitted via onChunk streaming above;
+  // only emit it here if nothing was streamed (e.g. non-streaming fallback path)
+  if (result.finalResponse && chunksEmitted === 0) {
     opts.onChunk(result.finalResponse);
   }
 

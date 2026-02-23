@@ -67,6 +67,7 @@ import { planTasks, getNextTask, formatTaskPlan, TaskPlan, SubTask } from './tas
 export interface AgentOptions {
   maxIterations: number;
   maxDuration: number; // milliseconds
+  onChunk?: (text: string) => void;
   onToolCall?: (tool: ToolCall) => void;
   onToolResult?: (result: ToolResult, toolCall: ToolCall) => void;
   onIteration?: (iteration: number, message: string) => void;
@@ -245,7 +246,7 @@ export async function runAgent(
           chatResponse = await agentChat(
             messages,
             systemPrompt,
-            opts.onThinking,
+            opts.onChunk,
             opts.abortSignal,
             dynamicTimeout * (1 + retryCount * 0.5) // Increase timeout on retry
           );
@@ -487,7 +488,7 @@ export async function runAgent(
             const fixResponse = await agentChat(
               messages,
               systemPrompt,
-              opts.onThinking,
+              opts.onChunk,
               opts.abortSignal
             );
             
