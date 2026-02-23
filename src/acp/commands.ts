@@ -128,6 +128,47 @@ export function initWorkspace(workspaceRoot: string): {
   return { codeepSessionId, history, welcomeText: lines.join('\n') };
 }
 
+/**
+ * Restore a previously saved ACP session by its Zed sessionId.
+ * Falls back to initWorkspace if the session cannot be found on disk.
+ */
+export function loadWorkspace(workspaceRoot: string, acpSessionId: string): {
+  codeepSessionId: string;
+  history: Message[];
+  welcomeText: string;
+} {
+  // Ensure workspace is set up
+  const codeepDir = join(workspaceRoot, '.codeep');
+  if (!existsSync(codeepDir)) {
+    mkdirSync(codeepDir, { recursive: true });
+  }
+  if (!isManuallyInitializedProject(workspaceRoot)) {
+    initializeAsProject(workspaceRoot);
+  }
+  if (!hasReadPermission(workspaceRoot)) {
+    setProjectPermission(workspaceRoot, true, true);
+  }
+
+  // Try to load the session that was saved under this ACP session ID
+  const loaded = loadSession(acpSessionId, workspaceRoot);
+  if (loaded) {
+    const history = loaded as Message[];
+    const provider = getCurrentProvider();
+    const model = config.get('model');
+    const lines: string[] = [
+      `**Codeep** • ${provider.name} • \`${model}\``,
+      '',
+      `**Session restored:** ${acpSessionId} (${history.length} messages)`,
+      '',
+      ...formatSessionPreviewLines(history),
+    ];
+    return { codeepSessionId: acpSessionId, history, welcomeText: lines.join('\n') };
+  }
+
+  // Session not found — fall back to initWorkspace behaviour
+  return initWorkspace(workspaceRoot);
+}
+
 // ─── Command dispatch ─────────────────────────────────────────────────────────
 
 /**
