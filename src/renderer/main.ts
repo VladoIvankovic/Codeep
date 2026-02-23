@@ -389,6 +389,7 @@ Commands (in chat):
 
   // ACP server mode — started by Zed via Agent Client Protocol
   if (args[0] === 'acp') {
+    await loadAllApiKeys();
     const { startAcpServer } = await import('../acp/server.js');
     await startAcpServer();
     return;
