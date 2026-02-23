@@ -154,8 +154,10 @@ export interface SessionUpdateAgentThoughtChunk {
 export interface SessionUpdateToolCall {
   sessionUpdate: 'tool_call';
   toolCallId: string;
-  status: 'pending';
-  rawInput: unknown;
+  title: string;
+  kind?: string;
+  status: 'pending' | 'in_progress';
+  locations?: { uri: string }[];
 }
 
 export interface SessionUpdateToolCallUpdate {
