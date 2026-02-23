@@ -3,7 +3,7 @@
 
 import { JsonRpcRequest, JsonRpcResponse, JsonRpcNotification } from './protocol.js';
 
-type MessageHandler = (msg: JsonRpcRequest) => void;
+type MessageHandler = (msg: JsonRpcRequest | JsonRpcNotification) => void;
 
 export class StdioTransport {
   private buffer = '';
@@ -25,7 +25,7 @@ export class StdioTransport {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
-        const msg = JSON.parse(trimmed) as JsonRpcRequest;
+        const msg = JSON.parse(trimmed) as JsonRpcRequest | JsonRpcNotification;
         this.handler?.(msg);
       } catch {
         // ignore malformed messages

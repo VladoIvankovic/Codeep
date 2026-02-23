@@ -1,5 +1,5 @@
 // acp/protocol.ts
-// ACP JSON-RPC message types for Zed Agent Client Protocol
+// ACP JSON-RPC message types — Agent Client Protocol spec
 
 export interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -21,42 +21,211 @@ export interface JsonRpcNotification {
   params?: unknown;
 }
 
-// ACP initialize request params
+// ─── initialize ──────────────────────────────────────────────────────────────
+
 export interface InitializeParams {
-  capabilities?: Record<string, unknown>;
-  workspaceFolders?: { uri: string; name: string }[];
+  protocolVersion?: number;
+  clientCapabilities?: {
+    fs?: { readTextFile?: boolean; writeTextFile?: boolean };
+    terminal?: boolean;
+  };
+  clientInfo?: { name: string; version: string };
 }
 
-// ACP initialize result
 export interface InitializeResult {
   protocolVersion: number;
   agentCapabilities: {
+    loadSession?: boolean;
     streaming?: boolean;
     fileEditing?: boolean;
   };
-  agentInfo: {
-    name: string;
-    version: string;
-  };
+  agentInfo: { name: string; version: string };
   authMethods: unknown[];
 }
 
-// ACP session/new request params
+// ─── session/new ─────────────────────────────────────────────────────────────
+
+export interface McpServer {
+  name: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+}
+
+export interface SessionMode {
+  id: string;
+  name: string;
+  description?: string | null;
+}
+
+export interface SessionModeState {
+  availableModes: SessionMode[];
+  currentModeId: string;
+}
+
+export interface SessionConfigOption {
+  id: string;
+  name: string;
+  description?: string | null;
+  category?: 'mode' | 'model' | 'thought_level' | null;
+  type: 'select';
+  options?: { id: string; name: string }[];
+  currentValue?: string;
+}
+
 export interface SessionNewParams {
   cwd: string;
-  mcpServers?: { name: string; command: string; args: string[]; env?: Record<string, string> }[];
+  mcpServers?: McpServer[];
 }
 
-// ACP ContentBlock (text only for now)
+export interface SessionNewResult {
+  sessionId: string;
+  modes?: SessionModeState | null;
+  configOptions?: SessionConfigOption[] | null;
+}
+
+// ─── session/load ─────────────────────────────────────────────────────────────
+
+export interface SessionLoadParams {
+  sessionId: string;
+  cwd: string;
+  mcpServers?: McpServer[];
+}
+
+export interface SessionLoadResult {
+  modes?: SessionModeState | null;
+  configOptions?: SessionConfigOption[] | null;
+}
+
+// ─── session/prompt ──────────────────────────────────────────────────────────
+
 export interface ContentBlock {
-  type: 'text';
-  text: string;
+  type: 'text' | 'image' | 'audio' | 'resource_link' | 'resource';
+  text?: string;       // type === 'text'
+  data?: string;       // type === 'image' | 'audio' (base64)
+  mimeType?: string;
+  uri?: string;
+  name?: string;
 }
 
-// ACP session/prompt request params
 export interface SessionPromptParams {
   sessionId: string;
   prompt: ContentBlock[];
+}
+
+export interface SessionPromptResult {
+  stopReason: 'end_turn' | 'cancelled';
+}
+
+// ─── session/cancel (notification, no id) ────────────────────────────────────
+
+export interface SessionCancelParams {
+  sessionId: string;
+}
+
+// ─── session/set_mode ────────────────────────────────────────────────────────
+
+export interface SetSessionModeParams {
+  sessionId: string;
+  modeId: string;
+}
+
+// ─── session/set_config_option ───────────────────────────────────────────────
+
+export interface SetSessionConfigOptionParams {
+  sessionId: string;
+  configId: string;
+  value: unknown;
+}
+
+// ─── session/update notification (agent → client) ────────────────────────────
+
+export type ToolCallState = 'running' | 'finished' | 'error';
+
+export interface SessionUpdateContentChunk {
+  type: 'content_chunk';
+  sessionId: string;
+  content: ContentBlock;
+}
+
+export interface SessionUpdateToolCall {
+  type: 'tool_call';
+  sessionId: string;
+  toolCallId: string;
+  toolName: string;
+  toolInput: unknown;
+  state: ToolCallState;
+  content?: { type: 'text'; text: string }[];
+}
+
+export interface SessionUpdateThoughtChunk {
+  type: 'agent_thought_chunk';
+  sessionId: string;
+  content: ContentBlock;
+}
+
+export interface SessionUpdateAvailableCommands {
+  type: 'available_commands_update';
+  sessionId: string;
+  availableCommands: { name: string; description: string; input?: { hint: string } }[];
+}
+
+export interface SessionUpdateCurrentMode {
+  type: 'current_mode_update';
+  sessionId: string;
+  currentModeId: string;
+}
+
+export type SessionUpdateParams =
+  | SessionUpdateContentChunk
+  | SessionUpdateToolCall
+  | SessionUpdateThoughtChunk
+  | SessionUpdateAvailableCommands
+  | SessionUpdateCurrentMode;
+
+// ─── session/request_permission (agent → client, as JSON-RPC request) ────────
+
+export type PermissionOptionKind = 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always';
+
+export interface PermissionOption {
+  optionId: string;
+  name: string;
+  kind: PermissionOptionKind;
+}
+
+export interface RequestPermissionParams {
+  sessionId: string;
+  toolCall: {
+    toolCallId: string;
+    toolName: string;
+    toolInput: unknown;
+    state: ToolCallState;
+    content: unknown[];
+  };
+  options: PermissionOption[];
+}
+
+export interface RequestPermissionResult {
+  outcome: { type: 'cancelled' } | { type: 'selected'; optionId: string };
+}
+
+// ─── fs methods (agent → client) ─────────────────────────────────────────────
+
+export interface FsReadTextFileParams {
+  sessionId: string;
+  path: string;
+  line?: number;
+  limit?: number;
+}
+
+export interface FsReadTextFileResult {
+  content: string;
+}
+
+export interface FsWriteTextFileParams {
+  sessionId: string;
+  path: string;
+  content: string;
 }
 
 export type AcpMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;

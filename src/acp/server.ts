@@ -3,14 +3,24 @@
 
 import { randomUUID } from 'crypto';
 import { StdioTransport } from './transport.js';
-import { InitializeParams, InitializeResult, SessionNewParams, SessionPromptParams } from './protocol.js';
-import { JsonRpcRequest } from './protocol.js';
+import {
+  InitializeParams, InitializeResult,
+  SessionNewParams, SessionNewResult,
+  SessionLoadParams, SessionLoadResult,
+  SessionPromptParams,
+  SessionCancelParams,
+  SetSessionModeParams,
+  SetSessionConfigOptionParams,
+  SessionModeState, SessionConfigOption,
+} from './protocol.js';
+import { JsonRpcRequest, JsonRpcNotification } from './protocol.js';
 import { runAgentSession } from './session.js';
-import { initWorkspace, handleCommand, AcpSession } from './commands.js';
-import { autoSaveSession } from '../config/index.js';
+import { initWorkspace, loadWorkspace, handleCommand, AcpSession } from './commands.js';
+import { autoSaveSession, config } from '../config/index.js';
 import { getCurrentVersion } from '../utils/update.js';
 
-// All advertised slash commands (shown in Zed autocomplete)
+// ─── Slash commands advertised to Zed ────────────────────────────────────────
+
 const AVAILABLE_COMMANDS = [
   // Configuration
   { name: 'help',      description: 'Show available commands' },
@@ -54,39 +64,76 @@ const AVAILABLE_COMMANDS = [
   { name: 'deploy',    description: 'Deploy the project' },
 ];
 
+// ─── Mode definitions ─────────────────────────────────────────────────────────
+
+const AGENT_MODES: SessionModeState = {
+  currentModeId: 'auto',
+  availableModes: [
+    { id: 'auto',   name: 'Auto',   description: 'Agent runs automatically without confirmation' },
+    { id: 'manual', name: 'Manual', description: 'Confirm dangerous operations before running' },
+  ],
+};
+
+// ─── Config options ───────────────────────────────────────────────────────────
+
+function buildConfigOptions(): SessionConfigOption[] {
+  return [
+    {
+      id: 'model',
+      name: 'Model',
+      description: 'AI model to use',
+      category: 'model',
+      type: 'select',
+      currentValue: config.get('model'),
+    },
+  ];
+}
+
+// ─── Server ───────────────────────────────────────────────────────────────────
+
 export function startAcpServer(): Promise<void> {
   const transport = new StdioTransport();
 
   // ACP sessionId → full AcpSession (includes history + codeep session tracking)
-  const sessions = new Map<string, AcpSession & { abortController: AbortController | null }>();
+  const sessions = new Map<string, AcpSession & { abortController: AbortController | null; currentModeId: string }>();
 
-  transport.start((msg: JsonRpcRequest) => {
-    switch (msg.method) {
-      case 'initialize':
-        handleInitialize(msg);
-        break;
-      case 'initialized':
-        // no-op acknowledgment
-        break;
-      case 'session/new':
-        handleSessionNew(msg);
-        break;
-      case 'session/prompt':
-        handleSessionPrompt(msg);
-        break;
-      case 'session/cancel':
-        handleSessionCancel(msg);
-        break;
+  transport.start((msg: JsonRpcRequest | JsonRpcNotification) => {
+    // Notifications have no id — handle separately
+    if (!('id' in msg)) {
+      handleNotification(msg as JsonRpcNotification);
+      return;
+    }
+    const req = msg as JsonRpcRequest;
+    switch (req.method) {
+      case 'initialize':           handleInitialize(req);           break;
+      case 'initialized':          /* no-op acknowledgment */        break;
+      case 'session/new':          handleSessionNew(req);           break;
+      case 'session/load':         handleSessionLoad(req);          break;
+      case 'session/prompt':       handleSessionPrompt(req);        break;
+      case 'session/set_mode':     handleSetMode(req);              break;
+      case 'session/set_config_option': handleSetConfigOption(req); break;
       default:
-        transport.error(msg.id, -32601, `Method not found: ${msg.method}`);
+        transport.error(req.id, -32601, `Method not found: ${req.method}`);
     }
   });
+
+  // ── Notification handler (no id, no response) ──────────────────────────────
+
+  function handleNotification(msg: JsonRpcNotification): void {
+    if (msg.method === 'session/cancel') {
+      const { sessionId } = (msg.params ?? {}) as SessionCancelParams;
+      sessions.get(sessionId)?.abortController?.abort();
+    }
+  }
+
+  // ── initialize ──────────────────────────────────────────────────────────────
 
   function handleInitialize(msg: JsonRpcRequest): void {
     const _params = msg.params as InitializeParams;
     const result: InitializeResult = {
       protocolVersion: 1,
       agentCapabilities: {
+        loadSession: true,
         streaming: true,
         fileEditing: true,
       },
@@ -99,11 +146,12 @@ export function startAcpServer(): Promise<void> {
     transport.respond(msg.id, result);
   }
 
+  // ── session/new ─────────────────────────────────────────────────────────────
+
   function handleSessionNew(msg: JsonRpcRequest): void {
     const params = msg.params as SessionNewParams;
     const acpSessionId = randomUUID();
 
-    // Initialise workspace: create .codeep folder, load/create codeep session
     const { codeepSessionId, history, welcomeText } = initWorkspace(params.cwd);
 
     sessions.set(acpSessionId, {
@@ -113,28 +161,124 @@ export function startAcpServer(): Promise<void> {
       codeepSessionId,
       addedFiles: new Map(),
       abortController: null,
+      currentModeId: 'auto',
     });
 
-    transport.respond(msg.id, { sessionId: acpSessionId });
-
-    // Advertise all available slash commands to Zed
-    transport.notify('session/update', {
+    const result: SessionNewResult = {
       sessionId: acpSessionId,
-      update: {
-        sessionUpdate: 'available_commands_update',
-        availableCommands: AVAILABLE_COMMANDS,
-      },
+      modes: AGENT_MODES,
+      configOptions: buildConfigOptions(),
+    };
+    transport.respond(msg.id, result);
+
+    // Advertise slash commands
+    transport.notify('session/update', {
+      type: 'available_commands_update',
+      sessionId: acpSessionId,
+      availableCommands: AVAILABLE_COMMANDS,
     });
 
-    // Stream welcome message
+    // Send welcome message
     transport.notify('session/update', {
+      type: 'content_chunk',
       sessionId: acpSessionId,
-      update: {
-        sessionUpdate: 'agent_message_chunk',
-        content: { type: 'text', text: welcomeText },
-      },
+      content: { type: 'text', text: welcomeText },
     });
   }
+
+  // ── session/load ────────────────────────────────────────────────────────────
+
+  function handleSessionLoad(msg: JsonRpcRequest): void {
+    const params = msg.params as SessionLoadParams;
+
+    // Try to restore existing Codeep session or fall back to fresh workspace
+    const existing = sessions.get(params.sessionId);
+    if (existing) {
+      // Session already in memory — update cwd if changed
+      existing.workspaceRoot = params.cwd;
+      const result: SessionLoadResult = {
+        modes: AGENT_MODES,
+        configOptions: buildConfigOptions(),
+      };
+      transport.respond(msg.id, result);
+      return;
+    }
+
+    // Session not in memory — try to load from disk
+    const { codeepSessionId, history, welcomeText } = loadWorkspace(params.cwd, params.sessionId);
+
+    sessions.set(params.sessionId, {
+      sessionId: params.sessionId,
+      workspaceRoot: params.cwd,
+      history,
+      codeepSessionId,
+      addedFiles: new Map(),
+      abortController: null,
+      currentModeId: 'auto',
+    });
+
+    const result: SessionLoadResult = {
+      modes: AGENT_MODES,
+      configOptions: buildConfigOptions(),
+    };
+    transport.respond(msg.id, result);
+
+    // Send restored session welcome
+    transport.notify('session/update', {
+      type: 'content_chunk',
+      sessionId: params.sessionId,
+      content: { type: 'text', text: welcomeText },
+    });
+  }
+
+  // ── session/set_mode ────────────────────────────────────────────────────────
+
+  function handleSetMode(msg: JsonRpcRequest): void {
+    const { sessionId, modeId } = msg.params as SetSessionModeParams;
+    const session = sessions.get(sessionId);
+    if (!session) {
+      transport.error(msg.id, -32602, `Unknown sessionId: ${sessionId}`);
+      return;
+    }
+
+    const validMode = AGENT_MODES.availableModes.find(m => m.id === modeId);
+    if (!validMode) {
+      transport.error(msg.id, -32602, `Unknown modeId: ${modeId}`);
+      return;
+    }
+
+    session.currentModeId = modeId;
+    // Map ACP mode to Codeep agentConfirmation setting
+    config.set('agentConfirmation', modeId === 'manual' ? 'dangerous' : 'never');
+
+    transport.respond(msg.id, {});
+
+    // Notify Zed of the mode change
+    transport.notify('session/update', {
+      type: 'current_mode_update',
+      sessionId,
+      currentModeId: modeId,
+    });
+  }
+
+  // ── session/set_config_option ───────────────────────────────────────────────
+
+  function handleSetConfigOption(msg: JsonRpcRequest): void {
+    const { sessionId, configId, value } = msg.params as SetSessionConfigOptionParams;
+    const session = sessions.get(sessionId);
+    if (!session) {
+      transport.error(msg.id, -32602, `Unknown sessionId: ${sessionId}`);
+      return;
+    }
+
+    if (configId === 'model' && typeof value === 'string') {
+      config.set('model', value);
+    }
+
+    transport.respond(msg.id, {});
+  }
+
+  // ── session/prompt ──────────────────────────────────────────────────────────
 
   function handleSessionPrompt(msg: JsonRpcRequest): void {
     const params = msg.params as SessionPromptParams;
@@ -147,7 +291,7 @@ export function startAcpServer(): Promise<void> {
     // Extract text from ContentBlock[]
     const prompt = params.prompt
       .filter((b) => b.type === 'text')
-      .map((b) => b.text)
+      .map((b) => b.text ?? '')
       .join('\n');
 
     const abortController = new AbortController();
@@ -157,27 +301,22 @@ export function startAcpServer(): Promise<void> {
     const sendChunk = (text: string) => {
       agentResponseChunks.push(text);
       transport.notify('session/update', {
+        type: 'content_chunk',
         sessionId: params.sessionId,
-        update: {
-          sessionUpdate: 'agent_message_chunk',
-          content: { type: 'text', text },
-        },
+        content: { type: 'text', text },
       });
     };
 
-    // Try slash commands first (async — skills, diff, scan, etc.)
+    // Try slash commands first
     handleCommand(prompt, session, sendChunk, abortController.signal)
       .then((cmd) => {
         if (cmd.handled) {
-          // For streaming commands (skills, diff), chunks were already sent via onChunk.
-          // For simple commands, send the response now.
           if (cmd.response) sendChunk(cmd.response);
           transport.respond(msg.id, { stopReason: 'end_turn' });
           return;
         }
 
         // Not a command — run agent loop
-        // Prepend any added-files context to the prompt
         let enrichedPrompt = prompt;
         if (session.addedFiles.size > 0) {
           const parts = ['[Attached files]'];
@@ -195,28 +334,23 @@ export function startAcpServer(): Promise<void> {
           onChunk: sendChunk,
           onThought: (text: string) => {
             transport.notify('session/update', {
+              type: 'agent_thought_chunk',
               sessionId: params.sessionId,
-              update: {
-                sessionUpdate: 'agent_thought_chunk',
-                content: { type: 'text', text },
-              },
+              content: { type: 'text', text },
             });
           },
-          onToolCall: (toolCallId, _toolName, kind, title, status, locations) => {
+          onToolCall: (toolCallId, toolName, _kind, _title, status, _locations) => {
             transport.notify('session/update', {
+              type: 'tool_call',
               sessionId: params.sessionId,
-              update: {
-                sessionUpdate: 'tool_call',
-                toolCallId,
-                title,
-                kind,
-                status,
-                ...(locations?.length ? { locations: locations.map(uri => ({ uri })) } : {}),
-              },
+              toolCallId,
+              toolName,
+              toolInput: {},
+              state: status === 'running' ? 'running' : status === 'finished' ? 'finished' : 'error',
+              content: [],
             });
           },
           onFileEdit: (uri, newText) => {
-            // ACP structured file/edit notification — lets the editor apply changes
             transport.notify('file/edit', {
               uri,
               textChanges: newText
@@ -246,12 +380,6 @@ export function startAcpServer(): Promise<void> {
         transport.error(msg.id, -32000, err.message);
         if (session) session.abortController = null;
       });
-  }
-
-  function handleSessionCancel(msg: JsonRpcRequest): void {
-    const { sessionId } = msg.params as { sessionId: string };
-    sessions.get(sessionId)?.abortController?.abort();
-    transport.respond(msg.id, {});
   }
 
   // Keep process alive until stdin closes (Zed terminates us)
