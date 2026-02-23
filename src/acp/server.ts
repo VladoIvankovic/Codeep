@@ -181,7 +181,7 @@ export function startAcpServer(): Promise<void> {
     transport.respond(msg.id, result);
 
     // Advertise slash commands
-    transport.notify('sessionUpdate', {
+    transport.notify('session/update', {
       sessionId: acpSessionId,
       update: {
         sessionUpdate: 'available_commands_update',
@@ -190,7 +190,7 @@ export function startAcpServer(): Promise<void> {
     });
 
     // Send welcome message
-    transport.notify('sessionUpdate', {
+    transport.notify('session/update', {
       sessionId: acpSessionId,
       update: {
         sessionUpdate: 'agent_message_chunk',
@@ -237,7 +237,7 @@ export function startAcpServer(): Promise<void> {
     transport.respond(msg.id, result);
 
     // Send restored session welcome
-    transport.notify('sessionUpdate', {
+    transport.notify('session/update', {
       sessionId: params.sessionId,
       update: {
         sessionUpdate: 'agent_message_chunk',
@@ -269,7 +269,7 @@ export function startAcpServer(): Promise<void> {
     transport.respond(msg.id, {});
 
     // Notify Zed of the mode change
-    transport.notify('sessionUpdate', {
+    transport.notify('session/update', {
       sessionId,
       update: {
         sessionUpdate: 'current_mode_update',
@@ -317,7 +317,7 @@ export function startAcpServer(): Promise<void> {
     const agentResponseChunks: string[] = [];
     const sendChunk = (text: string) => {
       agentResponseChunks.push(text);
-      transport.notify('sessionUpdate', {
+      transport.notify('session/update', {
         sessionId: params.sessionId,
         update: {
           sessionUpdate: 'agent_message_chunk',
@@ -352,7 +352,7 @@ export function startAcpServer(): Promise<void> {
           abortSignal: abortController.signal,
           onChunk: sendChunk,
           onThought: (text: string) => {
-            transport.notify('sessionUpdate', {
+            transport.notify('session/update', {
               sessionId: params.sessionId,
               update: {
                 sessionUpdate: 'agent_thought_chunk',
@@ -363,7 +363,7 @@ export function startAcpServer(): Promise<void> {
           onToolCall: (toolCallId, toolName, kind, title, status, locations) => {
             if (status === 'running') {
               // Initial tool_call notification: spec ToolCall shape
-              transport.notify('sessionUpdate', {
+              transport.notify('session/update', {
                 sessionId: params.sessionId,
                 update: {
                   sessionUpdate: 'tool_call',
@@ -378,7 +378,7 @@ export function startAcpServer(): Promise<void> {
               });
             } else {
               // tool_call_update: update status to completed/failed
-              transport.notify('sessionUpdate', {
+              transport.notify('session/update', {
                 sessionId: params.sessionId,
                 update: {
                   sessionUpdate: 'tool_call_update',
