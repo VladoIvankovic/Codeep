@@ -71,6 +71,28 @@ export function startAcpServer(): Promise<void> {
 
     transport.respond(msg.id, { sessionId: acpSessionId });
 
+    // Advertise available slash commands to Zed
+    transport.notify('session/update', {
+      sessionId: acpSessionId,
+      update: {
+        sessionUpdate: 'available_commands_update',
+        availableCommands: [
+          { name: 'help',     description: 'Show available commands' },
+          { name: 'status',   description: 'Show current configuration and session info' },
+          { name: 'version',  description: 'Show version and current model' },
+          { name: 'provider', description: 'List or switch AI provider', input: { hint: '<provider-id>' } },
+          { name: 'model',    description: 'List or switch model', input: { hint: '<model-id>' } },
+          { name: 'login',    description: 'Set API key for a provider', input: { hint: '<providerId> <apiKey>' } },
+          { name: 'apikey',   description: 'Show or set API key for current provider', input: { hint: '<key>' } },
+          { name: 'sessions', description: 'List saved sessions' },
+          { name: 'session',  description: 'Manage sessions: new or load', input: { hint: 'new | load <name>' } },
+          { name: 'save',     description: 'Save current session', input: { hint: '[name]' } },
+          { name: 'grant',    description: 'Grant write access for current workspace' },
+          { name: 'lang',     description: 'Set response language', input: { hint: '<code> (e.g. en, hr, auto)' } },
+        ],
+      },
+    });
+
     // Stream welcome message so the client sees it immediately after session/new
     transport.notify('session/update', {
       sessionId: acpSessionId,
