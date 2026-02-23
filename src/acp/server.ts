@@ -1,14 +1,17 @@
 // src/acp/server.ts
 // Codeep ACP adapter — started via `codeep acp` CLI subcommand
 
+import { randomUUID } from 'crypto';
 import { StdioTransport } from './transport.js';
-import { InitializeParams, InitializeResult, AgentRunParams } from './protocol.js';
+import { InitializeParams, InitializeResult, SessionNewParams, SessionPromptParams } from './protocol.js';
 import { JsonRpcRequest } from './protocol.js';
 import { runAgentSession } from './session.js';
 
 export function startAcpServer(): Promise<void> {
   const transport = new StdioTransport();
-  const activeSessions = new Map<string, AbortController>();
+
+  // sessionId → { workspaceRoot, abortController }
+  const sessions = new Map<string, { workspaceRoot: string; abortController: AbortController | null }>();
 
   transport.start((msg: JsonRpcRequest) => {
     switch (msg.method) {
@@ -18,11 +21,14 @@ export function startAcpServer(): Promise<void> {
       case 'initialized':
         // no-op acknowledgment
         break;
-      case 'agent/run':
-        handleAgentRun(msg);
+      case 'session/new':
+        handleSessionNew(msg);
         break;
-      case 'agent/cancel':
-        handleAgentCancel(msg);
+      case 'session/prompt':
+        handleSessionPrompt(msg);
+        break;
+      case 'session/cancel':
+        handleSessionCancel(msg);
         break;
       default:
         transport.error(msg.id, -32601, `Method not found: ${msg.method}`);
@@ -46,43 +52,62 @@ export function startAcpServer(): Promise<void> {
     transport.respond(msg.id, result);
   }
 
-  function handleAgentRun(msg: JsonRpcRequest): void {
-    const params = msg.params as AgentRunParams;
-    const conversationId = params.conversationId ?? String(msg.id);
+  function handleSessionNew(msg: JsonRpcRequest): void {
+    const params = msg.params as SessionNewParams;
+    const sessionId = randomUUID();
+    sessions.set(sessionId, { workspaceRoot: params.cwd, abortController: null });
+    transport.respond(msg.id, { sessionId });
+  }
+
+  function handleSessionPrompt(msg: JsonRpcRequest): void {
+    const params = msg.params as SessionPromptParams;
+    const session = sessions.get(params.sessionId);
+    if (!session) {
+      transport.error(msg.id, -32602, `Unknown sessionId: ${params.sessionId}`);
+      return;
+    }
+
+    // Extract text from ContentBlock[]
+    const prompt = params.prompt
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n');
+
     const abortController = new AbortController();
-    activeSessions.set(conversationId, abortController);
+    session.abortController = abortController;
 
     runAgentSession({
-      prompt: params.prompt,
-      workspaceRoot: params.workspaceRoot ?? process.cwd(),
-      conversationId,
+      prompt,
+      workspaceRoot: session.workspaceRoot,
+      conversationId: params.sessionId,
       abortSignal: abortController.signal,
       onChunk: (text) => {
-        transport.notify('agent/stream', { conversationId, text });
-      },
-      onFileEdit: (uri, newText) => {
-        transport.notify('workspace/applyEdit', {
-          changes: [{ uri, newText }],
+        transport.notify('session/update', {
+          sessionId: params.sessionId,
+          type: 'agent_message_chunk',
+          text,
         });
       },
+      onFileEdit: (_uri, _newText) => {
+        // file edits are streamed via onChunk for now
+      },
     }).then(() => {
-      transport.respond(msg.id, { done: true });
+      transport.respond(msg.id, { stopReason: 'end_turn' });
     }).catch((err: Error) => {
       if (err.name === 'AbortError') {
-        transport.respond(msg.id, { cancelled: true });
+        transport.respond(msg.id, { stopReason: 'cancelled' });
       } else {
         transport.error(msg.id, -32000, err.message);
       }
     }).finally(() => {
-      activeSessions.delete(conversationId);
+      if (session) session.abortController = null;
     });
   }
 
-  function handleAgentCancel(msg: JsonRpcRequest): void {
-    const { conversationId } = msg.params as { conversationId: string };
-    activeSessions.get(conversationId)?.abort();
-    activeSessions.delete(conversationId);
-    transport.respond(msg.id, { cancelled: true });
+  function handleSessionCancel(msg: JsonRpcRequest): void {
+    const { sessionId } = msg.params as { sessionId: string };
+    sessions.get(sessionId)?.abortController?.abort();
+    transport.respond(msg.id, {});
   }
 
   // Keep process alive until stdin closes (Zed terminates us)

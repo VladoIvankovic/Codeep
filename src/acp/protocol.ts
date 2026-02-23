@@ -41,26 +41,22 @@ export interface InitializeResult {
   authMethods: unknown[];
 }
 
-// ACP agent/run request params
-export interface AgentRunParams {
-  prompt: string;
-  workspaceRoot?: string;
-  conversationId?: string;
+// ACP session/new request params
+export interface SessionNewParams {
+  cwd: string;
+  mcpServers?: { name: string; command: string; args: string[]; env?: Record<string, string> }[];
 }
 
-// ACP agent/stream notification params (adapter → Zed)
-export interface AgentStreamParams {
-  conversationId: string;
+// ACP ContentBlock (text only for now)
+export interface ContentBlock {
+  type: 'text';
   text: string;
-  done?: boolean;
 }
 
-// ACP workspace/applyEdit notification params (adapter → Zed)
-export interface ApplyEditParams {
-  changes: {
-    uri: string;        // file:///absolute/path
-    newText: string;    // full new content
-  }[];
+// ACP session/prompt request params
+export interface SessionPromptParams {
+  sessionId: string;
+  prompt: ContentBlock[];
 }
 
 export type AcpMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
