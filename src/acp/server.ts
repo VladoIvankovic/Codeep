@@ -190,8 +190,14 @@ export function startAcpServer(): Promise<void> {
           conversationId: params.sessionId,
           abortSignal: abortController.signal,
           onChunk: sendChunk,
-          onFileEdit: (_uri, _newText) => {
-            // file edits are streamed via onChunk for now
+          onFileEdit: (uri, newText) => {
+            // ACP structured file/edit notification — lets the editor track changed files
+            transport.notify('file/edit', {
+              uri,
+              textChanges: newText
+                ? [{ range: { start: { line: 0, character: 0 }, end: { line: 999999, character: 0 } }, text: newText }]
+                : [],
+            });
           },
         }).then(() => {
           session.history.push({ role: 'user', content: prompt });
