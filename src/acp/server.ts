@@ -190,8 +190,30 @@ export function startAcpServer(): Promise<void> {
           conversationId: params.sessionId,
           abortSignal: abortController.signal,
           onChunk: sendChunk,
+          onThought: (text: string) => {
+            transport.notify('session/update', {
+              sessionId: params.sessionId,
+              update: {
+                sessionUpdate: 'agent_thought_chunk',
+                content: { type: 'text', text },
+              },
+            });
+          },
+          onToolCall: (toolCallId, _toolName, kind, title, status, locations) => {
+            transport.notify('session/update', {
+              sessionId: params.sessionId,
+              update: {
+                sessionUpdate: 'tool_call',
+                toolCallId,
+                title,
+                kind,
+                status,
+                ...(locations?.length ? { locations: locations.map(uri => ({ uri })) } : {}),
+              },
+            });
+          },
           onFileEdit: (uri, newText) => {
-            // ACP structured file/edit notification — lets the editor track changed files
+            // ACP structured file/edit notification — lets the editor apply changes
             transport.notify('file/edit', {
               uri,
               textChanges: newText
