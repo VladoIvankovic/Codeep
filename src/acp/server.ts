@@ -172,7 +172,7 @@ export function startAcpServer(): Promise<void> {
     transport.respond(msg.id, result);
 
     // Advertise slash commands
-    transport.notify('session/update', {
+    transport.notify('sessionUpdate', {
       sessionId: acpSessionId,
       update: {
         sessionUpdate: 'available_commands_update',
@@ -181,7 +181,7 @@ export function startAcpServer(): Promise<void> {
     });
 
     // Send welcome message
-    transport.notify('session/update', {
+    transport.notify('sessionUpdate', {
       sessionId: acpSessionId,
       update: {
         sessionUpdate: 'agent_message_chunk',
@@ -228,7 +228,7 @@ export function startAcpServer(): Promise<void> {
     transport.respond(msg.id, result);
 
     // Send restored session welcome
-    transport.notify('session/update', {
+    transport.notify('sessionUpdate', {
       sessionId: params.sessionId,
       update: {
         sessionUpdate: 'agent_message_chunk',
@@ -260,7 +260,7 @@ export function startAcpServer(): Promise<void> {
     transport.respond(msg.id, {});
 
     // Notify Zed of the mode change
-    transport.notify('session/update', {
+    transport.notify('sessionUpdate', {
       sessionId,
       update: {
         sessionUpdate: 'current_mode_update',
@@ -308,7 +308,7 @@ export function startAcpServer(): Promise<void> {
     const agentResponseChunks: string[] = [];
     const sendChunk = (text: string) => {
       agentResponseChunks.push(text);
-      transport.notify('session/update', {
+      transport.notify('sessionUpdate', {
         sessionId: params.sessionId,
         update: {
           sessionUpdate: 'agent_message_chunk',
@@ -343,7 +343,7 @@ export function startAcpServer(): Promise<void> {
           abortSignal: abortController.signal,
           onChunk: sendChunk,
           onThought: (text: string) => {
-            transport.notify('session/update', {
+            transport.notify('sessionUpdate', {
               sessionId: params.sessionId,
               update: {
                 sessionUpdate: 'agent_thought_chunk',
@@ -351,25 +351,30 @@ export function startAcpServer(): Promise<void> {
               },
             });
           },
-          onToolCall: (toolCallId, toolName, _kind, _title, status, _locations) => {
+          onToolCall: (toolCallId, toolName, kind, title, status, locations) => {
             if (status === 'running') {
-              transport.notify('session/update', {
+              // Initial tool_call notification: spec ToolCall shape
+              transport.notify('sessionUpdate', {
                 sessionId: params.sessionId,
                 update: {
                   sessionUpdate: 'tool_call',
                   toolCallId,
-                  status: 'pending',
-                  rawInput: { toolName },
+                  title: title || toolName,
+                  kind: kind || 'other',
+                  status: 'in_progress',
+                  ...(locations && locations.length > 0
+                    ? { locations: locations.map(uri => ({ uri })) }
+                    : {}),
                 },
               });
             } else {
-              transport.notify('session/update', {
+              // tool_call_update: update status to completed/failed
+              transport.notify('sessionUpdate', {
                 sessionId: params.sessionId,
                 update: {
                   sessionUpdate: 'tool_call_update',
                   toolCallId,
                   status: status === 'finished' ? 'completed' : 'failed',
-                  rawOutput: '',
                 },
               });
             }
