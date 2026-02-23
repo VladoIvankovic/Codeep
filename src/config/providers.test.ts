@@ -99,6 +99,7 @@ describe('providers', () => {
       expect(ids).toContain('minimax');
       expect(ids).toContain('minimax-cn');
       expect(ids).toContain('anthropic');
+      expect(ids).toContain('google');
     });
   });
 
@@ -177,6 +178,11 @@ describe('providers', () => {
     it('should have env key for anthropic', () => {
       expect(PROVIDERS['anthropic'].envKey).toBe('ANTHROPIC_API_KEY');
     });
+
+    it('should have env key for google', () => {
+      const provider = getProvider('google');
+      expect(provider!.envKey).toBe('GOOGLE_API_KEY');
+    });
   });
 
   describe('minimax-cn provider', () => {
@@ -222,4 +228,32 @@ describe('providers', () => {
       expect(getProviderMcpEndpoints('nonexistent')).toBeNull();
     });
   });
+
+  describe('google provider', () => {
+    it('should include google provider with correct config', () => {
+      const provider = getProvider('google');
+      expect(provider).not.toBeNull();
+      expect(provider!.name).toBe('Google AI');
+      expect(provider!.description).toBe('Gemini models');
+      expect(provider!.defaultProtocol).toBe('openai');
+      expect(provider!.defaultModel).toBe('gemini-2.0-flash');
+      expect(provider!.protocols.openai?.baseUrl).toBe(
+        'https://generativelanguage.googleapis.com/v1beta/openai'
+      );
+      expect(provider!.protocols.openai?.authHeader).toBe('Bearer');
+      expect(provider!.protocols.openai?.supportsNativeTools).toBe(true);
+      expect(provider!.protocols.anthropic).toBeUndefined();
+      expect(provider!.envKey).toBe('GOOGLE_API_KEY');
+      expect(provider!.subscribeUrl).toBe('https://aistudio.google.com/apikey');
+      expect(provider!.models).toHaveLength(6);
+      const modelIds = provider!.models.map(m => m.id);
+      expect(modelIds).toContain('gemini-2.5-pro-exp-03-25');
+      expect(modelIds).toContain('gemini-2.0-flash');
+      expect(modelIds).toContain('gemini-2.0-flash-lite');
+      expect(modelIds).toContain('gemini-1.5-pro');
+      expect(modelIds).toContain('gemini-1.5-flash');
+      expect(modelIds).toContain('gemini-1.5-flash-8b');
+    });
+  });
 });
+
