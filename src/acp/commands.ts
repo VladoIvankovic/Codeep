@@ -26,6 +26,8 @@ import { getProjectContext } from '../utils/project.js';
 import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { Message } from '../config/index.js';
+import { chat } from '../api/index.js';
+import { runAgent } from '../utils/agent.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,11 +38,17 @@ export interface AcpSession {
   history: Message[];
   /** Codeep session name (maps to .codeep/sessions/<name>.json) */
   codeepSessionId: string;
+  /** Files added to context via /add */
+  addedFiles: Map<string, { relativePath: string; content: string }>;
 }
 
 export interface CommandResult {
+  /** true if the input was a slash command (even if it failed) */
   handled: boolean;
+  /** Markdown text to stream back to the client */
   response: string;
+  /** If true, server should stream response chunks as they arrive (skills) */
+  streaming?: boolean;
 }
 
 // ─── Workspace / session init (called on session/new) ─────────────────────────
@@ -122,7 +130,19 @@ export function initWorkspace(workspaceRoot: string): {
 
 // ─── Command dispatch ─────────────────────────────────────────────────────────
 
-export function handleCommand(input: string, session: AcpSession): CommandResult {
+/**
+ * Try to handle a slash command. Async because skills and diff/review
+ * need to call the AI API or run shell commands.
+ *
+ * onChunk is called for streaming output (skills). For simple commands
+ * the full response is returned in CommandResult.response.
+ */
+export async function handleCommand(
+  input: string,
+  session: AcpSession,
+  onChunk: (text: string) => void,
+  abortSignal?: AbortSignal,
+): Promise<CommandResult> {
   const trimmed = input.trim();
   if (!trimmed.startsWith('/')) return { handled: false, response: '' };
 
@@ -158,8 +178,6 @@ export function handleCommand(input: string, session: AcpSession): CommandResult
     }
 
     case 'login': {
-      // In ACP context login = set API key for a provider
-      // Usage: /login <providerId> <apiKey>
       const [providerId, apiKey] = args;
       if (!providerId || !apiKey) {
         return { handled: true, response: 'Usage: `/login <providerId> <apiKey>`\n\n' + buildProviderList() };
@@ -170,10 +188,7 @@ export function handleCommand(input: string, session: AcpSession): CommandResult
     case 'sessions':
     case 'session': {
       const sub = args[0];
-      if (!sub) {
-        // No argument — show list with usage hint
-        return { handled: true, response: buildSessionList(session.workspaceRoot) };
-      }
+      if (!sub) return { handled: true, response: buildSessionList(session.workspaceRoot) };
       if (sub === 'new') {
         const id = startNewSession();
         session.codeepSessionId = id;
@@ -216,11 +231,260 @@ export function handleCommand(input: string, session: AcpSession): CommandResult
       return { handled: true, response: `Language set to \`${args[0]}\`` };
     }
 
-    default:
-      return {
-        handled: true,
-        response: `Unknown command: \`/${cmd}\`\n\nType \`/help\` to see available commands.`,
+    // ─── File context ──────────────────────────────────────────────────────────
+
+    case 'add': {
+      if (!args.length) {
+        if (session.addedFiles.size === 0) return { handled: true, response: 'No files in context. Usage: `/add <file> [file2...]`' };
+        const list = [...session.addedFiles.values()].map(f => `- \`${f.relativePath}\``).join('\n');
+        return { handled: true, response: `**Files in context (${session.addedFiles.size}):**\n${list}` };
+      }
+      const { promises: fs } = await import('fs');
+      const pathMod = await import('path');
+      const root = session.workspaceRoot;
+      const added: string[] = [];
+      const errors: string[] = [];
+      for (const filePath of args) {
+        const fullPath = pathMod.isAbsolute(filePath) ? filePath : pathMod.join(root, filePath);
+        const relativePath = pathMod.relative(root, fullPath);
+        try {
+          const stat = await fs.stat(fullPath);
+          if (!stat.isFile()) { errors.push(`\`${filePath}\`: not a file`); continue; }
+          if (stat.size > 100_000) { errors.push(`\`${filePath}\`: too large (max 100KB)`); continue; }
+          const content = await fs.readFile(fullPath, 'utf-8');
+          session.addedFiles.set(fullPath, { relativePath, content });
+          added.push(`\`${relativePath}\``);
+        } catch {
+          errors.push(`\`${filePath}\`: not found`);
+        }
+      }
+      const parts: string[] = [];
+      if (added.length) parts.push(`Added to context: ${added.join(', ')}`);
+      if (errors.length) parts.push(`Errors: ${errors.join(', ')}`);
+      return { handled: true, response: parts.join('\n') };
+    }
+
+    case 'drop': {
+      if (!args.length) {
+        const count = session.addedFiles.size;
+        session.addedFiles.clear();
+        return { handled: true, response: count ? `Dropped all ${count} file(s) from context.` : 'No files in context.' };
+      }
+      const pathMod = await import('path');
+      const root = session.workspaceRoot;
+      let dropped = 0;
+      for (const filePath of args) {
+        const fullPath = pathMod.isAbsolute(filePath) ? filePath : pathMod.join(root, filePath);
+        if (session.addedFiles.delete(fullPath)) dropped++;
+      }
+      return { handled: true, response: dropped ? `Dropped ${dropped} file(s). ${session.addedFiles.size} remaining.` : 'File not found in context.' };
+    }
+
+    // ─── Undo ──────────────────────────────────────────────────────────────────
+
+    case 'undo': {
+      const { undoLastAction } = await import('../utils/agent.js');
+      const result = undoLastAction();
+      return { handled: true, response: result.success ? `Undo: ${result.message}` : `Cannot undo: ${result.message}` };
+    }
+
+    case 'undo-all': {
+      const { undoAllActions } = await import('../utils/agent.js');
+      const result = undoAllActions();
+      return { handled: true, response: result.success ? `Undone ${result.results.length} action(s).` : 'Nothing to undo.' };
+    }
+
+    case 'skills': {
+      const { getAllSkills, searchSkills, formatSkillsList } = await import('../utils/skills.js');
+      const query = args.join(' ').toLowerCase();
+      const skills = query ? searchSkills(query) : getAllSkills();
+      if (!skills.length) return { handled: true, response: `No skills matching \`${query}\`.` };
+      return { handled: true, response: formatSkillsList(skills) };
+    }
+
+    case 'scan': {
+      onChunk('_Scanning project…_\n\n');
+      const { scanProject, saveProjectIntelligence, generateContextFromIntelligence } = await import('../utils/projectIntelligence.js');
+      try {
+        const intelligence = await scanProject(session.workspaceRoot);
+        saveProjectIntelligence(session.workspaceRoot, intelligence);
+        const context = generateContextFromIntelligence(intelligence);
+        onChunk(`## Project Scan\n\n${context}`);
+        return { handled: true, response: '', streaming: true };
+      } catch (err) {
+        return { handled: true, response: `Scan failed: ${(err as Error).message}` };
+      }
+    }
+
+    case 'review': {
+      onChunk('_Running code review…_\n\n');
+      const { performCodeReview, formatReviewResult } = await import('../utils/codeReview.js');
+      const projectCtx = getProjectContext(session.workspaceRoot);
+      if (!projectCtx) return { handled: true, response: 'No project context available.' };
+      const reviewFiles = args.length ? args : undefined;
+      const result = performCodeReview(projectCtx, reviewFiles);
+      return { handled: true, response: formatReviewResult(result) };
+    }
+
+    case 'learn': {
+      onChunk('_Learning from project…_\n\n');
+      const { learnFromProject, formatPreferencesForPrompt } = await import('../utils/learning.js');
+      const { promises: fs } = await import('fs');
+      const pathMod = await import('path');
+      const extensions = ['.ts', '.js', '.tsx', '.jsx', '.py', '.go', '.rs'];
+      const files: string[] = [];
+      const walkDir = async (dir: string, depth = 0): Promise<void> => {
+        if (depth > 3 || files.length >= 20) return;
+        try {
+          const entries = await fs.readdir(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+            const fullPath = pathMod.join(dir, entry.name);
+            if (entry.isDirectory()) { await walkDir(fullPath, depth + 1); }
+            else if (extensions.some(ext => entry.name.endsWith(ext))) {
+              files.push(pathMod.relative(session.workspaceRoot, fullPath));
+            }
+            if (files.length >= 20) break;
+          }
+        } catch { /* skip unreadable dirs */ }
       };
+      await walkDir(session.workspaceRoot);
+      if (!files.length) return { handled: true, response: 'No source files found to learn from.' };
+      const prefs = learnFromProject(session.workspaceRoot, files);
+      const formatted = formatPreferencesForPrompt(prefs);
+      return { handled: true, response: `## Learned Preferences\n\n${formatted}\n\n_Learned from ${files.length} file(s)._` };
+    }
+
+    case 'changes': {
+      const { getCurrentSessionActions } = await import('../utils/agent.js');
+      const actions = getCurrentSessionActions();
+      if (!actions.length) return { handled: true, response: 'No changes in current session.' };
+      const lines = ['## Session Changes', '', ...actions.map(a => `- **${a.type}**: \`${a.target}\` — ${a.result}`)];
+      return { handled: true, response: lines.join('\n') };
+    }
+
+    // ─── Export ────────────────────────────────────────────────────────────────
+
+    case 'export': {
+      if (!session.history.length) return { handled: true, response: 'No messages to export.' };
+      const format = (args[0] || 'md').toLowerCase();
+      if (format === 'json') {
+        return { handled: true, response: `\`\`\`json\n${JSON.stringify(session.history, null, 2)}\n\`\`\`` };
+      }
+      if (format === 'txt') {
+        const txt = session.history.map(m => `[${m.role.toUpperCase()}]\n${m.content}`).join('\n\n---\n\n');
+        return { handled: true, response: `\`\`\`\n${txt}\n\`\`\`` };
+      }
+      // default: markdown
+      const md = ['# Codeep Session Export', '', ...session.history.map(m =>
+        `## ${m.role === 'user' ? 'You' : m.role === 'assistant' ? 'Codeep' : 'System'}\n\n${m.content}`
+      )].join('\n\n---\n\n');
+      return { handled: true, response: md };
+    }
+
+    // ─── Git diff ──────────────────────────────────────────────────────────────
+
+    case 'diff': {
+      const { getGitDiff, formatDiffForDisplay } = await import('../utils/git.js');
+      const staged = args.includes('--staged') || args.includes('-s');
+      const result = getGitDiff(staged, session.workspaceRoot);
+      if (!result.success || !result.diff) {
+        return { handled: true, response: result.error || 'No changes found.' };
+      }
+      const preview = formatDiffForDisplay(result.diff, 60);
+      // Ask AI to review
+      onChunk('_Reviewing diff…_\n\n');
+      const projectCtx = getProjectContext(session.workspaceRoot);
+      let reviewText = '';
+      await chat(
+        `Review this git diff and provide concise feedback:\n\n\`\`\`diff\n${preview}\n\`\`\``,
+        session.history,
+        (chunk) => { reviewText += chunk; onChunk(chunk); },
+        undefined,
+        projectCtx,
+        undefined,
+      );
+      return { handled: true, response: '', streaming: true };
+    }
+
+    // ─── Skills ────────────────────────────────────────────────────────────────
+
+    default: {
+      const { findSkill, parseSkillArgs, executeSkill, trackSkillUsage } = await import('../utils/skills.js');
+      const skill = findSkill(cmd);
+      if (!skill) {
+        return { handled: true, response: `Unknown command: \`/${cmd}\`\n\nType \`/help\` for available commands or \`/skills\` to list all skills.` };
+      }
+
+      if (skill.requiresWriteAccess && !hasWritePermission(session.workspaceRoot)) {
+        return { handled: true, response: 'This skill requires write access. Use `/grant` first.' };
+      }
+
+      const params = parseSkillArgs(args.join(' '), skill);
+      trackSkillUsage(skill.name);
+
+      onChunk(`_Running skill **${skill.name}**…_\n\n`);
+
+      const { spawnSync } = await import('child_process');
+      const projectCtx = getProjectContext(session.workspaceRoot);
+
+      const skillResult = await executeSkill(skill, params, {
+        onCommand: async (shellCmd: string) => {
+          const proc = spawnSync(shellCmd, {
+            cwd: session.workspaceRoot,
+            encoding: 'utf-8',
+            timeout: 60_000,
+            shell: true,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          const out = ((proc.stdout || '') + (proc.stderr || '')).trim();
+          const block = `\`${shellCmd}\`\n\`\`\`\n${out || '(no output)'}\n\`\`\`\n`;
+          onChunk(block);
+          if ((proc.status ?? 1) !== 0) throw new Error(out || `Exit code ${proc.status}`);
+          return out;
+        },
+
+        onPrompt: async (prompt: string) => {
+          let response = '';
+          await chat(
+            prompt,
+            session.history,
+            (chunk) => { response += chunk; onChunk(chunk); },
+            undefined,
+            projectCtx,
+            undefined,
+          );
+          return response;
+        },
+
+        onAgent: async (task: string) => {
+          const { buildProjectContext } = await import('./session.js');
+          const ctx = buildProjectContext(session.workspaceRoot);
+          let output = '';
+          const agentResult = await runAgent(task, ctx, {
+            abortSignal,
+            onIteration: (_i: number, msg: string) => { onChunk(msg + '\n'); },
+            onThinking: (text: string) => { onChunk(text); },
+          });
+          if (agentResult.finalResponse) {
+            output = agentResult.finalResponse;
+            onChunk(output);
+          }
+          return output;
+        },
+
+        // Skills in ACP auto-confirm (no TUI)
+        onConfirm: async (_message: string) => true,
+
+        onNotify: (message: string) => { onChunk(`> ${message}\n`); },
+      });
+
+      if (!skillResult.success) {
+        return { handled: true, response: `Skill **${skill.name}** failed: ${skillResult.output}`, streaming: true };
+      }
+
+      return { handled: true, response: '', streaming: true };
+    }
   }
 }
 
@@ -230,24 +494,44 @@ function buildHelp(): string {
   return [
     '## Codeep Commands',
     '',
+    '**Configuration**',
     '| Command | Description |',
     '|---------|-------------|',
-    '| `/help` | Show this help |',
-    '| `/status` | Show current configuration and session info |',
+    '| `/status` | Show current config and session info |',
     '| `/version` | Show version and current model |',
-    '| `/provider` | List available providers |',
-    '| `/provider <id>` | Switch provider (e.g. `/provider anthropic`) |',
-    '| `/model` | List models for current provider |',
-    '| `/model <id>` | Switch model (e.g. `/model claude-opus-4-5`) |',
-    '| `/login <providerId> <apiKey>` | Set API key for a provider |',
-    '| `/apikey` | Show masked API key for current provider |',
-    '| `/apikey <key>` | Set API key for current provider |',
+    '| `/provider [id]` | List or switch provider |',
+    '| `/model [id]` | List or switch model |',
+    '| `/login <provider> <key>` | Set API key for a provider |',
+    '| `/apikey [key]` | Show or set API key |',
+    '| `/lang [code]` | Set response language (`en`, `hr`, `auto`…) |',
+    '| `/grant` | Grant write access for workspace |',
+    '',
+    '**Sessions**',
+    '| Command | Description |',
+    '|---------|-------------|',
     '| `/session` | List saved sessions |',
-    '| `/session new` | Start a new session |',
-    '| `/session load <name>` | Load a saved session |',
+    '| `/session new` | Start new session |',
+    '| `/session load <name>` | Load a session |',
     '| `/save [name]` | Save current session |',
-    '| `/grant` | Grant write access for current workspace |',
-    '| `/lang <code>` | Set response language (e.g. `en`, `hr`, `auto`) |',
+    '',
+    '**Context & Files**',
+    '| Command | Description |',
+    '|---------|-------------|',
+    '| `/add <file...>` | Add files to agent context |',
+    '| `/drop [file...]` | Remove files from context (no args = clear all) |',
+    '',
+    '**Actions**',
+    '| Command | Description |',
+    '|---------|-------------|',
+    '| `/diff [--staged]` | Git diff with AI review |',
+    '| `/undo` | Undo last agent action |',
+    '| `/undo-all` | Undo all actions in session |',
+    '| `/changes` | Show session changes |',
+    '| `/export [json\\|md\\|txt]` | Export conversation |',
+    '',
+    '**Skills** (type `/skills` to list all)',
+    '`/commit` · `/fix` · `/test` · `/docs` · `/refactor` · `/explain`',
+    '`/optimize` · `/debug` · `/push` · `/pr` · `/build` · `/deploy` …',
   ].join('\n');
 }
 
