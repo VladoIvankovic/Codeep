@@ -9,6 +9,50 @@ import { runAgentSession } from './session.js';
 import { initWorkspace, handleCommand, AcpSession } from './commands.js';
 import { autoSaveSession } from '../config/index.js';
 
+// All advertised slash commands (shown in Zed autocomplete)
+const AVAILABLE_COMMANDS = [
+  // Configuration
+  { name: 'help',      description: 'Show available commands' },
+  { name: 'status',    description: 'Show current config and session info' },
+  { name: 'version',   description: 'Show version and current model' },
+  { name: 'provider',  description: 'List or switch AI provider', input: { hint: '<provider-id>' } },
+  { name: 'model',     description: 'List or switch model', input: { hint: '<model-id>' } },
+  { name: 'login',     description: 'Set API key for a provider', input: { hint: '<providerId> <apiKey>' } },
+  { name: 'apikey',    description: 'Show or set API key for current provider', input: { hint: '<key>' } },
+  { name: 'lang',      description: 'Set response language', input: { hint: '<code> (en, hr, auto…)' } },
+  { name: 'grant',     description: 'Grant write access for workspace' },
+  // Sessions
+  { name: 'session',   description: 'List sessions, or: new / load <name>', input: { hint: 'new | load <name>' } },
+  { name: 'save',      description: 'Save current session', input: { hint: '[name]' } },
+  // Context
+  { name: 'add',       description: 'Add files to agent context', input: { hint: '<file> [file2…]' } },
+  { name: 'drop',      description: 'Remove files from context (no args = clear all)', input: { hint: '[file…]' } },
+  // Actions
+  { name: 'diff',      description: 'Git diff with AI review', input: { hint: '[--staged]' } },
+  { name: 'undo',      description: 'Undo last agent action' },
+  { name: 'undo-all',  description: 'Undo all agent actions in session' },
+  { name: 'changes',   description: 'Show all changes made in session' },
+  { name: 'export',    description: 'Export conversation', input: { hint: 'json | md | txt' } },
+  // Project intelligence
+  { name: 'scan',      description: 'Scan project structure and generate summary' },
+  { name: 'review',    description: 'Run code review on project or specific files', input: { hint: '[file…]' } },
+  { name: 'learn',     description: 'Learn coding preferences from project files' },
+  // Skills
+  { name: 'skills',    description: 'List all available skills', input: { hint: '[query]' } },
+  { name: 'commit',    description: 'Generate commit message and commit' },
+  { name: 'fix',       description: 'Fix bugs or issues' },
+  { name: 'test',      description: 'Write or run tests' },
+  { name: 'docs',      description: 'Generate documentation' },
+  { name: 'refactor',  description: 'Refactor code' },
+  { name: 'explain',   description: 'Explain code' },
+  { name: 'optimize',  description: 'Optimize code for performance' },
+  { name: 'debug',     description: 'Debug an issue' },
+  { name: 'push',      description: 'Git push' },
+  { name: 'pr',        description: 'Create a pull request' },
+  { name: 'build',     description: 'Build the project' },
+  { name: 'deploy',    description: 'Deploy the project' },
+];
+
 export function startAcpServer(): Promise<void> {
   const transport = new StdioTransport();
 
@@ -66,33 +110,22 @@ export function startAcpServer(): Promise<void> {
       workspaceRoot: params.cwd,
       history,
       codeepSessionId,
+      addedFiles: new Map(),
       abortController: null,
     });
 
     transport.respond(msg.id, { sessionId: acpSessionId });
 
-    // Advertise available slash commands to Zed
+    // Advertise all available slash commands to Zed
     transport.notify('session/update', {
       sessionId: acpSessionId,
       update: {
         sessionUpdate: 'available_commands_update',
-        availableCommands: [
-          { name: 'help',     description: 'Show available commands' },
-          { name: 'status',   description: 'Show current configuration and session info' },
-          { name: 'version',  description: 'Show version and current model' },
-          { name: 'provider', description: 'List or switch AI provider', input: { hint: '<provider-id>' } },
-          { name: 'model',    description: 'List or switch model', input: { hint: '<model-id>' } },
-          { name: 'login',    description: 'Set API key for a provider', input: { hint: '<providerId> <apiKey>' } },
-          { name: 'apikey',   description: 'Show or set API key for current provider', input: { hint: '<key>' } },
-          { name: 'session',  description: 'List sessions, or: new / load <name>', input: { hint: 'new | load <name>' } },
-          { name: 'save',     description: 'Save current session', input: { hint: '[name]' } },
-          { name: 'grant',    description: 'Grant write access for current workspace' },
-          { name: 'lang',     description: 'Set response language', input: { hint: '<code> (e.g. en, hr, auto)' } },
-        ],
+        availableCommands: AVAILABLE_COMMANDS,
       },
     });
 
-    // Stream welcome message so the client sees it immediately after session/new
+    // Stream welcome message
     transport.notify('session/update', {
       sessionId: acpSessionId,
       update: {
@@ -116,54 +149,68 @@ export function startAcpServer(): Promise<void> {
       .map((b) => b.text)
       .join('\n');
 
-    // Handle slash commands — no agent loop needed
-    const cmd = handleCommand(prompt, session);
-    if (cmd.handled) {
+    const abortController = new AbortController();
+    session.abortController = abortController;
+
+    const sendChunk = (text: string) => {
       transport.notify('session/update', {
         sessionId: params.sessionId,
         update: {
           sessionUpdate: 'agent_message_chunk',
-          content: { type: 'text', text: cmd.response },
+          content: { type: 'text', text },
         },
       });
-      transport.respond(msg.id, { stopReason: 'end_turn' });
-      return;
-    }
+    };
 
-    const abortController = new AbortController();
-    session.abortController = abortController;
+    // Try slash commands first (async — skills, diff, scan, etc.)
+    handleCommand(prompt, session, sendChunk, abortController.signal)
+      .then((cmd) => {
+        if (cmd.handled) {
+          // For streaming commands (skills, diff), chunks were already sent via onChunk.
+          // For simple commands, send the response now.
+          if (cmd.response) sendChunk(cmd.response);
+          transport.respond(msg.id, { stopReason: 'end_turn' });
+          return;
+        }
 
-    runAgentSession({
-      prompt,
-      workspaceRoot: session.workspaceRoot,
-      conversationId: params.sessionId,
-      abortSignal: abortController.signal,
-      onChunk: (text) => {
-        transport.notify('session/update', {
-          sessionId: params.sessionId,
-          update: {
-            sessionUpdate: 'agent_message_chunk',
-            content: { type: 'text', text },
+        // Not a command — run agent loop
+        // Prepend any added-files context to the prompt
+        let enrichedPrompt = prompt;
+        if (session.addedFiles.size > 0) {
+          const parts = ['[Attached files]'];
+          for (const [, f] of session.addedFiles) {
+            parts.push(`\nFile: ${f.relativePath}\n\`\`\`\n${f.content}\n\`\`\``);
+          }
+          enrichedPrompt = parts.join('\n') + '\n\n' + prompt;
+        }
+
+        runAgentSession({
+          prompt: enrichedPrompt,
+          workspaceRoot: session.workspaceRoot,
+          conversationId: params.sessionId,
+          abortSignal: abortController.signal,
+          onChunk: sendChunk,
+          onFileEdit: (_uri, _newText) => {
+            // file edits are streamed via onChunk for now
           },
+        }).then(() => {
+          session.history.push({ role: 'user', content: prompt });
+          autoSaveSession(session.history, session.workspaceRoot);
+          transport.respond(msg.id, { stopReason: 'end_turn' });
+        }).catch((err: Error) => {
+          if (err.name === 'AbortError') {
+            transport.respond(msg.id, { stopReason: 'cancelled' });
+          } else {
+            transport.error(msg.id, -32000, err.message);
+          }
+        }).finally(() => {
+          if (session) session.abortController = null;
         });
-      },
-      onFileEdit: (_uri, _newText) => {
-        // file edits are streamed via onChunk for now
-      },
-    }).then(() => {
-      // Persist conversation history after each agent turn
-      session.history.push({ role: 'user', content: prompt });
-      autoSaveSession(session.history, session.workspaceRoot);
-      transport.respond(msg.id, { stopReason: 'end_turn' });
-    }).catch((err: Error) => {
-      if (err.name === 'AbortError') {
-        transport.respond(msg.id, { stopReason: 'cancelled' });
-      } else {
+      })
+      .catch((err: Error) => {
         transport.error(msg.id, -32000, err.message);
-      }
-    }).finally(() => {
-      if (session) session.abortController = null;
-    });
+        if (session) session.abortController = null;
+      });
   }
 
   function handleSessionCancel(msg: JsonRpcRequest): void {

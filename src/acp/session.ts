@@ -18,7 +18,7 @@ export interface AgentSessionOptions {
  * Build a ProjectContext from a workspace root directory.
  * Falls back to a minimal synthetic context if scanning fails.
  */
-function buildProjectContext(workspaceRoot: string): ProjectContext {
+export function buildProjectContext(workspaceRoot: string): ProjectContext {
   const ctx = getProjectContext(workspaceRoot);
   if (ctx) {
     return ctx;
