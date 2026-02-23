@@ -1,6 +1,7 @@
 import Conf from 'conf';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync, statSync } from 'fs';
 import { join, dirname } from 'path';
+import { randomUUID } from 'crypto';
 
 import { PROVIDERS, getProvider } from './providers';
 import { logSession } from '../utils/logger';
@@ -24,6 +25,12 @@ interface ProjectPermission {
   readPermission: boolean;
   writePermission: boolean;
   grantedAt: string;
+}
+
+// Shape of .codeep/config.json (local per-project config)
+interface LocalProjectConfig {
+  permission?: ProjectPermission;
+  [key: string]: unknown;
 }
 
 interface ProviderApiKey {
@@ -493,8 +500,19 @@ export function isConfigured(providerId?: string): boolean {
 
 // Get current provider info
 export function getCurrentProvider(): { id: string; name: string } {
-  const providerId = config.get('provider');
-  const provider = getProvider(providerId);
+  let providerId = config.get('provider');
+  let provider = getProvider(providerId);
+
+  // If stored provider no longer exists in registry, fall back to first available
+  if (!provider) {
+    const fallback = Object.keys(PROVIDERS)[0];
+    if (fallback) {
+      providerId = fallback;
+      provider = getProvider(fallback);
+      config.set('provider', fallback);
+    }
+  }
+
   return {
     id: providerId,
     name: provider?.name || providerId,
@@ -535,10 +553,8 @@ export { PROVIDERS } from './providers';
 
 // Generate unique session ID
 function generateSessionId(): string {
-  const now = new Date();
-  const date = now.toISOString().split('T')[0];
-  const time = now.toTimeString().split(' ')[0].replace(/:/g, '-');
-  return `session-${date}-${time}`;
+  const date = new Date().toISOString().split('T')[0];
+  return `session-${date}-${randomUUID().slice(0, 8)}`;
 }
 
 // Get or create current session ID
@@ -772,8 +788,8 @@ export function getProjectPermission(projectPath: string): ProjectPermission | n
   const configPath = getLocalConfigPath(projectPath);
   if (configPath && existsSync(configPath)) {
     try {
-      const data = JSON.parse(readFileSync(configPath, 'utf-8'));
-      if (data.permission) return data.permission;
+      const data = JSON.parse(readFileSync(configPath, 'utf-8')) as LocalProjectConfig;
+      if (data.permission && typeof data.permission === 'object') return data.permission;
     } catch {
       // Fall through to global config
     }
@@ -798,15 +814,15 @@ export function setProjectPermission(projectPath: string, read: boolean, write: 
   // Try to save to local .codeep/config.json (for recognized projects)
   const configPath = getLocalConfigPath(projectPath);
   if (configPath) {
-    let data: any = {};
+    let data: LocalProjectConfig = {};
     if (existsSync(configPath)) {
       try {
-        data = JSON.parse(readFileSync(configPath, 'utf-8'));
+        data = JSON.parse(readFileSync(configPath, 'utf-8')) as LocalProjectConfig;
       } catch {
         // Invalid JSON, start fresh
       }
     }
-    
+
     data.permission = permission;
     writeFileSync(configPath, JSON.stringify(data, null, 2));
     return;
@@ -833,7 +849,7 @@ export function removeProjectPermission(projectPath: string): boolean {
   const configPath = getLocalConfigPath(projectPath);
   if (configPath && existsSync(configPath)) {
     try {
-      const data = JSON.parse(readFileSync(configPath, 'utf-8'));
+      const data = JSON.parse(readFileSync(configPath, 'utf-8')) as LocalProjectConfig;
       if (data.permission) {
         delete data.permission;
         writeFileSync(configPath, JSON.stringify(data, null, 2));

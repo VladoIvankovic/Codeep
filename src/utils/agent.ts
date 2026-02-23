@@ -194,6 +194,8 @@ export async function runAgent(
   let finalResponse = '';
   let result: AgentResult;
   let consecutiveTimeouts = 0;
+  let incompleteWorkRetries = 0;
+  const maxIncompleteWorkRetries = 2;
   const maxTimeoutRetries = 3;
   const maxConsecutiveTimeouts = 9; // Allow more consecutive timeouts before giving up
   const baseTimeout = config.get('agentApiTimeout');
@@ -342,17 +344,21 @@ export async function runAgent(
         
         // Also check if there were tool call parsing failures in this iteration
         // by looking for incomplete actions (e.g., write_file without content)
-        const hasIncompleteWork = iteration < 10 && wantsToContinue && finalResponse.length < 500;
-        
+        const hasIncompleteWork = wantsToContinue && finalResponse.length < 500
+          && incompleteWorkRetries < maxIncompleteWorkRetries;
+
         if (hasIncompleteWork) {
           debug('Model wants to continue, prompting for next action');
+          incompleteWorkRetries++;
           messages.push({ role: 'assistant', content });
-          messages.push({ 
-            role: 'user', 
-            content: 'Continue. Execute the tool calls now.' 
+          messages.push({
+            role: 'user',
+            content: 'Continue. Execute the tool calls now.'
           });
           continue;
         }
+        // Reset counter once model produces real output or we give up
+        incompleteWorkRetries = 0;
         
         // Model is done
         debug(`Agent finished at iteration ${iteration}`);

@@ -108,13 +108,22 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
       }
     },
     onToolResult: (toolResult, toolCall) => {
-      // Find the tracked entry by tool call id or by matching tool name in insertion order
-      const mapKey = toolCall.id
-        ? [...toolCallIdMap.keys()].find(k => k === toolCall.id)
-        : [...toolCallIdMap.keys()].find(k => k.startsWith(`${toolCall.tool}_`));
-      if (mapKey) {
-        const tracked = toolCallIdMap.get(mapKey)!;
-        if (opts.onToolCall) {
+      // Find the tracked entry: prefer exact id match, then first FIFO entry for same tool name
+      let mapKey: string | undefined;
+      if (toolCall.id && toolCallIdMap.has(toolCall.id)) {
+        mapKey = toolCall.id;
+      } else {
+        // FIFO: find oldest pending entry for this tool name
+        for (const [k, v] of toolCallIdMap) {
+          if (k.startsWith(`${toolCall.tool}_`) && v.toolCallId) {
+            mapKey = k;
+            break;
+          }
+        }
+      }
+      if (mapKey !== undefined) {
+        const tracked = toolCallIdMap.get(mapKey);
+        if (tracked && opts.onToolCall) {
           const status = toolResult.success ? 'finished' : 'error';
           opts.onToolCall(tracked.toolCallId, toolCall.tool, tracked.kind, '', status, tracked.locations);
         }
