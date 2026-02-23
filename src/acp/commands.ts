@@ -112,6 +112,11 @@ export function initWorkspace(workspaceRoot: string): {
     'Type `/help` to see available commands.',
   ];
 
+  if (history.length > 0) {
+    lines.push('', '---', '');
+    lines.push(...formatSessionPreviewLines(history));
+  }
+
   return { codeepSessionId, history, welcomeText: lines.join('\n') };
 }
 
@@ -180,7 +185,7 @@ export function handleCommand(input: string, session: AcpSession): CommandResult
         if (loaded) {
           session.codeepSessionId = args[1];
           session.history = loaded as Message[];
-          return { handled: true, response: `Session loaded: \`${args[1]}\` (${session.history.length} messages)` };
+          return { handled: true, response: formatSessionPreview(args[1], session.history) };
         }
         return { handled: true, response: `Session not found: \`${args[1]}\`` };
       }
@@ -325,6 +330,34 @@ function loginCmd(providerId: string, apiKey: string): string {
   setProvider(providerId);
   setApiKey(apiKey, providerId);
   return `Logged in as **${provider.name}** (\`${providerId}\`). Model: \`${provider.defaultModel}\`.`;
+}
+
+const PREVIEW_MESSAGES = 6; // last N messages to show on session restore
+const PREVIEW_MAX_CHARS = 300; // truncate long messages
+
+function formatSessionPreviewLines(history: Message[]): string[] {
+  const recent = history.slice(-PREVIEW_MESSAGES);
+  const lines: string[] = [`*Last ${recent.length} message${recent.length !== 1 ? 's' : ''}:*`, ''];
+  for (const msg of recent) {
+    const role = msg.role === 'user' ? '**You**' : msg.role === 'assistant' ? '**Codeep**' : '_system_';
+    const text = msg.content.length > PREVIEW_MAX_CHARS
+      ? msg.content.slice(0, PREVIEW_MAX_CHARS) + '…'
+      : msg.content;
+    // Collapse newlines to keep preview compact
+    lines.push(`${role}: ${text.replace(/\n+/g, ' ')}`);
+  }
+  return lines;
+}
+
+function formatSessionPreview(name: string, history: Message[]): string {
+  const lines = [
+    `Session loaded: \`${name}\` (${history.length} messages)`,
+    '',
+    '---',
+    '',
+    ...formatSessionPreviewLines(history),
+  ];
+  return lines.join('\n');
 }
 
 function buildSessionList(workspaceRoot: string): string {
