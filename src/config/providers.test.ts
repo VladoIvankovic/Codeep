@@ -236,7 +236,7 @@ describe('providers', () => {
       expect(provider!.name).toBe('Google AI');
       expect(provider!.description).toBe('Gemini models');
       expect(provider!.defaultProtocol).toBe('openai');
-      expect(provider!.defaultModel).toBe('gemini-2.0-flash');
+      expect(provider!.defaultModel).toBe('gemini-2.5-flash');
       expect(provider!.protocols.openai?.baseUrl).toBe(
         'https://generativelanguage.googleapis.com/v1beta/openai'
       );
@@ -247,12 +247,12 @@ describe('providers', () => {
       expect(provider!.subscribeUrl).toBe('https://aistudio.google.com/apikey');
       expect(provider!.models).toHaveLength(6);
       const modelIds = provider!.models.map(m => m.id);
-      expect(modelIds).toContain('gemini-2.5-pro-exp-03-25');
-      expect(modelIds).toContain('gemini-2.0-flash');
-      expect(modelIds).toContain('gemini-2.0-flash-lite');
-      expect(modelIds).toContain('gemini-1.5-pro');
-      expect(modelIds).toContain('gemini-1.5-flash');
-      expect(modelIds).toContain('gemini-1.5-flash-8b');
+      expect(modelIds).toContain('gemini-3.1-pro-preview');
+      expect(modelIds).toContain('gemini-3-pro-preview');
+      expect(modelIds).toContain('gemini-3-flash-preview');
+      expect(modelIds).toContain('gemini-2.5-pro');
+      expect(modelIds).toContain('gemini-2.5-flash');
+      expect(modelIds).toContain('gemini-2.5-flash-lite');
     });
   });
 });
