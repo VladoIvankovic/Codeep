@@ -161,7 +161,7 @@ export interface SessionUpdateToolCall {
   title: string;
   kind?: string;
   status: 'pending' | 'in_progress';
-  locations?: { uri: string }[];
+  locations?: { path: string }[];
 }
 
 export interface SessionUpdateToolCallUpdate {

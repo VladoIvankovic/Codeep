@@ -372,7 +372,7 @@ export function startAcpServer(): Promise<void> {
                   kind: kind || 'other',
                   status: 'in_progress',
                   ...(locations && locations.length > 0
-                    ? { locations: locations.map(uri => ({ uri })) }
+                    ? { locations: locations.map(path => ({ path })) }
                     : {}),
                 },
               });
@@ -387,14 +387,6 @@ export function startAcpServer(): Promise<void> {
                 },
               });
             }
-          },
-          onFileEdit: (uri, newText) => {
-            transport.notify('file/edit', {
-              uri,
-              textChanges: newText
-                ? [{ range: { start: { line: 0, character: 0 }, end: { line: 999999, character: 0 } }, text: newText }]
-                : [],
-            });
           },
         }).then(() => {
           session.history.push({ role: 'user', content: prompt });
