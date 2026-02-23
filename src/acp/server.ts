@@ -84,8 +84,10 @@ export function startAcpServer(): Promise<void> {
       onChunk: (text) => {
         transport.notify('session/update', {
           sessionId: params.sessionId,
-          type: 'agent_message_chunk',
-          text,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text },
+          },
         });
       },
       onFileEdit: (_uri, _newText) => {
