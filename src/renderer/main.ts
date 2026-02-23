@@ -172,6 +172,12 @@ async function handleSubmit(message: string): Promise<void> {
     return;
   }
 
+  const rateCheck = checkApiRateLimit();
+  if (!rateCheck.allowed) {
+    app.notify(rateCheck.message || 'Rate limit exceeded', 5000);
+    return;
+  }
+
   // Auto agent mode
   const agentMode = config.get('agentMode') || 'off';
   if (agentMode === 'on' && projectContext && hasWriteAccess && !isAgentRunningFlag) {
@@ -179,12 +185,6 @@ async function handleSubmit(message: string): Promise<void> {
       () => pendingInteractiveContext,
       (v) => { pendingInteractiveContext = v; },
     );
-    return;
-  }
-
-  const rateCheck = checkApiRateLimit();
-  if (!rateCheck.allowed) {
-    app.notify(rateCheck.message || 'Rate limit exceeded', 5000);
     return;
   }
 

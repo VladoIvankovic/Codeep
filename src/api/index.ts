@@ -670,7 +670,7 @@ export async function validateApiKey(apiKey: string, providerId?: string): Promi
       const errorText = await response.text();
       return { valid: false, error: `${response.status}: ${errorText}` };
     }
-  } catch (err: any) {
-    return { valid: false, error: err.message };
+  } catch (err: unknown) {
+    return { valid: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
