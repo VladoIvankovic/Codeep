@@ -32,13 +32,16 @@ export interface InitializeParams {
   clientInfo?: { name: string; version: string };
 }
 
+export interface AgentCapabilities {
+  loadSession?: boolean;
+  promptCapabilities?: { image?: boolean; audio?: boolean; embeddedContext?: boolean };
+  mcpCapabilities?: { stdio?: boolean; sse?: boolean; http?: boolean };
+  sessionCapabilities?: Record<string, unknown>;
+}
+
 export interface InitializeResult {
   protocolVersion: number;
-  agentCapabilities: {
-    loadSession?: boolean;
-    streaming?: boolean;
-    fileEditing?: boolean;
-  };
+  agentCapabilities: AgentCapabilities;
   agentInfo: { name: string; version: string };
   authMethods: unknown[];
 }
@@ -68,9 +71,10 @@ export interface SessionConfigOption {
   name: string;
   description?: string | null;
   category?: 'mode' | 'model' | 'thought_level' | null;
+  // Flattened from SessionConfigKind (tag = "type")
   type: 'select';
-  options?: { id: string; name: string }[];
-  currentValue?: string;
+  currentValue: string;
+  options: { value: string; name: string }[];
 }
 
 export interface SessionNewParams {

@@ -16,7 +16,7 @@ import {
 import { JsonRpcRequest, JsonRpcNotification } from './protocol.js';
 import { runAgentSession } from './session.js';
 import { initWorkspace, loadWorkspace, handleCommand, AcpSession } from './commands.js';
-import { autoSaveSession, config } from '../config/index.js';
+import { autoSaveSession, config, getModelsForCurrentProvider } from '../config/index.js';
 import { getCurrentVersion } from '../utils/update.js';
 
 // ─── Slash commands advertised to Zed ────────────────────────────────────────
@@ -77,6 +77,16 @@ const AGENT_MODES: SessionModeState = {
 // ─── Config options ───────────────────────────────────────────────────────────
 
 function buildConfigOptions(): SessionConfigOption[] {
+  const models = getModelsForCurrentProvider();
+  const currentModel = config.get('model') ?? '';
+  const modelOptions = Object.entries(models).map(([id, label]) => ({
+    value: id,
+    name: label,
+  }));
+  // Ensure currentValue is always one of the valid options
+  const currentValue = modelOptions.some(o => o.value === currentModel)
+    ? currentModel
+    : (modelOptions[0]?.value ?? '');
   return [
     {
       id: 'model',
@@ -84,7 +94,8 @@ function buildConfigOptions(): SessionConfigOption[] {
       description: 'AI model to use',
       category: 'model',
       type: 'select',
-      currentValue: config.get('model'),
+      currentValue,
+      options: modelOptions,
     },
   ];
 }
@@ -134,8 +145,6 @@ export function startAcpServer(): Promise<void> {
       protocolVersion: 1,
       agentCapabilities: {
         loadSession: true,
-        streaming: true,
-        fileEditing: true,
       },
       agentInfo: {
         name: 'codeep',
