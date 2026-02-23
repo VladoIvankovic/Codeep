@@ -139,49 +139,54 @@ export interface SetSessionConfigOptionParams {
 }
 
 // ─── session/update notification (agent → client) ────────────────────────────
+// The outer envelope always has { sessionId, update: <one of the below> }
 
-export type ToolCallState = 'running' | 'finished' | 'error';
+export interface SessionUpdateAgentMessageChunk {
+  sessionUpdate: 'agent_message_chunk';
+  content: ContentBlock;
+}
 
-export interface SessionUpdateContentChunk {
-  type: 'content_chunk';
-  sessionId: string;
+export interface SessionUpdateAgentThoughtChunk {
+  sessionUpdate: 'agent_thought_chunk';
   content: ContentBlock;
 }
 
 export interface SessionUpdateToolCall {
-  type: 'tool_call';
-  sessionId: string;
+  sessionUpdate: 'tool_call';
   toolCallId: string;
-  toolName: string;
-  toolInput: unknown;
-  state: ToolCallState;
-  content?: { type: 'text'; text: string }[];
+  status: 'pending';
+  rawInput: unknown;
 }
 
-export interface SessionUpdateThoughtChunk {
-  type: 'agent_thought_chunk';
-  sessionId: string;
-  content: ContentBlock;
+export interface SessionUpdateToolCallUpdate {
+  sessionUpdate: 'tool_call_update';
+  toolCallId: string;
+  status: 'completed' | 'failed';
+  rawOutput?: string;
 }
 
 export interface SessionUpdateAvailableCommands {
-  type: 'available_commands_update';
-  sessionId: string;
-  availableCommands: { name: string; description: string; input?: { hint: string } }[];
+  sessionUpdate: 'available_commands_update';
+  availableCommands: { name: string; description: string; input?: { hint: string } | null }[];
 }
 
 export interface SessionUpdateCurrentMode {
-  type: 'current_mode_update';
-  sessionId: string;
+  sessionUpdate: 'current_mode_update';
   currentModeId: string;
 }
 
-export type SessionUpdateParams =
-  | SessionUpdateContentChunk
+export type SessionUpdateInner =
+  | SessionUpdateAgentMessageChunk
+  | SessionUpdateAgentThoughtChunk
   | SessionUpdateToolCall
-  | SessionUpdateThoughtChunk
+  | SessionUpdateToolCallUpdate
   | SessionUpdateAvailableCommands
   | SessionUpdateCurrentMode;
+
+export interface SessionUpdateParams {
+  sessionId: string;
+  update: SessionUpdateInner;
+}
 
 // ─── session/request_permission (agent → client, as JSON-RPC request) ────────
 
@@ -199,7 +204,7 @@ export interface RequestPermissionParams {
     toolCallId: string;
     toolName: string;
     toolInput: unknown;
-    state: ToolCallState;
+    status: 'pending' | 'completed' | 'failed';
     content: unknown[];
   };
   options: PermissionOption[];

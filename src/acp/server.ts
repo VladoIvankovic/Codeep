@@ -173,16 +173,20 @@ export function startAcpServer(): Promise<void> {
 
     // Advertise slash commands
     transport.notify('session/update', {
-      type: 'available_commands_update',
       sessionId: acpSessionId,
-      availableCommands: AVAILABLE_COMMANDS,
+      update: {
+        sessionUpdate: 'available_commands_update',
+        availableCommands: AVAILABLE_COMMANDS,
+      },
     });
 
     // Send welcome message
     transport.notify('session/update', {
-      type: 'content_chunk',
       sessionId: acpSessionId,
-      content: { type: 'text', text: welcomeText },
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: welcomeText },
+      },
     });
   }
 
@@ -225,9 +229,11 @@ export function startAcpServer(): Promise<void> {
 
     // Send restored session welcome
     transport.notify('session/update', {
-      type: 'content_chunk',
       sessionId: params.sessionId,
-      content: { type: 'text', text: welcomeText },
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: welcomeText },
+      },
     });
   }
 
@@ -255,9 +261,11 @@ export function startAcpServer(): Promise<void> {
 
     // Notify Zed of the mode change
     transport.notify('session/update', {
-      type: 'current_mode_update',
       sessionId,
-      currentModeId: modeId,
+      update: {
+        sessionUpdate: 'current_mode_update',
+        currentModeId: modeId,
+      },
     });
   }
 
@@ -301,9 +309,11 @@ export function startAcpServer(): Promise<void> {
     const sendChunk = (text: string) => {
       agentResponseChunks.push(text);
       transport.notify('session/update', {
-        type: 'content_chunk',
         sessionId: params.sessionId,
-        content: { type: 'text', text },
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text },
+        },
       });
     };
 
@@ -334,21 +344,35 @@ export function startAcpServer(): Promise<void> {
           onChunk: sendChunk,
           onThought: (text: string) => {
             transport.notify('session/update', {
-              type: 'agent_thought_chunk',
               sessionId: params.sessionId,
-              content: { type: 'text', text },
+              update: {
+                sessionUpdate: 'agent_thought_chunk',
+                content: { type: 'text', text },
+              },
             });
           },
           onToolCall: (toolCallId, toolName, _kind, _title, status, _locations) => {
-            transport.notify('session/update', {
-              type: 'tool_call',
-              sessionId: params.sessionId,
-              toolCallId,
-              toolName,
-              toolInput: {},
-              state: status === 'running' ? 'running' : status === 'finished' ? 'finished' : 'error',
-              content: [],
-            });
+            if (status === 'running') {
+              transport.notify('session/update', {
+                sessionId: params.sessionId,
+                update: {
+                  sessionUpdate: 'tool_call',
+                  toolCallId,
+                  status: 'pending',
+                  rawInput: { toolName },
+                },
+              });
+            } else {
+              transport.notify('session/update', {
+                sessionId: params.sessionId,
+                update: {
+                  sessionUpdate: 'tool_call_update',
+                  toolCallId,
+                  status: status === 'finished' ? 'completed' : 'failed',
+                  rawOutput: '',
+                },
+              });
+            }
           },
           onFileEdit: (uri, newText) => {
             transport.notify('file/edit', {
