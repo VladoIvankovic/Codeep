@@ -6,12 +6,14 @@ import { StdioTransport } from './transport.js';
 import { InitializeParams, InitializeResult, SessionNewParams, SessionPromptParams } from './protocol.js';
 import { JsonRpcRequest } from './protocol.js';
 import { runAgentSession } from './session.js';
+import { initWorkspace, handleCommand, AcpSession } from './commands.js';
+import { autoSaveSession } from '../config/index.js';
 
 export function startAcpServer(): Promise<void> {
   const transport = new StdioTransport();
 
-  // sessionId → { workspaceRoot, abortController }
-  const sessions = new Map<string, { workspaceRoot: string; abortController: AbortController | null }>();
+  // ACP sessionId → full AcpSession (includes history + codeep session tracking)
+  const sessions = new Map<string, AcpSession & { abortController: AbortController | null }>();
 
   transport.start((msg: JsonRpcRequest) => {
     switch (msg.method) {
@@ -54,9 +56,29 @@ export function startAcpServer(): Promise<void> {
 
   function handleSessionNew(msg: JsonRpcRequest): void {
     const params = msg.params as SessionNewParams;
-    const sessionId = randomUUID();
-    sessions.set(sessionId, { workspaceRoot: params.cwd, abortController: null });
-    transport.respond(msg.id, { sessionId });
+    const acpSessionId = randomUUID();
+
+    // Initialise workspace: create .codeep folder, load/create codeep session
+    const { codeepSessionId, history, welcomeText } = initWorkspace(params.cwd);
+
+    sessions.set(acpSessionId, {
+      sessionId: acpSessionId,
+      workspaceRoot: params.cwd,
+      history,
+      codeepSessionId,
+      abortController: null,
+    });
+
+    transport.respond(msg.id, { sessionId: acpSessionId });
+
+    // Stream welcome message so the client sees it immediately after session/new
+    transport.notify('session/update', {
+      sessionId: acpSessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: welcomeText },
+      },
+    });
   }
 
   function handleSessionPrompt(msg: JsonRpcRequest): void {
@@ -72,6 +94,20 @@ export function startAcpServer(): Promise<void> {
       .filter((b) => b.type === 'text')
       .map((b) => b.text)
       .join('\n');
+
+    // Handle slash commands — no agent loop needed
+    const cmd = handleCommand(prompt, session);
+    if (cmd.handled) {
+      transport.notify('session/update', {
+        sessionId: params.sessionId,
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: cmd.response },
+        },
+      });
+      transport.respond(msg.id, { stopReason: 'end_turn' });
+      return;
+    }
 
     const abortController = new AbortController();
     session.abortController = abortController;
@@ -94,6 +130,9 @@ export function startAcpServer(): Promise<void> {
         // file edits are streamed via onChunk for now
       },
     }).then(() => {
+      // Persist conversation history after each agent turn
+      session.history.push({ role: 'user', content: prompt });
+      autoSaveSession(session.history, session.workspaceRoot);
       transport.respond(msg.id, { stopReason: 'end_turn' });
     }).catch((err: Error) => {
       if (err.name === 'AbortError') {
