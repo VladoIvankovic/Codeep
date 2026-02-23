@@ -2,6 +2,7 @@
 // Bridges ACP parameters to the Codeep agent loop.
 
 import { pathToFileURL } from 'url';
+import { join, isAbsolute } from 'path';
 import { runAgent } from '../utils/agent.js';
 import { getProjectContext, ProjectContext } from '../utils/project.js';
 
@@ -46,12 +47,27 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
 
   const result = await runAgent(opts.prompt, projectContext, {
     abortSignal: opts.abortSignal,
-    // Stream iteration status and thinking text back to the caller via onChunk
     onIteration: (_iteration: number, message: string) => {
       opts.onChunk(message + '\n');
     },
     onThinking: (text: string) => {
       opts.onChunk(text);
+    },
+    onToolCall: (toolCall) => {
+      // Notify the caller when agent writes or edits a file so ACP can
+      // send a structured file/edit notification to the editor.
+      const name = toolCall.tool;
+      if (name === 'write_file' || name === 'edit_file') {
+        const params = toolCall.parameters as Record<string, string>;
+        const filePath = params.path ?? '';
+        if (filePath) {
+          const absPath = isAbsolute(filePath)
+            ? filePath
+            : join(opts.workspaceRoot, filePath);
+          const newText = params.content ?? params.new_text ?? '';
+          opts.onFileEdit(pathToFileURL(absPath).href, newText);
+        }
+      }
     },
   });
 
