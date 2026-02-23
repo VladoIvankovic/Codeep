@@ -12,6 +12,8 @@ export interface AgentSessionOptions {
   conversationId: string;
   abortSignal: AbortSignal;
   onChunk: (text: string) => void;
+  onThought?: (text: string) => void;
+  onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[]) => void;
   onFileEdit: (uri: string, newText: string) => void;
 }
 
@@ -37,29 +39,59 @@ export function buildProjectContext(workspaceRoot: string): ProjectContext {
   };
 }
 
-/**
- * Run a single agent session driven by ACP parameters.
- *
- * onFileEdit is reserved for future use (v1 emits everything via onChunk).
- */
+// Maps internal tool names to ACP tool_call kind values and human titles.
+function toolCallMeta(toolName: string, params: Record<string, string>): { kind: string; title: string } {
+  const file = params.path ?? params.file ?? '';
+  const label = file ? ` ${file.split('/').pop()}` : '';
+  switch (toolName) {
+    case 'read_file':    return { kind: 'read',    title: `Reading${label}` };
+    case 'write_file':   return { kind: 'edit',    title: `Writing${label}` };
+    case 'edit_file':    return { kind: 'edit',    title: `Editing${label}` };
+    case 'delete_file':  return { kind: 'delete',  title: `Deleting${label}` };
+    case 'move_file':    return { kind: 'move',    title: `Moving${label}` };
+    case 'list_files':   return { kind: 'read',    title: `Listing files${label}` };
+    case 'search_files': return { kind: 'search',  title: `Searching${label || ' files'}` };
+    case 'run_command':  return { kind: 'execute', title: `Running: ${params.command ?? ''}` };
+    case 'web_fetch':    return { kind: 'fetch',   title: `Fetching ${params.url ?? ''}` };
+    default:             return { kind: 'other',   title: toolName };
+  }
+}
+
 export async function runAgentSession(opts: AgentSessionOptions): Promise<void> {
   const projectContext = buildProjectContext(opts.workspaceRoot);
+  let toolCallCounter = 0;
 
   const result = await runAgent(opts.prompt, projectContext, {
     abortSignal: opts.abortSignal,
-    onIteration: (_iteration: number, message: string) => {
-      opts.onChunk(message + '\n');
+    onIteration: (_iteration: number, _message: string) => {
+      // Intentionally not forwarded — iteration count is internal detail
     },
     onThinking: (text: string) => {
-      opts.onChunk(text);
+      if (opts.onThought) {
+        opts.onThought(text);
+      }
     },
     onToolCall: (toolCall) => {
-      // Notify the caller when agent writes or edits a file so ACP can
-      // send a structured file/edit notification to the editor.
       const name = toolCall.tool;
+      const params = (toolCall.parameters ?? {}) as Record<string, string>;
+      const { kind, title } = toolCallMeta(name, params);
+      const toolCallId = `tc_${++toolCallCounter}`;
+
+      // Resolve file locations for edit/read/delete/move tools
+      const locations: string[] = [];
+      const filePath = params.path ?? params.file ?? '';
+      if (filePath) {
+        const absPath = isAbsolute(filePath)
+          ? filePath
+          : join(opts.workspaceRoot, filePath);
+        locations.push(pathToFileURL(absPath).href);
+      }
+
+      // Emit tool_call notification (running state)
+      opts.onToolCall?.(toolCallId, name, kind, title, 'running', locations.length ? locations : undefined);
+
+      // For file edits, also send structured file/edit notification
       if (name === 'write_file' || name === 'edit_file') {
-        const params = toolCall.parameters as Record<string, string>;
-        const filePath = params.path ?? '';
         if (filePath) {
           const absPath = isAbsolute(filePath)
             ? filePath
