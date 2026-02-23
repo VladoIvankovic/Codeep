@@ -162,12 +162,13 @@ export function handleCommand(input: string, session: AcpSession): CommandResult
       return { handled: true, response: loginCmd(providerId, apiKey) };
     }
 
-    case 'sessions': {
-      return { handled: true, response: buildSessionList(session.workspaceRoot) };
-    }
-
+    case 'sessions':
     case 'session': {
       const sub = args[0];
+      if (!sub) {
+        // No argument — show list with usage hint
+        return { handled: true, response: buildSessionList(session.workspaceRoot) };
+      }
       if (sub === 'new') {
         const id = startNewSession();
         session.codeepSessionId = id;
@@ -183,7 +184,7 @@ export function handleCommand(input: string, session: AcpSession): CommandResult
         }
         return { handled: true, response: `Session not found: \`${args[1]}\`` };
       }
-      return { handled: true, response: 'Usage: `/session new` or `/session load <name>`' };
+      return { handled: true, response: 'Usage: `/session` · `/session new` · `/session load <name>`' };
     }
 
     case 'save': {
@@ -236,7 +237,7 @@ function buildHelp(): string {
     '| `/login <providerId> <apiKey>` | Set API key for a provider |',
     '| `/apikey` | Show masked API key for current provider |',
     '| `/apikey <key>` | Set API key for current provider |',
-    '| `/sessions` | List saved sessions |',
+    '| `/session` | List saved sessions |',
     '| `/session new` | Start a new session |',
     '| `/session load <name>` | Load a saved session |',
     '| `/save [name]` | Save current session |',
