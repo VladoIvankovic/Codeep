@@ -39,7 +39,7 @@ import {
   getProjectContext,
   ProjectContext,
 } from '../utils/project';
-import { getCurrentVersion } from '../utils/update';
+import { getCurrentVersion, checkForUpdates, getUpdateInstructions } from '../utils/update';
 import { getProviderList } from '../config/providers';
 import { getSessionStats } from '../utils/tokenTracker';
 import { checkApiRateLimit } from '../utils/ratelimit';
@@ -457,6 +457,13 @@ Commands (in chat):
   app.addMessage({ role: 'system', content: welcomeLines.join('\n') });
 
   app.start();
+
+  // Check for updates in background — show notify if new version available
+  checkForUpdates().then(info => {
+    if (info.hasUpdate) {
+      app.notify(`Update available: v${info.latest} (current: v${info.current})\nRun: ${getUpdateInstructions()}`);
+    }
+  }).catch(() => { /* ignore update check failures */ });
 
   const showIntroAnimation = process.stdout.rows >= 20;
 
