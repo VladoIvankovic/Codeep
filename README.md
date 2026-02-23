@@ -780,13 +780,11 @@ npm install -g codeep
 2. Add to your Zed `settings.json`:
 
 ```json
-{
-  "agent_servers": {
-    "Codeep": {
-      "type": "custom",
-      "command": "codeep",
-      "args": ["acp"]
-    }
+"agent_servers": {
+  "Codeep": {
+    "type": "custom",
+    "command": "codeep",
+    "args": ["acp"]
   }
 }
 ```
