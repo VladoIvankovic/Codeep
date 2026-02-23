@@ -8,6 +8,7 @@ import { JsonRpcRequest } from './protocol.js';
 import { runAgentSession } from './session.js';
 import { initWorkspace, handleCommand, AcpSession } from './commands.js';
 import { autoSaveSession } from '../config/index.js';
+import { getCurrentVersion } from '../utils/update.js';
 
 // All advertised slash commands (shown in Zed autocomplete)
 const AVAILABLE_COMMANDS = [
@@ -91,7 +92,7 @@ export function startAcpServer(): Promise<void> {
       },
       agentInfo: {
         name: 'codeep',
-        version: '1.0.0',
+        version: getCurrentVersion(),
       },
       authMethods: [],
     };
@@ -152,7 +153,9 @@ export function startAcpServer(): Promise<void> {
     const abortController = new AbortController();
     session.abortController = abortController;
 
+    const agentResponseChunks: string[] = [];
     const sendChunk = (text: string) => {
+      agentResponseChunks.push(text);
       transport.notify('session/update', {
         sessionId: params.sessionId,
         update: {
@@ -223,6 +226,10 @@ export function startAcpServer(): Promise<void> {
           },
         }).then(() => {
           session.history.push({ role: 'user', content: prompt });
+          const agentResponse = agentResponseChunks.join('');
+          if (agentResponse) {
+            session.history.push({ role: 'assistant', content: agentResponse });
+          }
           autoSaveSession(session.history, session.workspaceRoot);
           transport.respond(msg.id, { stopReason: 'end_turn' });
         }).catch((err: Error) => {

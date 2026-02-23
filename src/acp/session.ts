@@ -60,6 +60,8 @@ function toolCallMeta(toolName: string, params: Record<string, string>): { kind:
 export async function runAgentSession(opts: AgentSessionOptions): Promise<void> {
   const projectContext = buildProjectContext(opts.workspaceRoot);
   let toolCallCounter = 0;
+  // Maps tool call key → ACP toolCallId so onToolResult can emit finished/error status
+  const toolCallIdMap = new Map<string, { toolCallId: string; kind: string; locations?: string[] }>();
 
   const result = await runAgent(opts.prompt, projectContext, {
     abortSignal: opts.abortSignal,
@@ -87,6 +89,10 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
         locations.push(pathToFileURL(absPath).href);
       }
 
+      // Track this tool call so onToolResult can emit finished/error
+      const mapKey = toolCall.id ?? `${name}_${toolCallCounter}`;
+      toolCallIdMap.set(mapKey, { toolCallId, kind, locations: locations.length ? locations : undefined });
+
       // Emit tool_call notification (running state)
       opts.onToolCall?.(toolCallId, name, kind, title, 'running', locations.length ? locations : undefined);
 
@@ -99,6 +105,20 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
           const newText = params.content ?? params.new_text ?? '';
           opts.onFileEdit(pathToFileURL(absPath).href, newText);
         }
+      }
+    },
+    onToolResult: (toolResult, toolCall) => {
+      // Find the tracked entry by tool call id or by matching tool name in insertion order
+      const mapKey = toolCall.id
+        ? [...toolCallIdMap.keys()].find(k => k === toolCall.id)
+        : [...toolCallIdMap.keys()].find(k => k.startsWith(`${toolCall.tool}_`));
+      if (mapKey) {
+        const tracked = toolCallIdMap.get(mapKey)!;
+        if (opts.onToolCall) {
+          const status = toolResult.success ? 'finished' : 'error';
+          opts.onToolCall(tracked.toolCallId, toolCall.tool, tracked.kind, '', status, tracked.locations);
+        }
+        toolCallIdMap.delete(mapKey);
       }
     },
   });
