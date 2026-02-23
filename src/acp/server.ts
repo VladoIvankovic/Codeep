@@ -6,7 +6,6 @@ import { StdioTransport } from './transport.js';
 import { InitializeParams, InitializeResult, SessionNewParams, SessionPromptParams } from './protocol.js';
 import { JsonRpcRequest } from './protocol.js';
 import { runAgentSession } from './session.js';
-import { handleCommand } from './commands.js';
 
 export function startAcpServer(): Promise<void> {
   const transport = new StdioTransport();
@@ -73,20 +72,6 @@ export function startAcpServer(): Promise<void> {
       .filter((b) => b.type === 'text')
       .map((b) => b.text)
       .join('\n');
-
-    // Handle slash commands before passing to agent loop
-    const cmd = handleCommand(prompt);
-    if (cmd.handled) {
-      transport.notify('session/update', {
-        sessionId: params.sessionId,
-        update: {
-          sessionUpdate: 'agent_message_chunk',
-          content: { type: 'text', text: cmd.response },
-        },
-      });
-      transport.respond(msg.id, { stopReason: 'end_turn' });
-      return;
-    }
 
     const abortController = new AbortController();
     session.abortController = abortController;
