@@ -246,7 +246,7 @@ export function getProviderMcpEndpoints(providerId: string): ProviderConfig['mcp
 export function supportsNativeTools(providerId: string, protocol: 'openai' | 'anthropic'): boolean {
   const provider = PROVIDERS[providerId];
   if (!provider) return false;
-  return provider.protocols[protocol]?.supportsNativeTools ?? true; // Default to true
+  return provider.protocols[protocol]?.supportsNativeTools ?? false; // Default to false (safer)
 }
 
 /**

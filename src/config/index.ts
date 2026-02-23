@@ -512,7 +512,7 @@ export function setProvider(providerId: string): boolean {
   
   // Load API key for the new provider into cache
   // This is async but we fire-and-forget since the key will be loaded before next API call
-  loadApiKey(providerId);
+  loadApiKey(providerId).catch(() => { /* key will be fetched again on next API call */ });
   
   return true;
 }

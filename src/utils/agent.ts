@@ -235,7 +235,7 @@ export async function runAgent(
       debug(`Using timeout: ${dynamicTimeout}ms (base: ${baseTimeout}ms)`);
       
       // Get AI response with retry logic for timeouts
-      let chatResponse: AgentChatResponse;
+      let chatResponse: AgentChatResponse | null = null;
       let retryCount = 0;
       
       while (true) {
@@ -303,7 +303,7 @@ export async function runAgent(
       }
       
       // If we broke out due to max retries without a response, continue to next iteration
-      if (!chatResponse!) {
+      if (!chatResponse) {
         continue;
       }
       
