@@ -12,7 +12,7 @@ export interface AgentSessionOptions {
   abortSignal: AbortSignal;
   onChunk: (text: string) => void;
   onThought?: (text: string) => void;
-  onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[], rawOutput?: string, content?: { oldText?: string; newText?: string }) => void;
+  onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[], rawOutput?: string, content?: { type: 'Content'; oldText?: string; newText?: string }) => void;
 }
 
 /**
@@ -67,17 +67,17 @@ function toolCallMeta(toolName: string, params: Record<string, string>, workspac
 function buildToolCallContent(
   toolName: string,
   params: Record<string, string>
-): { oldText?: string; newText?: string } | undefined {
+): { type: 'Content'; oldText?: string; newText?: string } | undefined {
   switch (toolName) {
     case 'write_file': {
       const content = params.content ?? '';
-      return content ? { newText: content } : undefined;
+      return content ? { type: 'Content', newText: content } : undefined;
     }
     case 'edit_file': {
       const oldText = params.old_text ?? '';
       const newText = params.new_text ?? '';
       if (!oldText && !newText) return undefined;
-      return { oldText: oldText || undefined, newText: newText || undefined };
+      return { type: 'Content', oldText: oldText || undefined, newText: newText || undefined };
     }
     default:
       return undefined;
