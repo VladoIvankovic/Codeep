@@ -135,7 +135,7 @@ export function startAcpServer(): Promise<void> {
   const transport = new StdioTransport();
 
   // ACP sessionId → full AcpSession (includes history + codeep session tracking)
-  const sessions = new Map<string, AcpSession & { abortController: AbortController | null; currentModeId: string; titleSent: boolean }>();
+  const sessions = new Map<string, AcpSession & { abortController: AbortController | null; currentModeId: string; titleSent: boolean; hadHistory: boolean }>();
 
   transport.start((msg: JsonRpcRequest | JsonRpcNotification) => {
     // Notifications have no id — handle separately
@@ -221,6 +221,7 @@ export function startAcpServer(): Promise<void> {
       abortController: null,
       currentModeId: 'auto',
       titleSent: false,
+      hadHistory: history.length > 0,
     });
 
     const result: SessionNewResult = {
@@ -281,6 +282,7 @@ export function startAcpServer(): Promise<void> {
       addedFiles: new Map(),
       abortController: null,
       titleSent: false,
+      hadHistory: history.length > 0,
       currentModeId: 'auto',
     });
 
@@ -456,18 +458,10 @@ export function startAcpServer(): Promise<void> {
               },
             });
           }
-          // Send title on first interaction (commands count too)
-          if (!session.titleSent) {
+          // Update title with first real prompt if session had no history
+          if (!session.titleSent && !session.hadHistory) {
             session.titleSent = true;
-            const title = prompt.slice(0, 60).replace(/\n/g, ' ').trim();
-            transport.notify('session/update', {
-              sessionId: params.sessionId,
-              update: {
-                sessionUpdate: 'session_info_update',
-                title,
-                updatedAt: new Date().toISOString(),
-              },
-            });
+            sendSessionTitle(params.sessionId, [{ role: 'user', content: prompt }]);
           }
           transport.respond(msg.id, { stopReason: 'end_turn' });
           return;
@@ -534,18 +528,10 @@ export function startAcpServer(): Promise<void> {
           }
           autoSaveSession(session.history, session.workspaceRoot);
 
-          // Send session title on first completed prompt (so Zed shows something useful)
-          if (!session.titleSent) {
+          // Update title with first real prompt if session had no history
+          if (!session.titleSent && !session.hadHistory) {
             session.titleSent = true;
-            const title = prompt.slice(0, 60).replace(/\n/g, ' ').trim();
-            transport.notify('session/update', {
-              sessionId: params.sessionId,
-              update: {
-                sessionUpdate: 'session_info_update',
-                title,
-                updatedAt: new Date().toISOString(),
-              },
-            });
+            sendSessionTitle(params.sessionId, [{ role: 'user', content: prompt }]);
           }
 
           transport.respond(msg.id, { stopReason: 'end_turn' });
