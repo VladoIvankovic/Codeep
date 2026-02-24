@@ -38,18 +38,22 @@ export function buildProjectContext(workspaceRoot: string): ProjectContext {
 }
 
 // Maps internal tool names to ACP tool_call kind values and human titles.
-function toolCallMeta(toolName: string, params: Record<string, string>): { kind: string; title: string } {
+function toolCallMeta(toolName: string, params: Record<string, string>, workspaceRoot: string): { kind: string; title: string } {
   const file = params.path ?? params.file ?? '';
-  const label = file ? ` ${file.split('/').pop()}` : '';
+  // Use full path for edit tools (Zed renders it as a clickable file link)
+  const absFile = file
+    ? (isAbsolute(file) ? file : join(workspaceRoot, file))
+    : '';
+  const basename = absFile ? absFile.split('/').pop() ?? '' : '';
   switch (toolName) {
-    case 'read_file':    return { kind: 'read',    title: `Reading${label}` };
-    case 'write_file':   return { kind: 'edit',    title: `Writing${label}` };
-    case 'edit_file':    return { kind: 'edit',    title: `Editing${label}` };
-    case 'delete_file':  return { kind: 'delete',  title: `Deleting${label}` };
-    case 'move_file':    return { kind: 'move',    title: `Moving${label}` };
-    case 'list_files':   return { kind: 'read',    title: `Listing files${label}` };
-    case 'search_files': return { kind: 'search',  title: `Searching${label || ' files'}` };
-    case 'run_command':  return { kind: 'execute', title: `Running: ${params.command ?? ''}` };
+    case 'read_file':    return { kind: 'read',    title: `Reading ${basename}` };
+    case 'write_file':   return { kind: 'edit',    title: absFile ? `Edit ${absFile}` : 'Writing file' };
+    case 'edit_file':    return { kind: 'edit',    title: absFile ? `Edit ${absFile}` : 'Editing file' };
+    case 'delete_file':  return { kind: 'delete',  title: `Deleting ${basename}` };
+    case 'move_file':    return { kind: 'move',    title: `Moving ${basename}` };
+    case 'list_files':   return { kind: 'read',    title: `Listing files ${basename}` };
+    case 'search_files': return { kind: 'search',  title: `Searching ${basename || 'files'}` };
+    case 'run_command':  return { kind: 'execute', title: params.command ?? 'Running command' };
     case 'web_fetch':    return { kind: 'fetch',   title: `Fetching ${params.url ?? ''}` };
     default:             return { kind: 'other',   title: toolName };
   }
@@ -76,7 +80,7 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
     onToolCall: (toolCall) => {
       const name = toolCall.tool;
       const params = (toolCall.parameters ?? {}) as Record<string, string>;
-      const { kind, title } = toolCallMeta(name, params);
+      const { kind, title } = toolCallMeta(name, params, opts.workspaceRoot);
       const toolCallId = `tc_${++toolCallCounter}`;
 
       // Resolve file locations for edit/read/delete/move tools
