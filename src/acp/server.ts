@@ -134,7 +134,7 @@ export function startAcpServer(): Promise<void> {
   const transport = new StdioTransport();
 
   // ACP sessionId → full AcpSession (includes history + codeep session tracking)
-  const sessions = new Map<string, AcpSession & { abortController: AbortController | null; currentModeId: string }>();
+  const sessions = new Map<string, AcpSession & { abortController: AbortController | null; currentModeId: string; titleSent: boolean }>();
 
   transport.start((msg: JsonRpcRequest | JsonRpcNotification) => {
     // Notifications have no id — handle separately
@@ -202,6 +202,7 @@ export function startAcpServer(): Promise<void> {
       addedFiles: new Map(),
       abortController: null,
       currentModeId: 'auto',
+      titleSent: false,
     });
 
     const result: SessionNewResult = {
@@ -258,6 +259,7 @@ export function startAcpServer(): Promise<void> {
       codeepSessionId,
       addedFiles: new Map(),
       abortController: null,
+      titleSent: false,
       currentModeId: 'auto',
     });
 
@@ -348,8 +350,22 @@ export function startAcpServer(): Promise<void> {
 
   function handleSessionList(msg: JsonRpcRequest): void {
     const params = (msg.params ?? {}) as ListSessionsParams;
-    const sessionInfos = listSessionsWithInfo(params.cwd);
-    const acpSessions: AcpSessionInfo[] = sessionInfos.map(s => ({
+
+    // Collect local (project-scoped) sessions and global sessions, deduplicated by name
+    const seen = new Set<string>();
+    const merged = [
+      ...listSessionsWithInfo(params.cwd),   // project-local first
+      ...listSessionsWithInfo(),              // global fallback
+    ].filter(s => {
+      if (seen.has(s.name)) return false;
+      seen.add(s.name);
+      return true;
+    });
+
+    // Sort newest first
+    merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    const acpSessions: AcpSessionInfo[] = merged.map(s => ({
       sessionId: s.name,
       cwd: params.cwd ?? '',
       title: s.name,
@@ -413,6 +429,19 @@ export function startAcpServer(): Promise<void> {
               update: {
                 sessionUpdate: 'config_option_update',
                 configOptions: buildConfigOptions(),
+              },
+            });
+          }
+          // Send title on first interaction (commands count too)
+          if (!session.titleSent) {
+            session.titleSent = true;
+            const title = prompt.slice(0, 60).replace(/\n/g, ' ').trim();
+            transport.notify('session/update', {
+              sessionId: params.sessionId,
+              update: {
+                sessionUpdate: 'session_info_update',
+                title,
+                updatedAt: new Date().toISOString(),
               },
             });
           }
@@ -480,6 +509,21 @@ export function startAcpServer(): Promise<void> {
             session.history.push({ role: 'assistant', content: agentResponse });
           }
           autoSaveSession(session.history, session.workspaceRoot);
+
+          // Send session title on first completed prompt (so Zed shows something useful)
+          if (!session.titleSent) {
+            session.titleSent = true;
+            const title = prompt.slice(0, 60).replace(/\n/g, ' ').trim();
+            transport.notify('session/update', {
+              sessionId: params.sessionId,
+              update: {
+                sessionUpdate: 'session_info_update',
+                title,
+                updatedAt: new Date().toISOString(),
+              },
+            });
+          }
+
           transport.respond(msg.id, { stopReason: 'end_turn' });
         }).catch((err: Error) => {
           if (err.name === 'AbortError') {
