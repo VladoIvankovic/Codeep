@@ -2,6 +2,7 @@
 // Codeep ACP adapter — started via `codeep acp` CLI subcommand
 
 import { randomUUID } from 'crypto';
+import { basename as pathBasename } from 'path';
 import { StdioTransport } from './transport.js';
 import {
   InitializeParams, InitializeResult,
@@ -186,6 +187,23 @@ export function startAcpServer(): Promise<void> {
     transport.respond(msg.id, result);
   }
 
+  // ── helpers ──────────────────────────────────────────────────────────────────
+
+  function sendSessionTitle(sessionId: string, history: { role: string; content: string }[], fallback?: string): void {
+    const firstUserMsg = history.find(m => m.role === 'user');
+    const title = firstUserMsg
+      ? firstUserMsg.content.replace(/\n/g, ' ').trim().slice(0, 60)
+      : (fallback ?? 'Codeep session');
+    transport.notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'session_info_update',
+        title,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  }
+
   // ── session/new ─────────────────────────────────────────────────────────────
 
   function handleSessionNew(msg: JsonRpcRequest): void {
@@ -220,6 +238,9 @@ export function startAcpServer(): Promise<void> {
         availableCommands: AVAILABLE_COMMANDS,
       },
     });
+
+    // Send title immediately so Zed "Recent" panel shows something useful
+    sendSessionTitle(acpSessionId, history, pathBasename(params.cwd));
 
     // Send welcome message
     transport.notify('session/update', {
@@ -268,6 +289,9 @@ export function startAcpServer(): Promise<void> {
       configOptions: buildConfigOptions(),
     };
     transport.respond(msg.id, result);
+
+    // Send title immediately so Zed "Recent" panel shows something useful
+    sendSessionTitle(params.sessionId, history, pathBasename(params.cwd));
 
     // Send restored session welcome
     transport.notify('session/update', {
