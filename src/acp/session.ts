@@ -12,7 +12,7 @@ export interface AgentSessionOptions {
   abortSignal: AbortSignal;
   onChunk: (text: string) => void;
   onThought?: (text: string) => void;
-  onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[]) => void;
+  onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[], rawOutput?: string) => void;
 }
 
 /**
@@ -56,6 +56,39 @@ function toolCallMeta(toolName: string, params: Record<string, string>, workspac
     case 'run_command':  return { kind: 'execute', title: params.command ?? 'Running command' };
     case 'web_fetch':    return { kind: 'fetch',   title: `Fetching ${params.url ?? ''}` };
     default:             return { kind: 'other',   title: toolName };
+  }
+}
+
+// Builds rawOutput content to display inside tool call cards.
+// For write/edit operations, returns the code content or diff.
+// For command execution, returns the command output.
+function buildRawOutput(
+  toolName: string,
+  params: Record<string, string>,
+  toolResult: { success: boolean; output: string; error?: string }
+): string | undefined {
+  switch (toolName) {
+    case 'write_file': {
+      const content = params.content ?? '';
+      return content || undefined;
+    }
+    case 'edit_file': {
+      const oldText = params.old_text ?? '';
+      const newText = params.new_text ?? '';
+      if (!oldText && !newText) return undefined;
+      // Format as a simple before/after diff block
+      const oldLines = oldText.split('\n').map(l => `- ${l}`).join('\n');
+      const newLines = newText.split('\n').map(l => `+ ${l}`).join('\n');
+      return `${oldLines}\n${newLines}`;
+    }
+    case 'run_command': {
+      return toolResult.output || toolResult.error || undefined;
+    }
+    case 'read_file': {
+      return toolResult.output || undefined;
+    }
+    default:
+      return undefined;
   }
 }
 
@@ -120,7 +153,8 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
         const tracked = toolCallIdMap.get(mapKey);
         if (tracked && opts.onToolCall) {
           const status = toolResult.success ? 'finished' : 'error';
-          opts.onToolCall(tracked.toolCallId, toolCall.tool, tracked.kind, '', status, tracked.locations);
+          const rawOutput = buildRawOutput(toolCall.tool, toolCall.parameters as Record<string, string>, toolResult);
+          opts.onToolCall(tracked.toolCallId, toolCall.tool, tracked.kind, '', status, tracked.locations, rawOutput);
         }
         toolCallIdMap.delete(mapKey);
       }

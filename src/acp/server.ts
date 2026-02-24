@@ -492,7 +492,7 @@ export function startAcpServer(): Promise<void> {
               },
             });
           },
-          onToolCall: (toolCallId, toolName, kind, title, status, locations) => {
+          onToolCall: (toolCallId, toolName, kind, title, status, locations, rawOutput) => {
             if (status === 'running') {
               // Initial tool_call notification: spec ToolCall shape
               transport.notify('session/update', {
@@ -509,13 +509,14 @@ export function startAcpServer(): Promise<void> {
                 },
               });
             } else {
-              // tool_call_update: update status to completed/failed
+              // tool_call_update: update status to completed/failed, with optional content
               transport.notify('session/update', {
                 sessionId: params.sessionId,
                 update: {
                   sessionUpdate: 'tool_call_update',
                   toolCallId,
                   status: status === 'finished' ? 'completed' : 'failed',
+                  ...(rawOutput !== undefined ? { rawOutput } : {}),
                 },
               });
             }
