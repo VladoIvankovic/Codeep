@@ -293,6 +293,15 @@ export function startAcpServer(): Promise<void> {
     }
 
     transport.respond(msg.id, {});
+
+    // Confirm the new value back to Zed so its UI state stays in sync
+    transport.notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'config_option_update',
+        configOptions: buildConfigOptions(),
+      },
+    });
   }
 
   // ── session/prompt ──────────────────────────────────────────────────────────
