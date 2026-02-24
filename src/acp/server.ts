@@ -12,11 +12,13 @@ import {
   SetSessionModeParams,
   SetSessionConfigOptionParams,
   SessionModeState, SessionConfigOption,
+  ListSessionsParams, ListSessionsResult, AcpSessionInfo,
+  DeleteSessionParams,
 } from './protocol.js';
 import { JsonRpcRequest, JsonRpcNotification } from './protocol.js';
 import { runAgentSession } from './session.js';
 import { initWorkspace, loadWorkspace, handleCommand, AcpSession } from './commands.js';
-import { autoSaveSession, config, setProvider } from '../config/index.js';
+import { autoSaveSession, config, setProvider, listSessionsWithInfo, deleteSession as deleteSessionFile } from '../config/index.js';
 import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
 
@@ -149,6 +151,8 @@ export function startAcpServer(): Promise<void> {
       case 'session/prompt':       handleSessionPrompt(req);        break;
       case 'session/set_mode':     handleSetMode(req);              break;
       case 'session/set_config_option': handleSetConfigOption(req); break;
+      case 'session/list':             handleSessionList(req);          break;
+      case 'session/delete':           handleSessionDelete(req);        break;
       default:
         transport.error(req.id, -32601, `Method not found: ${req.method}`);
     }
@@ -171,6 +175,7 @@ export function startAcpServer(): Promise<void> {
       protocolVersion: 1,
       agentCapabilities: {
         loadSession: true,
+        sessionCapabilities: { list: {} },
       },
       agentInfo: {
         name: 'codeep',
@@ -337,6 +342,32 @@ export function startAcpServer(): Promise<void> {
         configOptions: buildConfigOptions(),
       },
     });
+  }
+
+  // ── session/list ─────────────────────────────────────────────────────────────
+
+  function handleSessionList(msg: JsonRpcRequest): void {
+    const params = (msg.params ?? {}) as ListSessionsParams;
+    const sessionInfos = listSessionsWithInfo(params.cwd);
+    const acpSessions: AcpSessionInfo[] = sessionInfos.map(s => ({
+      sessionId: s.name,
+      cwd: params.cwd ?? '',
+      title: s.name,
+      updatedAt: s.createdAt,
+    }));
+    const result: ListSessionsResult = { sessions: acpSessions };
+    transport.respond(msg.id, result);
+  }
+
+  // ── session/delete ───────────────────────────────────────────────────────────
+
+  function handleSessionDelete(msg: JsonRpcRequest): void {
+    const { sessionId } = (msg.params ?? {}) as DeleteSessionParams;
+    // Remove from in-memory sessions map if present
+    sessions.delete(sessionId);
+    // Delete from disk — sessionId is used as the session file name
+    deleteSessionFile(sessionId);
+    transport.respond(msg.id, {});
   }
 
   // ── session/prompt ──────────────────────────────────────────────────────────
