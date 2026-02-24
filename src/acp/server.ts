@@ -492,7 +492,7 @@ export function startAcpServer(): Promise<void> {
               },
             });
           },
-          onToolCall: (toolCallId, toolName, kind, title, status, locations, rawOutput, content) => {
+          onToolCall: (toolCallId, toolName, kind, title, status, locations, rawOutput) => {
             if (status === 'running') {
               // Initial tool_call notification: spec ToolCall shape
               transport.notify('session/update', {
@@ -506,7 +506,6 @@ export function startAcpServer(): Promise<void> {
                   ...(locations && locations.length > 0
                     ? { locations: locations.map(path => ({ path })) }
                     : {}),
-                  ...(content ? { content } : {}),
                 },
               });
             } else {
