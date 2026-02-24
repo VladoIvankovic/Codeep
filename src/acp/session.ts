@@ -46,16 +46,20 @@ function toolCallMeta(toolName: string, params: Record<string, string>, workspac
     : '';
   const basename = absFile ? absFile.split('/').pop() ?? '' : '';
   switch (toolName) {
-    case 'read_file':    return { kind: 'read',    title: `Reading ${basename}` };
-    case 'write_file':   return { kind: 'edit',    title: absFile ? `Edit ${absFile}` : 'Writing file' };
-    case 'edit_file':    return { kind: 'edit',    title: absFile ? `Edit ${absFile}` : 'Editing file' };
-    case 'delete_file':  return { kind: 'delete',  title: `Deleting ${basename}` };
-    case 'move_file':    return { kind: 'move',    title: `Moving ${basename}` };
-    case 'list_files':   return { kind: 'read',    title: `Listing files ${basename}` };
-    case 'search_files': return { kind: 'search',  title: `Searching ${basename || 'files'}` };
-    case 'run_command':  return { kind: 'execute', title: params.command ?? 'Running command' };
-    case 'web_fetch':    return { kind: 'fetch',   title: `Fetching ${params.url ?? ''}` };
-    default:             return { kind: 'other',   title: toolName };
+    case 'read_file':        return { kind: 'read',    title: `Reading ${basename}` };
+    case 'write_file':       return { kind: 'edit',    title: absFile ? `Edit ${absFile}` : 'Writing file' };
+    case 'edit_file':        return { kind: 'edit',    title: absFile ? `Edit ${absFile}` : 'Editing file' };
+    case 'delete_file':      return { kind: 'delete',  title: `Deleting ${basename}` };
+    case 'move_file':        return { kind: 'move',    title: `Moving ${basename}` };
+    case 'list_files':       return { kind: 'read',    title: `Listing ${basename || 'files'}` };
+    case 'create_directory': return { kind: 'edit',    title: `Creating dir ${basename}` };
+    case 'search_code':      return { kind: 'search',  title: `Searching ${params.pattern ?? 'code'}` };
+    case 'find_files':       return { kind: 'search',  title: `Finding ${params.pattern ?? 'files'}` };
+    case 'execute_command':  return { kind: 'execute', title: params.command ?? 'Running command' };
+    case 'fetch_url':        return { kind: 'fetch',   title: `Fetching ${params.url ?? ''}` };
+    case 'web_search':       return { kind: 'fetch',   title: `Searching ${params.query ?? ''}` };
+    case 'web_read':         return { kind: 'fetch',   title: `Reading ${params.url ?? ''}` };
+    default:                 return { kind: 'other',   title: toolName };
   }
 }
 
@@ -102,7 +106,7 @@ function buildRawOutput(
       const newLines = newText.split('\n').map(l => `+ ${l}`).join('\n');
       return `${oldLines}\n${newLines}`;
     }
-    case 'run_command': {
+    case 'execute_command': {
       return toolResult.output || toolResult.error || undefined;
     }
     case 'read_file': {
