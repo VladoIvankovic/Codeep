@@ -16,7 +16,8 @@ import {
 import { JsonRpcRequest, JsonRpcNotification } from './protocol.js';
 import { runAgentSession } from './session.js';
 import { initWorkspace, loadWorkspace, handleCommand, AcpSession } from './commands.js';
-import { autoSaveSession, config, getModelsForCurrentProvider } from '../config/index.js';
+import { autoSaveSession, config, setProvider } from '../config/index.js';
+import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
 
 // ─── Slash commands advertised to Zed ────────────────────────────────────────
@@ -77,15 +78,21 @@ const AGENT_MODES: SessionModeState = {
 // ─── Config options ───────────────────────────────────────────────────────────
 
 function buildConfigOptions(): SessionConfigOption[] {
-  const models = getModelsForCurrentProvider();
   const currentModel = config.get('model') ?? '';
-  const modelOptions = Object.entries(models).map(([id, label]) => ({
-    value: id,
-    name: label,
-  }));
-  // Ensure currentValue is always one of the valid options
-  const currentValue = modelOptions.some(o => o.value === currentModel)
-    ? currentModel
+  // Flatten all providers × models into one list so Zed shows a single dropdown
+  const modelOptions: { value: string; name: string }[] = [];
+  for (const [providerId, provider] of Object.entries(PROVIDERS)) {
+    for (const model of provider.models) {
+      modelOptions.push({
+        value: `${providerId}/${model.id}`,
+        name: `${model.name} - ${model.description} (${provider.name})`,
+      });
+    }
+  }
+  const currentProviderId = config.get('provider') ?? '';
+  const compositeValue = `${currentProviderId}/${currentModel}`;
+  const currentValue = modelOptions.some(o => o.value === compositeValue)
+    ? compositeValue
     : (modelOptions[0]?.value ?? '');
   return [
     {
@@ -289,7 +296,16 @@ export function startAcpServer(): Promise<void> {
     }
 
     if (configId === 'model' && typeof value === 'string') {
-      config.set('model', value);
+      // value is "providerId/modelId" — split and switch both
+      const slashIdx = value.indexOf('/');
+      if (slashIdx !== -1) {
+        const providerId = value.slice(0, slashIdx);
+        const modelId = value.slice(slashIdx + 1);
+        setProvider(providerId);   // sets provider + defaultModel + protocol
+        config.set('model', modelId);
+      } else {
+        config.set('model', value);
+      }
     }
 
     transport.respond(msg.id, {});
