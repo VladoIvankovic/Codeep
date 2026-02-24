@@ -12,7 +12,7 @@ export interface AgentSessionOptions {
   abortSignal: AbortSignal;
   onChunk: (text: string) => void;
   onThought?: (text: string) => void;
-  onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[], rawOutput?: string) => void;
+  onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[], rawOutput?: string, content?: { oldText?: string; newText?: string }) => void;
 }
 
 /**
@@ -56,6 +56,27 @@ function toolCallMeta(toolName: string, params: Record<string, string>, workspac
     case 'run_command':  return { kind: 'execute', title: params.command ?? 'Running command' };
     case 'web_fetch':    return { kind: 'fetch',   title: `Fetching ${params.url ?? ''}` };
     default:             return { kind: 'other',   title: toolName };
+  }
+}
+
+// Builds ToolCallContent (oldText/newText) for Zed's diff view in the tool_call card.
+function buildToolCallContent(
+  toolName: string,
+  params: Record<string, string>
+): { oldText?: string; newText?: string } | undefined {
+  switch (toolName) {
+    case 'write_file': {
+      const content = params.content ?? '';
+      return content ? { newText: content } : undefined;
+    }
+    case 'edit_file': {
+      const oldText = params.old_text ?? '';
+      const newText = params.new_text ?? '';
+      if (!oldText && !newText) return undefined;
+      return { oldText: oldText || undefined, newText: newText || undefined };
+    }
+    default:
+      return undefined;
   }
 }
 
@@ -131,8 +152,9 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
       const mapKey = toolCall.id ?? `${name}_${toolCallCounter}`;
       toolCallIdMap.set(mapKey, { toolCallId, kind, locations: locations.length ? locations : undefined });
 
-      // Emit tool_call notification (running state)
-      opts.onToolCall?.(toolCallId, name, kind, title, 'running', locations.length ? locations : undefined);
+      // Emit tool_call notification (running state) with optional diff content
+      const toolContent = buildToolCallContent(name, params);
+      opts.onToolCall?.(toolCallId, name, kind, title, 'running', locations.length ? locations : undefined, undefined, toolContent);
 
     },
     onToolResult: (toolResult, toolCall) => {
