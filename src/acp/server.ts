@@ -27,7 +27,6 @@ const AVAILABLE_COMMANDS = [
   { name: 'help',      description: 'Show available commands' },
   { name: 'status',    description: 'Show current config and session info' },
   { name: 'version',   description: 'Show version and current model' },
-  { name: 'provider',  description: 'List or switch AI provider', input: { hint: '<provider-id>' } },
   { name: 'model',     description: 'List or switch model', input: { hint: '<model-id>' } },
   { name: 'login',     description: 'Set API key for a provider', input: { hint: '<providerId> <apiKey>' } },
   { name: 'apikey',    description: 'Show or set API key for current provider', input: { hint: '<key>' } },
@@ -77,19 +76,39 @@ const AGENT_MODES: SessionModeState = {
 
 // ─── Config options ───────────────────────────────────────────────────────────
 
+/** Check if a provider has an API key stored (reads config directly, no async) */
+function providerHasKey(providerId: string): boolean {
+  // Check environment variable first
+  const envKey = PROVIDERS[providerId]?.envKey;
+  if (envKey && process.env[envKey]) return true;
+  // Check stored providerApiKeys
+  const stored = (config.get('providerApiKeys') || []) as { providerId: string; apiKey: string }[];
+  return stored.some(k => k.providerId === providerId && !!k.apiKey);
+}
+
 function buildConfigOptions(): SessionConfigOption[] {
   const currentModel = config.get('model') ?? '';
-  // Flatten all providers × models into one list so Zed shows a single dropdown
+  const currentProviderId = config.get('provider') ?? '';
+  // Only show providers that have an API key configured
   const modelOptions: { value: string; name: string }[] = [];
   for (const [providerId, provider] of Object.entries(PROVIDERS)) {
+    if (!providerHasKey(providerId)) continue;
     for (const model of provider.models) {
       modelOptions.push({
         value: `${providerId}/${model.id}`,
-        name: `${model.name} - ${model.description} (${provider.name})`,
+        name: model.name,
       });
     }
   }
-  const currentProviderId = config.get('provider') ?? '';
+  // Always include current provider's models even if key is missing (avoids empty list)
+  if (modelOptions.length === 0) {
+    const fallback = PROVIDERS[currentProviderId];
+    if (fallback) {
+      for (const model of fallback.models) {
+        modelOptions.push({ value: `${currentProviderId}/${model.id}`, name: model.name });
+      }
+    }
+  }
   const compositeValue = `${currentProviderId}/${currentModel}`;
   const currentValue = modelOptions.some(o => o.value === compositeValue)
     ? compositeValue
