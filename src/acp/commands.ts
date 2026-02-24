@@ -49,6 +49,8 @@ export interface CommandResult {
   response: string;
   /** If true, server should stream response chunks as they arrive (skills) */
   streaming?: boolean;
+  /** If true, server should re-send configOptions to client (provider/model changed) */
+  configOptionsChanged?: boolean;
 }
 
 // ─── Workspace / session init (called on session/new) ─────────────────────────
@@ -205,12 +207,12 @@ export async function handleCommand(
 
     case 'provider': {
       if (!args.length) return { handled: true, response: buildProviderList() };
-      return { handled: true, response: setProviderCmd(args[0]) };
+      return { handled: true, response: setProviderCmd(args[0]), configOptionsChanged: true };
     }
 
     case 'model': {
       if (!args.length) return { handled: true, response: buildModelList() };
-      return { handled: true, response: setModelCmd(args[0]) };
+      return { handled: true, response: setModelCmd(args[0]), configOptionsChanged: true };
     }
 
     case 'apikey': {
