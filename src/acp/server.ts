@@ -368,7 +368,7 @@ export function startAcpServer(): Promise<void> {
     const acpSessions: AcpSessionInfo[] = merged.map(s => ({
       sessionId: s.name,
       cwd: params.cwd ?? '',
-      title: s.name,
+      title: s.title,
       updatedAt: s.createdAt,
     }));
     const result: ListSessionsResult = { sessions: acpSessions };

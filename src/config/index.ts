@@ -9,6 +9,7 @@ import { createSecureStorage, type SecureStorage } from '../utils/keychain';
 
 interface Session {
   name: string;
+  title?: string;
   history: Message[];
   createdAt: string;
 }
@@ -623,8 +624,14 @@ export function flushAutoSave(): boolean {
 // Session management
 export function saveSession(name: string, history: Message[], projectPath?: string): boolean {
   try {
+    // Derive a human-readable title from the first user message
+    const firstUserMsg = history.find(m => m.role === 'user');
+    const title = firstUserMsg
+      ? firstUserMsg.content.replace(/\n/g, ' ').trim().slice(0, 60)
+      : name;
     const session: Session = {
       name,
+      title,
       history,
       createdAt: new Date().toISOString(),
     };
@@ -739,6 +746,7 @@ export function getSessionInfo(name: string, projectPath?: string): { name: stri
 
 export interface SessionInfo {
   name: string;
+  title: string;
   createdAt: string;
   messageCount: number;
   fileSize: number;
@@ -759,8 +767,15 @@ export function listSessionsWithInfo(projectPath?: string): SessionInfo[] {
       try {
         const stat = statSync(filePath);
         const data = JSON.parse(readFileSync(filePath, 'utf-8')) as Session;
+        const sessionName = data.name || file.replace('.json', '');
+        // Derive title: use stored title, else first user message, else session name
+        const firstUserMsg = data.history?.find(m => m.role === 'user');
+        const title = data.title
+          || (firstUserMsg ? firstUserMsg.content.replace(/\n/g, ' ').trim().slice(0, 60) : null)
+          || sessionName;
         sessions.push({
-          name: data.name || file.replace('.json', ''),
+          name: sessionName,
+          title,
           createdAt: data.createdAt || stat.mtime.toISOString(),
           messageCount: data.history?.length || 0,
           fileSize: stat.size,
