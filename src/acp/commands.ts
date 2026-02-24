@@ -692,7 +692,8 @@ function buildSessionList(workspaceRoot: string): string {
   if (sessions.length === 0) return 'No saved sessions. Start chatting to create one.';
   const lines = ['## Saved Sessions', ''];
   for (const s of sessions) {
-    lines.push(`- \`${s.name}\` — ${s.messageCount} messages — ${new Date(s.createdAt).toLocaleString()}`);
+    const label = s.title !== s.name ? `**${s.title}** (\`${s.name}\`)` : `\`${s.name}\``;
+    lines.push(`- ${label} — ${s.messageCount} messages — ${new Date(s.createdAt).toLocaleString()}`);
   }
   lines.push('', 'Use `/session load <name>` to restore.');
   return lines.join('\n');
