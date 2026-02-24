@@ -186,6 +186,12 @@ export interface SessionUpdateConfigOption {
   configOptions: SessionConfigOption[];
 }
 
+export interface SessionUpdateSessionInfo {
+  sessionUpdate: 'session_info_update';
+  title: string;
+  updatedAt?: string;
+}
+
 export type SessionUpdateInner =
   | SessionUpdateAgentMessageChunk
   | SessionUpdateAgentThoughtChunk
@@ -193,7 +199,8 @@ export type SessionUpdateInner =
   | SessionUpdateToolCallUpdate
   | SessionUpdateAvailableCommands
   | SessionUpdateCurrentMode
-  | SessionUpdateConfigOption;
+  | SessionUpdateConfigOption
+  | SessionUpdateSessionInfo;
 
 export interface SessionUpdateParams {
   sessionId: string;
