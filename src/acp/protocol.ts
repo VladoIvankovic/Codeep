@@ -226,6 +226,35 @@ export interface RequestPermissionResult {
   outcome: { type: 'cancelled' } | { type: 'selected'; optionId: string };
 }
 
+// ─── session/list ─────────────────────────────────────────────────────────────
+
+export interface ListSessionsParams {
+  cwd?: string;
+  cursor?: string;
+}
+
+export interface AcpSessionInfo {
+  sessionId: string;
+  cwd: string;
+  title?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface ListSessionsResult {
+  sessions: AcpSessionInfo[];
+  nextCursor?: string | null;
+}
+
+// ─── session/delete ───────────────────────────────────────────────────────────
+
+export interface DeleteSessionParams {
+  sessionId: string;
+}
+
+export interface DeleteSessionResult {
+  // empty on success
+}
+
 // ─── fs methods (agent → client) ─────────────────────────────────────────────
 
 export interface FsReadTextFileParams {
