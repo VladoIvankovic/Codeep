@@ -331,6 +331,16 @@ export function startAcpServer(): Promise<void> {
       .then((cmd) => {
         if (cmd.handled) {
           if (cmd.response) sendChunk(cmd.response);
+          // If provider or model changed, push updated config options to Zed
+          if (cmd.configOptionsChanged) {
+            transport.notify('session/update', {
+              sessionId: params.sessionId,
+              update: {
+                sessionUpdate: 'config_option_update',
+                configOptions: buildConfigOptions(),
+              },
+            });
+          }
           transport.respond(msg.id, { stopReason: 'end_turn' });
           return;
         }
