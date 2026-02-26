@@ -357,13 +357,17 @@ Main modules: src, components, hooks, utils
 - Naming: camelCase
 ```
 
-### Self-Verification
-After making changes, the agent automatically:
-1. Runs **build** to check for compilation errors
-2. Runs **tests** to ensure nothing is broken
-3. Runs **type checking** for TypeScript/PHP projects
-4. If errors found → automatically tries to fix them (up to 3 attempts)
-5. Reports final verification status
+### Self-Verification (Optional)
+When enabled in Settings, the agent can automatically verify its changes by running build, tests, or type checking after completing a task. Disabled by default — the agent works freely and you decide when to verify.
+
+Configure in **Settings → Agent Auto-Verify**:
+- **Off** (default) — no automatic verification
+- **Build only** — checks compilation after changes
+- **Typecheck only** — runs TypeScript/PHP type checking
+- **Test only** — runs test suite after changes
+- **Build + Typecheck + Test** — full verification
+
+If errors are found, the agent tries to fix them automatically (up to 3 attempts, configurable).
 
 **Supported project types:**
 
@@ -681,8 +685,8 @@ With write access enabled:
 | Agent Confirmation | Dangerous | `Never`, `Dangerous` (default), or `Always` |
 | Agent Auto-Commit | Off | Automatically commit after agent completes |
 | Agent Branch | Off | Create new branch for agent commits |
-| Agent Auto-Verify | On | Automatically run build/test after changes |
-| Agent Max Fix Attempts | 3 | Max attempts to auto-fix errors |
+| Agent Auto-Verify | Off | `Off`, `Build only`, `Typecheck only`, `Test only`, or `Build + Typecheck + Test` |
+| Agent Max Fix Attempts | 3 | Max attempts to auto-fix errors (when Auto-Verify is enabled) |
 
 ## Usage Examples
 
