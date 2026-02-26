@@ -199,8 +199,12 @@ export async function executeAgentTask(
     const result: AgentResult = await runAgent(enrichedTask, context, {
       dryRun,
       chatHistory: app.getChatHistory(),
-      onIteration: (iteration) => {
+      onIteration: (iteration, message) => {
         app.updateAgentProgress(iteration);
+        // Show special status messages (timeout retries, verification) but not generic iteration messages
+        if (message && !message.startsWith('Iteration ')) {
+          app.addMessage({ role: 'system', content: `_${message}_` });
+        }
       },
       onToolCall: (tool) => {
         const toolName = tool.tool.toLowerCase();
@@ -268,6 +272,21 @@ export async function executeAgentTask(
         } else if (actionType === 'delete') {
           const filePath = tool.parameters.path as string;
           app.addMessage({ role: 'system', content: `**Delete** \`${filePath}\`` });
+        } else if (actionType === 'read') {
+          const filePath = tool.parameters.path as string || shortTarget;
+          if (filePath) app.addMessage({ role: 'system', content: `**Reading** \`${filePath}\`` });
+        } else if (actionType === 'search') {
+          const pattern = (tool.parameters.pattern as string) || (tool.parameters.query as string) || shortTarget;
+          if (pattern) app.addMessage({ role: 'system', content: `**Searching** for \`${pattern}\`` });
+        } else if (actionType === 'list') {
+          const dirPath = tool.parameters.path as string || shortTarget;
+          if (dirPath) app.addMessage({ role: 'system', content: `**Listing** \`${dirPath}\`` });
+        } else if (actionType === 'fetch') {
+          const url = (tool.parameters.url as string) || shortTarget;
+          if (url) app.addMessage({ role: 'system', content: `**Fetching** \`${url}\`` });
+        } else if (actionType === 'command') {
+          const cmd = tool.parameters.command as string || shortTarget;
+          if (cmd) app.addMessage({ role: 'system', content: `**Running** \`${cmd}\`` });
         }
       },
       onToolResult: (result, toolCall) => {
@@ -296,7 +315,27 @@ export async function executeAgentTask(
     });
 
     if (result.success) {
-      const summary = result.finalResponse || `Completed ${result.actions.length} actions in ${result.iterations} steps.`;
+      const fileChanges = result.actions.filter(a => a.type === 'write' || a.type === 'edit' || a.type === 'delete');
+      const otherActions = result.actions.filter(a => a.type !== 'write' && a.type !== 'edit' && a.type !== 'delete');
+      const completionLines: string[] = [];
+      if (result.finalResponse) {
+        completionLines.push(result.finalResponse);
+        completionLines.push('');
+      }
+      completionLines.push(`**Agent completed** in ${result.iterations} step(s)`);
+      if (fileChanges.length > 0) {
+        completionLines.push('');
+        completionLines.push('**Files changed:**');
+        for (const a of fileChanges) {
+          const icon = a.type === 'delete' ? '✗' : '✓';
+          completionLines.push(`  ${icon} ${a.type}: \`${a.target}\``);
+        }
+      }
+      if (otherActions.length > 0) {
+        completionLines.push('');
+        completionLines.push(`${otherActions.length} read/search operation(s) performed`);
+      }
+      const summary = completionLines.join('\n');
       app.addMessage({ role: 'assistant', content: summary });
       app.notify(`Agent completed: ${result.actions.length} actions`);
 

@@ -309,6 +309,25 @@ export function parseToolCalls(response: string): ToolCall[] {
     }
   }
 
+  // Format 3b: Tool <arg_key>param</arg_key><arg_value>value</arg_value> format
+  // Some models emit: Tool write_file<arg_key>path</arg_key><arg_value>...</arg_value>
+  if (toolCalls.length === 0) {
+    const argKeyValueRegex = /Tool\s+(\w+)((?:\s*<arg_key>[\s\S]*?<\/arg_key>\s*<arg_value>[\s\S]*?<\/arg_value>)+)/gi;
+    while ((match = argKeyValueRegex.exec(response)) !== null) {
+      const toolName = normalizeToolName(match[1]);
+      const argBlock = match[2];
+      const params: Record<string, unknown> = {};
+      const pairRegex = /<arg_key>([\s\S]*?)<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/gi;
+      let pairMatch;
+      while ((pairMatch = pairRegex.exec(argBlock)) !== null) {
+        params[pairMatch[1].trim()] = pairMatch[2].trim();
+      }
+      if (toolName && Object.keys(params).length > 0) {
+        toolCalls.push({ tool: toolName, parameters: params });
+      }
+    }
+  }
+
   // Format 4: Inline JSON with tool property (fallback)
   if (toolCalls.length === 0) {
     const jsonRegex = /\{[^{}]*"tool"\s*:\s*"[^"]+"\s*,\s*"parameters"\s*:\s*\{[^{}]*\}[^{}]*\}/g;
