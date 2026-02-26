@@ -369,7 +369,10 @@ export async function executeAgentTask(
     } else if (result.aborted) {
       app.addMessage({ role: 'assistant', content: 'Agent stopped by user.' });
     } else {
-      app.addMessage({ role: 'assistant', content: `Agent failed: ${result.error || 'Unknown error'}` });
+      const failLines: string[] = [];
+      if (result.finalResponse) failLines.push(result.finalResponse);
+      failLines.push(`**Agent stopped**: ${result.error || 'Unknown error'}`);
+      app.addMessage({ role: 'assistant', content: failLines.join('\n\n') });
     }
 
     autoSaveSession(app.getMessages(), ctx.projectPath);
