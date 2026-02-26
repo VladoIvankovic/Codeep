@@ -368,10 +368,12 @@ export async function executeAgentTask(
     } else if (result.aborted) {
       app.addMessage({ role: 'assistant', content: 'Agent stopped by user.' });
     } else {
-      const failLines: string[] = [];
-      if (result.finalResponse) failLines.push(result.finalResponse);
-      failLines.push(`**Agent stopped**: ${result.error || 'Unknown error'}`);
-      app.addMessage({ role: 'assistant', content: failLines.join('\n\n') });
+      // Show the agent's summary if available, with error details below
+      if (result.finalResponse) {
+        app.addMessage({ role: 'assistant', content: result.finalResponse });
+      } else {
+        app.addMessage({ role: 'assistant', content: `Agent could not complete the task: ${result.error || 'Unknown error'}` });
+      }
     }
 
     autoSaveSession(app.getMessages(), ctx.projectPath);
