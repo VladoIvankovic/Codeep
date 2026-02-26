@@ -140,6 +140,7 @@ export function getAgentSystemPrompt(projectContext: ProjectContext): string {
 7. NEVER use execute_command for: ls, find, cat, grep, mkdir, rm, cp, mv, touch
 8. Use execute_command ONLY for: npm, git, composer, pip, cargo (build/package managers)
 9. When the task is complete, respond with a summary WITHOUT any tool calls
+10. CRITICAL: If the task is NOT complete, you MUST call a tool — never respond with only text mid-task. Do not "think out loud" or describe what you are about to do without calling a tool. Act immediately.
 
 ## Project Information
 Name: ${projectContext.name || 'Unknown'}
