@@ -134,10 +134,11 @@ export class Screen {
     }
     
     // Parse text character by character, tracking ANSI escape sequences
+    // Use index-based loop to handle ANSI sequences, but read full Unicode code points
     let col = 0;
     let i = 0;
     let currentStyle = prefixStyle;
-    
+
     while (i < text.length && col < this.width) {
       // Check for ANSI escape sequence
       if (text[i] === '\x1b' && text[i + 1] === '[') {
@@ -159,17 +160,20 @@ export class Screen {
           i++;
         }
       } else {
-        // Regular character
-        const w = charWidth(text[i]);
+        // Read full Unicode code point (handles surrogate pairs for emoji)
+        const codePoint = text.codePointAt(i) ?? text.charCodeAt(i);
+        const char = String.fromCodePoint(codePoint);
+        const charLen = char.length; // surrogate pair = 2, BMP char = 1
+        const w = charWidth(char);
         if (col < this.width) {
-          this.buffer[y][col] = { char: text[i], style: currentStyle };
+          this.buffer[y][col] = { char, style: currentStyle };
           // Wide char: fill next cell with empty placeholder
           if (w === 2 && col + 1 < this.width) {
             this.buffer[y][col + 1] = { char: '', style: currentStyle };
           }
         }
         col += w;
-        i++;
+        i += charLen;
       }
     }
   }
