@@ -282,3 +282,37 @@ describe('formatCommandResult', () => {
     expect(result).not.toContain('stderr');
   });
 });
+
+describe('executeCommandAsync', () => {
+  it('returns success for valid command', async () => {
+    const { executeCommandAsync } = await import('./shell');
+    const result = await executeCommandAsync('echo', ['hello']);
+    expect(result.success).toBe(true);
+    expect(result.stdout.trim()).toBe('hello');
+  });
+
+  it('returns failure for non-zero exit code', async () => {
+    const { executeCommandAsync } = await import('./shell');
+    const result = await executeCommandAsync('ls', ['/nonexistent-path-xyz']);
+    expect(result.success).toBe(false);
+  });
+
+  it('returns failure with timeout message when command exceeds timeout', async () => {
+    const { executeCommandAsync } = await import('./shell');
+    const result = await executeCommandAsync('sleep', ['10'], { timeout: 100 });
+    expect(result.success).toBe(false);
+    expect(result.stderr).toContain('timed out');
+  });
+
+  it('returns failure for blocked command', async () => {
+    const { executeCommandAsync } = await import('./shell');
+    const result = await executeCommandAsync('sudo', ['ls']);
+    expect(result.success).toBe(false);
+  });
+
+  it('returns failure for unknown command', async () => {
+    const { executeCommandAsync } = await import('./shell');
+    const result = await executeCommandAsync('notarealcommand_xyz', []);
+    expect(result.success).toBe(false);
+  });
+});
