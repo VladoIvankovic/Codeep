@@ -378,6 +378,18 @@ export function execSimple(
 }
 
 /**
+ * Execute a command asynchronously and return only stdout if successful
+ */
+export async function execSimpleAsync(
+  command: string,
+  args: string[] = [],
+  options?: CommandOptions
+): Promise<string | null> {
+  const result = await executeCommandAsync(command, args, options);
+  return result.success ? result.stdout.trim() : null;
+}
+
+/**
  * Check if a command exists in PATH
  */
 export function commandExists(command: string): boolean {
