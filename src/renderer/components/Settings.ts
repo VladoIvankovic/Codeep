@@ -124,7 +124,7 @@ export const SETTINGS: SettingItem[] = [
     getValue: () => config.get('agentMaxIterations'),
     type: 'number',
     min: 10,
-    max: 200,
+    max: 500,
     step: 10,
   },
   {

@@ -226,7 +226,7 @@ function createConfig(): Conf<ConfigSchema> {
     agentAutoCommitBranch: false,
     agentAutoVerify: 'off',
     agentMaxFixAttempts: 3,
-    agentMaxIterations: 100,
+    agentMaxIterations: 200,
     agentMaxDuration: 20,
     agentApiTimeout: 180000,
     protocol: 'openai',
