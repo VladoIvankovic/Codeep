@@ -64,6 +64,17 @@ import { runAllVerifications, formatErrorsForAgent, hasVerificationErrors, getVe
 import { gatherSmartContext, formatSmartContext, extractTargetFile } from './smartContext';
 import { planTasks, getNextTask, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
 
+// ─── Tool result truncation ───────────────────────────────────────────────────
+
+const TOOL_RESULT_MAX_CHARS = 8_000; // ~2K tokens per tool result
+
+function truncateToolResult(output: string, toolName: string): string {
+  if (output.length <= TOOL_RESULT_MAX_CHARS) return output;
+  const kept = output.slice(0, TOOL_RESULT_MAX_CHARS);
+  const truncated = output.length - TOOL_RESULT_MAX_CHARS;
+  return `${kept}\n[... ${truncated} chars truncated — use search_code or read specific sections if you need more]`;
+}
+
 // ─── Context window compression ───────────────────────────────────────────────
 
 const CONTEXT_COMPRESS_THRESHOLD = 80_000; // ~20K tokens, safe for all providers
@@ -250,6 +261,13 @@ export async function runAgent(
   const maxTimeoutRetries = 3;
   const maxConsecutiveTimeouts = 9; // Allow more consecutive timeouts before giving up
   const baseTimeout = config.get('agentApiTimeout');
+
+  // Infinite loop detection: track last write hash per file path
+  const lastWriteHashByPath = new Map<string, string>();
+  let duplicateWriteCount = 0;
+
+  // Duplicate read cache: path → truncated output (avoid re-sending large file content)
+  const readCache = new Map<string, string>();
   
   try {
     while (iteration < opts.maxIterations) {
@@ -451,16 +469,55 @@ export async function runAgent(
         }
         
         opts.onToolResult?.(toolResult, toolCall);
-        
+
         // Log action
         const actionLog = createActionLog(toolCall, toolResult);
         actions.push(actionLog);
-        
-        // Format result for AI
-        if (toolResult.success) {
-          toolResults.push(`Tool ${toolCall.tool} succeeded:\n${toolResult.output}`);
+
+        // ── Infinite loop detection for write/edit ──────────────────────────
+        if (toolCall.tool === 'write_file' || toolCall.tool === 'edit_file') {
+          const filePath = toolCall.parameters.path as string || '';
+          const contentKey = JSON.stringify(toolCall.parameters).slice(0, 500);
+          const prevHash = lastWriteHashByPath.get(filePath);
+          if (prevHash === contentKey) {
+            duplicateWriteCount++;
+            if (duplicateWriteCount >= 2) {
+              toolResults.push(`[WARNING] You have written the same content to \`${filePath}\` ${duplicateWriteCount + 1} times in a row. You are stuck in a loop. Stop and think differently — read the file to check its current state, then try a completely different approach.`);
+              duplicateWriteCount = 0;
+            } else {
+              toolResults.push(`Tool ${toolCall.tool} succeeded (note: same content as previous write to this file):\n${toolResult.output}`);
+            }
+          } else {
+            duplicateWriteCount = 0;
+            lastWriteHashByPath.set(filePath, contentKey);
+            if (toolResult.success) {
+              toolResults.push(`Tool ${toolCall.tool} succeeded:\n${toolResult.output}`);
+            } else {
+              toolResults.push(`Tool ${toolCall.tool} failed:\n${toolResult.error || 'Unknown error'}`);
+            }
+          }
+        // ── Duplicate read cache ────────────────────────────────────────────
+        } else if (toolCall.tool === 'read_file' && toolResult.success) {
+          const filePath = toolCall.parameters.path as string || '';
+          if (readCache.has(filePath)) {
+            toolResults.push(`Tool read_file succeeded (cached — file unchanged since last read):\n${readCache.get(filePath)}`);
+          } else {
+            const truncated = truncateToolResult(toolResult.output, toolCall.tool);
+            readCache.set(filePath, truncated);
+            toolResults.push(`Tool read_file succeeded:\n${truncated}`);
+          }
+        // ── General truncation for other tools ─────────────────────────────
+        } else if (toolResult.success) {
+          const truncated = truncateToolResult(toolResult.output, toolCall.tool);
+          toolResults.push(`Tool ${toolCall.tool} succeeded:\n${truncated}`);
         } else {
           toolResults.push(`Tool ${toolCall.tool} failed:\n${toolResult.error || 'Unknown error'}`);
+        }
+
+        // Invalidate read cache when a file is written/edited
+        if ((toolCall.tool === 'write_file' || toolCall.tool === 'edit_file') && toolResult.success) {
+          const filePath = toolCall.parameters.path as string || '';
+          readCache.delete(filePath);
         }
       }
       
@@ -471,13 +528,20 @@ export async function runAgent(
       });
     }
     
-    // Check if we hit max iterations
+    // Check if we hit max iterations — build partial summary from actions log
     if (iteration >= opts.maxIterations && !finalResponse) {
+      const filesDone = actions.filter(a => a.type === 'write' || a.type === 'edit').map(a => a.target);
+      const partialLines = [`Agent reached the iteration limit (${opts.maxIterations} steps).`];
+      if (filesDone.length > 0) {
+        partialLines.push(`\n**Partial progress — files written/edited:**`);
+        [...new Set(filesDone)].forEach(f => partialLines.push(`  ✓ \`${f}\``));
+        partialLines.push(`\nThe task may be incomplete. You can continue by running the agent again.`);
+      }
       result = {
         success: false,
         iterations: iteration,
         actions,
-        finalResponse: 'Agent reached maximum iterations',
+        finalResponse: partialLines.join('\n'),
         error: `Exceeded maximum of ${opts.maxIterations} iterations`,
       };
       return result;

@@ -144,6 +144,7 @@ export class App {
   // Agent progress state
   private isAgentRunning = false;
   private agentIteration = 0;
+  private agentMaxIterations = 0;
   private agentActions: Array<{ type: string; target: string; result: string }> = [];
   private agentThinking = '';
   
@@ -448,6 +449,7 @@ export class App {
     this.isAgentRunning = running;
     if (running) {
       this.agentIteration = 0;
+      this.agentMaxIterations = 0;
       this.agentActions = [];
       this.agentThinking = '';
       this.isLoading = false; // Clear loading state when agent takes over
@@ -469,7 +471,11 @@ export class App {
     }
     this.render();
   }
-  
+
+  setAgentMaxIterations(max: number): void {
+    this.agentMaxIterations = max;
+  }
+
   /**
    * Set agent thinking text
    */
@@ -1678,7 +1684,10 @@ export class App {
     // Agent running state - show special prompt
     if (this.isAgentRunning) {
       const spinner = SPINNER_FRAMES[this.spinnerFrame];
-      const agentText = `${spinner} Agent working... step ${this.agentIteration} | ${this.agentActions.length} actions (Esc to stop)`;
+      const stepLabel = this.agentMaxIterations > 0
+        ? `step ${this.agentIteration}/${this.agentMaxIterations}`
+        : `step ${this.agentIteration}`;
+      const agentText = `${spinner} Agent working... ${stepLabel} | ${this.agentActions.length} actions (Esc to stop)`;
       this.screen.writeLine(y, agentText, PRIMARY_COLOR);
       this.screen.showCursor(false);
       return;
@@ -2237,7 +2246,9 @@ export class App {
     }
     
     // Step info on the right
-    const stepText = `step ${this.agentIteration}`;
+    const stepText = this.agentMaxIterations > 0
+      ? `step ${this.agentIteration}/${this.agentMaxIterations}`
+      : `step ${this.agentIteration}`;
     this.screen.write(width - stepText.length - 1, y, stepText, fg.gray);
     y++;
     

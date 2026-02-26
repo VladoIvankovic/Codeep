@@ -196,6 +196,9 @@ export async function executeAgentTask(
     const fileContext = ctx.formatAddedFilesContext();
     const enrichedTask = fileContext ? fileContext + task : task;
 
+    // Show N/M progress in status bar
+    app.setAgentMaxIterations(config.get('agentMaxIterations'));
+
     const result: AgentResult = await runAgent(enrichedTask, context, {
       dryRun,
       chatHistory: app.getChatHistory(),
