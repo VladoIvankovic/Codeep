@@ -12,12 +12,12 @@ vi.mock('fs', async (importOriginal) => {
 
 // Mock shell module so we don't run real commands
 vi.mock('./shell', () => ({
-  executeCommand: vi.fn(),
+  executeCommandAsync: vi.fn(),
 }));
 
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { executeCommand } from './shell';
+import { executeCommandAsync } from './shell';
 import {
   detectProjectScripts,
   formatVerifyResults,
@@ -31,7 +31,7 @@ import {
 
 const mockExistsSync = existsSync as ReturnType<typeof vi.fn>;
 const mockReadFileSync = readFileSync as ReturnType<typeof vi.fn>;
-const mockExecuteCommand = executeCommand as ReturnType<typeof vi.fn>;
+const mockExecuteCommandAsync = executeCommandAsync as ReturnType<typeof vi.fn>;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -347,7 +347,7 @@ describe('formatErrorsForAgent', () => {
   });
 });
 
-// ─── error parsing (via runAllVerifications with mocked executeCommand) ───────
+// ─── error parsing (via runAllVerifications with mocked executeCommandAsync) ──
 
 describe('error parsing via runAllVerifications', () => {
   const root = '/project';
@@ -363,14 +363,14 @@ describe('error parsing via runAllVerifications', () => {
     );
   });
 
-  it('parses TypeScript errors (file(line,col): error TSxxxx: msg)', () => {
-    mockExecuteCommand.mockReturnValue({
+  it('parses TypeScript errors (file(line,col): error TSxxxx: msg)', async () => {
+    mockExecuteCommandAsync.mockResolvedValue({
       success: false,
       stdout: 'src/foo.ts(10,5): error TS2345: Argument of type "x" is not assignable to parameter of type "y".',
       stderr: '',
     });
 
-    const results = runAllVerifications(root, { runBuild: false, runTest: false, runLint: false, runTypecheck: true });
+    const results = await runAllVerifications(root, { runBuild: false, runTest: false, runLint: false, runTypecheck: true });
     expect(results).toHaveLength(1);
 
     const [result] = results;
@@ -382,14 +382,14 @@ describe('error parsing via runAllVerifications', () => {
     expect(result.errors[0].code).toBe('TS2345');
   });
 
-  it('parses ESLint errors (file:line:col: error msg)', () => {
-    mockExecuteCommand.mockReturnValue({
+  it('parses ESLint errors (file:line:col: error msg)', async () => {
+    mockExecuteCommandAsync.mockResolvedValue({
       success: false,
       stdout: '/project/src/bar.ts:15:3: error no-unused-vars: "x" is defined but never used.',
       stderr: '',
     });
 
-    const results = runAllVerifications(root, { runBuild: false, runTest: false, runLint: false, runTypecheck: true });
+    const results = await runAllVerifications(root, { runBuild: false, runTest: false, runLint: false, runTypecheck: true });
     const [result] = results;
 
     expect(result.errors[0].file).toBe('/project/src/bar.ts');
@@ -398,14 +398,14 @@ describe('error parsing via runAllVerifications', () => {
     expect(result.errors[0].severity).toBe('error');
   });
 
-  it('parses Jest FAIL lines', () => {
-    mockExecuteCommand.mockReturnValue({
+  it('parses Jest FAIL lines', async () => {
+    mockExecuteCommandAsync.mockResolvedValue({
       success: false,
       stdout: ' FAIL src/foo.test.ts',
       stderr: '',
     });
 
-    const results = runAllVerifications(root, { runBuild: false, runTest: false, runLint: false, runTypecheck: true });
+    const results = await runAllVerifications(root, { runBuild: false, runTest: false, runLint: false, runTypecheck: true });
     const [result] = results;
 
     expect(result.errors[0].file).toBe('src/foo.test.ts');
@@ -413,23 +413,64 @@ describe('error parsing via runAllVerifications', () => {
     expect(result.errors[0].severity).toBe('error');
   });
 
-  it('returns empty errors array for successful command output', () => {
-    mockExecuteCommand.mockReturnValue({
+  it('returns empty errors array for successful command output', async () => {
+    mockExecuteCommandAsync.mockResolvedValue({
       success: true,
       stdout: 'Build succeeded',
       stderr: '',
     });
 
-    const results = runAllVerifications(root, { runBuild: false, runTest: false, runLint: false, runTypecheck: true });
+    const results = await runAllVerifications(root, { runBuild: false, runTest: false, runLint: false, runTypecheck: true });
     expect(results[0].success).toBe(true);
     expect(results[0].errors).toHaveLength(0);
   });
 
-  it('returns no results when no scripts available', () => {
+  it('returns no results when no scripts available', async () => {
     // No package.json, no go.mod, nothing
     mockExistsSync.mockReturnValue(false);
 
-    const results = runAllVerifications(root, { runBuild: true, runTest: true, runLint: true, runTypecheck: true });
+    const results = await runAllVerifications(root, { runBuild: true, runTest: true, runLint: true, runTypecheck: true });
     expect(results).toHaveLength(0);
+  });
+});
+
+// ─── runAllVerifications (async) ─────────────────────────────────────────────
+
+describe('runAllVerifications (async)', () => {
+  it('returns array of results', async () => {
+    const results = await runAllVerifications(process.cwd());
+    expect(Array.isArray(results)).toBe(true);
+  });
+
+  it('each result has required fields', async () => {
+    mockExecuteCommandAsync.mockResolvedValue({
+      success: true,
+      stdout: 'ok',
+      stderr: '',
+    });
+
+    const results = await runAllVerifications(process.cwd());
+    for (const r of results) {
+      expect(r).toHaveProperty('success');
+      expect(r).toHaveProperty('type');
+      expect(r).toHaveProperty('errors');
+      expect(r).toHaveProperty('duration');
+    }
+  });
+
+  it('hasVerificationErrors returns boolean', async () => {
+    mockExecuteCommandAsync.mockResolvedValue({
+      success: true,
+      stdout: 'ok',
+      stderr: '',
+    });
+
+    const results = await runAllVerifications(process.cwd(), {
+      runBuild: false,
+      runTest: false,
+      runLint: false,
+      runTypecheck: true,
+    });
+    expect(typeof hasVerificationErrors(results)).toBe('boolean');
   });
 });

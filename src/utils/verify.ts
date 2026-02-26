@@ -5,7 +5,7 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { executeCommand, CommandResult } from './shell';
+import { executeCommandAsync } from './shell';
 import { ProjectContext } from './project';
 
 export interface VerifyResult {
@@ -164,27 +164,37 @@ export function detectProjectScripts(projectRoot: string): {
 /**
  * Run a verification command
  */
-function runVerifyCommand(
+async function runVerifyCommand(
   type: VerifyResult['type'],
   command: string,
   args: string[],
   projectRoot: string,
   timeout: number
-): VerifyResult {
+): Promise<VerifyResult> {
   const startTime = Date.now();
-  
-  const result = executeCommand(command, args, {
+
+  const result = await executeCommandAsync(command, args, {
     cwd: projectRoot,
     projectRoot,
     timeout,
   });
-  
+
   const duration = Date.now() - startTime;
   const output = result.stdout + '\n' + result.stderr;
-  
+
   // Parse errors from output
   const errors = parseErrors(output, type);
-  
+
+  // If command failed but no errors were parsed, surface the failure reason explicitly
+  if (!result.success && errors.length === 0) {
+    const reason = result.stderr?.includes('timed out')
+      ? `Command timed out after ${Math.round(duration / 1000)}s. This build tool may be too slow for verification. Consider adding a faster typecheck script to package.json.`
+      : result.stderr?.includes('not in the allowed list') || result.stderr?.includes('not allowed')
+        ? `Command '${command}' is not allowed. Check shell.ts ALLOWED_COMMANDS.`
+        : result.stderr?.trim() || result.stdout?.trim() || 'Command failed with no output';
+    errors.push({ severity: 'error', message: reason });
+  }
+
   return {
     success: result.success,
     type,
@@ -308,19 +318,19 @@ function parseErrors(output: string, type: string): ParsedError[] {
 /**
  * Run build verification
  */
-export function runBuildVerification(
+export async function runBuildVerification(
   projectRoot: string,
   timeout: number = 120000
-): VerifyResult | null {
+): Promise<VerifyResult | null> {
   const scripts = detectProjectScripts(projectRoot);
-  
+
   if (!scripts.build) {
     return null;
   }
-  
+
   let command: string;
   let args: string[];
-  
+
   if (scripts.build === '__go_build__') {
     command = 'go';
     args = ['build', './...'];
@@ -331,20 +341,30 @@ export function runBuildVerification(
     command = 'composer';
     args = ['run', 'build'];
   } else {
+    if (!existsSync(join(projectRoot, 'node_modules'))) {
+      return {
+        success: false,
+        type: 'build',
+        command: `${scripts.packageManager} run ${scripts.build}`,
+        output: 'node_modules not found. Run npm install first.',
+        errors: [{ severity: 'error', message: 'node_modules not found. Run npm install first.' }],
+        duration: 0,
+      };
+    }
     command = scripts.packageManager;
     args = ['run', scripts.build];
   }
-  
+
   return runVerifyCommand('build', command, args, projectRoot, timeout);
 }
 
 /**
  * Run test verification
  */
-export function runTestVerification(
+export async function runTestVerification(
   projectRoot: string,
   timeout: number = 120000
-): VerifyResult | null {
+): Promise<VerifyResult | null> {
   const scripts = detectProjectScripts(projectRoot);
   
   if (!scripts.test) {
@@ -373,20 +393,30 @@ export function runTestVerification(
     command = 'php';
     args = ['artisan', 'test'];
   } else {
+    if (!existsSync(join(projectRoot, 'node_modules'))) {
+      return {
+        success: false,
+        type: 'test',
+        command: `${scripts.packageManager} run ${scripts.test}`,
+        output: 'node_modules not found. Run npm install first.',
+        errors: [{ severity: 'error', message: 'node_modules not found. Run npm install first.' }],
+        duration: 0,
+      };
+    }
     command = scripts.packageManager;
     args = ['run', scripts.test];
   }
-  
+
   return runVerifyCommand('test', command, args, projectRoot, timeout);
 }
 
 /**
  * Run TypeScript type checking
  */
-export function runTypecheckVerification(
+export async function runTypecheckVerification(
   projectRoot: string,
   timeout: number = 60000
-): VerifyResult | null {
+): Promise<VerifyResult | null> {
   const scripts = detectProjectScripts(projectRoot);
   
   if (!scripts.typecheck) {
@@ -397,8 +427,14 @@ export function runTypecheckVerification(
   let args: string[];
   
   if (scripts.typecheck === '__tsc_direct__') {
-    command = 'npx';
-    args = ['tsc', '--noEmit'];
+    const localTsc = join(projectRoot, 'node_modules', '.bin', 'tsc');
+    if (existsSync(localTsc)) {
+      command = localTsc;
+      args = ['--noEmit'];
+    } else {
+      command = 'npx';
+      args = ['tsc', '--noEmit'];
+    }
   } else if (scripts.typecheck === '__php_lint__') {
     // PHP syntax check on all PHP files
     command = 'find';
@@ -414,10 +450,10 @@ export function runTypecheckVerification(
 /**
  * Run lint verification
  */
-export function runLintVerification(
+export async function runLintVerification(
   projectRoot: string,
   timeout: number = 60000
-): VerifyResult | null {
+): Promise<VerifyResult | null> {
   const scripts = detectProjectScripts(projectRoot);
   
   if (!scripts.lint) {
@@ -433,34 +469,34 @@ export function runLintVerification(
 /**
  * Run all verifications
  */
-export function runAllVerifications(
+export async function runAllVerifications(
   projectRoot: string,
   options: Partial<VerifyOptions> = {}
-): VerifyResult[] {
+): Promise<VerifyResult[]> {
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const results: VerifyResult[] = [];
   
   // Run typecheck first (fastest feedback)
   if (opts.runTypecheck) {
-    const result = runTypecheckVerification(projectRoot, opts.timeout);
+    const result = await runTypecheckVerification(projectRoot, opts.timeout);
     if (result) results.push(result);
   }
   
   // Run build
   if (opts.runBuild) {
-    const result = runBuildVerification(projectRoot, opts.timeout);
+    const result = await runBuildVerification(projectRoot, opts.timeout);
     if (result) results.push(result);
   }
   
   // Run lint
   if (opts.runLint) {
-    const result = runLintVerification(projectRoot, opts.timeout);
+    const result = await runLintVerification(projectRoot, opts.timeout);
     if (result) results.push(result);
   }
   
   // Run tests last (slowest)
   if (opts.runTest) {
-    const result = runTestVerification(projectRoot, opts.timeout);
+    const result = await runTestVerification(projectRoot, opts.timeout);
     if (result) results.push(result);
   }
   
