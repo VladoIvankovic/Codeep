@@ -681,7 +681,7 @@ With write access enabled:
 | Agent Mode | ON | `ON` = agent runs automatically (requires write permission via `/grant`), `Manual` = use /agent |
 | Agent API Timeout | 180000ms | Timeout per agent API call (auto-adjusted for complexity) |
 | Agent Max Duration | 20 min | Maximum time for agent to run (5-60 min) |
-| Agent Max Iterations | 100 | Maximum agent iterations (10-200) |
+| Agent Max Iterations | 200 | Maximum agent iterations (10-500) |
 | Agent Confirmation | Dangerous | `Never`, `Dangerous` (default), or `Always` |
 | Agent Auto-Commit | Off | Automatically commit after agent completes |
 | Agent Branch | Off | Create new branch for agent commits |
