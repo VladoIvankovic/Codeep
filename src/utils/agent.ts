@@ -64,6 +64,56 @@ import { runAllVerifications, formatErrorsForAgent, hasVerificationErrors, getVe
 import { gatherSmartContext, formatSmartContext, extractTargetFile } from './smartContext';
 import { planTasks, getNextTask, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
 
+// ─── Context window compression ───────────────────────────────────────────────
+
+const CONTEXT_COMPRESS_THRESHOLD = 80_000; // ~20K tokens, safe for all providers
+const RECENT_MESSAGES_TO_KEEP = 6; // Always preserve the last N messages verbatim
+
+/**
+ * Compress old messages when the conversation grows too large.
+ * Keeps the first message (original task) and the last RECENT_MESSAGES_TO_KEEP
+ * messages intact. Everything in between is replaced with a compact summary
+ * built from the actions log — no extra API call needed.
+ */
+function compressMessages(messages: Message[], actions: ActionLog[]): Message[] {
+  const totalChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+  if (totalChars < CONTEXT_COMPRESS_THRESHOLD) return messages;
+
+  // Need at least first + recent block to be worth compressing
+  if (messages.length <= RECENT_MESSAGES_TO_KEEP + 1) return messages;
+
+  const firstMessage = messages[0];
+  const recentMessages = messages.slice(-RECENT_MESSAGES_TO_KEEP);
+
+  // Build summary from action log
+  const fileWrites = actions.filter(a => a.type === 'write' || a.type === 'edit');
+  const fileDeletes = actions.filter(a => a.type === 'delete');
+  const commands = actions.filter(a => a.type === 'command');
+  const reads = actions.filter(a => a.type === 'read');
+
+  const summaryLines: string[] = ['[Context compressed — summary of work so far]'];
+  if (fileWrites.length > 0) {
+    summaryLines.push(`Files written/edited (${fileWrites.length}): ${fileWrites.map(a => a.target).join(', ')}`);
+  }
+  if (fileDeletes.length > 0) {
+    summaryLines.push(`Files deleted: ${fileDeletes.map(a => a.target).join(', ')}`);
+  }
+  if (commands.length > 0) {
+    summaryLines.push(`Commands run: ${commands.map(a => a.target).join(', ')}`);
+  }
+  if (reads.length > 0) {
+    summaryLines.push(`Files read (${reads.length}): ${reads.slice(-10).map(a => a.target).join(', ')}`);
+  }
+  summaryLines.push('[End of summary — continuing from current state]');
+
+  const summaryMessage: Message = { role: 'user', content: summaryLines.join('\n') };
+
+  debug(`Context compressed: ${totalChars} chars → keeping first + summary + last ${RECENT_MESSAGES_TO_KEEP} messages`);
+  return [firstMessage, summaryMessage, ...recentMessages];
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 export interface AgentOptions {
   maxIterations: number;
   maxDuration: number; // milliseconds
@@ -230,7 +280,15 @@ export async function runAgent(
       
       iteration++;
       opts.onIteration?.(iteration, `Iteration ${iteration}/${opts.maxIterations}`);
-      
+
+      // Compress messages if context window is getting full
+      const compressed = compressMessages(messages, actions);
+      if (compressed !== messages) {
+        messages.length = 0;
+        messages.push(...compressed);
+        opts.onIteration?.(iteration, `Context compressed (${compressed.length} messages kept)`);
+      }
+
       debug(`Starting iteration ${iteration}/${opts.maxIterations}, actions: ${actions.length}`);
       
       // Calculate dynamic timeout based on task complexity
