@@ -3,7 +3,7 @@
  * Only writes changes to terminal - minimizes flickering
  */
 
-import { cursor, screen, style, stripAnsi, visibleLength, charWidth } from './ansi';
+import { cursor, screen, style, visibleLength, charWidth } from './ansi';
 
 export interface Cell {
   char: string;
@@ -149,8 +149,8 @@ export class Screen {
         }
         if (escEnd < text.length) {
           const escSeq = text.slice(i, escEnd + 1);
-          // Reset code clears style, otherwise accumulate
-          if (escSeq === '\x1b[0m') {
+          // Reset code clears accumulated style back to prefix
+          if (escSeq === '\x1b[0m' || escSeq === '\x1b[m') {
             currentStyle = prefixStyle;
           } else {
             currentStyle += escSeq;
@@ -210,8 +210,13 @@ export class Screen {
         line = word;
         lineLength = wordLength;
       } else {
-        line += (line ? ' ' : '') + word;
-        lineLength += wordLength + (line.length > wordLength ? 1 : 0);
+        if (line) {
+          line += ' ' + word;
+          lineLength += 1 + wordLength;
+        } else {
+          line = word;
+          lineLength = wordLength;
+        }
       }
     }
     
@@ -263,8 +268,17 @@ export class Screen {
           continue;
         }
 
-        // Skip wide-char placeholder cells
+        // Wide-char placeholder cell (right half of emoji/CJK):
+        // If previously rendered something here, clear it with a space so there's no ghost.
+        // The wide char itself (left cell) already moved the terminal cursor past this cell.
         if (cell.char === '') {
+          if (renderedCell.char !== '') {
+            // Previous char here was something visible — overwrite with space to clear ghost
+            output += cursor.to(y + 1, x + 1);
+            output += style.reset;
+            lastStyle = '';
+            output += ' ';
+          }
           this.rendered[y][x] = { ...cell };
           continue;
         }
