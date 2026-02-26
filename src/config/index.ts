@@ -224,7 +224,7 @@ function createConfig(): Conf<ConfigSchema> {
     agentConfirmation: 'dangerous',
     agentAutoCommit: false,
     agentAutoCommitBranch: false,
-    agentAutoVerify: true,
+    agentAutoVerify: false,
     agentMaxFixAttempts: 3,
     agentMaxIterations: 100,
     agentMaxDuration: 20,
