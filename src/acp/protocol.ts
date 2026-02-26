@@ -294,4 +294,47 @@ export interface FsWriteTextFileParams {
   content: string;
 }
 
+// ─── terminal methods (agent → client) ───────────────────────────────────────
+
+export interface TerminalCreateParams {
+  sessionId: string;
+  command: string;
+  args: string[];
+  cwd: string;
+  env?: Record<string, string>;
+  outputByteLimit?: number;
+}
+
+export interface TerminalCreateResult {
+  terminalId: string;
+}
+
+export interface TerminalWaitForExitParams {
+  sessionId: string;
+  terminalId: string;
+}
+
+export type TerminalExitStatus =
+  | { type: 'exited'; code: number }
+  | { type: 'killed' };
+
+export interface TerminalWaitForExitResult {
+  exitStatus: TerminalExitStatus;
+}
+
+export interface TerminalOutputParams {
+  sessionId: string;
+  terminalId: string;
+}
+
+export interface TerminalOutputResult {
+  output: string;
+  exitStatus?: TerminalExitStatus;
+}
+
+export interface TerminalReleaseParams {
+  sessionId: string;
+  terminalId: string;
+}
+
 export type AcpMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
