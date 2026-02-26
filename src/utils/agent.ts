@@ -591,7 +591,7 @@ export async function runAgent(
           opts.onIteration?.(iteration, `Verification attempt ${fixAttempt + 1}/${maxFixAttempts}`);
 
           // Run verifications
-          const verifyResults = runAllVerifications(projectContext.root || process.cwd(), {
+          const verifyResults = await runAllVerifications(projectContext.root || process.cwd(), {
             runBuild: true,
             runTest: true,
             runTypecheck: true,
