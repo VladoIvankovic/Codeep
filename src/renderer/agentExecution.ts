@@ -316,6 +316,12 @@ export async function executeAgentTask(
       abortSignal: abortController.signal,
     });
 
+    // Hide agent progress panel before adding completion message so the full
+    // message area is used when rendering (avoids truncated finalResponse)
+    ctx.setAgentRunning(false);
+    ctx.setAbortController(null);
+    app.setAgentRunning(false);
+
     if (result.success) {
       const fileChanges = result.actions.filter(a => a.type === 'write' || a.type === 'edit' || a.type === 'delete');
       const otherActions = result.actions.filter(a => a.type !== 'write' && a.type !== 'edit' && a.type !== 'delete');
@@ -383,9 +389,11 @@ export async function executeAgentTask(
     app.addMessage({ role: 'assistant', content: `Agent error: ${err.message}` });
     app.notify(`Agent error: ${err.message}`, 5000);
   } finally {
+    // Ensure cleanup even if an exception occurs (may already be false from success path)
     ctx.setAgentRunning(false);
     ctx.setAbortController(null);
     app.setAgentRunning(false);
+    app.render();
   }
 }
 
