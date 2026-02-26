@@ -357,7 +357,7 @@ export async function runAgent(
             consecutiveTimeouts++;
             debug(`Timeout occurred (retry ${retryCount}/${maxTimeoutRetries}, consecutive: ${consecutiveTimeouts})`);
             opts.onIteration?.(iteration, `API timeout, retrying (${retryCount}/${maxTimeoutRetries})...`);
-            
+
             if (retryCount >= maxTimeoutRetries) {
               // Too many retries for this iteration
               if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
@@ -371,20 +371,33 @@ export async function runAgent(
                 };
                 return result;
               }
-              
+
               // Skip this iteration and try next
-              messages.push({ 
-                role: 'user', 
-                content: 'The previous request timed out. Please continue with the task, using simpler responses if needed.' 
+              messages.push({
+                role: 'user',
+                content: 'The previous request timed out. Please continue with the task, using simpler responses if needed.'
               });
               break;
             }
-            
+
             // Wait before retry (exponential backoff)
             await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
             continue;
           }
-          
+
+          // Handle 429 rate-limit / server overload with retry + backoff
+          if (err.message.includes('429')) {
+            retryCount++;
+            const waitSec = Math.min(5 * retryCount, 30); // 5s, 10s, 15s … max 30s
+            debug(`429 rate limit (retry ${retryCount}/${maxTimeoutRetries}), waiting ${waitSec}s`);
+            opts.onIteration?.(iteration, `Server busy (429), retrying in ${waitSec}s... (${retryCount}/${maxTimeoutRetries})`);
+            if (retryCount >= maxTimeoutRetries) {
+              throw error; // Give up after max retries
+            }
+            await new Promise(resolve => setTimeout(resolve, waitSec * 1000));
+            continue;
+          }
+
           throw error;
         }
       }
