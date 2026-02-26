@@ -2567,11 +2567,24 @@ export class App {
       const { formatted, hasFormatting } = this.applyInlineMarkdown(line);
 
       if (hasFormatting) {
-        lines.push({
-          text: prefix + formatted,
-          style: prefixStyle,
-          raw: true,
-        });
+        // Use original (no-ANSI) line to measure and wrap, then apply markdown per segment
+        if (stringWidth(line) > maxWidth - prefix.length) {
+          const wrapped = this.wordWrap(line, maxWidth - prefix.length);
+          for (let j = 0; j < wrapped.length; j++) {
+            const { formatted: segFormatted } = this.applyInlineMarkdown(wrapped[j]);
+            lines.push({
+              text: (j === 0 ? prefix : '  ') + segFormatted,
+              style: j === 0 ? prefixStyle : '',
+              raw: true,
+            });
+          }
+        } else {
+          lines.push({
+            text: prefix + formatted,
+            style: prefixStyle,
+            raw: true,
+          });
+        }
       } else {
         // Plain text - word wrap as before
         if (stringWidth(line) > maxWidth - prefix.length) {
@@ -2800,20 +2813,33 @@ export class App {
     const words = text.split(' ');
     const lines: string[] = [];
     let currentLine = '';
-    
+
     for (const word of words) {
-      if (stringWidth(currentLine) + stringWidth(word) + 1 > maxWidth && currentLine) {
+      const wordW = stringWidth(word);
+      // Hard-break words wider than maxWidth (e.g. long file paths with no spaces)
+      if (wordW > maxWidth) {
+        if (currentLine) { lines.push(currentLine); currentLine = ''; }
+        // Slice the word into maxWidth chunks
+        let remaining = word;
+        while (stringWidth(remaining) > maxWidth) {
+          lines.push(remaining.slice(0, maxWidth));
+          remaining = remaining.slice(maxWidth);
+        }
+        currentLine = remaining;
+        continue;
+      }
+      if (stringWidth(currentLine) + wordW + 1 > maxWidth && currentLine) {
         lines.push(currentLine);
         currentLine = word;
       } else {
         currentLine += (currentLine ? ' ' : '') + word;
       }
     }
-    
+
     if (currentLine) {
       lines.push(currentLine);
     }
-    
+
     return lines.length > 0 ? lines : [''];
   }
 }
