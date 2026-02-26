@@ -384,31 +384,36 @@ export async function runAgent(
             continue;
           }
 
-          // Retry on transient errors: rate-limit, server errors, network failures
+          // All non-abort errors are retryable — retry with backoff
+          retryCount++;
           const isRateLimit = err.message.includes('429');
           const isServerError = err.message.includes('500') || err.message.includes('502') || err.message.includes('503') || err.message.includes('529');
-          const isNetworkError = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EPIPE', 'EAI_AGAIN', 'fetch failed', 'network', 'socket hang up'].some(code => err.message.toLowerCase().includes(code.toLowerCase()));
-          if (isRateLimit || isServerError || isNetworkError) {
-            retryCount++;
-            const waitSec = Math.min(5 * retryCount, 30); // 5s, 10s, 15s … max 30s
-            const code = isRateLimit ? '429' : isServerError ? '5xx' : 'network';
-            debug(`${code} error (retry ${retryCount}/${maxTimeoutRetries}), waiting ${waitSec}s`);
-            opts.onIteration?.(iteration, `Server error (${code}), retrying in ${waitSec}s... (${retryCount}/${maxTimeoutRetries})`);
-            if (retryCount >= maxTimeoutRetries) {
-              throw error; // Give up after max retries
-            }
-            await new Promise(resolve => setTimeout(resolve, waitSec * 1000));
-            continue;
-          }
-
-          // Unknown error — retry once before giving up
-          retryCount++;
+          const code = isRateLimit ? '429' : isServerError ? '5xx' : 'error';
+          const waitSec = Math.min(5 * retryCount, 30);
+          debug(`${code} (retry ${retryCount}/${maxTimeoutRetries}): ${err.message}`);
+          opts.onIteration?.(iteration, `API ${code}, retrying in ${waitSec}s... (${retryCount}/${maxTimeoutRetries})`);
           if (retryCount >= maxTimeoutRetries) {
-            throw error;
+            // Don't throw — skip this iteration like timeouts do
+            consecutiveTimeouts++;
+            if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
+              result = {
+                success: false,
+                iterations: iteration,
+                actions,
+                finalResponse: actions.length > 0
+                  ? `Agent made progress (${actions.length} actions) but API errors prevented completion. You can continue by running the agent again.`
+                  : 'Agent could not complete the task due to repeated API errors. Check your API key and network connection.',
+                error: `API failed after ${maxTimeoutRetries} retries: ${err.message}`,
+              };
+              return result;
+            }
+            messages.push({
+              role: 'user',
+              content: 'The previous request failed. Please continue with the task.'
+            });
+            break; // Break retry loop, continue main loop
           }
-          debug(`Unknown API error (retry ${retryCount}/${maxTimeoutRetries}): ${err.message}`);
-          opts.onIteration?.(iteration, `API error, retrying... (${retryCount}/${maxTimeoutRetries})`);
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          await new Promise(resolve => setTimeout(resolve, waitSec * 1000));
           continue;
         }
       }
