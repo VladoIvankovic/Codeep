@@ -449,27 +449,17 @@ export async function runAgent(
           .replace(/```(?:json|tool_call)?\s*\{[\s\S]*?\}\s*```/g, '') // Only strip tool-call-like code blocks
           .trim();
         
-        // Check if model indicates it wants to continue (incomplete response)
-        // Covers English and Croatian/other language responses
-        const continueIndicators = [
-          // English
-          'let me', 'i will', 'i\'ll', 'now i', 'next i',
-          'creating', 'writing', 'generating',
-          'let\'s', 'going to', 'need to create', 'need to write',
-          'first,', 'first let', 'now let', 'i need to', 'i should',
-          'i\'ll check', 'i\'ll look', 'let me check', 'let me look',
-          // Croatian / generic Slavic
-          'provjer', 'pogledaj', 'pogledajmo', 'hajde', 'trebam',
-          'treba', 'napravit', 'napravimo', 'sada ću', 'sad ću',
-          'idemo', 'prvo ću', 'prvo trebam', 'moram', 'ću sada',
-        ];
-        const lowerResponse = finalResponse.toLowerCase();
-        const wantsToContinue = continueIndicators.some(indicator => lowerResponse.includes(indicator));
-        
-        // Also detect language-agnostic signals: response ending with ':' strongly
-        // indicates the model was about to list steps or execute tools
-        const endsWithColon = finalResponse.endsWith(':') || finalResponse.endsWith(':\n');
-        const hasIncompleteWork = (wantsToContinue || endsWithColon) && finalResponse.length < 800
+        // Detect incomplete response using language-agnostic structural signals only.
+        // Keyword lists are brittle (language-dependent) — rely on punctuation/length instead.
+        const trimmed = finalResponse.trimEnd();
+        // A response ending with ':' means the model was about to list steps or execute tools
+        const endsWithColon = trimmed.endsWith(':');
+        // A very short response (< 120 chars) with no sentence-ending punctuation is likely
+        // a mid-thought fragment, not a real conclusion
+        const lastChar = trimmed.slice(-1);
+        const hasProperEnding = ['.', '!', '?', '"', '\'', '`', ')'].includes(lastChar);
+        const isShortFragment = trimmed.length < 120 && !hasProperEnding;
+        const hasIncompleteWork = (endsWithColon || isShortFragment)
           && incompleteWorkRetries < maxIncompleteWorkRetries;
 
         if (hasIncompleteWork) {
