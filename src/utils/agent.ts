@@ -137,7 +137,7 @@ export interface AgentOptions {
   onTaskUpdate?: (task: SubTask) => void;
   abortSignal?: AbortSignal;
   dryRun?: boolean;
-  autoVerify?: boolean;
+  autoVerify?: 'off' | 'build' | 'typecheck' | 'test' | 'all' | boolean;
   maxFixAttempts?: number;
   usePlanning?: boolean; // Enable task planning for complex tasks
   chatHistory?: Array<{ role: 'user' | 'assistant'; content: string }>; // Prior chat session context
@@ -587,10 +587,12 @@ export async function runAgent(
     }
     
     // Self-verification: Run build/test and fix errors if needed
-    const autoVerify = opts.autoVerify ?? config.get('agentAutoVerify');
+    const autoVerifyRaw = opts.autoVerify ?? config.get('agentAutoVerify');
+    // Support legacy boolean values: true -> 'all', false -> 'off'
+    const autoVerify = autoVerifyRaw === true ? 'all' : autoVerifyRaw === false ? 'off' : autoVerifyRaw;
     const maxFixAttempts = opts.maxFixAttempts ?? config.get('agentMaxFixAttempts');
-    
-    if (autoVerify && !opts.dryRun) {
+
+    if (autoVerify !== 'off' && !opts.dryRun) {
       // Check if we made any file changes worth verifying
       const hasFileChanges = actions.some(a => 
         a.type === 'write' || a.type === 'edit' || a.type === 'delete'
@@ -608,11 +610,11 @@ export async function runAgent(
 
           opts.onIteration?.(iteration, `Verification attempt ${fixAttempt + 1}/${maxFixAttempts}`);
 
-          // Run verifications
+          // Run verifications based on selected mode
           const verifyResults = await runAllVerifications(projectContext.root || process.cwd(), {
-            runBuild: true,
-            runTest: true,
-            runTypecheck: true,
+            runBuild: autoVerify === 'all' || autoVerify === 'build',
+            runTest: autoVerify === 'all' || autoVerify === 'test',
+            runTypecheck: autoVerify === 'all' || autoVerify === 'typecheck',
             runLint: false,
           });
 

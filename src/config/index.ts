@@ -59,7 +59,7 @@ interface ConfigSchema {
   agentConfirmation: 'always' | 'dangerous' | 'never'; // Confirmation mode for agent actions
   agentAutoCommit: boolean; // Auto-commit after agent completes
   agentAutoCommitBranch: boolean; // Create new branch for commits
-  agentAutoVerify: boolean; // Auto-run build/test after changes
+  agentAutoVerify: 'off' | 'build' | 'typecheck' | 'test' | 'all'; // Auto-run verification after changes
   agentMaxFixAttempts: number; // Max attempts to fix errors (default: 3)
   agentMaxIterations: number; // Max agent iterations (default: 100)
   agentMaxDuration: number; // Max agent duration in minutes (default: 20)
@@ -224,7 +224,7 @@ function createConfig(): Conf<ConfigSchema> {
     agentConfirmation: 'dangerous',
     agentAutoCommit: false,
     agentAutoCommitBranch: false,
-    agentAutoVerify: false,
+    agentAutoVerify: 'off',
     agentMaxFixAttempts: 3,
     agentMaxIterations: 100,
     agentMaxDuration: 20,
