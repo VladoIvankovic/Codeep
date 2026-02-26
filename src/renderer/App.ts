@@ -2196,7 +2196,8 @@ export class App {
     this.screen.write(titlePadLeft + title.length, y, '─'.repeat(Math.max(0, titlePadRight)), PRIMARY_COLOR);
     y++;
     
-    // Current action line (no side borders)
+    // Current action line (clear first to avoid stale text from longer previous paths)
+    this.screen.writeLine(y, '');
     if (this.agentActions.length > 0) {
       const lastAction = this.agentActions[this.agentActions.length - 1];
       const actionLabel = this.getActionLabel(lastAction.type);
@@ -2210,9 +2211,10 @@ export class App {
     }
     y++;
     
-    // Stats line: Files and step info
+    // Stats line: Files and step info (clear line first to avoid stale text)
+    this.screen.writeLine(y, '');
     let x = 1;
-    
+
     // File changes
     if (stats.writes > 0) {
       const txt = `+${stats.writes}`;
