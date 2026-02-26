@@ -198,8 +198,8 @@ export async function executeTool(toolCall: ToolCall, projectRoot: string): Prom
           return { success: false, output: '', error: 'Missing required parameter: path', tool, parameters };
         }
         if (content === undefined || content === null) {
-          debug('write_file: content was undefined, using placeholder');
-          content = '<!-- Content was not provided -->\n';
+          debug('write_file failed: content was undefined');
+          return { success: false, output: '', error: 'File content was empty or truncated by the API. Try writing a smaller file or splitting into multiple writes.', tool, parameters };
         }
 
         const validation = validatePath(path, projectRoot);

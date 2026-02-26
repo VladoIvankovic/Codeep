@@ -475,31 +475,29 @@ export async function runAllVerifications(
 ): Promise<VerifyResult[]> {
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const results: VerifyResult[] = [];
-  
-  // Run typecheck first (fastest feedback)
-  if (opts.runTypecheck) {
-    const result = await runTypecheckVerification(projectRoot, opts.timeout);
-    if (result) results.push(result);
+
+  // Run typecheck and lint in parallel (independent checks)
+  const parallel: Promise<VerifyResult | null>[] = [];
+  if (opts.runTypecheck) parallel.push(runTypecheckVerification(projectRoot, opts.timeout));
+  if (opts.runLint) parallel.push(runLintVerification(projectRoot, opts.timeout));
+
+  if (parallel.length > 0) {
+    const parallelResults = await Promise.all(parallel);
+    for (const r of parallelResults) { if (r) results.push(r); }
   }
-  
-  // Run build
+
+  // Run build after typecheck/lint (may depend on them)
   if (opts.runBuild) {
     const result = await runBuildVerification(projectRoot, opts.timeout);
     if (result) results.push(result);
   }
-  
-  // Run lint
-  if (opts.runLint) {
-    const result = await runLintVerification(projectRoot, opts.timeout);
-    if (result) results.push(result);
-  }
-  
-  // Run tests last (slowest)
+
+  // Run tests last (slowest, depends on build)
   if (opts.runTest) {
     const result = await runTestVerification(projectRoot, opts.timeout);
     if (result) results.push(result);
   }
-  
+
   return results;
 }
 

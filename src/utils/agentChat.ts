@@ -183,7 +183,7 @@ export async function agentChat(
 
   const timeout = setTimeout(() => { isTimeout = true; controller.abort(); }, timeoutMs);
   if (abortSignal) {
-    abortSignal.addEventListener('abort', () => { isTimeout = false; controller.abort(); });
+    abortSignal.addEventListener('abort', () => { isTimeout = false; controller.abort(); }, { once: true });
   }
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -301,7 +301,7 @@ export async function agentChatFallback(
 
   const timeout = setTimeout(() => { isTimeout = true; controller.abort(); }, timeoutMs);
   if (abortSignal) {
-    abortSignal.addEventListener('abort', () => { isTimeout = false; controller.abort(); });
+    abortSignal.addEventListener('abort', () => { isTimeout = false; controller.abort(); }, { once: true });
   }
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };

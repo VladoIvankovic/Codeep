@@ -13,6 +13,17 @@ import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession } from '../config/index';
 import { getGitStatus } from '../utils/git';
 
+function getActionType(toolName: string): string {
+  return toolName.includes('write') ? 'write' :
+    toolName.includes('edit') ? 'edit' :
+    toolName.includes('read') ? 'read' :
+    toolName.includes('delete') ? 'delete' :
+    toolName.includes('list') ? 'list' :
+    toolName.includes('search') || toolName.includes('grep') ? 'search' :
+    toolName.includes('mkdir') ? 'mkdir' :
+    toolName.includes('fetch') ? 'fetch' : 'command';
+}
+
 // ─── Context ─────────────────────────────────────────────────────────────────
 
 export interface AppExecutionContext {
@@ -217,14 +228,7 @@ export async function executeAgentTask(
           (tool.parameters.command as string) ||
           (tool.parameters.pattern as string) || '';
 
-        const actionType = toolName.includes('write') ? 'write' :
-          toolName.includes('edit') ? 'edit' :
-          toolName.includes('read') ? 'read' :
-          toolName.includes('delete') ? 'delete' :
-          toolName.includes('list') ? 'list' :
-          toolName.includes('search') || toolName.includes('grep') ? 'search' :
-          toolName.includes('mkdir') ? 'mkdir' :
-          toolName.includes('fetch') ? 'fetch' : 'command';
+        const actionType = getActionType(toolName);
 
         const shortTarget = target.length > 50 ? '...' + target.slice(-47) : target;
         app.setAgentThinking(`${actionType}: ${shortTarget}`);
@@ -298,14 +302,7 @@ export async function executeAgentTask(
         const toolName = toolCall.tool.toLowerCase();
         const target = (toolCall.parameters.path as string) || (toolCall.parameters.command as string) || '';
 
-        const actionType = toolName.includes('write') ? 'write' :
-          toolName.includes('edit') ? 'edit' :
-          toolName.includes('read') ? 'read' :
-          toolName.includes('delete') ? 'delete' :
-          toolName.includes('list') ? 'list' :
-          toolName.includes('search') || toolName.includes('grep') ? 'search' :
-          toolName.includes('mkdir') ? 'mkdir' :
-          toolName.includes('fetch') ? 'fetch' : 'command';
+        const actionType = getActionType(toolName);
 
         app.updateAgentProgress(0, {
           type: actionType,
