@@ -16,7 +16,6 @@ const debug = (...args: unknown[]) => {
 // Import chat layer (prompt building + API calls)
 import {
   agentChat,
-  agentChatFallback as _agentChatFallback,
   getAgentSystemPrompt,
   getFallbackSystemPrompt,
   TimeoutError,
@@ -31,7 +30,7 @@ export type { AgentChatResponse };
  * Calculate dynamic timeout based on task complexity
  * Complex tasks (creating pages, multiple files) need more time
  */
-function calculateDynamicTimeout(prompt: string, iteration: number, baseTimeout: number): number {
+function calculateDynamicTimeout(iteration: number, baseTimeout: number): number {
   // Simple approach: just use base timeout with small multiplier for later iterations
   // Complex calculations were causing more problems than they solved
   
@@ -318,7 +317,7 @@ export async function runAgent(
       debug(`Starting iteration ${iteration}/${opts.maxIterations}, actions: ${actions.length}`);
       
       // Calculate dynamic timeout based on task complexity
-      const dynamicTimeout = calculateDynamicTimeout(prompt, iteration, baseTimeout);
+      const dynamicTimeout = calculateDynamicTimeout(iteration, baseTimeout);
       debug(`Using timeout: ${dynamicTimeout}ms (base: ${baseTimeout}ms)`);
       
       // Get AI response with retry logic for timeouts
@@ -434,7 +433,7 @@ export async function runAgent(
           .replace(/<arg_key>[\s\S]*?<\/arg_value>/gi, '')
           .replace(/Tool parameters:[\s\S]*?(?=\n\n|$)/gi, '')
           .replace(/\{'path'[\s\S]*?\}/g, '')
-          .replace(/```[\s\S]*?```/g, '')
+          .replace(/```(?:json|tool_call)?\s*\{[\s\S]*?\}\s*```/g, '') // Only strip tool-call-like code blocks
           .trim();
         
         // Check if model indicates it wants to continue (incomplete response)
@@ -539,10 +538,12 @@ export async function runAgent(
           toolResults.push(`Tool ${toolCall.tool} failed:\n${toolResult.error || 'Unknown error'}`);
         }
 
-        // Invalidate read cache when a file is written/edited
+        // Invalidate read cache when files may have changed
         if ((toolCall.tool === 'write_file' || toolCall.tool === 'edit_file') && toolResult.success) {
           const filePath = toolCall.parameters.path as string || '';
           readCache.delete(filePath);
+        } else if (toolCall.tool === 'execute_command' && toolResult.success) {
+          readCache.clear(); // Commands can modify arbitrary files
         }
       }
       
@@ -685,7 +686,8 @@ export async function runAgent(
               actions.push(actionLog);
               
               if (toolResult.success) {
-                fixResults.push(`Tool ${toolCall.tool} succeeded:\n${toolResult.output}`);
+                const truncated = truncateToolResult(toolResult.output, toolCall.tool);
+                fixResults.push(`Tool ${toolCall.tool} succeeded:\n${truncated}`);
               } else {
                 fixResults.push(`Tool ${toolCall.tool} failed:\n${toolResult.error || 'Unknown error'}`);
               }

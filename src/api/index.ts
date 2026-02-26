@@ -351,7 +351,7 @@ async function chatOpenAI(
   
   // Listen to external abort signal if provided (user cancel)
   if (abortSignal) {
-    abortSignal.addEventListener('abort', () => controller.abort());
+    abortSignal.addEventListener('abort', () => controller.abort(), { once: true });
   }
 
   // Build headers based on auth type
@@ -488,7 +488,7 @@ async function chatAnthropic(
   
   // Listen to external abort signal if provided (user cancel)
   if (abortSignal) {
-    abortSignal.addEventListener('abort', () => controller.abort());
+    abortSignal.addEventListener('abort', () => controller.abort(), { once: true });
   }
 
   // Build headers based on auth type

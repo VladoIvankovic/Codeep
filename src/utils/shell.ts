@@ -153,8 +153,8 @@ export function validateCommand(
   
   // Special validation for rm command
   if (command === 'rm') {
-    const hasRecursive = args.some(a => a.includes('r'));
-    const hasForce = args.some(a => a.includes('f'));
+    const hasRecursive = args.some(a => a.startsWith('-') && a.includes('r'));
+    const hasForce = args.some(a => a.startsWith('-') && a.includes('f'));
     
     if (hasRecursive && hasForce) {
       // rm -rf requires extra validation
