@@ -387,7 +387,7 @@ export async function runAgent(
           // Retry on transient errors: rate-limit, server errors, network failures
           const isRateLimit = err.message.includes('429');
           const isServerError = err.message.includes('500') || err.message.includes('502') || err.message.includes('503') || err.message.includes('529');
-          const isNetworkError = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EPIPE', 'EAI_AGAIN'].some(code => err.message.includes(code));
+          const isNetworkError = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EPIPE', 'EAI_AGAIN', 'fetch failed', 'network', 'socket hang up'].some(code => err.message.toLowerCase().includes(code.toLowerCase()));
           if (isRateLimit || isServerError || isNetworkError) {
             retryCount++;
             const waitSec = Math.min(5 * retryCount, 30); // 5s, 10s, 15s … max 30s
@@ -401,7 +401,15 @@ export async function runAgent(
             continue;
           }
 
-          throw error;
+          // Unknown error — retry once before giving up
+          retryCount++;
+          if (retryCount >= maxTimeoutRetries) {
+            throw error;
+          }
+          debug(`Unknown API error (retry ${retryCount}/${maxTimeoutRetries}): ${err.message}`);
+          opts.onIteration?.(iteration, `API error, retrying... (${retryCount}/${maxTimeoutRetries})`);
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          continue;
         }
       }
       
