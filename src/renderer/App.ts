@@ -147,6 +147,7 @@ export class App {
   private agentMaxIterations = 0;
   private agentActions: Array<{ type: string; target: string; result: string }> = [];
   private agentThinking = '';
+  private agentWaitingForAI = false;
   
   // Paste detection state
   private pasteInfo: { chars: number; lines: number; preview: string; fullText: string } | null = null;
@@ -452,6 +453,7 @@ export class App {
       this.agentMaxIterations = 0;
       this.agentActions = [];
       this.agentThinking = '';
+      this.agentWaitingForAI = true;
       this.isLoading = false; // Clear loading state when agent takes over
       this.startSpinner();
     } else {
@@ -481,6 +483,11 @@ export class App {
    */
   setAgentThinking(text: string): void {
     this.agentThinking = text;
+    this.render();
+  }
+
+  setAgentWaitingForAI(waiting: boolean): void {
+    this.agentWaitingForAI = waiting;
     this.render();
   }
   
@@ -2198,7 +2205,9 @@ export class App {
     
     // Current action line (clear first to avoid stale text from longer previous paths)
     this.screen.writeLine(y, '');
-    if (this.agentActions.length > 0) {
+    if (this.agentWaitingForAI) {
+      this.screen.write(1, y, 'Thinking...', fg.gray);
+    } else if (this.agentActions.length > 0) {
       const lastAction = this.agentActions[this.agentActions.length - 1];
       const actionLabel = this.getActionLabel(lastAction.type);
       const actionColor = this.getActionColor(lastAction.type);
