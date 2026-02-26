@@ -16,8 +16,10 @@ import {
   ListSessionsParams, ListSessionsResult, AcpSessionInfo,
   DeleteSessionParams,
 } from './protocol.js';
-import { JsonRpcRequest, JsonRpcNotification } from './protocol.js';
+import { JsonRpcRequest, JsonRpcNotification, RequestPermissionResult } from './protocol.js';
 import { runAgentSession } from './session.js';
+import { PermissionOutcome } from '../utils/agent.js';
+import { ToolCall } from '../utils/tools.js';
 import { initWorkspace, loadWorkspace, handleCommand, AcpSession } from './commands.js';
 import { autoSaveSession, config, setProvider, listSessionsWithInfo, deleteSession as deleteSessionFile } from '../config/index.js';
 import { PROVIDERS } from '../config/providers.js';
@@ -521,6 +523,32 @@ export function startAcpServer(): Promise<void> {
               });
             }
           },
+          // Only request permission in Manual mode
+          onRequestPermission: session.currentModeId === 'manual'
+            ? async (toolCall: ToolCall): Promise<PermissionOutcome> => {
+                const permToolCallId = `perm_${randomUUID()}`;
+                const result = await transport.request('session/request_permission', {
+                  sessionId: params.sessionId,
+                  toolCall: {
+                    toolCallId: permToolCallId,
+                    toolName: toolCall.tool,
+                    toolInput: toolCall.parameters,
+                    status: 'pending',
+                    content: [],
+                  },
+                  options: [
+                    { optionId: 'allow_once',    name: 'Allow once',    kind: 'allow_once' },
+                    { optionId: 'allow_always',  name: 'Allow always',  kind: 'allow_always' },
+                    { optionId: 'reject_once',   name: 'Reject once',   kind: 'reject_once' },
+                    { optionId: 'reject_always', name: 'Reject always', kind: 'reject_always' },
+                  ],
+                }) as RequestPermissionResult | null;
+
+                // Map ACP outcome back to PermissionOutcome
+                if (!result || result.outcome.type === 'cancelled') return 'reject_once';
+                return result.outcome.optionId as PermissionOutcome;
+              }
+            : undefined,
         }).then(() => {
           session.history.push({ role: 'user', content: prompt });
           const agentResponse = agentResponseChunks.join('');
