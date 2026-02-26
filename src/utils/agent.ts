@@ -450,17 +450,26 @@ export async function runAgent(
           .trim();
         
         // Check if model indicates it wants to continue (incomplete response)
+        // Covers English and Croatian/other language responses
         const continueIndicators = [
-          'let me', 'i will', 'i\'ll', 'now i', 'next i', 
+          // English
+          'let me', 'i will', 'i\'ll', 'now i', 'next i',
           'creating', 'writing', 'generating',
-          'let\'s', 'going to', 'need to create', 'need to write'
+          'let\'s', 'going to', 'need to create', 'need to write',
+          'first,', 'first let', 'now let', 'i need to', 'i should',
+          'i\'ll check', 'i\'ll look', 'let me check', 'let me look',
+          // Croatian / generic Slavic
+          'provjer', 'pogledaj', 'pogledajmo', 'hajde', 'trebam',
+          'treba', 'napravit', 'napravimo', 'sada ću', 'sad ću',
+          'idemo', 'prvo ću', 'prvo trebam', 'moram', 'ću sada',
         ];
         const lowerResponse = finalResponse.toLowerCase();
         const wantsToContinue = continueIndicators.some(indicator => lowerResponse.includes(indicator));
         
-        // Also check if there were tool call parsing failures in this iteration
-        // by looking for incomplete actions (e.g., write_file without content)
-        const hasIncompleteWork = wantsToContinue && finalResponse.length < 500
+        // Also detect language-agnostic signals: response ending with ':' strongly
+        // indicates the model was about to list steps or execute tools
+        const endsWithColon = finalResponse.endsWith(':') || finalResponse.endsWith(':\n');
+        const hasIncompleteWork = (wantsToContinue || endsWithColon) && finalResponse.length < 800
           && incompleteWorkRetries < maxIncompleteWorkRetries;
 
         if (hasIncompleteWork) {
