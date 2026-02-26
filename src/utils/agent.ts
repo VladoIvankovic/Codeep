@@ -437,15 +437,16 @@ export async function runAgent(
       
       if (hasFileChanges) {
         let fixAttempt = 0;
-        
+        let previousErrorSignature = '';
+
         while (fixAttempt < maxFixAttempts) {
           // Check abort signal
           if (opts.abortSignal?.aborted) {
             break;
           }
-          
+
           opts.onIteration?.(iteration, `Verification attempt ${fixAttempt + 1}/${maxFixAttempts}`);
-          
+
           // Run verifications
           const verifyResults = runAllVerifications(projectContext.root || process.cwd(), {
             runBuild: true,
@@ -453,18 +454,18 @@ export async function runAgent(
             runTypecheck: true,
             runLint: false,
           });
-          
+
           opts.onVerification?.(verifyResults);
-          
+
           // Check if all passed
           if (!hasVerificationErrors(verifyResults)) {
             const summary = getVerificationSummary(verifyResults);
             finalResponse += `\n\n✓ Verification passed: ${summary.passed}/${summary.total} checks`;
             break;
           }
-          
+
           fixAttempt++;
-          
+
           // If we've exceeded attempts, report the errors
           if (fixAttempt >= maxFixAttempts) {
             const summary = getVerificationSummary(verifyResults);
@@ -474,13 +475,27 @@ export async function runAgent(
             finalResponse += `\n\n✗ Verification failed after ${fixAttempt} fix attempt(s): ${errorDetail}`;
             break;
           }
-          
-          // Ask agent to fix the errors
+
+          // Detect if the same errors are repeating (previous fix attempt didn't help)
           const errorMessage = formatErrorsForAgent(verifyResults);
+          const currentErrorSignature = errorMessage.slice(0, 200);
+          const errorsRepeating = previousErrorSignature !== '' && currentErrorSignature === previousErrorSignature;
+          previousErrorSignature = currentErrorSignature;
+
+          // Escalate the fix strategy based on attempt number and whether errors are repeating
+          let fixPrompt: string;
+          if (errorsRepeating) {
+            fixPrompt = `${errorMessage}\n\nYour previous fix attempt did NOT resolve these errors — they are still the same. You MUST try a completely different approach:\n- Re-read the affected files to understand the current state\n- Consider whether the root cause is different from what you assumed\n- Try an alternative implementation strategy\n- If it's a missing dependency, install it with execute_command`;
+          } else if (fixAttempt === 1) {
+            fixPrompt = `${errorMessage}\n\nFix these errors. Read the affected files first to understand the current state before making changes.`;
+          } else {
+            fixPrompt = `${errorMessage}\n\nAttempt ${fixAttempt}/${maxFixAttempts}: Your previous fix was partially successful but errors remain. Re-read ALL affected files and take a fresh look — consider whether there are related issues you missed.`;
+          }
+
           messages.push({ role: 'assistant', content: finalResponse });
-          messages.push({ 
-            role: 'user', 
-            content: `${errorMessage}\n\nFix these errors. After fixing, I will re-run verification.` 
+          messages.push({
+            role: 'user',
+            content: fixPrompt,
           });
           
           iteration++;
