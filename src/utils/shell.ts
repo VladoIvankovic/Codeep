@@ -2,7 +2,7 @@
  * Shell command execution utilities with safety checks
  */
 
-import { spawnSync, SpawnSyncOptions } from 'child_process';
+import { spawnSync, spawn, SpawnSyncOptions } from 'child_process';
 import { resolve, relative, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 
@@ -98,7 +98,7 @@ const ALLOWED_COMMANDS = new Set([
   'eslint', 'prettier', 'black', 'rustfmt',
   
   // Other common tools
-  'echo', 'pwd', 'which', 'env', 'date',
+  'echo', 'pwd', 'which', 'env', 'date', 'sleep',
   'curl', 'wget', // allowed but patterns checked
   'tar', 'unzip', 'zip',
   
@@ -258,6 +258,103 @@ export function executeCommand(
       args,
     };
   }
+}
+
+/**
+ * Execute a shell command asynchronously (non-blocking)
+ */
+export function executeCommandAsync(
+  command: string,
+  args: string[] = [],
+  options?: CommandOptions
+): Promise<CommandResult> {
+  return new Promise((resolve) => {
+    const startTime = Date.now();
+    const cwd = options?.cwd || process.cwd();
+    const timeout = options?.timeout || 60000;
+
+    // Validate command first (synchronous, fast)
+    const validation = validateCommand(command, args, options);
+    if (!validation.valid) {
+      resolve({
+        success: false,
+        stdout: '',
+        stderr: validation.reason || 'Command validation failed',
+        exitCode: -1,
+        duration: 0,
+        command,
+        args,
+      });
+      return;
+    }
+
+    // Ensure cwd exists
+    if (!existsSync(cwd)) {
+      resolve({
+        success: false,
+        stdout: '',
+        stderr: `Working directory does not exist: ${cwd}`,
+        exitCode: -1,
+        duration: 0,
+        command,
+        args,
+      });
+      return;
+    }
+
+    const child = spawn(command, args, {
+      cwd,
+      env: { ...process.env, ...options?.env },
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
+    child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      const duration = Date.now() - startTime;
+      resolve({
+        success: false,
+        stdout,
+        stderr: `Command timed out after ${timeout}ms`,
+        exitCode: -1,
+        duration,
+        command,
+        args,
+      });
+    }, timeout);
+
+    child.on('close', (code: number | null) => {
+      clearTimeout(timer);
+      const duration = Date.now() - startTime;
+      resolve({
+        success: code === 0,
+        stdout,
+        stderr,
+        exitCode: code ?? -1,
+        duration,
+        command,
+        args,
+      });
+    });
+
+    child.on('error', (err: Error) => {
+      clearTimeout(timer);
+      const duration = Date.now() - startTime;
+      resolve({
+        success: false,
+        stdout: '',
+        stderr: err.message,
+        exitCode: -1,
+        duration,
+        command,
+        args,
+      });
+    });
+  });
 }
 
 /**
