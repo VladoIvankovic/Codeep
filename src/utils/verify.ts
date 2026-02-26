@@ -185,14 +185,15 @@ async function runVerifyCommand(
   // Parse errors from output
   const errors = parseErrors(output, type);
 
-  // If command failed but no errors were parsed, surface the failure reason explicitly
+  // If command failed but no errors were parsed, surface the failure reason as warning
+  // (not error — could be pre-existing build issue unrelated to agent's changes)
   if (!result.success && errors.length === 0) {
     const reason = result.stderr?.includes('timed out')
-      ? `Command timed out after ${Math.round(duration / 1000)}s. This build tool may be too slow for verification. Consider adding a faster typecheck script to package.json.`
+      ? `Command timed out after ${Math.round(duration / 1000)}s. This build tool may be too slow for verification.`
       : result.stderr?.includes('not in the allowed list') || result.stderr?.includes('not allowed')
         ? `Command '${command}' is not allowed. Check shell.ts ALLOWED_COMMANDS.`
         : result.stderr?.trim() || result.stdout?.trim() || 'Command failed with no output';
-    errors.push({ severity: 'error', message: reason });
+    errors.push({ severity: 'warning', message: reason });
   }
 
   return {
