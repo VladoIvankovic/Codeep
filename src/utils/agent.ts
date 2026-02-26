@@ -618,7 +618,24 @@ export async function runAgent(
 
           opts.onVerification?.(verifyResults);
 
-          // Check if all passed
+          // Filter errors: only keep those related to files the agent touched
+          const touchedFiles = new Set(
+            actions
+              .filter(a => a.type === 'write' || a.type === 'edit')
+              .map(a => a.target)
+          );
+          for (const vr of verifyResults) {
+            vr.errors = vr.errors.filter(e => {
+              if (!e.file) return true; // Keep errors without file info (build failures etc)
+              return touchedFiles.has(e.file) || [...touchedFiles].some(f => e.file!.endsWith(f) || f.endsWith(e.file!));
+            });
+            // Update success based on remaining errors
+            if (vr.errors.filter(e => e.severity === 'error').length === 0) {
+              vr.success = true;
+            }
+          }
+
+          // Check if all passed (after filtering)
           if (!hasVerificationErrors(verifyResults)) {
             const summary = getVerificationSummary(verifyResults);
             finalResponse += `\n\n✓ Verification passed: ${summary.passed}/${summary.total} checks`;
