@@ -466,13 +466,17 @@ export async function runAgent(
 
           fixAttempt++;
 
-          // If we've exceeded attempts, report the errors
+          // If we've exceeded fix attempts, hand back to the main agent loop
+          // instead of stopping — let it keep working freely without the verification constraint
           if (fixAttempt >= maxFixAttempts) {
-            const summary = getVerificationSummary(verifyResults);
-            const errorDetail = summary.errors > 0
-              ? `${summary.errors} error(s) remaining`
-              : `${summary.failed}/${summary.total} check(s) failing (exit code non-zero)`;
-            finalResponse += `\n\n✗ Verification failed after ${fixAttempt} fix attempt(s): ${errorDetail}`;
+            const errorMessage = formatErrorsForAgent(verifyResults);
+            messages.push({ role: 'assistant', content: finalResponse });
+            messages.push({
+              role: 'user',
+              content: `${errorMessage}\n\nVerification has failed ${fixAttempt} time(s). Stop trying the same approach. Step back, re-read ALL relevant files, and think about the root cause from scratch. Try a fundamentally different solution.`,
+            });
+            // Re-enter the main agent loop — it will continue until maxIterations
+            iteration++;
             break;
           }
 
