@@ -124,6 +124,8 @@ function compressMessages(messages: Message[], actions: ActionLog[]): Message[] 
 
 // ──────────────────────────────────────────────────────────────────────────────
 
+export type PermissionOutcome = 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always';
+
 export interface AgentOptions {
   maxIterations: number;
   maxDuration: number; // milliseconds
@@ -135,6 +137,7 @@ export interface AgentOptions {
   onVerification?: (results: VerifyResult[]) => void;
   onTaskPlan?: (plan: TaskPlan) => void;
   onTaskUpdate?: (task: SubTask) => void;
+  onRequestPermission?: (toolCall: ToolCall) => Promise<PermissionOutcome>;
   abortSignal?: AbortSignal;
   dryRun?: boolean;
   autoVerify?: 'off' | 'build' | 'typecheck' | 'test' | 'all' | boolean;
@@ -257,6 +260,10 @@ export async function runAgent(
   let consecutiveTimeouts = 0;
   let incompleteWorkRetries = 0;
   const maxIncompleteWorkRetries = 2;
+  // Track tools permanently allowed this session via allow_always
+  const alwaysAllowedTools = new Set<string>();
+  // Tools that require permission when onRequestPermission is set
+  const dangerousTools = new Set(['delete_file', 'execute_command']);
   const maxTimeoutRetries = 3;
   const maxConsecutiveTimeouts = 9; // Allow more consecutive timeouts before giving up
   const baseTimeout = config.get('agentApiTimeout');
@@ -488,9 +495,29 @@ export async function runAgent(
       
       for (const toolCall of toolCalls) {
         opts.onToolCall?.(toolCall);
-        
+
+        // Permission check for dangerous tools (only when callback is provided, e.g. ACP/Zed)
+        if (opts.onRequestPermission && dangerousTools.has(toolCall.tool) && !alwaysAllowedTools.has(toolCall.tool)) {
+          const outcome = await opts.onRequestPermission(toolCall);
+          if (outcome === 'allow_always') {
+            alwaysAllowedTools.add(toolCall.tool);
+          } else if (outcome === 'reject_once' || outcome === 'reject_always') {
+            const toolResult: ToolResult = {
+              success: false,
+              output: '',
+              error: `User rejected permission for ${toolCall.tool}`,
+              tool: toolCall.tool,
+              parameters: toolCall.parameters,
+            };
+            opts.onToolResult?.(toolResult, toolCall);
+            actions.push(createActionLog(toolCall, toolResult));
+            toolResults.push(`Tool ${toolCall.tool} was rejected by user.`);
+            continue;
+          }
+        }
+
         let toolResult: ToolResult;
-        
+
         if (opts.dryRun) {
           // In dry run mode, simulate success
           toolResult = {

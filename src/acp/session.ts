@@ -2,8 +2,9 @@
 // Bridges ACP parameters to the Codeep agent loop.
 
 import { join, isAbsolute } from 'path';
-import { runAgent } from '../utils/agent.js';
+import { runAgent, PermissionOutcome } from '../utils/agent.js';
 import { getProjectContext, ProjectContext } from '../utils/project.js';
+import { ToolCall } from '../utils/tools.js';
 
 export interface AgentSessionOptions {
   prompt: string;
@@ -13,6 +14,7 @@ export interface AgentSessionOptions {
   onChunk: (text: string) => void;
   onThought?: (text: string) => void;
   onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[], rawOutput?: string) => void;
+  onRequestPermission?: (toolCall: ToolCall) => Promise<PermissionOutcome>;
 }
 
 /**
@@ -163,6 +165,7 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
         toolCallIdMap.delete(mapKey);
       }
     },
+    onRequestPermission: opts.onRequestPermission,
   });
 
   // result.finalResponse is already emitted via onChunk streaming above;
