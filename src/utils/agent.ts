@@ -273,12 +273,20 @@ export async function runAgent(
     while (iteration < opts.maxIterations) {
       // Check timeout
       if (Date.now() - startTime > opts.maxDuration) {
+        const filesDone = actions.filter(a => a.type === 'write' || a.type === 'edit').map(a => a.target);
+        const durationMin = Math.round(opts.maxDuration / 60000);
+        const partialLines = [`Agent reached the time limit (${durationMin} min).`];
+        if (filesDone.length > 0) {
+          partialLines.push(`\n**Partial progress — files written/edited:**`);
+          [...new Set(filesDone)].forEach(f => partialLines.push(`  ✓ \`${f}\``));
+          partialLines.push(`\nYou can continue by running the agent again.`);
+        }
         result = {
           success: false,
           iterations: iteration,
           actions,
-          finalResponse: 'Agent timed out',
-          error: `Exceeded maximum duration of ${opts.maxDuration / 1000} seconds`,
+          finalResponse: partialLines.join('\n'),
+          error: `Exceeded maximum duration of ${durationMin} min`,
         };
         return result;
       }
