@@ -433,6 +433,19 @@ export function startAcpServer(): Promise<void> {
     const abortController = new AbortController();
     session.abortController = abortController;
 
+    // Plan tracking: build a live plan from tool calls as the agent works
+    // ACP spec: send complete list on every update, client replaces current plan
+    const planEntries = new Map<string, import('./protocol.js').PlanEntry>();
+    const sendPlan = () => {
+      transport.notify('session/update', {
+        sessionId: params.sessionId,
+        update: {
+          sessionUpdate: 'plan',
+          entries: [...planEntries.values()],
+        },
+      });
+    };
+
     const agentResponseChunks: string[] = [];
     const sendChunk = (text: string) => {
       agentResponseChunks.push(text);
@@ -510,6 +523,16 @@ export function startAcpServer(): Promise<void> {
                     : {}),
                 },
               });
+              // Add to plan as in_progress — only meaningful actions (not reads)
+              if (kind === 'edit' || kind === 'execute' || kind === 'delete') {
+                planEntries.set(toolCallId, {
+                  id: toolCallId,
+                  content: title || toolName,
+                  priority: kind === 'execute' ? 'high' : 'medium',
+                  status: 'in_progress',
+                });
+                sendPlan();
+              }
             } else {
               // tool_call_update: update status to completed/failed, with optional content
               transport.notify('session/update', {
@@ -521,6 +544,12 @@ export function startAcpServer(): Promise<void> {
                   ...(rawOutput !== undefined ? { rawOutput } : {}),
                 },
               });
+              // Mark plan entry as completed
+              const entry = planEntries.get(toolCallId);
+              if (entry) {
+                entry.status = 'completed';
+                sendPlan();
+              }
             }
           },
           // Only request permission in Manual mode

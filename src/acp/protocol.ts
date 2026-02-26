@@ -192,11 +192,24 @@ export interface SessionUpdateSessionInfo {
   updatedAt?: string;
 }
 
+export interface PlanEntry {
+  id: string;
+  content: string;
+  priority: 'high' | 'medium' | 'low';
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
+export interface SessionUpdatePlan {
+  sessionUpdate: 'plan';
+  entries: PlanEntry[];
+}
+
 export type SessionUpdateInner =
   | SessionUpdateAgentMessageChunk
   | SessionUpdateAgentThoughtChunk
   | SessionUpdateToolCall
   | SessionUpdateToolCallUpdate
+  | SessionUpdatePlan
   | SessionUpdateAvailableCommands
   | SessionUpdateCurrentMode
   | SessionUpdateConfigOption
