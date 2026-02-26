@@ -385,14 +385,15 @@ export async function runAgent(
             continue;
           }
 
-          // Handle 429 rate-limit and 500/502/503 server errors with retry + backoff
+          // Retry on transient errors: rate-limit, server errors, network failures
           const isRateLimit = err.message.includes('429');
-          const isServerError = err.message.includes('500') || err.message.includes('502') || err.message.includes('503');
-          if (isRateLimit || isServerError) {
+          const isServerError = err.message.includes('500') || err.message.includes('502') || err.message.includes('503') || err.message.includes('529');
+          const isNetworkError = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EPIPE', 'EAI_AGAIN'].some(code => err.message.includes(code));
+          if (isRateLimit || isServerError || isNetworkError) {
             retryCount++;
             const waitSec = Math.min(5 * retryCount, 30); // 5s, 10s, 15s … max 30s
-            const code = isRateLimit ? '429' : isServerError ? '5xx' : 'error';
-            debug(`${code} server error (retry ${retryCount}/${maxTimeoutRetries}), waiting ${waitSec}s`);
+            const code = isRateLimit ? '429' : isServerError ? '5xx' : 'network';
+            debug(`${code} error (retry ${retryCount}/${maxTimeoutRetries}), waiting ${waitSec}s`);
             opts.onIteration?.(iteration, `Server error (${code}), retrying in ${waitSec}s... (${retryCount}/${maxTimeoutRetries})`);
             if (retryCount >= maxTimeoutRetries) {
               throw error; // Give up after max retries
