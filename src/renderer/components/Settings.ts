@@ -130,11 +130,14 @@ export const SETTINGS: SettingItem[] = [
   {
     key: 'agentAutoVerify',
     label: 'Agent Auto-Verify',
-    getValue: () => config.get('agentAutoVerify') !== false,
+    getValue: () => config.get('agentAutoVerify'),
     type: 'select',
     options: [
-      { value: true, label: 'On' },
-      { value: false, label: 'Off' },
+      { value: 'off', label: 'Off' },
+      { value: 'build', label: 'Build only' },
+      { value: 'typecheck', label: 'Typecheck only' },
+      { value: 'test', label: 'Test only' },
+      { value: 'all', label: 'Build + Typecheck + Test' },
     ],
   },
   {
