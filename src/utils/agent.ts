@@ -329,6 +329,8 @@ export async function runAgent(
         // Also remove Tool parameters/tool call artifacts that AI sometimes includes in text
         finalResponse = content
           .replace(/<think>[\s\S]*?<\/think>/gi, '')
+          .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+          .replace(/<arg_key>[\s\S]*?<\/arg_value>/gi, '')
           .replace(/Tool parameters:[\s\S]*?(?=\n\n|$)/gi, '')
           .replace(/\{'path'[\s\S]*?\}/g, '')
           .replace(/```[\s\S]*?```/g, '')
@@ -466,7 +468,10 @@ export async function runAgent(
           // If we've exceeded attempts, report the errors
           if (fixAttempt >= maxFixAttempts) {
             const summary = getVerificationSummary(verifyResults);
-            finalResponse += `\n\n✗ Verification failed after ${fixAttempt} fix attempts: ${summary.errors} errors remaining`;
+            const errorDetail = summary.errors > 0
+              ? `${summary.errors} error(s) remaining`
+              : `${summary.failed}/${summary.total} check(s) failing (exit code non-zero)`;
+            finalResponse += `\n\n✗ Verification failed after ${fixAttempt} fix attempt(s): ${errorDetail}`;
             break;
           }
           
