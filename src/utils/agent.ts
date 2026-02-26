@@ -312,7 +312,7 @@ export async function runAgent(
       if (compressed !== messages) {
         messages.length = 0;
         messages.push(...compressed);
-        opts.onIteration?.(iteration, `Context compressed (${compressed.length} messages kept)`);
+        opts.onIteration?.(iteration, `Context compressed to save memory — continuing with last ${compressed.length} messages`);
       }
 
       debug(`Starting iteration ${iteration}/${opts.maxIterations}, actions: ${actions.length}`);
