@@ -313,7 +313,11 @@ export function executeCommandAsync(
     child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
     child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
 
+    let settled = false;
+
     const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
       child.kill('SIGTERM');
       const duration = Date.now() - startTime;
       resolve({
@@ -328,6 +332,8 @@ export function executeCommandAsync(
     }, timeout);
 
     child.on('close', (code: number | null) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       const duration = Date.now() - startTime;
       resolve({
@@ -342,6 +348,8 @@ export function executeCommandAsync(
     });
 
     child.on('error', (err: Error) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       const duration = Date.now() - startTime;
       resolve({
