@@ -9,7 +9,7 @@
 
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync, realpathSync } from 'fs';
 import { join, dirname, relative, resolve, isAbsolute } from 'path';
-import { executeCommand } from './shell';
+import { executeCommandAsync } from './shell';
 import { recordWrite, recordEdit, recordDelete, recordMkdir, recordCommand } from './history';
 import { loadIgnoreRules, isIgnored } from './gitignore';
 import { normalizeToolName } from './toolParsing';
@@ -308,7 +308,7 @@ export async function executeTool(toolCall: ToolCall, projectRoot: string): Prom
 
         recordCommand(command, args);
 
-        const result = executeCommand(command, args, {
+        const result = await executeCommandAsync(command, args, {
           cwd: projectRoot,
           projectRoot,
           timeout: 120000,
@@ -327,7 +327,7 @@ export async function executeTool(toolCall: ToolCall, projectRoot: string): Prom
         const validation = validatePath(searchPath, projectRoot);
         if (!validation.valid) return { success: false, output: '', error: validation.error, tool, parameters };
 
-        const result = executeCommand('grep', ['-rn', '--include=*.{ts,tsx,js,jsx,json,md,css,html,py,go,rs,rb,kt,kts,swift,php,java,cs,c,cpp,h,hpp,vue,svelte,yaml,yml,toml,sh,sql,xml,scss,less}', pattern, validation.absolutePath], {
+        const result = await executeCommandAsync('grep', ['-rn', '--include=*.{ts,tsx,js,jsx,json,md,css,html,py,go,rs,rb,kt,kts,swift,php,java,cs,c,cpp,h,hpp,vue,svelte,yaml,yml,toml,sh,sql,xml,scss,less}', pattern, validation.absolutePath], {
           cwd: projectRoot,
           projectRoot,
           timeout: 30000,
@@ -359,7 +359,7 @@ export async function executeTool(toolCall: ToolCall, projectRoot: string): Prom
           findArgs.push('-name', pattern, '-print');
         }
 
-        const result = executeCommand('find', findArgs, { cwd: projectRoot, projectRoot, timeout: 15000 });
+        const result = await executeCommandAsync('find', findArgs, { cwd: projectRoot, projectRoot, timeout: 15000 });
 
         if (result.exitCode === 0 || result.stdout) {
           const files = result.stdout.split('\n').filter(Boolean);
@@ -376,7 +376,7 @@ export async function executeTool(toolCall: ToolCall, projectRoot: string): Prom
 
         try { new URL(url); } catch { return { success: false, output: '', error: 'Invalid URL format', tool, parameters }; }
 
-        const result = executeCommand('curl', ['-s', '-L', '-m', '30', '-A', 'Codeep/1.0', '--max-filesize', '1000000', url], {
+        const result = await executeCommandAsync('curl', ['-s', '-L', '-m', '30', '-A', 'Codeep/1.0', '--max-filesize', '1000000', url], {
           cwd: projectRoot,
           projectRoot,
           timeout: 35000,
