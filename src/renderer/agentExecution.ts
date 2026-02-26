@@ -204,12 +204,14 @@ export async function executeAgentTask(
       chatHistory: app.getChatHistory(),
       onIteration: (iteration, message) => {
         app.updateAgentProgress(iteration);
+        app.setAgentWaitingForAI(true); // Waiting for AI response between tool calls
         // Show special status messages (timeout retries, verification) but not generic iteration messages
         if (message && !message.startsWith('Iteration ')) {
           app.addMessage({ role: 'system', content: `_${message}_` });
         }
       },
       onToolCall: (tool) => {
+        app.setAgentWaitingForAI(false); // AI responded, executing tool
         const toolName = tool.tool.toLowerCase();
         const target = (tool.parameters.path as string) ||
           (tool.parameters.command as string) ||
