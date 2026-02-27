@@ -2471,7 +2471,7 @@ export class App {
       lines.push({ text: fg.rgb(80, 80, 80) + '\u254c\u254c codeep' + style.reset, style: '', raw: true });
       firstPrefix = ' ';
     } else {
-      firstPrefix = fg.gray + style.dim + '\u25c6 ' + style.reset;
+      firstPrefix = fg.rgb(100, 140, 200) + '\u25b8 ' + style.reset;
     }
 
     const codeBlockRegex = /```([^\n]*)\n([\s\S]*?)```/g;
