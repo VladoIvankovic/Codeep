@@ -22,6 +22,7 @@ import {
   loadProjectRules,
   formatChatHistoryForAgent,
 } from './agentChat';
+import { ApiError } from '../api/index';
 import type { AgentChatResponse } from './agentChat';
 export { loadProjectRules, formatChatHistoryForAgent };
 export type { AgentChatResponse };
@@ -390,6 +391,18 @@ export async function runAgent(
             // Wait before retry (exponential backoff)
             await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
             continue;
+          }
+
+          // Don't retry on 4xx client errors except 429 (rate limit)
+          if (err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 429) {
+            result = {
+              success: false,
+              iterations: iteration,
+              actions,
+              finalResponse: '',
+              error: err.message,
+            };
+            return result;
           }
 
           // All non-abort errors are retryable — retry with backoff

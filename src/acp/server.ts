@@ -25,6 +25,7 @@ import { PermissionOutcome } from '../utils/agent.js';
 import { ToolCall } from '../utils/tools.js';
 import { initWorkspace, loadWorkspace, handleCommand, AcpSession } from './commands.js';
 import { autoSaveSession, config, setProvider, listSessionsWithInfo, deleteSession as deleteSessionFile } from '../config/index.js';
+import { ApiError } from '../api/index.js';
 import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
 
@@ -637,8 +638,11 @@ export function startAcpServer(): Promise<void> {
         }).catch((err: Error) => {
           if (err.name === 'AbortError') {
             transport.respond(msg.id, { stopReason: 'cancelled' });
-          } else if (err.message?.includes('API key not configured') || err.message?.includes('API key')) {
+          } else if (err.message?.includes('API key not configured') || err.message?.includes('API key') || (err instanceof ApiError && err.status === 401)) {
             sendChunk(`❌ No API key configured. Use /login <provider> <key> or set the environment variable (e.g. ZAI_API_KEY, ANTHROPIC_API_KEY).`);
+            transport.respond(msg.id, { stopReason: 'end_turn' });
+          } else if (err instanceof ApiError && err.status >= 500) {
+            sendChunk(`⚠️ API server error (${err.status}). Please try again.`);
             transport.respond(msg.id, { stopReason: 'end_turn' });
           } else {
             transport.error(msg.id, -32000, err.message);
@@ -648,8 +652,11 @@ export function startAcpServer(): Promise<void> {
         });
       })
       .catch((err: Error) => {
-        if (err.message?.includes('API key not configured') || err.message?.includes('API key')) {
+        if (err.message?.includes('API key not configured') || err.message?.includes('API key') || (err instanceof ApiError && err.status === 401)) {
           sendChunk(`❌ No API key configured. Use /login <provider> <key> or set the environment variable (e.g. ZAI_API_KEY, ANTHROPIC_API_KEY).`);
+          transport.respond(msg.id, { stopReason: 'end_turn' });
+        } else if (err instanceof ApiError && err.status >= 500) {
+          sendChunk(`⚠️ API server error (${err.status}). Please try again.`);
           transport.respond(msg.id, { stopReason: 'end_turn' });
         } else {
           transport.error(msg.id, -32000, err.message);
