@@ -160,6 +160,7 @@ export function startAcpServer(): Promise<void> {
       case 'session/list':             handleSessionList(req);          break;
       case 'session/delete':           handleSessionDelete(req);        break;
       default:
+        process.stderr.write(`[codeep-acp] Unknown method: ${req.method}\n`);
         transport.error(req.id, -32601, `Method not found: ${req.method}`);
     }
   });
@@ -636,6 +637,9 @@ export function startAcpServer(): Promise<void> {
         }).catch((err: Error) => {
           if (err.name === 'AbortError') {
             transport.respond(msg.id, { stopReason: 'cancelled' });
+          } else if (err.message?.includes('API key not configured') || err.message?.includes('API key')) {
+            sendChunk(`❌ No API key configured. Use /login <provider> <key> or set the environment variable (e.g. ZAI_API_KEY, ANTHROPIC_API_KEY).`);
+            transport.respond(msg.id, { stopReason: 'end_turn' });
           } else {
             transport.error(msg.id, -32000, err.message);
           }
@@ -644,7 +648,12 @@ export function startAcpServer(): Promise<void> {
         });
       })
       .catch((err: Error) => {
-        transport.error(msg.id, -32000, err.message);
+        if (err.message?.includes('API key not configured') || err.message?.includes('API key')) {
+          sendChunk(`❌ No API key configured. Use /login <provider> <key> or set the environment variable (e.g. ZAI_API_KEY, ANTHROPIC_API_KEY).`);
+          transport.respond(msg.id, { stopReason: 'end_turn' });
+        } else {
+          transport.error(msg.id, -32000, err.message);
+        }
         if (session) session.abortController = null;
       });
   }
