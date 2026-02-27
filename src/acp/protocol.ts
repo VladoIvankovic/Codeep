@@ -312,11 +312,12 @@ export interface TerminalCreateResult {
 export interface TerminalWaitForExitParams {
   sessionId: string;
   terminalId: string;
+  timeoutMs?: number;
 }
 
 export type TerminalExitStatus =
   | { type: 'exited'; code: number }
-  | { type: 'killed' };
+  | { type: 'killed'; signal?: string };
 
 export interface TerminalWaitForExitResult {
   exitStatus: TerminalExitStatus;
@@ -325,16 +326,22 @@ export interface TerminalWaitForExitResult {
 export interface TerminalOutputParams {
   sessionId: string;
   terminalId: string;
+  offset?: number;
 }
 
 export interface TerminalOutputResult {
   output: string;
+  /** Absent while the process is still running; present once the process has exited. */
   exitStatus?: TerminalExitStatus;
 }
 
 export interface TerminalReleaseParams {
   sessionId: string;
   terminalId: string;
+}
+
+export interface TerminalReleaseResult {
+  // empty on success
 }
 
 export type AcpMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
