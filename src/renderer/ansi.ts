@@ -120,6 +120,61 @@ export function styled(text: string, ...styles: string[]): string {
 }
 
 /**
+ * Interpolate between two RGB colors at position t (0..1)
+ */
+function lerpColor(
+  from: [number, number, number],
+  to: [number, number, number],
+  t: number
+): [number, number, number] {
+  return [
+    Math.round(from[0] + (to[0] - from[0]) * t),
+    Math.round(from[1] + (to[1] - from[1]) * t),
+    Math.round(from[2] + (to[2] - from[2]) * t),
+  ];
+}
+
+/**
+ * Render text with a horizontal RGB gradient across multiple color stops.
+ * Each character gets its own fg.rgb() code.
+ * Stops: array of [r,g,b] colors distributed evenly across the text.
+ */
+export function gradientText(
+  text: string,
+  stops: Array<[number, number, number]>
+): string {
+  if (stops.length === 0) return text;
+  if (stops.length === 1) return fg.rgb(...stops[0]) + text + style.reset;
+
+  const chars = [...text]; // handle multi-byte / emoji
+  const len = chars.length;
+  if (len === 0) return text;
+
+  let result = '';
+  for (let i = 0; i < len; i++) {
+    const t = len === 1 ? 0 : i / (len - 1);
+    // Which segment between stops?
+    const seg = Math.min(Math.floor(t * (stops.length - 1)), stops.length - 2);
+    const segT = t * (stops.length - 1) - seg;
+    const [r, g, b] = lerpColor(stops[seg], stops[seg + 1], segT);
+    result += fg.rgb(r, g, b) + chars[i];
+  }
+  return result + style.reset;
+}
+
+/**
+ * Render a full-width separator line with a gradient.
+ * Uses the given char (default '─') repeated across width.
+ */
+export function gradientLine(
+  width: number,
+  stops: Array<[number, number, number]>,
+  char = '─'
+): string {
+  return gradientText(char.repeat(width), stops);
+}
+
+/**
  * Get terminal display width of a single character
  * CJK, fullwidth, and emoji characters take 2 columns
  */
