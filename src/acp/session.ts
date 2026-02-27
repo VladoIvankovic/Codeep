@@ -176,9 +176,15 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
     opts.onChunk(result.finalResponse);
   }
 
-  // Surface errors as thrown exceptions so index.ts can handle them correctly
+  // Surface errors as thrown exceptions so the ACP server can handle them correctly.
+  // Exception: if finalResponse was already sent as a chunk (e.g. "Agent reached the
+  // iteration limit", "Agent stopped due to repeated API timeouts"), don't also throw —
+  // the user already received the explanation and Zed would show a confusing second error.
   if (!result.success && !result.aborted) {
-    throw new Error(result.error ?? 'Agent run failed without a specific error message');
+    const alreadyExplained = result.finalResponse && chunksEmitted > 0;
+    if (!alreadyExplained) {
+      throw new Error(result.error ?? 'Agent run failed without a specific error message');
+    }
   }
 
   if (result.aborted) {
