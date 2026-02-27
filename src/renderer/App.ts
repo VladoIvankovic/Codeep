@@ -2459,51 +2459,54 @@ export class App {
    */
   private formatMessage(role: 'user' | 'assistant' | 'system', content: string, maxWidth: number): Array<{ text: string; style: string; raw?: boolean }> {
     const lines: Array<{ text: string; style: string; raw?: boolean }> = [];
-    
-    const roleStyle = role === 'user' ? fg.green : role === 'assistant' ? PRIMARY_COLOR : fg.yellow;
-    const roleLabel = role === 'user' ? '> ' : role === 'assistant' ? '  ' : '# ';
-    
-    // Parse content for code blocks
+
+    // Role-specific prefix — user gets gradient bar, assistant gets dim header, system gets diamond
+    const contIndent = '   ';
+    let firstPrefix: string;
+    const firstStyle = '';
+
+    if (role === 'user') {
+      firstPrefix = gradientText('\u258c ', GRADIENT_STOPS) + style.reset;
+    } else if (role === 'assistant') {
+      lines.push({ text: fg.rgb(80, 80, 80) + '\u254c\u254c codeep' + style.reset, style: '', raw: true });
+      firstPrefix = ' ';
+    } else {
+      firstPrefix = fg.gray + style.dim + '\u25c6 ' + style.reset;
+    }
+
     const codeBlockRegex = /```([^\n]*)\n([\s\S]*?)```/g;
     let lastIndex = 0;
     let match;
     let isFirstLine = true;
-    
+
     while ((match = codeBlockRegex.exec(content)) !== null) {
-      // Add text before code block
       const textBefore = content.slice(lastIndex, match.index);
       if (textBefore) {
-        const textLines = this.formatTextLines(textBefore, maxWidth, isFirstLine ? roleLabel : '  ', isFirstLine ? roleStyle : '');
+        const prefix = isFirstLine ? firstPrefix : (role === 'user' ? contIndent : ' ');
+        const textLines = this.formatTextLines(textBefore, maxWidth, prefix, firstStyle, role === 'user' && isFirstLine);
         lines.push(...textLines);
         isFirstLine = false;
       }
-      
-      // Add code block with syntax highlighting
+
       this.codeBlockCounter++;
       const rawLang = (match[1] || 'text').trim();
-      // Handle filepath:name.ext format - extract extension as language
       let lang = rawLang;
       if (rawLang.includes(':') || rawLang.includes('.')) {
-        const ext = rawLang.split('.').pop() || rawLang;
-        lang = ext;
+        lang = rawLang.split('.').pop() || rawLang;
       }
-      const code = match[2];
-      const codeLines = this.formatCodeBlock(code, lang, maxWidth, this.codeBlockCounter);
-      lines.push(...codeLines);
-      
+      lines.push(...this.formatCodeBlock(match[2], lang, maxWidth, this.codeBlockCounter));
       lastIndex = match.index + match[0].length;
       isFirstLine = false;
     }
-    
-    // Add remaining text after last code block
+
     const textAfter = content.slice(lastIndex);
     if (textAfter) {
-      const textLines = this.formatTextLines(textAfter, maxWidth, isFirstLine ? roleLabel : '  ', isFirstLine ? roleStyle : '');
+      const prefix = isFirstLine ? firstPrefix : (role === 'user' ? contIndent : ' ');
+      const textLines = this.formatTextLines(textAfter, maxWidth, prefix, firstStyle, role === 'user' && isFirstLine);
       lines.push(...textLines);
     }
-    
+
     lines.push({ text: '', style: '' });
-    
     return lines;
   }
   
@@ -2574,14 +2577,15 @@ export class App {
   /**
    * Format plain text lines with markdown support
    */
-  private formatTextLines(text: string, maxWidth: number, firstPrefix: string, firstStyle: string): Array<{ text: string; style: string; raw?: boolean }> {
+  private formatTextLines(text: string, maxWidth: number, firstPrefix: string, firstStyle: string, rawPrefix = false): Array<{ text: string; style: string; raw?: boolean }> {
     const lines: Array<{ text: string; style: string; raw?: boolean }> = [];
     const contentLines = text.split('\n');
-    
+
     for (let i = 0; i < contentLines.length; i++) {
       const line = contentLines[i];
       const prefix = i === 0 ? firstPrefix : '  ';
       const prefixStyle = i === 0 ? firstStyle : '';
+      const isRaw = i === 0 ? rawPrefix : false;
 
       // Heading: ## or ### etc.
       const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
@@ -2615,7 +2619,7 @@ export class App {
         const bullet = listMatch[2];
         const content = listMatch[3];
         const { formatted, hasFormatting } = this.applyInlineMarkdown(content);
-        const bulletChar = bullet === '-' || bullet === '*' ? '•' : bullet;
+        const bulletChar = bullet === '-' || bullet === '*' ? '\u25b8' : bullet;
         if (hasFormatting) {
           lines.push({
             text: prefix + indent + fg.gray + bulletChar + '\x1b[0m' + ' ' + formatted,
@@ -2658,15 +2662,18 @@ export class App {
         if (stringWidth(line) > maxWidth - prefix.length) {
           const wrapped = this.wordWrap(line, maxWidth - prefix.length);
           for (let j = 0; j < wrapped.length; j++) {
+            const lineIsRaw = j === 0 ? isRaw : false;
             lines.push({
               text: (j === 0 ? prefix : '  ') + wrapped[j],
               style: j === 0 ? prefixStyle : '',
+              ...(lineIsRaw ? { raw: true } : {}),
             });
           }
         } else {
           lines.push({
             text: prefix + line,
             style: prefixStyle,
+            ...(isRaw ? { raw: true } : {}),
           });
         }
       }
