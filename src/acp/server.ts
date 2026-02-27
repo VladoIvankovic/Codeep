@@ -16,8 +16,9 @@ import {
   ListSessionsParams, ListSessionsResult, AcpSessionInfo,
   DeleteSessionParams,
 } from './protocol.js';
-import { JsonRpcRequest, JsonRpcNotification, RequestPermissionResult } from './protocol.js';
+import { JsonRpcRequest, JsonRpcNotification, RequestPermissionResult, TerminalCreateResult, TerminalOutputResult, TerminalWaitForExitResult } from './protocol.js';
 import { runAgentSession } from './session.js';
+import { executeCommandAsync } from '../utils/shell.js';
 import { PermissionOutcome } from '../utils/agent.js';
 import { ToolCall } from '../utils/tools.js';
 import { initWorkspace, loadWorkspace, handleCommand, AcpSession } from './commands.js';
@@ -178,6 +179,7 @@ export function startAcpServer(): Promise<void> {
       protocolVersion: 1,
       agentCapabilities: {
         loadSession: true,
+        terminal: true,
         sessionCapabilities: { list: {} },
       },
       agentInfo: {
@@ -578,6 +580,41 @@ export function startAcpServer(): Promise<void> {
                 return result.outcome.optionId as PermissionOutcome;
               }
             : undefined,
+          onExecuteCommand: async (command: string, args: string[], cwd: string) => {
+            try {
+              const createResult = await transport.request('terminal/create', {
+                sessionId: params.sessionId,
+                command,
+                args,
+                cwd,
+                outputByteLimit: 1_000_000,
+              }) as TerminalCreateResult;
+
+              const { terminalId } = createResult;
+
+              const waitResult = await transport.request('terminal/waitForExit', {
+                sessionId: params.sessionId,
+                terminalId,
+              }) as TerminalWaitForExitResult;
+
+              const outputResult = await transport.request('terminal/output', {
+                sessionId: params.sessionId,
+                terminalId,
+              }) as TerminalOutputResult;
+
+              await transport.request('terminal/release', {
+                sessionId: params.sessionId,
+                terminalId,
+              });
+
+              const exitCode = waitResult.exitStatus.type === 'exited' ? waitResult.exitStatus.code : 1;
+              return { stdout: outputResult.output ?? '', stderr: '', exitCode };
+            } catch (err) {
+              // Zed terminal unavailable — fall back to local execution
+              const r = await executeCommandAsync(command, args, { cwd, projectRoot: cwd, timeout: 120000 });
+              return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 0 };
+            }
+          },
         }).then(() => {
           session.history.push({ role: 'user', content: prompt });
           const agentResponse = agentResponseChunks.join('');
