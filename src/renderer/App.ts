@@ -1740,7 +1740,7 @@ export class App {
       const placeholder = this.isMultilineMode
         ? 'Multi-line mode  Enter=newline · Esc=send'
         : 'Message or /command';
-      this.screen.write(promptSymbol.length, y, placeholder, fg.gray + style.dim);
+      this.screen.write(promptSymbol.length, y, placeholder, fg.gray);
 
       if (!hideCursor) {
         this.screen.setCursor(promptSymbol.length, y);
@@ -2378,27 +2378,35 @@ export class App {
     const status = this.options.getStatus();
     const stats = status.tokenStats;
 
-    // Left segment: msg count · token count
+    // Left: model (gradient) · msg count · token count
+    const modelName = status.model || '';
     const msgCount = `${this.messages.length} msg`;
     const tokenStr = stats && stats.totalTokens > 0
       ? `${stats.totalTokens < 1000 ? stats.totalTokens : (stats.totalTokens / 1000).toFixed(1) + 'K'} tok`
       : '';
-    const leftParts = [msgCount, tokenStr].filter(Boolean);
-    const leftText = ' ' + leftParts.join(' · ');
-    this.screen.write(0, y, leftText, fg.gray + style.dim);
 
-    // Center: model name with gradient (only if it fits)
-    const modelName = status.model || '';
-    if (modelName && width > 40) {
-      const modelX = Math.floor((width - modelName.length) / 2);
-      this.screen.write(modelX, y, gradientText(modelName, GRADIENT_STOPS));
+    let leftX = 1;
+    if (modelName) {
+      this.screen.write(leftX, y, gradientText(modelName, GRADIENT_STOPS));
+      leftX += modelName.length + 2;
+      this.screen.write(leftX - 1, y, '·', fg.gray);
+      leftX += 1;
+    }
+    this.screen.write(leftX, y, msgCount, fg.gray);
+    leftX += msgCount.length;
+    if (tokenStr) {
+      this.screen.write(leftX, y, ' · ', fg.gray);
+      this.screen.write(leftX + 3, y, tokenStr, fg.gray);
     }
 
-    // Right: Esc hint only when active, nothing when idle
+    // Right: context-sensitive hints
+    let rightText: string;
     if (this.isStreaming || this.isLoading) {
-      const rightText = 'Esc  ';
-      this.screen.write(width - rightText.length, y, rightText, fg.gray + style.dim);
+      rightText = 'Esc to stop ';
+    } else {
+      rightText = '/help · ↑↓ history ';
     }
+    this.screen.write(width - rightText.length, y, rightText, fg.gray);
   }
   
   /**
