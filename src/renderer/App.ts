@@ -5,7 +5,7 @@
 
 import { Screen } from './Screen';
 import { Input, LineEditor, KeyEvent } from './Input';
-import { fg, bg, style, stringWidth } from './ansi';
+import { fg, bg, style, stringWidth, gradientText, gradientLine } from './ansi';
 import { SYNTAX, highlightCode } from './highlight';
 import {
   handleInlineStatusKey,
@@ -22,8 +22,25 @@ import { spawn } from 'child_process';
 // Primary color: #f02a30 (Codeep red)
 const PRIMARY_COLOR = fg.rgb(240, 42, 48);
 
-// Spinner frames for animation
-const SPINNER_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+// Gradient stops: deep red → codeep red → orange → amber
+// Used for separator lines and accent elements
+const GRADIENT_STOPS: Array<[number, number, number]> = [
+  [160, 20, 30],   // deep red
+  [240, 42, 48],   // Codeep red
+  [240, 100, 30],  // orange-red
+  [240, 160, 20],  // amber
+];
+
+// Dimmer gradient for subtle separators (half brightness)
+const GRADIENT_STOPS_DIM: Array<[number, number, number]> = [
+  [80, 10, 15],
+  [140, 25, 28],
+  [140, 60, 18],
+  [140, 90, 12],
+];
+
+// 8-bit block spinner frames
+const SPINNER_FRAMES = ['▖', '▘', '▝', '▗', '▌', '▀', '▐', '▄'];
 
 // ASCII Logo
 const LOGO_LINES = [
@@ -1492,8 +1509,8 @@ export class App {
       y++;
     }
     
-    // Separator
-    this.screen.horizontalLine(separatorLine, '─', fg.gray);
+    // Gradient separator
+    this.screen.writeRaw(separatorLine, gradientLine(width, GRADIENT_STOPS_DIM));
     
     // Input (don't render cursor when menu/settings is open)
     this.renderInput(inputLine, width, this.menuOpen || this.settingsOpen);
@@ -1688,23 +1705,24 @@ export class App {
       return;
     }
     
-    // Agent running state - show special prompt
+    // Agent running state - show special prompt with gradient
     if (this.isAgentRunning) {
       const spinner = SPINNER_FRAMES[this.spinnerFrame];
       const stepLabel = this.agentMaxIterations > 0
         ? `step ${this.agentIteration}/${this.agentMaxIterations}`
         : `step ${this.agentIteration}`;
       const agentText = `${spinner} Agent working... ${stepLabel} | ${this.agentActions.length} actions (Esc to stop)`;
-      this.screen.writeLine(y, agentText, PRIMARY_COLOR);
+      this.screen.write(0, y, gradientText(agentText, GRADIENT_STOPS) + style.bold);
       this.screen.showCursor(false);
       return;
     }
-    
-    // Loading/streaming state with animated spinner
+
+    // Loading/streaming state with animated spinner + gradient
     if (this.isLoading || this.isStreaming) {
       const spinner = SPINNER_FRAMES[this.spinnerFrame];
-      const message = this.isStreaming ? 'Writing' : 'Thinking';
-      this.screen.writeLine(y, `${spinner} ${message}...`, PRIMARY_COLOR);
+      const message = this.isStreaming ? 'Writing...' : 'Thinking...';
+      const spinnerText = `${spinner} ${message}`;
+      this.screen.write(0, y, gradientText(spinnerText, GRADIENT_STOPS));
       this.screen.showCursor(false);
       return;
     }
@@ -2178,7 +2196,7 @@ export class App {
   private renderInlineAgentProgress(startY: number, width: number): void {
     let y = startY;
     const spinner = SPINNER_FRAMES[this.spinnerFrame];
-    
+
     // Calculate stats in a single pass
     const stats = this.agentActions.reduce(
       (acc, a) => {
@@ -2193,17 +2211,17 @@ export class App {
       },
       { reads: 0, writes: 0, edits: 0, deletes: 0, commands: 0, searches: 0, errors: 0 },
     );
-    
-    // Top border with title
-    const title = ` ${spinner} AGENT `;
+
+    // Top border: gradient line with gradient title embedded
+    const titleInner = ` ${spinner} AGENT `;
     const titlePadLeft = 2;
-    const titlePadRight = width - titlePadLeft - title.length - 1;
-    this.screen.write(0, y, '─'.repeat(titlePadLeft), PRIMARY_COLOR);
-    this.screen.write(titlePadLeft, y, title, PRIMARY_COLOR + style.bold);
-    this.screen.write(titlePadLeft + title.length, y, '─'.repeat(Math.max(0, titlePadRight)), PRIMARY_COLOR);
+    const lineLeft = gradientLine(titlePadLeft, GRADIENT_STOPS);
+    const titleColored = gradientText(titleInner, GRADIENT_STOPS) + style.bold;
+    const lineRight = gradientLine(Math.max(0, width - titlePadLeft - titleInner.length - 1), GRADIENT_STOPS);
+    this.screen.write(0, y, lineLeft + titleColored + lineRight);
     y++;
-    
-    // Current action line (clear first to avoid stale text from longer previous paths)
+
+    // Current action line
     this.screen.writeLine(y, '');
     if (this.agentWaitingForAI) {
       this.screen.write(1, y, 'Thinking...', fg.gray);
@@ -2219,8 +2237,8 @@ export class App {
       this.screen.write(1, y, 'Starting...', fg.gray);
     }
     y++;
-    
-    // Stats line: Files and step info (clear line first to avoid stale text)
+
+    // Stats + 8-bit progress bar line
     this.screen.writeLine(y, '');
     let x = 1;
 
@@ -2255,21 +2273,39 @@ export class App {
       this.screen.write(x, y, txt, fg.cyan);
       x += txt.length + 1;
     }
-    
-    // Step info on the right
-    const stepText = this.agentMaxIterations > 0
-      ? `step ${this.agentIteration}/${this.agentMaxIterations}`
-      : `step ${this.agentIteration}`;
-    this.screen.write(width - stepText.length - 1, y, stepText, fg.gray);
+
+    // 8-bit gradient progress bar (right side, if max iterations known)
+    if (this.agentMaxIterations > 0) {
+      const barWidth = 14;
+      const progress = Math.min(this.agentIteration / this.agentMaxIterations, 1);
+      const filled = Math.round(progress * barWidth);
+      // Use block chars: █▓▒░ for gradient fill effect
+      const BLOCKS = ['░', '▒', '▓', '█'];
+      let bar = '';
+      for (let i = 0; i < barWidth; i++) {
+        if (i < filled - 1) bar += '█';
+        else if (i === filled - 1) bar += '▓';
+        else if (i === filled) bar += '▒';
+        else bar += '░';
+      }
+      const barColored = gradientText(bar, GRADIENT_STOPS);
+      const stepText = `${this.agentIteration}/${this.agentMaxIterations}`;
+      const barX = width - barWidth - stepText.length - 3;
+      this.screen.write(barX, y, barColored);
+      this.screen.write(width - stepText.length - 1, y, stepText, fg.gray);
+    } else {
+      const stepText = `step ${this.agentIteration}`;
+      this.screen.write(width - stepText.length - 1, y, stepText, fg.gray);
+    }
     y++;
-    
-    // Bottom border with help
+
+    // Bottom border with help text
     const helpText = ' Esc to stop ';
     const helpPadLeft = Math.floor((width - helpText.length) / 2);
-    const helpPadRight = Math.ceil((width - helpText.length) / 2);
-    this.screen.write(0, y, '─'.repeat(helpPadLeft), fg.gray);
+    const helpPadRight = Math.max(0, width - helpPadLeft - helpText.length);
+    this.screen.write(0, y, gradientLine(helpPadLeft, GRADIENT_STOPS_DIM));
     this.screen.write(helpPadLeft, y, helpText, fg.gray);
-    this.screen.write(helpPadLeft + helpText.length, y, '─'.repeat(helpPadRight), fg.gray);
+    this.screen.write(helpPadLeft + helpText.length, y, gradientLine(helpPadRight, GRADIENT_STOPS_DIM));
   }
   
   /**
@@ -2327,29 +2363,47 @@ export class App {
    * Render status bar
    */
   private renderStatusBar(y: number, width: number): void {
-    let leftText = '';
-    let rightText = '';
-    
+    // Clear the line first
+    this.screen.writeLine(y, '');
+
     if (this.notification) {
-      leftText = ` ${this.notification}`;
-    } else {
-      const stats = this.options.getStatus().tokenStats;
-      const tokenInfo = stats && stats.totalTokens > 0
-        ? ` | ${stats.totalTokens < 1000 ? stats.totalTokens : (stats.totalTokens / 1000).toFixed(1) + 'K'} tokens`
-        : '';
-      leftText = ` ${this.messages.length} messages${tokenInfo}`;
+      // Notification: gradient colored, full width
+      const notifText = ` ${this.notification}`;
+      this.screen.write(0, y, gradientText(notifText, GRADIENT_STOPS));
+      return;
     }
-    
+
+    const status = this.options.getStatus();
+    const stats = status.tokenStats;
+    const tokenInfo = stats && stats.totalTokens > 0
+      ? ` ${stats.totalTokens < 1000 ? stats.totalTokens : (stats.totalTokens / 1000).toFixed(1) + 'K'} tok`
+      : '';
+
+    // Left: message count (gray) + token info (dim)
+    const msgPart = ` ${this.messages.length} msg`;
+    this.screen.write(0, y, msgPart, fg.gray);
+    if (tokenInfo) {
+      this.screen.write(msgPart.length, y, tokenInfo, fg.gray + style.dim);
+    }
+
+    // Center: model name with gradient
+    const modelName = status.model || '';
+    if (modelName) {
+      const modelColored = gradientText(modelName, GRADIENT_STOPS);
+      const modelX = Math.floor((width - modelName.length) / 2);
+      this.screen.write(modelX, y, modelColored);
+    }
+
+    // Right: context hint (gray)
+    let rightText: string;
     if (this.isStreaming) {
-      rightText = 'Streaming... (Esc to cancel)';
+      rightText = 'Esc cancel ';
     } else if (this.isLoading) {
-      rightText = 'Thinking...';
+      rightText = 'working... ';
     } else {
-      rightText = 'Enter send | /help commands';
+      rightText = '/help ';
     }
-    
-    const padding = ' '.repeat(Math.max(0, width - leftText.length - rightText.length));
-    this.screen.writeLine(y, leftText + padding + rightText, fg.gray);
+    this.screen.write(width - rightText.length, y, rightText, fg.gray);
   }
   
   /**
