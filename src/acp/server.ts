@@ -597,6 +597,7 @@ export function startAcpServer(): Promise<void> {
               const waitResult = await transport.request('terminal/waitForExit', {
                 sessionId: params.sessionId,
                 terminalId,
+                timeoutMs: 120_000,
               }) as TerminalWaitForExitResult;
 
               const outputResult = await transport.request('terminal/output', {
