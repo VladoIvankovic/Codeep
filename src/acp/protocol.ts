@@ -34,6 +34,7 @@ export interface InitializeParams {
 
 export interface AgentCapabilities {
   loadSession?: boolean;
+  terminal?: boolean;
   promptCapabilities?: { image?: boolean; audio?: boolean; embeddedContext?: boolean };
   mcpCapabilities?: { stdio?: boolean; sse?: boolean; http?: boolean };
   sessionCapabilities?: Record<string, unknown>;
