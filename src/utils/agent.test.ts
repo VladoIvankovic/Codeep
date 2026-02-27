@@ -318,12 +318,255 @@ describe('formatAgentResult', () => {
   });
 });
 
+// ─── Mocks required to drive runAgent ────────────────────────────────────────
+
+// agentChat mock must be hoisted so vi.mock() factory can reference it
+const { mockAgentChat } = vi.hoisted(() => ({ mockAgentChat: vi.fn() }));
+
+vi.mock('./agentChat', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./agentChat')>();
+  return {
+    ...actual,
+    agentChat: mockAgentChat,
+  };
+});
+
+vi.mock('./tools', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./tools')>();
+  return {
+    ...actual,
+    executeTool: vi.fn(),
+    parseToolCalls: vi.fn(() => []),
+    createActionLog: vi.fn((_toolCall: unknown, toolResult: unknown) => ({
+      type: 'command',
+      target: 'npm',
+      result: 'success',
+      timestamp: Date.now(),
+    })),
+  };
+});
+
+vi.mock('../config/index', () => ({
+  config: {
+    get: vi.fn((k: string) => {
+      const defaults: Record<string, unknown> = {
+        provider: 'openai',
+        protocol: 'openai',
+        agentMaxIterations: 10,
+        agentMaxDuration: 5,
+        agentApiTimeout: 30000,
+      };
+      return defaults[k] ?? null;
+    }),
+  },
+  getApiKey: vi.fn(() => 'sk-test'),
+  Message: {},
+}));
+
+vi.mock('../config/providers', () => ({
+  supportsNativeTools: vi.fn(() => true),
+  getProviderBaseUrl: vi.fn(() => 'https://api.example.com'),
+  getProviderAuthHeader: vi.fn(() => 'Bearer sk-test'),
+}));
+
+vi.mock('./history', () => ({
+  startSession: vi.fn(() => 'session-1'),
+  endSession: vi.fn(),
+  undoLastAction: vi.fn(),
+  undoAllActions: vi.fn(),
+  getCurrentSession: vi.fn(() => null),
+  getRecentSessions: vi.fn(() => []),
+  formatSession: vi.fn(() => ''),
+}));
+
+vi.mock('./verify', () => ({
+  runAllVerifications: vi.fn(async () => []),
+  formatErrorsForAgent: vi.fn(() => ''),
+  hasVerificationErrors: vi.fn(() => false),
+  getVerificationSummary: vi.fn(() => ''),
+}));
+
+vi.mock('./smartContext', () => ({
+  gatherSmartContext: vi.fn(() => ({})),
+  formatSmartContext: vi.fn(() => ''),
+  extractTargetFile: vi.fn(() => null),
+}));
+
+vi.mock('./taskPlanner', () => ({
+  planTasks: vi.fn(async () => ({ tasks: [] })),
+  getNextTask: vi.fn(() => null),
+  formatTaskPlan: vi.fn(() => ''),
+}));
+
+import { runAgent } from './agent';
+import { executeTool } from './tools';
+
 describe('onExecuteCommand callback', () => {
-  it('onExecuteCommand callback shape is correct', async () => {
-    const mockExecute = vi.fn().mockResolvedValue({ stdout: 'mock output', stderr: '', exitCode: 0 });
-    const result = await mockExecute('npm', ['test'], '/tmp');
-    expect(result).toEqual({ stdout: 'mock output', stderr: '', exitCode: 0 });
-    expect(mockExecute).toHaveBeenCalledWith('npm', ['test'], '/tmp');
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('invokes onExecuteCommand with correct args and maps result to ToolResult shape', async () => {
+    // First agentChat call: return an execute_command tool call
+    // Second call: return empty tool calls so the agent terminates
+    mockAgentChat
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [
+          {
+            tool: 'execute_command',
+            parameters: { command: 'npm', args: ['test'] },
+          },
+        ],
+        usedNativeTools: true,
+      })
+      .mockResolvedValueOnce({
+        content: 'All done.',
+        toolCalls: [],
+        usedNativeTools: true,
+      });
+
+    const onExecuteCommand = vi.fn().mockResolvedValue({
+      stdout: 'Tests passed',
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const onToolResult = vi.fn();
+
+    const projectContext = {
+      root: '/tmp/test-project',
+      name: 'test-project',
+      type: 'node',
+      structure: '',
+    };
+
+    const agentResult = await runAgent('run tests', projectContext as never, {
+      onExecuteCommand,
+      onToolResult,
+      maxIterations: 5,
+    });
+
+    // Callback must have been called with the right positional args
+    expect(onExecuteCommand).toHaveBeenCalledOnce();
+    expect(onExecuteCommand).toHaveBeenCalledWith('npm', ['test'], '/tmp/test-project');
+
+    // onToolResult should have received a valid ToolResult
+    expect(onToolResult).toHaveBeenCalledOnce();
+    const [toolResult, toolCall] = onToolResult.mock.calls[0];
+    expect(toolResult).toMatchObject({
+      success: true,
+      output: 'Tests passed',
+      tool: 'execute_command',
+    });
+    expect(toolCall).toMatchObject({ tool: 'execute_command' });
+
+    // The agent should complete successfully
+    expect(agentResult.success).toBe(true);
+  });
+
+  it('returns error ToolResult when command field is missing', async () => {
+    mockAgentChat
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [
+          {
+            tool: 'execute_command',
+            // no command field
+            parameters: { args: ['test'] },
+          },
+        ],
+        usedNativeTools: true,
+      })
+      .mockResolvedValueOnce({
+        content: 'Done.',
+        toolCalls: [],
+        usedNativeTools: true,
+      });
+
+    const onExecuteCommand = vi.fn();
+    const onToolResult = vi.fn();
+
+    const projectContext = {
+      root: '/tmp/test-project',
+      name: 'test-project',
+      type: 'node',
+      structure: '',
+    };
+
+    await runAgent('run tests', projectContext as never, {
+      onExecuteCommand,
+      onToolResult,
+      maxIterations: 5,
+    });
+
+    // Callback must NOT have been called since command is missing
+    expect(onExecuteCommand).not.toHaveBeenCalled();
+
+    // onToolResult should have received an error ToolResult
+    expect(onToolResult).toHaveBeenCalledOnce();
+    const [toolResult] = onToolResult.mock.calls[0];
+    expect(toolResult).toMatchObject({
+      success: false,
+      output: '',
+      error: 'execute_command called with missing command field',
+      tool: 'execute_command',
+    });
+  });
+
+  it('falls back to executeTool when onExecuteCommand callback throws', async () => {
+    mockAgentChat
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [
+          {
+            tool: 'execute_command',
+            parameters: { command: 'npm', args: ['install'] },
+          },
+        ],
+        usedNativeTools: true,
+      })
+      .mockResolvedValueOnce({
+        content: 'Done.',
+        toolCalls: [],
+        usedNativeTools: true,
+      });
+
+    const onExecuteCommand = vi.fn().mockRejectedValue(new Error('terminal unavailable'));
+
+    const mockFallbackResult = {
+      success: true,
+      output: 'fallback output',
+      tool: 'execute_command',
+      parameters: { command: 'npm', args: ['install'] },
+    };
+    (executeTool as ReturnType<typeof vi.fn>).mockResolvedValue(mockFallbackResult);
+
+    const onToolResult = vi.fn();
+
+    const projectContext = {
+      root: '/tmp/test-project',
+      name: 'test-project',
+      type: 'node',
+      structure: '',
+    };
+
+    await runAgent('install deps', projectContext as never, {
+      onExecuteCommand,
+      onToolResult,
+      maxIterations: 5,
+    });
+
+    // Callback was called but threw
+    expect(onExecuteCommand).toHaveBeenCalledOnce();
+
+    // executeTool fallback should have been used
+    expect(executeTool).toHaveBeenCalledOnce();
+
+    // onToolResult should reflect the fallback result
+    expect(onToolResult).toHaveBeenCalledOnce();
+    const [toolResult] = onToolResult.mock.calls[0];
+    expect(toolResult).toMatchObject({ output: 'fallback output' });
   });
 });
 

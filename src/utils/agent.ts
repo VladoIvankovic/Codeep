@@ -528,21 +528,33 @@ export async function runAgent(
           };
         } else if (opts.onExecuteCommand && toolCall.tool === 'execute_command') {
           // Delegate to external terminal (e.g. Zed ACP terminal)
+          // Note: onExecuteCommand runs after the permission gate above
           const command = toolCall.parameters.command as string;
           const args = (toolCall.parameters.args as string[]) || [];
           const cwd = projectContext.root || process.cwd();
-          try {
-            const r = await opts.onExecuteCommand(command, args, cwd);
+          if (!command) {
             toolResult = {
-              success: r.exitCode === 0,
-              output: r.stdout || '(no output)',
-              error: r.exitCode !== 0 ? (r.stderr || `exited with code ${r.exitCode}`) : undefined,
+              success: false,
+              output: '',
+              error: 'execute_command called with missing command field',
               tool: toolCall.tool,
               parameters: toolCall.parameters,
             };
-          } catch {
-            // Fallback to local execution if callback throws
-            toolResult = await executeTool(toolCall, cwd);
+          } else {
+            try {
+              const commandResult = await opts.onExecuteCommand(command, args, cwd);
+              toolResult = {
+                success: commandResult.exitCode === 0,
+                output: commandResult.stdout || '(no output)',
+                error: commandResult.exitCode !== 0 ? (commandResult.stderr || `exited with code ${commandResult.exitCode}`) : undefined,
+                tool: toolCall.tool,
+                parameters: toolCall.parameters,
+              };
+            } catch (err) {
+              debug('onExecuteCommand callback threw, falling back to local execution:', err);
+              // Fallback to local execution if callback throws
+              toolResult = await executeTool(toolCall, cwd);
+            }
           }
         } else {
           toolResult = await executeTool(toolCall, projectContext.root || process.cwd());
