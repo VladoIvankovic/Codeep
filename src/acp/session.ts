@@ -15,6 +15,7 @@ export interface AgentSessionOptions {
   onThought?: (text: string) => void;
   onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[], rawOutput?: string) => void;
   onRequestPermission?: (toolCall: ToolCall) => Promise<PermissionOutcome>;
+  onExecuteCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
 }
 
 /**
@@ -166,6 +167,7 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
       }
     },
     onRequestPermission: opts.onRequestPermission,
+    onExecuteCommand: opts.onExecuteCommand,
   });
 
   // result.finalResponse is already emitted via onChunk streaming above;
