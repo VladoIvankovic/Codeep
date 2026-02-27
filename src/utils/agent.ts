@@ -138,6 +138,7 @@ export interface AgentOptions {
   onTaskPlan?: (plan: TaskPlan) => void;
   onTaskUpdate?: (task: SubTask) => void;
   onRequestPermission?: (toolCall: ToolCall) => Promise<PermissionOutcome>;
+  onExecuteCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   abortSignal?: AbortSignal;
   dryRun?: boolean;
   autoVerify?: 'off' | 'build' | 'typecheck' | 'test' | 'all' | boolean;
@@ -519,15 +520,31 @@ export async function runAgent(
         let toolResult: ToolResult;
 
         if (opts.dryRun) {
-          // In dry run mode, simulate success
           toolResult = {
             success: true,
             output: `[DRY RUN] Would execute: ${toolCall.tool}`,
             tool: toolCall.tool,
             parameters: toolCall.parameters,
           };
+        } else if (opts.onExecuteCommand && toolCall.tool === 'execute_command') {
+          // Delegate to external terminal (e.g. Zed ACP terminal)
+          const command = toolCall.parameters.command as string;
+          const args = (toolCall.parameters.args as string[]) || [];
+          const cwd = projectContext.root || process.cwd();
+          try {
+            const r = await opts.onExecuteCommand(command, args, cwd);
+            toolResult = {
+              success: r.exitCode === 0,
+              output: r.stdout || '(no output)',
+              error: r.exitCode !== 0 ? (r.stderr || `exited with code ${r.exitCode}`) : undefined,
+              tool: toolCall.tool,
+              parameters: toolCall.parameters,
+            };
+          } catch {
+            // Fallback to local execution if callback throws
+            toolResult = await executeTool(toolCall, cwd);
+          }
         } else {
-          // Actually execute the tool
           toolResult = await executeTool(toolCall, projectContext.root || process.cwd());
         }
         

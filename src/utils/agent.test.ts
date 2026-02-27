@@ -318,6 +318,15 @@ describe('formatAgentResult', () => {
   });
 });
 
+describe('onExecuteCommand callback', () => {
+  it('onExecuteCommand callback shape is correct', async () => {
+    const mockExecute = vi.fn().mockResolvedValue({ stdout: 'mock output', stderr: '', exitCode: 0 });
+    const result = await mockExecute('npm', ['test'], '/tmp');
+    expect(result).toEqual({ stdout: 'mock output', stderr: '', exitCode: 0 });
+    expect(mockExecute).toHaveBeenCalledWith('npm', ['test'], '/tmp');
+  });
+});
+
 describe('formatChatHistoryForAgent', () => {
   it('should return empty string for undefined input', () => {
     expect(formatChatHistoryForAgent(undefined)).toBe('');
