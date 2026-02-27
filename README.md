@@ -25,7 +25,8 @@
 - **Z.AI (ZhipuAI)** — GLM-5, GLM-4.7, GLM-4.7 Flash (international & China endpoints)
 - **MiniMax** — MiniMax M2.5 (international & China endpoints)
 - **DeepSeek** — DeepSeek V3, DeepSeek R1 (reasoning)
-- **Anthropic** — Claude Sonnet 4.6, Claude Opus 4.6, Claude Haiku 4.5
+- **Anthropic** — Claude Sonnet 4.6, Claude Opus 4.6, Claude Sonnet 4.5, Claude Haiku 4.5
+- **Google AI** — Gemini 3.1 Pro Preview, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash Lite
 - Switch between providers with `/provider`
 - Configure different API keys per provider
 - Both OpenAI-compatible and Anthropic API protocols supported
@@ -668,6 +669,7 @@ With write access enabled:
 | `MINIMAX_CN_API_KEY` | MiniMax China API key |
 | `DEEPSEEK_API_KEY` | DeepSeek API key |
 | `ANTHROPIC_API_KEY` | Anthropic Claude API key |
+| `GOOGLE_API_KEY` | Google AI (Gemini) API key |
 
 ### Settings (`/settings`)
 
