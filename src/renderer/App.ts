@@ -1727,57 +1727,59 @@ export class App {
       return;
     }
     
-    // Build prompt prefix — show line count for multi-line buffers
+    // Build prompt prefix
     const lines = inputValue.split('\n');
     const lineCount = lines.length;
-    const prompt = lineCount > 1 ? `[${lineCount}] > ` : this.isMultilineMode ? 'M> ' : '> ';
-    const maxInputWidth = width - prompt.length - 1;
-    
+    // ❯ for normal, ❯❯ for multiline, [n] for multi-line with count
+    const promptSymbol = lineCount > 1 ? `[${lineCount}] ❯ ` : this.isMultilineMode ? '❯❯ ' : '❯ ';
+    const maxInputWidth = width - promptSymbol.length - 1;
+
     // Show placeholder when input is empty
     if (!inputValue) {
-      this.screen.write(0, y, prompt, fg.green);
+      this.screen.write(0, y, promptSymbol, PRIMARY_COLOR);
       const placeholder = this.isMultilineMode
-        ? 'Multi-line mode (Enter=newline, Esc=send)...'
-        : 'Type a message or /command...';
-      this.screen.write(prompt.length, y, placeholder, fg.gray);
-      
+        ? 'Multi-line mode  Enter=newline · Esc=send'
+        : 'Message or /command';
+      this.screen.write(promptSymbol.length, y, placeholder, fg.gray + style.dim);
+
       if (!hideCursor) {
-        this.screen.setCursor(prompt.length, y);
+        this.screen.setCursor(promptSymbol.length, y);
         this.screen.showCursor(true);
       } else {
         this.screen.showCursor(false);
       }
       return;
     }
-    
+
     // For multi-line content, show the last line being edited
     const lastLine = lines[lines.length - 1];
     const displayInput = lineCount > 1 ? lastLine : inputValue;
-    // Cursor position within the last line
     const charsBeforeLastLine = lineCount > 1 ? inputValue.lastIndexOf('\n') + 1 : 0;
     const cursorInLine = cursorPos - charsBeforeLastLine;
-    
+
     let displayValue: string;
     let cursorX: number;
-    
+
     if (displayInput.length <= maxInputWidth) {
       displayValue = displayInput;
-      cursorX = prompt.length + Math.max(0, cursorInLine);
+      cursorX = promptSymbol.length + Math.max(0, cursorInLine);
     } else {
       const effectiveCursor = Math.max(0, cursorInLine);
       const visibleStart = Math.max(0, effectiveCursor - Math.floor(maxInputWidth * 0.7));
       const visibleEnd = visibleStart + maxInputWidth;
-      
+
       if (visibleStart > 0) {
         displayValue = '…' + displayInput.slice(visibleStart + 1, visibleEnd);
       } else {
         displayValue = displayInput.slice(0, maxInputWidth);
       }
-      
-      cursorX = prompt.length + (effectiveCursor - visibleStart);
+
+      cursorX = promptSymbol.length + (effectiveCursor - visibleStart);
     }
-    
-    this.screen.writeLine(y, prompt + displayValue, fg.green);
+
+    // Prompt symbol in primary color, input text in white
+    this.screen.write(0, y, promptSymbol, PRIMARY_COLOR);
+    this.screen.write(promptSymbol.length, y, displayValue, fg.white);
     
     // Hide cursor when menu/settings is open
     if (hideCursor) {
@@ -2375,35 +2377,28 @@ export class App {
 
     const status = this.options.getStatus();
     const stats = status.tokenStats;
-    const tokenInfo = stats && stats.totalTokens > 0
-      ? ` ${stats.totalTokens < 1000 ? stats.totalTokens : (stats.totalTokens / 1000).toFixed(1) + 'K'} tok`
+
+    // Left segment: msg count · token count
+    const msgCount = `${this.messages.length} msg`;
+    const tokenStr = stats && stats.totalTokens > 0
+      ? `${stats.totalTokens < 1000 ? stats.totalTokens : (stats.totalTokens / 1000).toFixed(1) + 'K'} tok`
       : '';
+    const leftParts = [msgCount, tokenStr].filter(Boolean);
+    const leftText = ' ' + leftParts.join(' · ');
+    this.screen.write(0, y, leftText, fg.gray + style.dim);
 
-    // Left: message count (gray) + token info (dim)
-    const msgPart = ` ${this.messages.length} msg`;
-    this.screen.write(0, y, msgPart, fg.gray);
-    if (tokenInfo) {
-      this.screen.write(msgPart.length, y, tokenInfo, fg.gray + style.dim);
-    }
-
-    // Center: model name with gradient
+    // Center: model name with gradient (only if it fits)
     const modelName = status.model || '';
-    if (modelName) {
-      const modelColored = gradientText(modelName, GRADIENT_STOPS);
+    if (modelName && width > 40) {
       const modelX = Math.floor((width - modelName.length) / 2);
-      this.screen.write(modelX, y, modelColored);
+      this.screen.write(modelX, y, gradientText(modelName, GRADIENT_STOPS));
     }
 
-    // Right: context hint (gray)
-    let rightText: string;
-    if (this.isStreaming) {
-      rightText = 'Esc cancel ';
-    } else if (this.isLoading) {
-      rightText = 'working... ';
-    } else {
-      rightText = '/help ';
+    // Right: Esc hint only when active, nothing when idle
+    if (this.isStreaming || this.isLoading) {
+      const rightText = 'Esc  ';
+      this.screen.write(width - rightText.length, y, rightText, fg.gray + style.dim);
     }
-    this.screen.write(width - rightText.length, y, rightText, fg.gray);
   }
   
   /**
