@@ -1493,7 +1493,7 @@ export class App {
     }
     
     // Gradient separator
-    this.screen.writeRaw(separatorLine, fg.rgb(60, 10, 12) + '─'.repeat(width) + style.reset);
+    this.screen.writeRaw(separatorLine, PRIMARY_COLOR + '─'.repeat(width) + style.reset);
     
     // Input (don't render cursor when menu/settings is open)
     this.renderInput(inputLine, width, this.menuOpen || this.settingsOpen);
@@ -2289,9 +2289,9 @@ export class App {
     const helpText = ' Esc to stop ';
     const helpPadLeft = Math.floor((width - helpText.length) / 2);
     const helpPadRight = Math.max(0, width - helpPadLeft - helpText.length);
-    this.screen.write(0, y, fg.rgb(60, 10, 12) + '─'.repeat(helpPadLeft) + style.reset);
+    this.screen.write(0, y, PRIMARY_COLOR + '─'.repeat(helpPadLeft) + style.reset);
     this.screen.write(helpPadLeft, y, helpText, fg.gray);
-    this.screen.write(helpPadLeft + helpText.length, y, fg.rgb(60, 10, 12) + '─'.repeat(helpPadRight) + style.reset);
+    this.screen.write(helpPadLeft + helpText.length, y, PRIMARY_COLOR + '─'.repeat(helpPadRight) + style.reset);
   }
   
   /**
