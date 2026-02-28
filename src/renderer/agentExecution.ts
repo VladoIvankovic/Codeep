@@ -208,7 +208,8 @@ export async function executeAgentTask(
     const enrichedTask = fileContext ? fileContext + task : task;
 
     // Show N/M progress in status bar
-    app.setAgentMaxIterations(config.get('agentMaxIterations'));
+    const rawIterations = config.get('agentMaxIterations') || 100;
+    app.setAgentMaxIterations(Math.max(5, Math.min(500, rawIterations)));
 
     const result: AgentResult = await runAgent(enrichedTask, context, {
       dryRun,
@@ -281,22 +282,8 @@ export async function executeAgentTask(
         } else if (actionType === 'delete') {
           const filePath = tool.parameters.path as string;
           app.addMessage({ role: 'system', content: `**Delete** \`${filePath}\`` });
-        } else if (actionType === 'read') {
-          const filePath = tool.parameters.path as string || shortTarget;
-          if (filePath) app.addMessage({ role: 'system', content: `**Reading** \`${filePath}\`` });
-        } else if (actionType === 'search') {
-          const pattern = (tool.parameters.pattern as string) || (tool.parameters.query as string) || shortTarget;
-          if (pattern) app.addMessage({ role: 'system', content: `**Searching** for \`${pattern}\`` });
-        } else if (actionType === 'list') {
-          const dirPath = tool.parameters.path as string || shortTarget;
-          if (dirPath) app.addMessage({ role: 'system', content: `**Listing** \`${dirPath}\`` });
-        } else if (actionType === 'fetch') {
-          const url = (tool.parameters.url as string) || shortTarget;
-          if (url) app.addMessage({ role: 'system', content: `**Fetching** \`${url}\`` });
-        } else if (actionType === 'command') {
-          const cmd = tool.parameters.command as string || shortTarget;
-          if (cmd) app.addMessage({ role: 'system', content: `**Running** \`${cmd}\`` });
         }
+        // read/search/list/fetch/command — setAgentThinking() above is enough, no chat message needed
       },
       onToolResult: (result, toolCall) => {
         const toolName = toolCall.tool.toLowerCase();
