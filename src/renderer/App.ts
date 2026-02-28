@@ -323,8 +323,8 @@ export class App {
   /**
    * Get all messages (for API history)
    */
-  getMessages(): Message[] {
-    return this.messages;
+  getMessages(): Array<{ role: 'user' | 'assistant' | 'system'; content: string }> {
+    return this.messages.filter(m => m.role !== 'welcome') as Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
   }
   
   /**
