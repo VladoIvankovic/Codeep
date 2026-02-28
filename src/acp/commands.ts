@@ -266,12 +266,17 @@ export async function handleCommand(
     }
 
     case 'lang': {
+      const validLangs = ['auto', 'en', 'zh', 'es', 'hi', 'ar', 'pt', 'fr', 'de', 'ja', 'ru', 'hr'] as const;
       if (!args.length) {
         const current = config.get('language') || 'auto';
-        return { handled: true, response: `Current language: \`${current}\`. Usage: \`/lang <code>\` (e.g. \`en\`, \`hr\`, \`auto\`)` };
+        return { handled: true, response: `Current language: \`${current}\`. Usage: \`/lang <code>\` (${validLangs.join(', ')})` };
       }
-      config.set('language', args[0] as 'auto' | 'en' | 'zh' | 'es' | 'hi' | 'ar' | 'pt' | 'fr' | 'de' | 'ja' | 'ru' | 'hr');
-      return { handled: true, response: `Language set to \`${args[0]}\`` };
+      const lang = args[0].toLowerCase();
+      if (!validLangs.includes(lang as typeof validLangs[number])) {
+        return { handled: true, response: `Invalid language \`${args[0]}\`. Valid: ${validLangs.join(', ')}` };
+      }
+      config.set('language', lang as typeof validLangs[number]);
+      return { handled: true, response: `Language set to \`${lang}\`` };
     }
 
     // ─── File context ──────────────────────────────────────────────────────────
@@ -288,7 +293,11 @@ export async function handleCommand(
       const added: string[] = [];
       const errors: string[] = [];
       for (const filePath of args) {
-        const fullPath = pathMod.isAbsolute(filePath) ? filePath : pathMod.join(root, filePath);
+        const fullPath = pathMod.resolve(root, filePath);
+        if (!fullPath.startsWith(root + pathMod.sep) && fullPath !== root) {
+          errors.push(`\`${filePath}\`: path outside workspace`);
+          continue;
+        }
         const relativePath = pathMod.relative(root, fullPath);
         try {
           const stat = await fs.stat(fullPath);
@@ -317,7 +326,8 @@ export async function handleCommand(
       const root = session.workspaceRoot;
       let dropped = 0;
       for (const filePath of args) {
-        const fullPath = pathMod.isAbsolute(filePath) ? filePath : pathMod.join(root, filePath);
+        const fullPath = pathMod.resolve(root, filePath);
+        if (!fullPath.startsWith(root + pathMod.sep) && fullPath !== root) continue;
         if (session.addedFiles.delete(fullPath)) dropped++;
       }
       return { handled: true, response: dropped ? `Dropped ${dropped} file(s). ${session.addedFiles.size} remaining.` : 'File not found in context.' };
