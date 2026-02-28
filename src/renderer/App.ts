@@ -5,7 +5,7 @@
 
 import { Screen } from './Screen';
 import { Input, LineEditor, KeyEvent } from './Input';
-import { fg, bg, style, stringWidth, gradientText, gradientLine } from './ansi';
+import { fg, bg, style, stringWidth } from './ansi';
 import { SYNTAX, highlightCode } from './highlight';
 import {
   handleInlineStatusKey,
@@ -21,23 +21,6 @@ import { spawn } from 'child_process';
 
 // Primary color: #f02a30 (Codeep red)
 const PRIMARY_COLOR = fg.rgb(240, 42, 48);
-
-// Gradient stops: deep red → codeep red → orange → amber
-// Used for separator lines and accent elements
-const GRADIENT_STOPS: Array<[number, number, number]> = [
-  [160, 20, 30],   // deep red
-  [240, 42, 48],   // Codeep red
-  [240, 100, 30],  // orange-red
-  [240, 160, 20],  // amber
-];
-
-// Dimmer gradient for subtle separators (half brightness)
-const GRADIENT_STOPS_DIM: Array<[number, number, number]> = [
-  [80, 10, 15],
-  [140, 25, 28],
-  [140, 60, 18],
-  [140, 90, 12],
-];
 
 // 8-bit block spinner frames
 const SPINNER_FRAMES = ['▖', '▘', '▝', '▗', '▌', '▀', '▐', '▄'];
@@ -1510,7 +1493,7 @@ export class App {
     }
     
     // Gradient separator
-    this.screen.writeRaw(separatorLine, gradientLine(width, GRADIENT_STOPS_DIM));
+    this.screen.writeRaw(separatorLine, fg.rgb(60, 10, 12) + '─'.repeat(width) + style.reset);
     
     // Input (don't render cursor when menu/settings is open)
     this.renderInput(inputLine, width, this.menuOpen || this.settingsOpen);
@@ -1712,7 +1695,7 @@ export class App {
         ? `step ${this.agentIteration}/${this.agentMaxIterations}`
         : `step ${this.agentIteration}`;
       const agentText = `${spinner} Agent working... ${stepLabel} | ${this.agentActions.length} actions (Esc to stop)`;
-      this.screen.write(0, y, gradientText(agentText, GRADIENT_STOPS) + style.bold);
+      this.screen.write(0, y, PRIMARY_COLOR + style.bold + agentText + style.reset);
       this.screen.showCursor(false);
       return;
     }
@@ -1722,7 +1705,7 @@ export class App {
       const spinner = SPINNER_FRAMES[this.spinnerFrame];
       const message = this.isStreaming ? 'Writing...' : 'Thinking...';
       const spinnerText = `${spinner} ${message}`;
-      this.screen.write(0, y, gradientText(spinnerText, GRADIENT_STOPS));
+      this.screen.write(0, y, PRIMARY_COLOR + spinnerText + style.reset);
       this.screen.showCursor(false);
       return;
     }
@@ -2217,9 +2200,10 @@ export class App {
     // Top border: gradient line with gradient title embedded
     const titleInner = ` ${spinner} AGENT `;
     const titlePadLeft = 2;
-    const lineLeft = gradientLine(titlePadLeft, GRADIENT_STOPS);
-    const titleColored = gradientText(titleInner, GRADIENT_STOPS) + style.bold;
-    const lineRight = gradientLine(Math.max(0, width - titlePadLeft - titleInner.length - 1), GRADIENT_STOPS);
+    const lineChar = PRIMARY_COLOR + '─' + style.reset;
+    const lineLeft = lineChar.repeat(titlePadLeft);
+    const titleColored = PRIMARY_COLOR + style.bold + titleInner + style.reset;
+    const lineRight = lineChar.repeat(Math.max(0, width - titlePadLeft - titleInner.length - 1));
     this.screen.write(0, y, lineLeft + titleColored + lineRight);
     y++;
 
@@ -2290,7 +2274,7 @@ export class App {
         else if (i === filled) bar += '▒';
         else bar += '░';
       }
-      const barColored = gradientText(bar, GRADIENT_STOPS);
+      const barColored = PRIMARY_COLOR + bar + style.reset;
       const stepText = `${this.agentIteration}/${this.agentMaxIterations}`;
       const barX = width - barWidth - stepText.length - 3;
       this.screen.write(barX, y, barColored);
@@ -2305,9 +2289,9 @@ export class App {
     const helpText = ' Esc to stop ';
     const helpPadLeft = Math.floor((width - helpText.length) / 2);
     const helpPadRight = Math.max(0, width - helpPadLeft - helpText.length);
-    this.screen.write(0, y, gradientLine(helpPadLeft, GRADIENT_STOPS_DIM));
+    this.screen.write(0, y, fg.rgb(60, 10, 12) + '─'.repeat(helpPadLeft) + style.reset);
     this.screen.write(helpPadLeft, y, helpText, fg.gray);
-    this.screen.write(helpPadLeft + helpText.length, y, gradientLine(helpPadRight, GRADIENT_STOPS_DIM));
+    this.screen.write(helpPadLeft + helpText.length, y, fg.rgb(60, 10, 12) + '─'.repeat(helpPadRight) + style.reset);
   }
   
   /**
@@ -2371,7 +2355,7 @@ export class App {
     if (this.notification) {
       // Notification: gradient colored, full width
       const notifText = ` ${this.notification}`;
-      this.screen.write(0, y, gradientText(notifText, GRADIENT_STOPS));
+      this.screen.write(0, y, PRIMARY_COLOR + notifText + style.reset);
       return;
     }
 
@@ -2387,7 +2371,7 @@ export class App {
 
     let leftX = 1;
     if (modelName) {
-      this.screen.write(leftX, y, gradientText(modelName, GRADIENT_STOPS));
+      this.screen.write(leftX, y, PRIMARY_COLOR + modelName + style.reset);
       leftX += modelName.length + 2;
       this.screen.write(leftX - 1, y, '·', fg.gray);
       leftX += 1;
