@@ -137,6 +137,9 @@ export class App {
   private notification = '';
   private notificationTimeout: NodeJS.Timeout | null = null;
   
+  // Render scheduling
+  private pendingRender = false;
+
   // Spinner animation state
   private spinnerFrame = 0;
   private spinnerInterval: NodeJS.Timeout | null = null;
@@ -153,6 +156,9 @@ export class App {
   private pasteInfo: { chars: number; lines: number; preview: string; fullText: string } | null = null;
   private pasteInfoOpen = false;
   private codeBlockCounter = 0; // Global code block counter for /copy numbering
+
+  // Message render cache: index → { lines, width, startBlock, blockCount }
+  private messageCache: Array<{ lines: Array<{ text: string; style: string; raw?: boolean }>; width: number; startBlock: number; blockCount: number } | null> = [];
   
   // Inline help state
   private helpOpen = false;
@@ -280,15 +286,21 @@ export class App {
     this.input.start();
     
     this.input.onKey((event) => this.handleKey(event));
-    this.screen.onResize(() => this.render());
+    this.screen.onResize(() => {
+      this.messageCache = new Array(this.messages.length).fill(null);
+      this.scheduleRender();
+    });
     
-    this.render();
+    this.scheduleRender();
   }
   
   /**
    * Stop the application
    */
   stop(): void {
+    this.stopSpinner();
+    if (this.notificationTimeout) clearTimeout(this.notificationTimeout);
+    if (this.introInterval) clearInterval(this.introInterval);
     this.input.stop();
     this.screen.cleanup();
   }
@@ -298,26 +310,23 @@ export class App {
    */
   addMessage(message: Message): void {
     this.messages.push(message);
+    this.messageCache.push(null); // slot za novu poruku
     this.scrollOffset = 0;
-    this.render();
+    this.scheduleRender();
   }
-  
-  /**
-   * Set messages (for loading session)
-   */
+
   setMessages(messages: Message[]): void {
     this.messages = messages;
+    this.messageCache = new Array(messages.length).fill(null);
     this.scrollOffset = 0;
-    this.render();
+    this.scheduleRender();
   }
-  
-  /**
-   * Clear messages
-   */
+
   clearMessages(): void {
     this.messages = [];
+    this.messageCache = [];
     this.scrollOffset = 0;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -361,7 +370,7 @@ export class App {
     
     // Set scroll offset to show the target message near the top
     this.scrollOffset = Math.max(0, totalLines - targetStartLine - Math.floor(visibleLines / 2));
-    this.render();
+    this.scheduleRender();
     this.notify(`Jumped to message #${messageIndex + 1}`);
   }
   
@@ -382,7 +391,7 @@ export class App {
     this.isLoading = false;
     this.streamingContent = '';
     this.startSpinner();
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -390,7 +399,7 @@ export class App {
    */
   addStreamChunk(chunk: string): void {
     this.streamingContent += chunk;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -402,11 +411,12 @@ export class App {
         role: 'assistant',
         content: this.streamingContent,
       });
+      this.messageCache.push(null);
     }
     this.streamingContent = '';
     this.isStreaming = false;
     this.stopSpinner();
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -419,7 +429,7 @@ export class App {
     } else {
       this.stopSpinner();
     }
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -460,7 +470,7 @@ export class App {
       this.isLoading = false; // Ensure loading is cleared when agent finishes
       this.stopSpinner();
     }
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -471,7 +481,7 @@ export class App {
     if (action) {
       this.agentActions.push(action);
     }
-    this.render();
+    this.scheduleRender();
   }
 
   setAgentMaxIterations(max: number): void {
@@ -483,12 +493,12 @@ export class App {
    */
   setAgentThinking(text: string): void {
     this.agentThinking = text;
-    this.render();
+    this.scheduleRender();
   }
 
   setAgentWaitingForAI(waiting: boolean): void {
     this.agentWaitingForAI = waiting;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -521,7 +531,7 @@ export class App {
       // Small paste - just add to input directly
       this.editor.insert(text);
       this.updateAutocomplete();
-      this.render();
+      this.scheduleRender();
       return;
     }
     
@@ -534,7 +544,7 @@ export class App {
       fullText: text,
     };
     this.pasteInfoOpen = true;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -546,7 +556,7 @@ export class App {
       this.pasteInfo = null;
       this.pasteInfoOpen = false;
       this.notify('Paste cancelled');
-      this.render();
+      this.scheduleRender();
       return;
     }
     
@@ -558,7 +568,7 @@ export class App {
       }
       this.pasteInfo = null;
       this.pasteInfoOpen = false;
-      this.render();
+      this.scheduleRender();
       return;
     }
     
@@ -568,7 +578,7 @@ export class App {
         const text = this.pasteInfo.fullText;
         this.pasteInfo = null;
         this.pasteInfoOpen = false;
-        this.render();
+        this.scheduleRender();
         
         // Submit directly
         this.addMessage({ role: 'user', content: text });
@@ -587,7 +597,7 @@ export class App {
    */
   notify(message: string, duration = 3000): void {
     this.notification = message;
-    this.render();
+    this.scheduleRender();
     
     if (this.notificationTimeout) {
       clearTimeout(this.notificationTimeout);
@@ -595,7 +605,7 @@ export class App {
     
     this.notificationTimeout = setTimeout(() => {
       this.notification = '';
-      this.render();
+      this.scheduleRender();
     }, duration);
   }
   
@@ -615,7 +625,7 @@ export class App {
     this.menuIndex = 0;
     this.menuCallback = (item) => callback(parseInt(item.key, 10));
     this.menuOpen = true;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -624,7 +634,7 @@ export class App {
   showSettings(): void {
     this.settingsState = { selectedIndex: 0, editing: false, editValue: '' };
     this.settingsOpen = true;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -634,7 +644,7 @@ export class App {
     this.confirmOptions = options;
     this.confirmSelection = 'no'; // Default to No for safety
     this.confirmOpen = true;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -650,7 +660,7 @@ export class App {
     this.permissionIndex = 0;
     this.permissionCallback = callback;
     this.permissionOpen = true;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -667,7 +677,7 @@ export class App {
     this.sessionPickerDeleteCallback = deleteCallback || null;
     this.sessionPickerDeleteMode = false;
     this.sessionPickerOpen = true;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -683,7 +693,7 @@ export class App {
     this.searchIndex = 0;
     this.searchCallback = callback;
     this.searchOpen = true;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -693,7 +703,7 @@ export class App {
     this.exportIndex = 0;
     this.exportCallback = callback;
     this.exportOpen = true;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -707,7 +717,7 @@ export class App {
     this.logoutIndex = 0;
     this.logoutCallback = callback;
     this.logoutOpen = true;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -724,7 +734,7 @@ export class App {
     const noiseInterval = setInterval(() => {
       noiseCount++;
       this.introProgress = Math.random();
-      this.render();
+      this.scheduleRender();
       
       if (noiseCount >= 10) {
         clearInterval(noiseInterval);
@@ -737,7 +747,7 @@ export class App {
         this.introInterval = setInterval(() => {
           const elapsed = Date.now() - startTime;
           this.introProgress = Math.min(elapsed / duration, 1);
-          this.render();
+          this.scheduleRender();
           
           if (this.introProgress >= 1) {
             this.finishIntro();
@@ -746,7 +756,7 @@ export class App {
       }
     }, 50);
     
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -772,7 +782,7 @@ export class App {
       this.introCallback = null;
     }
     
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -789,7 +799,7 @@ export class App {
     this.loginError = '';
     this.loginCallback = callback;
     this.loginOpen = true;
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -800,7 +810,7 @@ export class App {
     this.input.start();
     this.input.onKey((event) => this.handleKey(event));
     
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -822,7 +832,7 @@ export class App {
     const currentIndex = items.findIndex(item => item.key === currentValue);
     this.menuIndex = currentIndex >= 0 ? currentIndex : 0;
     
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -925,7 +935,7 @@ export class App {
     if (event.key === 'escape') {
       if (this.showAutocomplete) {
         this.showAutocomplete = false;
-        this.render();
+        this.scheduleRender();
         return;
       }
       // In multiline mode, Escape submits the buffered input
@@ -949,12 +959,12 @@ export class App {
     if (this.showAutocomplete) {
       if (event.key === 'up') {
         this.autocompleteIndex = Math.max(0, this.autocompleteIndex - 1);
-        this.render();
+        this.scheduleRender();
         return;
       }
       if (event.key === 'down') {
         this.autocompleteIndex = Math.min(this.autocompleteItems.length - 1, this.autocompleteIndex + 1);
-        this.render();
+        this.scheduleRender();
         return;
       }
       if (event.key === 'tab' || event.key === 'enter') {
@@ -963,7 +973,7 @@ export class App {
           const selected = this.autocompleteItems[this.autocompleteIndex];
           this.editor.setValue('/' + selected + ' ');
           this.showAutocomplete = false;
-          this.render();
+          this.scheduleRender();
           return;
         }
       }
@@ -985,14 +995,14 @@ export class App {
     // Ctrl+A - go to beginning of line
     if (event.ctrl && event.key === 'a') {
       this.editor.setCursorPos(0);
-      this.render();
+      this.scheduleRender();
       return;
     }
     
     // Ctrl+E - go to end of line
     if (event.ctrl && event.key === 'e') {
       this.editor.setCursorPos(this.editor.getValue().length);
-      this.render();
+      this.scheduleRender();
       return;
     }
     
@@ -1000,7 +1010,7 @@ export class App {
     if (event.ctrl && event.key === 'u') {
       this.editor.clear();
       this.showAutocomplete = false;
-      this.render();
+      this.scheduleRender();
       return;
     }
     
@@ -1008,7 +1018,7 @@ export class App {
     if (event.ctrl && event.key === 'w') {
       this.editor.deleteWordBackward();
       this.updateAutocomplete();
-      this.render();
+      this.scheduleRender();
       return;
     }
     
@@ -1016,7 +1026,7 @@ export class App {
     if (event.ctrl && event.key === 'k') {
       this.editor.deleteToEnd();
       this.updateAutocomplete();
-      this.render();
+      this.scheduleRender();
       return;
     }
     
@@ -1024,40 +1034,40 @@ export class App {
     if (event.key === 'pageup') {
       // Scroll up (show older messages)
       this.scrollOffset += 10;
-      this.render();
+      this.scheduleRender();
       return;
     }
     
     if (event.key === 'pagedown') {
       // Scroll down (show newer messages)
       this.scrollOffset = Math.max(0, this.scrollOffset - 10);
-      this.render();
+      this.scheduleRender();
       return;
     }
     
     // Arrow up/down can also scroll when input is empty
     if (event.key === 'up' && !this.editor.getValue() && !this.showAutocomplete) {
       this.scrollOffset += 3;
-      this.render();
+      this.scheduleRender();
       return;
     }
     
     if (event.key === 'down' && !this.editor.getValue() && !this.showAutocomplete && this.scrollOffset > 0) {
       this.scrollOffset = Math.max(0, this.scrollOffset - 3);
-      this.render();
+      this.scheduleRender();
       return;
     }
     
     // Mouse scroll
     if (event.key === 'scrollup') {
       this.scrollOffset += 3;
-      this.render();
+      this.scheduleRender();
       return;
     }
     
     if (event.key === 'scrolldown') {
       this.scrollOffset = Math.max(0, this.scrollOffset - 3);
-      this.render();
+      this.scheduleRender();
       return;
     }
     
@@ -1073,14 +1083,14 @@ export class App {
       // Backslash continuation: if line ends with \, add newline instead of submitting
       if (rawValue.endsWith('\\')) {
         this.editor.setValue(rawValue.slice(0, -1) + '\n');
-        this.render();
+        this.scheduleRender();
         return;
       }
 
       // Multiline mode: Enter adds newline, Ctrl+Enter submits
       if (this.isMultilineMode && !event.ctrl) {
         this.editor.insert('\n');
-        this.render();
+        this.scheduleRender();
         return;
       }
 
@@ -1098,7 +1108,7 @@ export class App {
     if (this.editor.handleKey(event)) {
       // Update autocomplete based on input
       this.updateAutocomplete();
-      this.render();
+      this.scheduleRender();
     }
   }
   
@@ -1129,7 +1139,7 @@ export class App {
   private handleInlineStatusKey(event: KeyEvent): void {
     handleInlineStatusKey(event, {
       close: () => { this.statusOpen = false; },
-      render: () => this.render(),
+      render: () => this.scheduleRender(),
     });
   }
 
@@ -1141,7 +1151,7 @@ export class App {
       scrollIndex: this.helpScrollIndex,
       setScrollIndex: (v) => { this.helpScrollIndex = v; },
       close: () => { this.helpOpen = false; },
-      render: () => this.render(),
+      render: () => this.scheduleRender(),
     });
   }
   
@@ -1160,7 +1170,7 @@ export class App {
       this.notify(result.notify);
     }
     
-    this.render();
+    this.scheduleRender();
   }
   
   /**
@@ -1182,7 +1192,7 @@ export class App {
       },
       onRender: () => {
         this.searchIndex = state.searchIndex;
-        this.render();
+        this.scheduleRender();
       },
       onResult: (messageIndex: number) => {
         if (callback) {
@@ -1205,7 +1215,7 @@ export class App {
       this.exportOpen = state.exportOpen;
       this.exportIndex = state.exportIndex;
       this.exportCallback = state.exportCallback;
-      this.render();
+      this.scheduleRender();
     };
     handleExportKeyComponent(event, state, {
       onClose: syncState,
@@ -1237,7 +1247,7 @@ export class App {
     };
     handleLogoutKeyComponent(event, state, {
       onClose: () => {},
-      onRender: () => { syncState(); this.render(); },
+      onRender: () => { syncState(); this.scheduleRender(); },
       onSelect: () => {},
     });
     syncState();
@@ -1262,7 +1272,7 @@ export class App {
         this.loginCallback = null;
         if (callback) callback(result);
       },
-      render: () => this.render(),
+      render: () => this.scheduleRender(),
     });
   }
   
@@ -1280,7 +1290,7 @@ export class App {
         this.menuCallback = null;
         if (selected && callback) callback(selected);
       },
-      render: () => this.render(),
+      render: () => this.scheduleRender(),
     });
   }
   
@@ -1297,7 +1307,7 @@ export class App {
         this.permissionCallback = null;
         if (callback) callback(level);
       },
-      render: () => this.render(),
+      render: () => this.scheduleRender(),
     });
   }
   
@@ -1321,14 +1331,14 @@ export class App {
         if (this.sessionPickerDeleteCallback) this.sessionPickerDeleteCallback(name);
       },
       notify: (msg) => this.notify(msg),
-      render: () => this.render(),
+      render: () => this.scheduleRender(),
     });
   }
   
   private handleInlineConfirmKey(event: KeyEvent): void {
     if (!this.confirmOptions) {
       this.confirmOpen = false;
-      this.render();
+      this.scheduleRender();
       return;
     }
     handleInlineConfirmKey(event, {
@@ -1342,7 +1352,7 @@ export class App {
         if (confirmed) options.onConfirm();
         else if (options.onCancel) options.onCancel();
       },
-      render: () => this.render(),
+      render: () => this.scheduleRender(),
     });
   }
   
@@ -1379,12 +1389,12 @@ export class App {
       case 'help':
         this.helpOpen = true;
         this.helpScrollIndex = 0;
-        this.render();
+        this.scheduleRender();
         break;
         
       case 'status':
         this.statusOpen = true;
-        this.render();
+        this.scheduleRender();
         break;
         
       case 'clear':
@@ -1415,13 +1425,22 @@ export class App {
   /**
    * Render current screen
    */
+  scheduleRender(): void {
+    if (this.pendingRender) return;
+    this.pendingRender = true;
+    setImmediate(() => {
+      this.pendingRender = false;
+      this.render();
+    });
+  }
+
   render(): void {
     // Intro animation takes over the whole screen
     if (this.showIntro) {
       this.renderIntro();
       return;
     }
-    
+
     this.renderChat();
   }
   
@@ -2200,10 +2219,9 @@ export class App {
     // Top border: gradient line with gradient title embedded
     const titleInner = ` ${spinner} AGENT `;
     const titlePadLeft = 2;
-    const lineChar = PRIMARY_COLOR + '─' + style.reset;
-    const lineLeft = lineChar.repeat(titlePadLeft);
+    const lineLeft = PRIMARY_COLOR + '─'.repeat(titlePadLeft) + style.reset;
     const titleColored = PRIMARY_COLOR + style.bold + titleInner + style.reset;
-    const lineRight = lineChar.repeat(Math.max(0, width - titlePadLeft - titleInner.length - 1));
+    const lineRight = PRIMARY_COLOR + '─'.repeat(Math.max(0, width - titlePadLeft - titleInner.length - 1)) + style.reset;
     this.screen.write(0, y, lineLeft + titleColored + lineRight);
     y++;
 
@@ -2414,11 +2432,24 @@ export class App {
       allLines.push({ text: '', style: '' });
     }
 
-    for (const msg of this.messages) {
-      const msgLines = msg.role === 'welcome'
-        ? this.formatWelcomeMessage(msg.content)
-        : this.formatMessage(msg.role, msg.content, width);
-      allLines.push(...msgLines);
+    for (let i = 0; i < this.messages.length; i++) {
+      const msg = this.messages[i];
+      const cached = this.messageCache[i];
+
+      if (cached && cached.width === width && cached.startBlock === this.codeBlockCounter) {
+        // Cache hit — preskoči formatiranje
+        this.codeBlockCounter += cached.blockCount;
+        allLines.push(...cached.lines);
+      } else {
+        // Cache miss — formatiraj i spremi
+        const startBlock = this.codeBlockCounter;
+        const msgLines = msg.role === 'welcome'
+          ? this.formatWelcomeMessage(msg.content)
+          : this.formatMessage(msg.role, msg.content, width);
+        const blockCount = this.codeBlockCounter - startBlock;
+        this.messageCache[i] = { lines: msgLines, width, startBlock, blockCount };
+        allLines.push(...msgLines);
+      }
     }
 
     if (this.isStreaming && this.streamingContent) {
@@ -2524,7 +2555,7 @@ export class App {
       lines.push({ text: PRIMARY_COLOR + '\u254c\u254c' + style.reset + fg.rgb(120, 120, 120) + ' codeep' + style.reset, style: '', raw: true });
       firstPrefix = ' ';
     } else {
-      firstPrefix = fg.rgb(100, 140, 200) + '\u25b8 ' + style.reset;
+      firstPrefix = PRIMARY_COLOR + '\u25b8 ' + style.reset;
     }
 
     const codeBlockRegex = /```([^\n]*)\n([\s\S]*?)```/g;

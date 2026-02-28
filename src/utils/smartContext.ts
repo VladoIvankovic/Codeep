@@ -112,8 +112,16 @@ function extractImports(content: string, ext: string): string[] {
   return imports;
 }
 
-// Cache for resolveImportPath — avoids redundant disk lookups across import graphs
+// LRU cache for resolveImportPath — bounded to prevent memory growth in long sessions
+const IMPORT_CACHE_MAX = 1000;
 const importResolutionCache = new Map<string, string | null>();
+
+function importCacheSet(key: string, value: string | null): void {
+  if (importResolutionCache.size >= IMPORT_CACHE_MAX) {
+    importResolutionCache.delete(importResolutionCache.keys().next().value!);
+  }
+  importResolutionCache.set(key, value);
+}
 
 /**
  * Resolve import path to actual file path.
@@ -148,7 +156,7 @@ function resolveImportPath(
     result = resolveWithExtensions(resolved, ext);
   }
 
-  importResolutionCache.set(cacheKey, result);
+  importCacheSet(cacheKey, result);
   return result;
 }
 
