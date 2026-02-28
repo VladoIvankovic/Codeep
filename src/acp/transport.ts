@@ -5,6 +5,9 @@ import { JsonRpcRequest, JsonRpcResponse, JsonRpcNotification } from './protocol
 
 type MessageHandler = (msg: JsonRpcRequest | JsonRpcNotification) => void;
 
+const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB
+const REQUEST_TIMEOUT_MS = 30_000; // 30s
+
 export class StdioTransport {
   private buffer = '';
   private handler: MessageHandler | null = null;
@@ -20,6 +23,10 @@ export class StdioTransport {
 
   private onData(chunk: string): void {
     this.buffer += chunk;
+    if (this.buffer.length > MAX_BUFFER_SIZE) {
+      this.buffer = '';
+      return;
+    }
     const lines = this.buffer.split('\n');
     this.buffer = lines.pop() ?? '';
 
@@ -70,6 +77,11 @@ export class StdioTransport {
     return new Promise((resolve) => {
       this.pendingRequests.set(id, resolve);
       process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+      setTimeout(() => {
+        if (this.pendingRequests.delete(id)) {
+          resolve(null);
+        }
+      }, REQUEST_TIMEOUT_MS);
     });
   }
 }
