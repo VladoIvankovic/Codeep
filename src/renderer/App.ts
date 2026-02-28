@@ -118,7 +118,7 @@ import { renderLogoutPanel, handleLogoutKey as handleLogoutKeyComponent, LogoutS
 import { renderSearchPanel, handleSearchKey as handleSearchKeyComponent, SearchState } from './components/Search';
 
 export interface Message {
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'welcome';
   content: string;
 }
 
@@ -387,7 +387,7 @@ export class App {
    */
   getChatHistory(): Array<{ role: 'user' | 'assistant'; content: string }> {
     return this.messages
-      .filter(m => m.role !== 'system')
+      .filter(m => m.role !== 'system' && m.role !== 'welcome')
       .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
   }
   
@@ -2431,7 +2431,9 @@ export class App {
     }
 
     for (const msg of this.messages) {
-      const msgLines = this.formatMessage(msg.role, msg.content, width);
+      const msgLines = msg.role === 'welcome'
+        ? this.formatWelcomeMessage(msg.content)
+        : this.formatMessage(msg.role, msg.content, width);
       allLines.push(...msgLines);
     }
 
@@ -2457,18 +2459,85 @@ export class App {
   /**
    * Format message into lines with syntax highlighting for code blocks
    */
+  private formatWelcomeMessage(content: string): Array<{ text: string; style: string; raw?: boolean }> {
+    const lines: Array<{ text: string; style: string; raw?: boolean }> = [];
+    const DIM = fg.rgb(80, 80, 80);
+    const LABEL = fg.rgb(100, 100, 100);
+    const SEP = DIM + '  ·  ' + style.reset;
+
+    for (const line of content.split('\n')) {
+      if (line.trim() === '') {
+        lines.push({ text: '', style: '' });
+        continue;
+      }
+
+      // Version line: "Codeep vX.X.X  ·  Provider  ·  Model"
+      if (line.startsWith('Codeep ')) {
+        const parts = line.split('  ·  ');
+        const colored = PRIMARY_COLOR + style.bold + (parts[0] || '') + style.reset
+          + SEP + fg.rgb(180, 180, 180) + (parts[1] || '') + style.reset
+          + SEP + fg.rgb(130, 130, 130) + (parts[2] || '') + style.reset;
+        lines.push({ text: colored, style: '', raw: true });
+        continue;
+      }
+
+      // Project line
+      if (/^\s+Project\s/.test(line)) {
+        const value = line.replace(/^\s+Project\s+/, '');
+        lines.push({ text: LABEL + '  Project  ' + style.reset + fg.rgb(100, 180, 220) + value + style.reset, style: '', raw: true });
+        continue;
+      }
+
+      // Access line
+      if (/^\s+Access\s/.test(line)) {
+        const value = line.replace(/^\s+Access\s+/, '');
+        const parts = value.split('  ·  ');
+        const accessColored = fg.rgb(100, 200, 120) + style.bold + (parts[0] || '') + style.reset;
+        const rest = parts.slice(1).map(p => fg.rgb(80, 160, 100) + p + style.reset).join(SEP);
+        lines.push({ text: LABEL + '  Access   ' + style.reset + accessColored + (rest ? SEP + rest : ''), style: '', raw: true });
+        continue;
+      }
+
+      // Mode line
+      if (/^\s+Mode\s/.test(line)) {
+        const value = line.replace(/^\s+Mode\s+/, '');
+        lines.push({ text: LABEL + '  Mode     ' + style.reset + fg.rgb(160, 160, 160) + value + style.reset, style: '', raw: true });
+        continue;
+      }
+
+      // Agent Mode warning
+      if (line.includes('⚠')) {
+        lines.push({ text: '  ' + fg.rgb(220, 160, 40) + line.trim() + style.reset, style: '', raw: true });
+        continue;
+      }
+
+      // Shortcuts line
+      if (line.includes('/help')) {
+        const parts = line.trim().split('  ·  ');
+        const colored = parts.map(p => fg.rgb(150, 150, 150) + p.trim() + style.reset).join(DIM + '  ·  ' + style.reset);
+        lines.push({ text: '  ' + colored, style: '', raw: true });
+        continue;
+      }
+
+      lines.push({ text: line, style: '' });
+    }
+
+    lines.push({ text: '', style: '' });
+    return lines;
+  }
+
   private formatMessage(role: 'user' | 'assistant' | 'system', content: string, maxWidth: number): Array<{ text: string; style: string; raw?: boolean }> {
     const lines: Array<{ text: string; style: string; raw?: boolean }> = [];
 
-    // Role-specific prefix — user gets gradient bar, assistant gets dim header, system gets diamond
+    // Role-specific prefix — user gets primary color bar, assistant gets dim header, system gets diamond
     const contIndent = '   ';
     let firstPrefix: string;
     const firstStyle = '';
 
     if (role === 'user') {
-      firstPrefix = gradientText('\u258c ', GRADIENT_STOPS) + style.reset;
+      firstPrefix = PRIMARY_COLOR + '\u258c ' + style.reset;
     } else if (role === 'assistant') {
-      lines.push({ text: fg.rgb(80, 80, 80) + '\u254c\u254c codeep' + style.reset, style: '', raw: true });
+      lines.push({ text: PRIMARY_COLOR + '\u254c\u254c' + style.reset + fg.rgb(120, 120, 120) + ' codeep' + style.reset, style: '', raw: true });
       firstPrefix = ' ';
     } else {
       firstPrefix = fg.rgb(100, 140, 200) + '\u25b8 ' + style.reset;
@@ -2536,7 +2605,7 @@ export class App {
         const end = text.indexOf('***', i + 3);
         if (end !== -1) {
           const inner = text.slice(i + 3, end);
-          result += style.bold + style.italic + fg.white + inner + '\x1b[0m';
+          result += style.bold + style.italic + PRIMARY_COLOR + inner + '\x1b[0m';
           hasFormatting = true;
           i = end + 3;
           continue;
@@ -2548,7 +2617,7 @@ export class App {
         const end = text.indexOf('**', i + 2);
         if (end !== -1) {
           const inner = text.slice(i + 2, end);
-          result += style.bold + fg.white + inner + '\x1b[0m';
+          result += style.bold + PRIMARY_COLOR + inner + '\x1b[0m';
           hasFormatting = true;
           i = end + 2;
           continue;
