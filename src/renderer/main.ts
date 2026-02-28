@@ -439,22 +439,22 @@ Commands (in chat):
   const model = config.get('model');
   const agentMode = config.get('agentMode') || 'off';
 
-  const welcomeLines: string[] = [`Codeep v${version} • ${providerInfo?.name} • ${model}`, ''];
+  const welcomeLines: string[] = [`Codeep v${version}  ·  ${providerInfo?.name}  ·  ${model}`, ''];
   if (projectContext) {
-    welcomeLines.push(`Project: ${projectPath}`);
+    welcomeLines.push(`  Project  ${projectPath}`);
     welcomeLines.push(hasWriteAccess
-      ? 'Access: Read & Write (Agent enabled)'
-      : 'Access: Read Only (/grant to enable Agent)');
+      ? '  Access   Read & Write  ·  Agent enabled'
+      : '  Access   Read Only  ·  /grant to enable Agent');
   } else {
-    welcomeLines.push('Mode: Chat only (no project context)');
+    welcomeLines.push('  Mode     Chat only  ·  no project context');
   }
   if (agentMode === 'on' && hasWriteAccess) {
     welcomeLines.push('');
-    welcomeLines.push('⚠ Agent Mode ON: Messages will auto-execute as agent tasks');
+    welcomeLines.push('  ⚠  Agent Mode ON  —  messages auto-execute as agent tasks');
   }
   welcomeLines.push('');
-  welcomeLines.push('Shortcuts: /help commands • Ctrl+L clear • Esc cancel');
-  app.addMessage({ role: 'system', content: welcomeLines.join('\n') });
+  welcomeLines.push('  /help  ·  Ctrl+L clear  ·  Esc cancel');
+  app.addMessage({ role: 'welcome', content: welcomeLines.join('\n') });
 
   app.start();
 
