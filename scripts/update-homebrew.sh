@@ -66,3 +66,23 @@ echo ""
 echo "Users can now update with:"
 echo "  brew update"
 echo "  brew upgrade codeep"
+
+# ── Update Zed extension ──────────────────────────────────────────────────────
+ZED_REPO_PATH="/Users/vladoivankovic/github/Codeep/codeep-zed"
+ZED_TOML="$ZED_REPO_PATH/extension.toml"
+
+echo "📝 Updating Zed extension to v${VERSION}..."
+
+# Bump version and archive URLs in extension.toml
+sed -i '' "s/^version = \".*\"/version = \"${VERSION}\"/" "$ZED_TOML"
+sed -i '' "s|/releases/download/v[^/]*/|/releases/download/v${VERSION}/|g" "$ZED_TOML"
+
+cd "$ZED_REPO_PATH"
+git add extension.toml
+git commit -m "Update codeep to v${VERSION}"
+git tag "v${VERSION}"
+git push
+git push origin "v${VERSION}"
+
+echo "✅ Done! Zed extension updated to v${VERSION}"
+echo "   GitHub Action will build binaries automatically."

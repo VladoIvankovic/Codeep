@@ -289,6 +289,24 @@ if ((config.get('agentMode') as string) === 'auto') {
   config.set('agentMode', 'on');
 }
 
+// Migrate old conservative limits to new unlimited defaults.
+// Only upgrade values that are still at the old defaults — don't override user-set values.
+if (config.get('agentMaxIterations') <= 200) {
+  config.set('agentMaxIterations', 10000);
+}
+if (config.get('agentMaxDuration') <= 20) {
+  config.set('agentMaxDuration', 480);
+}
+if (config.get('agentApiTimeout') <= 180000) {
+  config.set('agentApiTimeout', 600000);
+}
+if (config.get('rateLimitApi') <= 30) {
+  config.set('rateLimitApi', 10000);
+}
+if (config.get('rateLimitCommands') <= 100) {
+  config.set('rateLimitCommands', 10000);
+}
+
 // Global sessions directory - use same directory as conf package for cross-platform consistency
 // config.path gives us something like ~/.config/codeep-nodejs/config.json, we use its parent
 const GLOBAL_BASE_DIR = dirname(config.path);
