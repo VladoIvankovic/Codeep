@@ -97,12 +97,12 @@ class RateLimiter {
 
 // Default rate limiters - configs are loaded from user settings
 let apiRateLimiter = new RateLimiter({
-  maxRequests: config.get('rateLimitApi') || 30,
+  maxRequests: config.get('rateLimitApi') || 1000000,
   windowMs: 60 * 1000, // per minute
 });
 
 let commandRateLimiter = new RateLimiter({
-  maxRequests: config.get('rateLimitCommands') || 100,
+  maxRequests: config.get('rateLimitCommands') || 10000,
   windowMs: 60 * 1000, // per minute
 });
 
@@ -111,12 +111,12 @@ let commandRateLimiter = new RateLimiter({
  */
 export function updateRateLimits(): void {
   apiRateLimiter = new RateLimiter({
-    maxRequests: config.get('rateLimitApi') || 30,
+    maxRequests: config.get('rateLimitApi') || 1000000,
     windowMs: 60 * 1000,
   });
   
   commandRateLimiter = new RateLimiter({
-    maxRequests: config.get('rateLimitCommands') || 100,
+    maxRequests: config.get('rateLimitCommands') || 10000,
     windowMs: 60 * 1000,
   });
 }

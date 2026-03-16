@@ -12,7 +12,7 @@
  *   TimeoutError             — distinguishes timeout from user abort
  */
 
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { ProjectContext } from './project';
 import { config, getApiKey, Message } from '../config/index';
@@ -65,6 +65,88 @@ export function loadProjectRules(projectRoot: string): string {
   }
 
   return '';
+}
+
+/**
+ * Load agent progress log from .codeep/progress.md
+ * Injected into system prompt so agent knows what was previously done.
+ */
+export function loadProgressLog(projectRoot: string): string {
+  if (!projectRoot) return '';
+  const progressFile = join(projectRoot, '.codeep', 'progress.md');
+  if (!existsSync(progressFile)) return '';
+  try {
+    const content = readFileSync(progressFile, 'utf-8').trim();
+    if (content) {
+      return `\n\n## Previous Session Progress\nThe agent has previously worked on this project. Read this to understand what was already done and what still needs to be done:\n\n${content}`;
+    }
+  } catch (err) {
+    debug('Failed to read progress log from', progressFile, err);
+  }
+  return '';
+}
+
+/**
+ * Write agent progress log to .codeep/progress.md
+ * Called after each agent run so the next session has context.
+ */
+export function writeProgressLog(
+  projectRoot: string,
+  prompt: string,
+  result: { success: boolean; iterations: number; actions: Array<{ type: string; target: string }>; finalResponse: string }
+): void {
+  if (!projectRoot) return;
+  const codeepDir = join(projectRoot, '.codeep');
+  if (!existsSync(codeepDir)) return; // Only write if .codeep already exists (initialized project)
+  try {
+    const now = new Date().toISOString();
+    const fileWrites = result.actions.filter(a => a.type === 'write' || a.type === 'edit');
+    const fileDeletes = result.actions.filter(a => a.type === 'delete');
+    const commands = result.actions.filter(a => a.type === 'command');
+
+    const lines: string[] = [
+      `# Agent Progress Log`,
+      ``,
+      `## Last Session: ${now}`,
+      ``,
+      `### Task`,
+      `${prompt}`,
+      ``,
+      `### Status`,
+      result.success ? `✓ Completed (${result.iterations} iterations)` : `⚠ Incomplete — task may need to be continued`,
+      ``,
+    ];
+
+    if (fileWrites.length > 0) {
+      lines.push(`### Files Written/Edited`);
+      [...new Set(fileWrites.map(a => a.target))].forEach(f => lines.push(`- ${f}`));
+      lines.push('');
+    }
+    if (fileDeletes.length > 0) {
+      lines.push(`### Files Deleted`);
+      [...new Set(fileDeletes.map(a => a.target))].forEach(f => lines.push(`- ${f}`));
+      lines.push('');
+    }
+    if (commands.length > 0) {
+      lines.push(`### Commands Run`);
+      commands.forEach(a => lines.push(`- ${a.target}`));
+      lines.push('');
+    }
+    if (result.finalResponse) {
+      lines.push(`### Summary`);
+      lines.push(result.finalResponse.slice(0, 3000));
+      lines.push('');
+    }
+    if (!result.success) {
+      lines.push(`### What Still Needs to Be Done`);
+      lines.push(`The task was not fully completed in the last session. Run the agent again on the same project to continue from where it left off.`);
+      lines.push('');
+    }
+
+    writeFileSync(join(codeepDir, 'progress.md'), lines.join('\n'), 'utf-8');
+  } catch (err) {
+    debug('Failed to write progress log:', err);
+  }
 }
 
 /**

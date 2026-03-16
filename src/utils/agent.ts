@@ -20,11 +20,13 @@ import {
   getFallbackSystemPrompt,
   TimeoutError,
   loadProjectRules,
+  loadProgressLog,
+  writeProgressLog,
   formatChatHistoryForAgent,
 } from './agentChat';
 import { ApiError } from '../api/index';
 import type { AgentChatResponse } from './agentChat';
-export { loadProjectRules, formatChatHistoryForAgent };
+export { loadProjectRules, loadProgressLog, writeProgressLog, formatChatHistoryForAgent };
 export type { AgentChatResponse };
 
 /**
@@ -45,9 +47,9 @@ function calculateDynamicTimeout(iteration: number, baseTimeout: number): number
     multiplier = 1.5;
   }
   
-  // Minimum 120 seconds, maximum 5 minutes for a single API call
+  // Minimum 120 seconds, no hard upper cap — let agentApiTimeout setting be the real ceiling
   const calculatedTimeout = baseTimeout * multiplier;
-  return Math.min(Math.max(calculatedTimeout, 120000), 300000);
+  return Math.max(calculatedTimeout, 120000);
 }
 import {
   parseToolCalls,
@@ -238,7 +240,13 @@ export async function runAgent(
   if (projectRules) {
     systemPrompt += projectRules;
   }
-  
+
+  // Inject previous session progress (from .codeep/progress.md)
+  const progressLog = loadProgressLog(projectContext.root);
+  if (progressLog) {
+    systemPrompt += progressLog;
+  }
+
   if (smartContextStr) {
     systemPrompt += '\n\n' + smartContextStr;
   }
@@ -261,13 +269,13 @@ export async function runAgent(
   let result: AgentResult;
   let consecutiveTimeouts = 0;
   let incompleteWorkRetries = 0;
-  const maxIncompleteWorkRetries = 2;
+  const maxIncompleteWorkRetries = 5;
   // Track tools permanently allowed this session via allow_always
   const alwaysAllowedTools = new Set<string>();
   // Tools that require permission when onRequestPermission is set
   const dangerousTools = new Set(['delete_file', 'execute_command']);
   const maxTimeoutRetries = 3;
-  const maxConsecutiveTimeouts = 9; // Allow more consecutive timeouts before giving up
+  const maxConsecutiveTimeouts = 30; // Allow more consecutive timeouts before giving up
   const baseTimeout = config.get('agentApiTimeout');
 
   // Infinite loop detection: track last write hash per file path
@@ -296,6 +304,7 @@ export async function runAgent(
           finalResponse: partialLines.join('\n'),
           error: `Exceeded maximum duration of ${durationMin} min`,
         };
+        writeProgressLog(projectContext.root || '', prompt, result);
         return result;
       }
       
@@ -631,7 +640,7 @@ export async function runAgent(
       // Add tool results to messages
       messages.push({
         role: 'user',
-        content: `Tool results:\n\n${toolResults.join('\n\n')}\n\nContinue with the task. If this subtask is complete, provide a summary without tool calls.`,
+        content: `Tool results:\n\n${toolResults.join('\n\n')}\n\nContinue with the task. Keep working until everything is fully done.`,
       });
     }
     
@@ -651,6 +660,7 @@ export async function runAgent(
         finalResponse: partialLines.join('\n'),
         error: `Exceeded maximum of ${opts.maxIterations} iterations`,
       };
+      writeProgressLog(projectContext.root || '', prompt, result);
       return result;
     }
     
@@ -812,6 +822,7 @@ export async function runAgent(
       actions,
       finalResponse,
     };
+    writeProgressLog(projectContext.root || '', prompt, result);
     return result;
     
   } catch (error) {

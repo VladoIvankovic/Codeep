@@ -64,6 +64,7 @@ interface ConfigSchema {
   agentMaxIterations: number; // Max agent iterations (default: 100)
   agentMaxDuration: number; // Max agent duration in minutes (default: 20)
   agentApiTimeout: number; // Base API timeout for agent in ms (default: 90000, dynamically adjusted)
+  agentInteractive: boolean; // Show interactive mode (default: true)
   projectPermissions: ProjectPermission[];
   providerApiKeys: ProviderApiKey[];
 }
@@ -226,9 +227,10 @@ function createConfig(): Conf<ConfigSchema> {
     agentAutoCommitBranch: false,
     agentAutoVerify: 'off',
     agentMaxFixAttempts: 3,
-    agentMaxIterations: 200,
-    agentMaxDuration: 20,
-    agentApiTimeout: 180000,
+    agentMaxIterations: 10000,
+    agentMaxDuration: 480,
+    agentApiTimeout: 600000,
+    agentInteractive: true,
     protocol: 'openai',
     plan: 'lite',
     language: 'en',
@@ -237,8 +239,8 @@ function createConfig(): Conf<ConfigSchema> {
     temperature: 0.7,
     maxTokens: 8192,
     apiTimeout: 60000,
-    rateLimitApi: 30,
-    rateLimitCommands: 100,
+    rateLimitApi: 10000,
+    rateLimitCommands: 10000,
     projectPermissions: [],
     providerApiKeys: [],
   };

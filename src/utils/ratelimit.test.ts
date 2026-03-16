@@ -1,14 +1,30 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// Mock config to use small, predictable limits so tests run fast and don't
+// depend on the production defaults (which are now effectively unlimited).
+vi.mock('../config/index', () => ({
+  config: {
+    get: vi.fn((k: string) => {
+      if (k === 'rateLimitApi') return 5;
+      if (k === 'rateLimitCommands') return 5;
+      return undefined;
+    }),
+  },
+}));
+
 import {
   checkApiRateLimit,
   checkCommandRateLimit,
   resetRateLimits,
   getRateLimitStatus,
+  updateRateLimits,
 } from './ratelimit';
+
+const API_LIMIT = 5;
+const CMD_LIMIT = 5;
 
 describe('ratelimit utilities', () => {
   beforeEach(() => {
-    // Reset rate limiters before each test
     resetRateLimits();
   });
 
@@ -20,7 +36,6 @@ describe('ratelimit utilities', () => {
     });
 
     it('should track request count', () => {
-      // Make some requests
       checkApiRateLimit();
       checkApiRateLimit();
       checkApiRateLimit();
@@ -30,21 +45,18 @@ describe('ratelimit utilities', () => {
     });
 
     it('should block requests over limit', () => {
-      // Make requests up to the limit (default 30)
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < API_LIMIT; i++) {
         const result = checkApiRateLimit();
         expect(result.allowed).toBe(true);
       }
 
-      // Next request should be blocked
       const result = checkApiRateLimit();
       expect(result.allowed).toBe(false);
       expect(result.message).toContain('Rate limit exceeded');
     });
 
     it('should include retry message when blocked', () => {
-      // Fill up the limit
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < API_LIMIT; i++) {
         checkApiRateLimit();
       }
 
@@ -68,8 +80,7 @@ describe('ratelimit utilities', () => {
     });
 
     it('should block commands over limit', () => {
-      // Make commands up to the limit (default 100)
-      for (let i = 0; i < 100; i++) {
+      for (let i = 0; i < CMD_LIMIT; i++) {
         checkCommandRateLimit();
       }
 
@@ -81,7 +92,6 @@ describe('ratelimit utilities', () => {
 
   describe('resetRateLimits', () => {
     it('should reset all counters', () => {
-      // Make some requests
       checkApiRateLimit();
       checkApiRateLimit();
       checkCommandRateLimit();
@@ -92,7 +102,6 @@ describe('ratelimit utilities', () => {
       expect(status.api.count).toBe(2);
       expect(status.commands.count).toBe(3);
 
-      // Reset
       resetRateLimits();
 
       status = getRateLimitStatus();
@@ -101,18 +110,14 @@ describe('ratelimit utilities', () => {
     });
 
     it('should allow requests after reset', () => {
-      // Fill up the limit
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < API_LIMIT; i++) {
         checkApiRateLimit();
       }
 
-      // Should be blocked
       expect(checkApiRateLimit().allowed).toBe(false);
 
-      // Reset
       resetRateLimits();
 
-      // Should be allowed again
       expect(checkApiRateLimit().allowed).toBe(true);
     });
   });
@@ -127,11 +132,11 @@ describe('ratelimit utilities', () => {
       expect(status.commands).toHaveProperty('limit');
     });
 
-    it('should return correct limits', () => {
+    it('should return correct limits from config', () => {
       const status = getRateLimitStatus();
 
-      expect(status.api.limit).toBe(30);
-      expect(status.commands.limit).toBe(100);
+      expect(status.api.limit).toBe(API_LIMIT);
+      expect(status.commands.limit).toBe(CMD_LIMIT);
     });
 
     it('should update count after requests', () => {
@@ -145,23 +150,29 @@ describe('ratelimit utilities', () => {
     });
   });
 
+  describe('updateRateLimits', () => {
+    it('should re-read limits from config', () => {
+      // updateRateLimits re-creates the limiters from config (mocked to 5)
+      updateRateLimits();
+      const status = getRateLimitStatus();
+      expect(status.api.limit).toBe(API_LIMIT);
+      expect(status.commands.limit).toBe(CMD_LIMIT);
+    });
+  });
+
   describe('sliding window behavior', () => {
     it('should expire old requests after window', async () => {
-      // This test uses fake timers to simulate time passing
       vi.useFakeTimers();
 
-      // Make some requests
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < API_LIMIT; i++) {
         checkApiRateLimit();
       }
 
-      // Should be blocked
       expect(checkApiRateLimit().allowed).toBe(false);
 
       // Advance time past the window (60 seconds)
       vi.advanceTimersByTime(61000);
 
-      // Should be allowed again (old requests expired)
       expect(checkApiRateLimit().allowed).toBe(true);
 
       vi.useRealTimers();
