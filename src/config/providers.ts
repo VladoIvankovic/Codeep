@@ -65,6 +65,26 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       zread: 'https://api.z.ai/api/mcp/zread/mcp',
     },
   },
+  'z.ai-api': {
+    name: 'Z.AI API (pay-per-use)',
+    description: 'ZhipuAI GLM models via API key',
+    protocols: {
+      openai: {
+        baseUrl: 'https://api.z.ai/api/paas/v4',
+        authHeader: 'Bearer',
+        supportsNativeTools: true,
+      },
+    },
+    models: [
+      { id: 'glm-5', name: 'GLM-5', description: 'Most capable GLM model' },
+      { id: 'glm-4.7', name: 'GLM-4.7', description: 'Latest GLM model' },
+      { id: 'glm-4.7-flash', name: 'GLM-4.7 Flash', description: 'Faster, lighter version' },
+    ],
+    defaultModel: 'glm-4.7',
+    defaultProtocol: 'openai',
+    envKey: 'ZAI_API_KEY',
+    subscribeUrl: 'https://api.z.ai',
+  },
   'z.ai-cn': {
     name: 'Z.AI China (ZhipuAI)',
     description: 'GLM Coding Plan (China)',
@@ -117,6 +137,28 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultProtocol: 'anthropic',
     envKey: 'MINIMAX_API_KEY',
     subscribeUrl: 'https://platform.minimax.io/subscribe/coding-plan?code=2lWvoWUhrp&source=link',
+  },
+  'minimax-api': {
+    name: 'MiniMax API (pay-per-use)',
+    description: 'MiniMax models via API key',
+    protocols: {
+      openai: {
+        baseUrl: 'https://api.minimax.io/v1',
+        authHeader: 'Bearer',
+        supportsNativeTools: true,
+      },
+    },
+    models: [
+      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', description: 'Peak performance' },
+      { id: 'MiniMax-M2.5-highspeed', name: 'MiniMax M2.5 High Speed', description: 'Same performance, faster (~100 tps)' },
+      { id: 'MiniMax-M2.1', name: 'MiniMax M2.1', description: 'Strong multilingual and programming' },
+      { id: 'MiniMax-M2.1-highspeed', name: 'MiniMax M2.1 High Speed', description: 'Faster variant (~100 tps)' },
+      { id: 'MiniMax-M2', name: 'MiniMax M2', description: 'Agentic capabilities, advanced reasoning' },
+    ],
+    defaultModel: 'MiniMax-M2.5',
+    defaultProtocol: 'openai',
+    envKey: 'MINIMAX_API_KEY',
+    subscribeUrl: 'https://platform.minimax.io',
   },
   'minimax-cn': {
     name: 'MiniMax China',

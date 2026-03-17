@@ -6,9 +6,10 @@ Guide for publishing new versions of Codeep.
 
 - npm account with publish access to `codeep` package
 - 2FA enabled (you'll need OTP codes)
-- Git push access to both repos:
+- Git push access to all repos:
   - `VladoIvankovic/Codeep`
   - `VladoIvankovic/homebrew-codeep`
+  - `VladoIvankovic/codeep-zed`
 
 ## Release Steps
 
@@ -43,7 +44,7 @@ npm publish --otp=<6-digit-code>
 
 Get the OTP code from your authenticator app.
 
-### 5. Update Homebrew Formula
+### 5. Update Homebrew Formula & Zed Extension
 
 ```bash
 ./scripts/update-homebrew.sh 1.0.19
@@ -51,8 +52,9 @@ Get the OTP code from your authenticator app.
 
 This script will:
 - Fetch SHA256 hash from npm
-- Update `homebrew-codeep/Formula/codeep.rb`
-- Commit and push to GitHub
+- Update `homebrew-codeep/Formula/codeep.rb` and push
+- Bump version in `codeep-zed/extension.toml`, tag and push
+- GitHub Action in `codeep-zed` automatically builds binaries for all platforms
 
 **Manual alternative:**
 ```bash
