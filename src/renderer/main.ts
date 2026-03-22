@@ -374,6 +374,7 @@ Codeep - AI-powered coding assistant TUI
 
 Usage:
   codeep              Start interactive chat
+  codeep account      Link CLI to your codeep.dev dashboard
   codeep acp          Start ACP server (for Zed editor integration)
   codeep --version    Show version
   codeep --help       Show this help
@@ -384,6 +385,13 @@ Commands (in chat):
   /version   Show version and current model
   /exit      Quit application
     `);
+    process.exit(0);
+  }
+
+  // Account / dashboard link flow
+  if (args[0] === 'account') {
+    const { runAccountFlow } = await import('../utils/codeepCloud.js');
+    await runAccountFlow();
     process.exit(0);
   }
 

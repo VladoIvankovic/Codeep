@@ -67,6 +67,8 @@ interface ConfigSchema {
   agentInteractive: boolean; // Show interactive mode (default: true)
   projectPermissions: ProjectPermission[];
   providerApiKeys: ProviderApiKey[];
+  githubId: string;
+  githubUsername: string;
 }
 
 export type { AgentMode };
@@ -243,6 +245,8 @@ function createConfig(): Conf<ConfigSchema> {
     rateLimitCommands: 10000,
     projectPermissions: [],
     providerApiKeys: [],
+    githubId: '',
+    githubUsername: '',
   };
 
   // First try standard location
@@ -916,4 +920,13 @@ export function hasReadPermission(projectPath: string): boolean {
 export function hasWritePermission(projectPath: string): boolean {
   const perm = getProjectPermission(projectPath);
   return perm?.writePermission === true;
+}
+
+export function getGithubId(): string {
+  return config.get('githubId') || '';
+}
+
+export function setGithubAccount(githubId: string, username: string): void {
+  config.set('githubId', githubId);
+  config.set('githubUsername', username);
 }

@@ -10,7 +10,8 @@ import { App, Message } from './App';
 import { chat } from '../api/index';
 import { runAgent, AgentResult } from '../utils/agent';
 import { ProjectContext } from '../utils/project';
-import { config, autoSaveSession } from '../config/index';
+import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
+import { reportStats } from '../utils/codeepCloud';
 import { getGitStatus } from '../utils/git';
 
 function getActionType(toolName: string): string {
@@ -370,6 +371,15 @@ export async function executeAgentTask(
     }
 
     autoSaveSession(app.getMessages(), ctx.projectPath);
+
+    // Report stats to codeep.dev (fire-and-forget, only if github_id is set)
+    const { getCurrentVersion } = await import('../utils/update.js');
+    reportStats({
+      model: config.get('model'),
+      provider: config.get('provider'),
+      sessionId: getCurrentSessionId(),
+      cliVersion: getCurrentVersion(),
+    });
 
   } catch (error) {
     const err = error as Error;
