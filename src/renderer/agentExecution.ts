@@ -374,11 +374,16 @@ export async function executeAgentTask(
 
     // Report stats to codeep.dev (fire-and-forget, only if github_id is set)
     const { getCurrentVersion } = await import('../utils/update.js');
+    const sessionId = getCurrentSessionId();
     reportStats({
       model: config.get('model'),
       provider: config.get('provider'),
-      sessionId: getCurrentSessionId(),
+      sessionId,
+      sessionName: sessionId,
+      messageCount: app.getMessages().length,
       cliVersion: getCurrentVersion(),
+      projectName: ctx.projectContext?.name,
+      language: ctx.projectContext?.type,
     });
 
   } catch (error) {

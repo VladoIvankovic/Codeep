@@ -99,7 +99,11 @@ export interface StatsPayload {
   provider: string;
   command?: string;
   sessionId: string;
+  sessionName?: string;
+  messageCount?: number;
   cliVersion: string;
+  projectName?: string;
+  language?: string;
 }
 
 /**
