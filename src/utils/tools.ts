@@ -7,7 +7,7 @@
  *   toolExecution.ts   — executeTool, validatePath, createActionLog
  */
 
-import { hasZaiMcpAccess, hasMinimaxMcpAccess, ZAI_MCP_TOOLS, MINIMAX_MCP_TOOLS } from './mcpIntegration';
+import { hasZaiMcpAccess, hasMinimaxMcpAccess, hasZaiVisionAccess, ZAI_MCP_TOOLS, ZAI_VISION_TOOLS, MINIMAX_MCP_TOOLS } from './mcpIntegration';
 
 // Tool parameter info shape (used in formatToolDefinitions)
 interface ToolParamInfo { type: string; required?: boolean; description: string }
@@ -175,6 +175,14 @@ export const AGENT_TOOLS = {
       query: { type: 'string', description: 'Search query', required: true },
     },
   },
+  zai_analyze_image: {
+    name: 'zai_analyze_image',
+    description: 'Analyze and understand an image using Z.AI vision model (GLM-4V). Can describe images, read text from screenshots, understand diagrams, and answer questions about visual content. Requires a Z.AI API key.',
+    parameters: {
+      prompt: { type: 'string', description: 'Question or instruction about the image (e.g. "Describe this image", "What text is in this screenshot?")', required: true },
+      image_url: { type: 'string', description: 'URL of the image or base64-encoded image data (prefix base64 with data:image/png;base64,...)', required: true },
+    },
+  },
   minimax_understand_image: {
     name: 'minimax_understand_image',
     description: 'Analyze and understand an image using MiniMax vision model. Can describe images, read text from screenshots, understand diagrams, and answer questions about visual content. Requires a MiniMax API key.',
@@ -190,9 +198,11 @@ export const AGENT_TOOLS = {
  */
 function getFilteredToolEntries(): [string, typeof AGENT_TOOLS[keyof typeof AGENT_TOOLS]][] {
   const hasMcp = hasZaiMcpAccess();
+  const hasZaiVision = hasZaiVisionAccess();
   const hasMinimaxMcp = hasMinimaxMcpAccess();
   return Object.entries(AGENT_TOOLS).filter(([name]) => {
     if (ZAI_MCP_TOOLS.includes(name)) return hasMcp;
+    if (ZAI_VISION_TOOLS.includes(name)) return hasZaiVision;
     if (MINIMAX_MCP_TOOLS.includes(name)) return hasMinimaxMcp;
     return true;
   });

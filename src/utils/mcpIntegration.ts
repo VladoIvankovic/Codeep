@@ -18,8 +18,14 @@ export interface ZaiMcpResponse {
 // Z.AI MCP tool names (available when user has any Z.AI API key)
 export const ZAI_MCP_TOOLS = ['web_search', 'web_read', 'github_read'];
 
+// Z.AI Vision tool names (available when user has any Z.AI API key)
+export const ZAI_VISION_TOOLS = ['zai_analyze_image'];
+
 // Z.AI provider IDs that have MCP endpoints
 export const ZAI_PROVIDER_IDS = ['z.ai', 'z.ai-cn'];
+
+// All Z.AI provider IDs (including pay-per-use)
+export const ZAI_ALL_PROVIDER_IDS = ['z.ai', 'z.ai-api', 'z.ai-cn'];
 
 // MiniMax MCP tool names (available when user has any MiniMax API key)
 export const MINIMAX_MCP_TOOLS = ['minimax_web_search', 'minimax_understand_image'];
@@ -133,6 +139,71 @@ export async function callMinimaxApi(host: string, path: string, body: Record<st
       return data.content.map((c) => c.text || '').join('\n');
     }
     return JSON.stringify(data);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Find a Z.AI provider (any variant) that has an API key configured.
+ * Used for vision tool access which works with all Z.AI providers.
+ */
+export function getZaiVisionConfig(): { baseUrl: string; apiKey: string } | null {
+  const activeProvider = config.get('provider');
+  if (ZAI_ALL_PROVIDER_IDS.includes(activeProvider)) {
+    const key = getApiKey(activeProvider);
+    const baseUrl = PROVIDERS[activeProvider]?.protocols?.openai?.baseUrl;
+    if (key && baseUrl) return { baseUrl, apiKey: key };
+  }
+  for (const pid of ZAI_ALL_PROVIDER_IDS) {
+    const key = getApiKey(pid);
+    const baseUrl = PROVIDERS[pid]?.protocols?.openai?.baseUrl;
+    if (key && baseUrl) return { baseUrl, apiKey: key };
+  }
+  return null;
+}
+
+/**
+ * Check if Z.AI Vision tools are available
+ */
+export function hasZaiVisionAccess(): boolean {
+  return getZaiVisionConfig() !== null;
+}
+
+/**
+ * Call Z.AI vision API (OpenAI-compatible chat completions with image content)
+ */
+export async function callZaiVisionApi(baseUrl: string, apiKey: string, prompt: string, imageUrl: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'glm-4v-flash',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: imageUrl } },
+            { type: 'text', text: prompt },
+          ],
+        }],
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(`Z.AI Vision API error ${response.status}: ${errorText || response.statusText}`);
+    }
+
+    const data = await response.json() as { choices?: { message?: { content?: string } }[] };
+    return data.choices?.[0]?.message?.content || JSON.stringify(data);
   } finally {
     clearTimeout(timeout);
   }

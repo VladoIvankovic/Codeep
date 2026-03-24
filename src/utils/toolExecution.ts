@@ -13,7 +13,7 @@ import { executeCommandAsync } from './shell';
 import { recordWrite, recordEdit, recordDelete, recordMkdir, recordCommand } from './history';
 import { loadIgnoreRules, isIgnored } from './gitignore';
 import { normalizeToolName } from './toolParsing';
-import { getZaiMcpConfig, getMinimaxMcpConfig, callZaiMcp, callMinimaxApi } from './mcpIntegration';
+import { getZaiMcpConfig, getZaiVisionConfig, getMinimaxMcpConfig, callZaiMcp, callZaiVisionApi, callMinimaxApi } from './mcpIntegration';
 import { ToolCall, ToolResult, ActionLog } from './tools';
 
 const debug = (...args: unknown[]) => {
@@ -472,6 +472,20 @@ export async function executeTool(toolCall: ToolCall, projectRoot: string): Prom
         if (!query) return { success: false, output: '', error: 'Missing required parameter: query', tool, parameters };
 
         const result = await callMinimaxApi(mmConfig.host, '/v1/coding_plan/search', { q: query }, mmConfig.apiKey);
+        const output = result.length > 15000 ? result.substring(0, 15000) + '\n\n... (truncated)' : result;
+        return { success: true, output, tool, parameters };
+      }
+
+      case 'zai_analyze_image': {
+        const zaiVisionConfig = getZaiVisionConfig();
+        if (!zaiVisionConfig) return { success: false, output: '', error: 'zai_analyze_image requires a Z.AI API key. Configure one via /provider z.ai-api', tool, parameters };
+
+        const prompt = parameters.prompt as string;
+        const imageUrl = parameters.image_url as string;
+        if (!prompt) return { success: false, output: '', error: 'Missing required parameter: prompt', tool, parameters };
+        if (!imageUrl) return { success: false, output: '', error: 'Missing required parameter: image_url', tool, parameters };
+
+        const result = await callZaiVisionApi(zaiVisionConfig.baseUrl, zaiVisionConfig.apiKey, prompt, imageUrl);
         const output = result.length > 15000 ? result.substring(0, 15000) + '\n\n... (truncated)' : result;
         return { success: true, output, tool, parameters };
       }

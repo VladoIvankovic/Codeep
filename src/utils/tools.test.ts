@@ -19,8 +19,9 @@ const ALL_TOOL_NAMES = Object.keys(AGENT_TOOLS);
 
 // MCP tools are filtered out when no API key is configured (e.g. in tests)
 const ZAI_MCP_TOOLS = ['web_search', 'web_read', 'github_read'];
+const ZAI_VISION_TOOLS = ['zai_analyze_image'];
 const MINIMAX_MCP_TOOLS = ['minimax_web_search', 'minimax_understand_image'];
-const MCP_TOOLS = [...ZAI_MCP_TOOLS, ...MINIMAX_MCP_TOOLS];
+const MCP_TOOLS = [...ZAI_MCP_TOOLS, ...ZAI_VISION_TOOLS, ...MINIMAX_MCP_TOOLS];
 const CORE_TOOL_NAMES = ALL_TOOL_NAMES.filter(n => !MCP_TOOLS.includes(n));
 
 // ─── getOpenAITools ──────────────────────────────────────────────────────────
