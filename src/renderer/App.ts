@@ -151,6 +151,7 @@ export class App {
   private agentActions: Array<{ type: string; target: string; result: string }> = [];
   private agentThinking = '';
   private agentWaitingForAI = false;
+  private agentLog: string[] = [];
   
   // Paste detection state
   private pasteInfo: { chars: number; lines: number; preview: string; fullText: string } | null = null;
@@ -464,6 +465,7 @@ export class App {
       this.agentActions = [];
       this.agentThinking = '';
       this.agentWaitingForAI = true;
+      this.agentLog = [];
       this.isLoading = false; // Clear loading state when agent takes over
       this.startSpinner();
     } else {
@@ -498,6 +500,12 @@ export class App {
 
   setAgentWaitingForAI(waiting: boolean): void {
     this.agentWaitingForAI = waiting;
+    this.scheduleRender();
+  }
+
+  addAgentLog(entry: string): void {
+    this.agentLog.push(entry);
+    if (this.agentLog.length > 5) this.agentLog.shift();
     this.scheduleRender();
   }
   
@@ -1458,7 +1466,7 @@ export class App {
       const previewLines = Math.min(this.pasteInfo.preview.split('\n').length, 5);
       bottomPanelHeight = previewLines + 6; // title + preview + extra line indicator + options
     } else if (this.isAgentRunning) {
-      bottomPanelHeight = 5; // Agent progress box (4 lines + 1 margin)
+      bottomPanelHeight = 9; // Agent progress box: top + 5 log lines + stats + bottom + 1 margin
     } else if (this.permissionOpen) {
       bottomPanelHeight = 10; // Permission dialog
     } else if (this.sessionPickerOpen) {
@@ -2225,22 +2233,34 @@ export class App {
     this.screen.write(0, y, lineLeft + titleColored + lineRight);
     y++;
 
-    // Current action line
-    this.screen.writeLine(y, '');
-    if (this.agentWaitingForAI) {
-      this.screen.write(1, y, 'Thinking...', fg.gray);
-    } else if (this.agentActions.length > 0) {
-      const lastAction = this.agentActions[this.agentActions.length - 1];
-      const actionLabel = this.getActionLabel(lastAction.type);
-      const actionColor = this.getActionColor(lastAction.type);
-      const maxTargetLen = width - actionLabel.length - 4;
-      const target = this.formatActionTarget(lastAction.target, maxTargetLen);
-      this.screen.write(1, y, actionLabel, actionColor + style.bold);
-      this.screen.write(1 + actionLabel.length + 1, y, target, fg.white);
-    } else {
-      this.screen.write(1, y, 'Starting...', fg.gray);
+    // Rolling log (last 5 actions)
+    const LOG_LINES = 5;
+    const padded = [...this.agentLog];
+    while (padded.length < LOG_LINES) padded.unshift('');
+    for (let i = 0; i < LOG_LINES; i++) {
+      this.screen.writeLine(y, '');
+      const entry = padded[i];
+      if (entry) {
+        // entry format: "symbol label target"
+        const spaceIdx = entry.indexOf(' ', 2);
+        const spaceIdx2 = spaceIdx > 0 ? entry.indexOf(' ', spaceIdx + 1) : -1;
+        if (spaceIdx2 > 0) {
+          const symbol = entry.slice(0, 2);
+          const label = entry.slice(2, spaceIdx2);
+          const target = entry.slice(spaceIdx2 + 1);
+          const isActive = i === padded.length - 1;
+          const symbolColor = isActive ? PRIMARY_COLOR : fg.gray;
+          const labelColor = isActive ? fg.white + style.bold : fg.gray;
+          const targetColor = isActive ? fg.white : fg.gray;
+          this.screen.write(1, y, symbol, symbolColor);
+          this.screen.write(3, y, label, labelColor);
+          this.screen.write(3 + label.length + 1, y, target, targetColor);
+        } else {
+          this.screen.write(1, y, entry, fg.gray);
+        }
+      }
+      y++;
     }
-    y++;
 
     // Stats + 8-bit progress bar line
     this.screen.writeLine(y, '');

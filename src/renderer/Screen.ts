@@ -32,7 +32,8 @@ export class Screen {
       this.height = process.stdout.rows || 24;
       this.buffer = this.createEmptyBuffer();
       this.rendered = this.createEmptyBuffer();
-      // Notify the app to re-render with new dimensions
+      // Clear physical terminal so stale content doesn't bleed through
+      process.stdout.write('\x1b[2J');
       if (this.resizeCallback) {
         this.resizeCallback();
       }

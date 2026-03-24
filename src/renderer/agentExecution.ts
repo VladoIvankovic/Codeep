@@ -235,6 +235,11 @@ export async function executeAgentTask(
         const shortTarget = target.length > 50 ? '...' + target.slice(-47) : target;
         app.setAgentThinking(`${actionType}: ${shortTarget}`);
 
+        const logSymbol = '▸ ';
+        const logLabel = actionType.charAt(0).toUpperCase() + actionType.slice(1);
+        const logPad = ' '.repeat(Math.max(0, 8 - logLabel.length));
+        app.addAgentLog(`${logSymbol}${logLabel}${logPad} ${shortTarget}`);
+
         if (actionType === 'write' && tool.parameters.content) {
           const filePath = tool.parameters.path as string;
           try {
