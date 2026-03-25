@@ -54,6 +54,10 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'MiniMax-M2':             { inputPer1M: 0.20, outputPer1M: 0.55 },
 };
 
+export function getPricingTable(): { model: string; inputPer1M: number; outputPer1M: number }[] {
+  return Object.entries(MODEL_PRICING).map(([model, p]) => ({ model, ...p }));
+}
+
 // Session-level accumulator
 const records: TokenRecord[] = [];
 

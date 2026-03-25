@@ -866,28 +866,39 @@ export async function handleCommand(
     }
 
     case 'cost': {
-      const { getCostBreakdown, getSessionStats, formatTokenCount } = await import('../utils/tokenTracker');
+      const { getCostBreakdown, getSessionStats, formatTokenCount, getPricingTable } = await import('../utils/tokenTracker');
       const stats = getSessionStats();
-      if (stats.requestCount === 0) {
-        ctx.app.notify('No API calls made yet this session');
-        break;
-      }
-      const breakdown = getCostBreakdown();
       const lines: string[] = ['## Session Cost', ''];
-      lines.push(`Requests: ${stats.requestCount}`);
-      lines.push(`Tokens: ${formatTokenCount(stats.totalTokens)} total (${formatTokenCount(stats.totalPromptTokens)} in / ${formatTokenCount(stats.totalCompletionTokens)} out)`);
-      if (breakdown.length > 0) {
+
+      if (stats.requestCount === 0) {
+        lines.push('*No API calls made yet this session.*');
         lines.push('');
-        lines.push('### By model');
-        for (const b of breakdown) {
-          const costStr = b.estimatedCost > 0 ? `~$${b.estimatedCost.toFixed(4)}` : '(no pricing data)';
-          lines.push(`- **${b.model}** (${b.provider}): ${formatTokenCount(b.promptTokens)} in / ${formatTokenCount(b.completionTokens)} out — ${costStr}`);
-        }
-        if (stats.estimatedCost > 0) {
+      } else {
+        lines.push(`Requests: ${stats.requestCount}`);
+        lines.push(`Tokens: ${formatTokenCount(stats.totalTokens)} total (${formatTokenCount(stats.totalPromptTokens)} in / ${formatTokenCount(stats.totalCompletionTokens)} out)`);
+        const breakdown = getCostBreakdown();
+        if (breakdown.length > 0) {
           lines.push('');
-          lines.push(`**Total: ~$${stats.estimatedCost.toFixed(4)}**`);
+          lines.push('### By model');
+          for (const b of breakdown) {
+            const costStr = b.estimatedCost > 0 ? `~$${b.estimatedCost.toFixed(4)}` : '(no pricing data)';
+            lines.push(`- **${b.model}** (${b.provider}): ${formatTokenCount(b.promptTokens)} in / ${formatTokenCount(b.completionTokens)} out — ${costStr}`);
+          }
+          if (stats.estimatedCost > 0) {
+            lines.push('');
+            lines.push(`**Total: ~$${stats.estimatedCost.toFixed(4)}**`);
+          }
         }
+        lines.push('');
       }
+
+      lines.push('### Pricing (per 1M tokens)');
+      lines.push('| Model | Input | Output |');
+      lines.push('|---|---|---|');
+      for (const p of getPricingTable()) {
+        lines.push(`| ${p.model} | $${p.inputPer1M.toFixed(3)} | $${p.outputPer1M.toFixed(3)} |`);
+      }
+
       ctx.app.addMessage({ role: 'system', content: lines.join('\n') } as Message);
       break;
     }

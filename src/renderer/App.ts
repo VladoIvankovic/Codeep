@@ -273,6 +273,7 @@ export class App {
     'multiline',
     'provider', 'model', 'protocol', 'lang', 'grant', 'login', 'logout',
     'context-save', 'context-load', 'context-clear', 'learn',
+    'cost', 'tasks', 'account',
     'c', 't', 'd', 'r', 'f', 'e', 'o', 'b', 'p',
   ];
   
