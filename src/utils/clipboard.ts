@@ -62,6 +62,48 @@ export function readFromClipboard(): string | null {
 }
 
 /**
+ * Read image from clipboard as base64 data URL, or null if no image present.
+ */
+export function readImageFromClipboard(): string | null {
+  try {
+    if (process.platform === 'darwin') {
+      const { existsSync, readFileSync, unlinkSync } = require('fs');
+      const tmpPath = '/tmp/codeep_clipboard_img.png';
+      // Write clipboard PNG to temp file via osascript
+      execSync(`osascript -e 'try
+        set imgData to (the clipboard as «class PNGf»)
+        set f to open for access POSIX file "${tmpPath}" with write permission
+        write imgData to f
+        close access f
+      end try'`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+      if (existsSync(tmpPath)) {
+        const data = readFileSync(tmpPath) as Buffer;
+        unlinkSync(tmpPath);
+        if (data.length > 0) return 'data:image/png;base64,' + data.toString('base64');
+      }
+      return null;
+    } else if (process.platform === 'linux') {
+      const data = execSync('xclip -selection clipboard -t image/png -o 2>/dev/null', { encoding: 'buffer' }) as Buffer;
+      if (data.length > 0) return 'data:image/png;base64,' + data.toString('base64');
+      return null;
+    } else if (process.platform === 'win32') {
+      const { existsSync, readFileSync, unlinkSync } = require('fs');
+      const tmpPath = 'C:\\Temp\\codeep_clipboard_img.png';
+      execSync(`powershell -command "Add-Type -AssemblyName System.Windows.Forms; $img = [System.Windows.Forms.Clipboard]::GetImage(); if ($img) { $img.Save('${tmpPath}', [System.Drawing.Imaging.ImageFormat]::Png) }"`, { encoding: 'utf-8' });
+      if (existsSync(tmpPath)) {
+        const data = readFileSync(tmpPath) as Buffer;
+        unlinkSync(tmpPath);
+        if (data.length > 0) return 'data:image/png;base64,' + data.toString('base64');
+      }
+      return null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Check if clipboard is available
  */
 export function isClipboardAvailable(): boolean {

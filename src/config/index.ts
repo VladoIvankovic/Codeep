@@ -930,3 +930,91 @@ export function setGithubAccount(githubId: string, username: string): void {
   config.set('githubId', githubId);
   config.set('githubUsername', username);
 }
+
+// ─── Profiles ─────────────────────────────────────────────────────────────────
+
+function getProfilesDir(): string {
+  const dir = join(GLOBAL_BASE_DIR, 'profiles');
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+export interface Profile {
+  name: string;
+  createdAt: string;
+  provider: string;
+  model: string;
+  protocol: 'openai' | 'anthropic';
+  temperature: number;
+  maxTokens: number;
+  language: string;
+  agentMode: AgentMode;
+  agentConfirmation: 'always' | 'dangerous' | 'never';
+  agentAutoCommit: boolean;
+}
+
+export function saveProfile(name: string): boolean {
+  try {
+    const profile: Profile = {
+      name,
+      createdAt: new Date().toISOString(),
+      provider: config.get('provider'),
+      model: config.get('model'),
+      protocol: config.get('protocol'),
+      temperature: config.get('temperature'),
+      maxTokens: config.get('maxTokens'),
+      language: config.get('language'),
+      agentMode: config.get('agentMode'),
+      agentConfirmation: config.get('agentConfirmation'),
+      agentAutoCommit: config.get('agentAutoCommit'),
+    };
+    writeFileSync(join(getProfilesDir(), `${name}.json`), JSON.stringify(profile, null, 2));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function loadProfile(name: string): Profile | null {
+  try {
+    const filePath = join(getProfilesDir(), `${name}.json`);
+    if (!existsSync(filePath)) return null;
+    return JSON.parse(readFileSync(filePath, 'utf-8')) as Profile;
+  } catch {
+    return null;
+  }
+}
+
+export function applyProfile(profile: Profile): void {
+  config.set('provider', profile.provider);
+  config.set('model', profile.model);
+  config.set('protocol', profile.protocol);
+  config.set('temperature', profile.temperature);
+  config.set('maxTokens', profile.maxTokens);
+  config.set('language', profile.language);
+  config.set('agentMode', profile.agentMode);
+  config.set('agentConfirmation', profile.agentConfirmation);
+  config.set('agentAutoCommit', profile.agentAutoCommit);
+}
+
+export function listProfiles(): string[] {
+  try {
+    return readdirSync(getProfilesDir())
+      .filter(f => f.endsWith('.json'))
+      .map(f => f.replace('.json', ''))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+export function deleteProfile(name: string): boolean {
+  try {
+    const filePath = join(getProfilesDir(), `${name}.json`);
+    if (!existsSync(filePath)) return false;
+    unlinkSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}

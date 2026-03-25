@@ -118,6 +118,27 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       zread: 'https://open.bigmodel.cn/api/mcp/zread/mcp',
     },
   },
+  'z.ai-cn-api': {
+    name: 'Z.AI China API (pay-per-use)',
+    description: 'ZhipuAI GLM models via BigModel API key (China)',
+    protocols: {
+      openai: {
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        authHeader: 'Bearer',
+        supportsNativeTools: true,
+      },
+    },
+    models: [
+      { id: 'glm-5', name: 'GLM-5', description: 'Most capable GLM model' },
+      { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Faster GLM-5 variant' },
+      { id: 'glm-4.7', name: 'GLM-4.7', description: 'Latest GLM model' },
+      { id: 'glm-4.7-flash', name: 'GLM-4.7 Flash', description: 'Faster, lighter version' },
+    ],
+    defaultModel: 'glm-5',
+    defaultProtocol: 'openai',
+    envKey: 'ZAI_CN_API_KEY',
+    subscribeUrl: 'https://open.bigmodel.cn',
+  },
   'minimax': {
     name: 'MiniMax',
     description: 'MiniMax Coding Plan',

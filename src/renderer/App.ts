@@ -89,6 +89,8 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'context-load': 'Load conversation',
   'context-clear': 'Clear saved context',
   'learn': 'Learn code preferences',
+  'cost': 'Show session cost and token usage',
+  'profile': 'Save/load settings profiles',
 };
 
 import { helpCategories, keyboardShortcuts } from './components/Help';
@@ -119,6 +121,7 @@ export interface AppOptions {
   onCommand: (command: string, args: string[]) => void;
   onExit: () => void;
   onStopAgent?: () => void;
+  onImagePaste?: (imageData: string) => Promise<void>;
   getStatus: () => StatusInfo;
   hasWriteAccess?: () => boolean;
   hasProjectContext?: () => boolean;
@@ -513,9 +516,26 @@ export class App {
    * Paste from system clipboard (Ctrl+V)
    */
   private pasteFromClipboard(): void {
+    // Check for image in clipboard first
+    if (this.options.onImagePaste) {
+      try {
+        const { readImageFromClipboard } = require('../utils/clipboard');
+        const imageData = readImageFromClipboard() as string | null;
+        if (imageData) {
+          this.notify('Image detected — sending to vision model...');
+          this.options.onImagePaste(imageData).catch((err: Error) => {
+            this.notify(`Image error: ${err.message}`);
+          });
+          return;
+        }
+      } catch {
+        // Fall through to text paste
+      }
+    }
+
     try {
       const clipboardContent = clipboardy.readSync();
-      
+
       if (clipboardContent && clipboardContent.trim()) {
         this.handlePaste(clipboardContent.trim());
       } else {
@@ -1457,7 +1477,16 @@ export class App {
    */
   private renderChat(): void {
     const { width, height } = this.screen.getSize();
-    
+
+    // Graceful degradation for very small terminals
+    if (width < 40 || height < 10) {
+      this.screen.clear();
+      const msg = `Terminal too small (${width}x${height}) — resize to at least 40x10`;
+      this.screen.writeLine(0, msg.slice(0, width), '');
+      this.screen.render();
+      return;
+    }
+
     this.screen.clear();
     
     // If menu or settings is open, reserve space for it at bottom
@@ -1498,13 +1527,13 @@ export class App {
     
     // Layout - main UI takes top portion
     const messagesStart = 0;
-    const messagesEnd = mainHeight - 4;
-    const separatorLine = mainHeight - 3;
-    const inputLine = mainHeight - 2;
-    const statusLine = mainHeight - 1;
+    const messagesEnd = Math.max(0, mainHeight - 4);
+    const separatorLine = Math.max(0, mainHeight - 3);
+    const inputLine = Math.max(0, mainHeight - 2);
+    const statusLine = Math.max(0, mainHeight - 1);
 
     // Messages
-    const messagesHeight = messagesEnd - messagesStart + 1;
+    const messagesHeight = Math.max(1, messagesEnd - messagesStart + 1);
     const messagesToRender = this.getVisibleMessages(messagesHeight, width - 2);
     
     let y = messagesStart;

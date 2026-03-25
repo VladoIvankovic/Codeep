@@ -24,6 +24,11 @@ import {
   deleteSession,
   renameSession,
   setProjectPermission,
+  saveProfile,
+  loadProfile,
+  applyProfile,
+  listProfiles,
+  deleteProfile,
 } from '../config/index';
 import { getProjectContext } from '../utils/project';
 import { getCurrentVersion } from '../utils/update';
@@ -781,6 +786,84 @@ export async function handleCommand(
           }
         }
       });
+      break;
+    }
+
+    case 'profile': {
+      const subCmd = args[0]?.toLowerCase();
+      const profileName = args[1] || args[0]; // /profile save name OR /profile name
+
+      if (!subCmd || subCmd === 'list') {
+        const profiles = listProfiles();
+        if (profiles.length === 0) {
+          ctx.app.notify('No profiles saved. Use /profile save <name>');
+        } else {
+          ctx.app.addMessage({ role: 'system', content: `## Profiles\n\n${profiles.map(p => `- ${p}`).join('\n')}\n\nUse /profile load <name> to apply.` } as Message);
+        }
+        break;
+      }
+
+      if (subCmd === 'save') {
+        const name = args[1];
+        if (!name) { ctx.app.notify('Usage: /profile save <name>'); break; }
+        if (saveProfile(name)) ctx.app.notify(`Profile saved: ${name}`);
+        else ctx.app.notify('Failed to save profile');
+        break;
+      }
+
+      if (subCmd === 'load') {
+        const name = args[1];
+        if (!name) { ctx.app.notify('Usage: /profile load <name>'); break; }
+        const profile = loadProfile(name);
+        if (!profile) { ctx.app.notify(`Profile not found: ${name}`); break; }
+        applyProfile(profile);
+        ctx.app.notify(`Profile loaded: ${profile.name} (${profile.provider} / ${profile.model})`);
+        break;
+      }
+
+      if (subCmd === 'delete') {
+        const name = args[1];
+        if (!name) { ctx.app.notify('Usage: /profile delete <name>'); break; }
+        if (deleteProfile(name)) ctx.app.notify(`Profile deleted: ${name}`);
+        else ctx.app.notify(`Profile not found: ${name}`);
+        break;
+      }
+
+      // /profile <name> — shorthand for load
+      const profile = loadProfile(subCmd);
+      if (profile) {
+        applyProfile(profile);
+        ctx.app.notify(`Profile loaded: ${profile.name} (${profile.provider} / ${profile.model})`);
+      } else {
+        ctx.app.notify(`Unknown profile subcommand: ${subCmd}. Use save / load / delete / list`);
+      }
+      break;
+    }
+
+    case 'cost': {
+      const { getCostBreakdown, getSessionStats, formatTokenCount } = await import('../utils/tokenTracker');
+      const stats = getSessionStats();
+      if (stats.requestCount === 0) {
+        ctx.app.notify('No API calls made yet this session');
+        break;
+      }
+      const breakdown = getCostBreakdown();
+      const lines: string[] = ['## Session Cost', ''];
+      lines.push(`Requests: ${stats.requestCount}`);
+      lines.push(`Tokens: ${formatTokenCount(stats.totalTokens)} total (${formatTokenCount(stats.totalPromptTokens)} in / ${formatTokenCount(stats.totalCompletionTokens)} out)`);
+      if (breakdown.length > 0) {
+        lines.push('');
+        lines.push('### By model');
+        for (const b of breakdown) {
+          const costStr = b.estimatedCost > 0 ? `~$${b.estimatedCost.toFixed(4)}` : '(no pricing data)';
+          lines.push(`- **${b.model}** (${b.provider}): ${formatTokenCount(b.promptTokens)} in / ${formatTokenCount(b.completionTokens)} out — ${costStr}`);
+        }
+        if (stats.estimatedCost > 0) {
+          lines.push('');
+          lines.push(`**Total: ~$${stats.estimatedCost.toFixed(4)}**`);
+        }
+      }
+      ctx.app.addMessage({ role: 'system', content: lines.join('\n') } as Message);
       break;
     }
 

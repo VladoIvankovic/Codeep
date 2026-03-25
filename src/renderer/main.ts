@@ -13,6 +13,7 @@ import { StatusInfo } from './components/Status';
 import { LoginScreen, renderProviderSelect } from './components/Login';
 import { renderPermissionScreen, getPermissionOptions, PermissionLevel } from './components/Permission';
 import { chat, setProjectContext } from '../api/index';
+import { getZaiVisionConfig, getMinimaxMcpConfig, callZaiVisionApi, callMinimaxApi } from '../utils/mcpIntegration';
 import {
   config,
   isConfigured,
@@ -434,6 +435,22 @@ Commands (in chat):
         agentAbortController.abort();
         app.notify('Stopping agent...');
       }
+    },
+    onImagePaste: async (imageData: string) => {
+      const prompt = 'Describe this image in detail.';
+      const zaiConfig = getZaiVisionConfig();
+      const mmConfig = getMinimaxMcpConfig();
+      let result: string;
+      if (zaiConfig) {
+        result = await callZaiVisionApi(zaiConfig.baseUrl, zaiConfig.apiKey, prompt, imageData);
+      } else if (mmConfig) {
+        result = await callMinimaxApi(mmConfig.host, '/v1/coding_plan/vlm', { prompt, image_url: imageData }, mmConfig.apiKey);
+      } else {
+        app.notify('Image paste requires Z.AI or MiniMax API key');
+        return;
+      }
+      app.addMessage({ role: 'user', content: '[Image pasted from clipboard]' } as Message);
+      app.addMessage({ role: 'assistant', content: result } as Message);
     },
     getStatus,
     hasWriteAccess: () => hasWriteAccess,

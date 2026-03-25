@@ -63,7 +63,7 @@ export class Screen {
    * Get terminal dimensions
    */
   getSize(): { width: number; height: number } {
-    return { width: this.width, height: this.height };
+    return { width: Math.max(20, this.width), height: Math.max(4, this.height) };
   }
   
   /**

@@ -25,7 +25,7 @@ export const ZAI_VISION_TOOLS = ['zai_analyze_image'];
 export const ZAI_PROVIDER_IDS = ['z.ai', 'z.ai-cn'];
 
 // All Z.AI provider IDs (including pay-per-use)
-export const ZAI_ALL_PROVIDER_IDS = ['z.ai', 'z.ai-api', 'z.ai-cn'];
+export const ZAI_ALL_PROVIDER_IDS = ['z.ai', 'z.ai-api', 'z.ai-cn', 'z.ai-cn-api'];
 
 // MiniMax MCP tool names (available when user has any MiniMax API key)
 export const MINIMAX_MCP_TOOLS = ['minimax_web_search', 'minimax_understand_image'];
