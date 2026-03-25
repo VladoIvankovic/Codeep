@@ -3,6 +3,7 @@
  */
 
 import { execSync } from 'child_process';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 
 /**
  * Copy text to clipboard
@@ -67,7 +68,6 @@ export function readFromClipboard(): string | null {
 export function readImageFromClipboard(): string | null {
   try {
     if (process.platform === 'darwin') {
-      const { existsSync, readFileSync, unlinkSync, writeFileSync } = require('fs');
       const tmpPath = '/tmp/codeep_clipboard_img.png';
       const shPath = '/tmp/codeep_clipboard.sh';
 
@@ -101,7 +101,6 @@ EOF`;
       if (data.length > 0) return 'data:image/png;base64,' + data.toString('base64');
       return null;
     } else if (process.platform === 'win32') {
-      const { existsSync, readFileSync, unlinkSync } = require('fs');
       const tmpPath = 'C:\\Temp\\codeep_clipboard_img.png';
       execSync(`powershell -command "Add-Type -AssemblyName System.Windows.Forms; $img = [System.Windows.Forms.Clipboard]::GetImage(); if ($img) { $img.Save('${tmpPath}', [System.Drawing.Imaging.ImageFormat]::Png) }"`, { encoding: 'utf-8' });
       if (existsSync(tmpPath)) {

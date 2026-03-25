@@ -185,7 +185,7 @@ export async function callZaiVisionApi(baseUrl: string, apiKey: string, prompt: 
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'glm-4v-flash',
+        model: 'glm-4.6v-flash',
         messages: [{
           role: 'user',
           content: [

@@ -17,6 +17,7 @@ import {
   handleLoginKey,
 } from './handlers';
 import clipboardy from 'clipboardy';
+import { readImageFromClipboard } from '../utils/clipboard.js';
 import { spawn } from 'child_process';
 
 // Primary color: #f02a30 (Codeep red)
@@ -520,18 +521,13 @@ export class App {
   private pasteFromClipboard(): void {
     // Check for image in clipboard first
     if (this.options.onImagePaste) {
-      try {
-        const { readImageFromClipboard } = require('../utils/clipboard');
-        const imageData = readImageFromClipboard() as string | null;
-        if (imageData) {
-          this.notify('Image detected — sending to vision model...');
-          this.options.onImagePaste(imageData).catch((err: Error) => {
-            this.notify(`Image error: ${err.message}`);
-          });
-          return;
-        }
-      } catch {
-        // Fall through to text paste
+      const imageData = readImageFromClipboard();
+      if (imageData) {
+        this.notify('Image detected — sending to vision model...');
+        this.options.onImagePaste(imageData).catch((err: Error) => {
+          this.notify(`Image error: ${err.message}`);
+        });
+        return;
       }
     }
 
