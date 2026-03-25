@@ -791,6 +791,7 @@ export async function handleCommand(
 
     case 'tasks': {
       const { fetchTasks } = await import('../utils/codeepCloud');
+      const { setTaskContext, clearTaskContext } = await import('../utils/taskContext');
       const projectName = args[0] || ctx.projectContext?.name;
       const tasks = await fetchTasks(projectName);
 
@@ -799,17 +800,21 @@ export async function handleCommand(
         break;
       }
       if (tasks.length === 0) {
+        clearTaskContext();
         ctx.app.notify(projectName ? `No pending tasks for "${projectName}"` : 'No pending tasks');
         break;
       }
 
-      const TYPE_ICON = { bug: '🐛', feature: '✨', task: '☐' };
+      setTaskContext(tasks);
+
+      const TYPE_ICON: Record<string, string> = { bug: '[bug]', feature: '[feature]', task: '[task]' };
       const lines = [`## Tasks${projectName ? ` — ${projectName}` : ''}`, ''];
       for (const t of tasks) {
-        const icon = TYPE_ICON[t.type] ?? '☐';
-        lines.push(`${icon} **[${t.type}]** ${t.title}${t.description ? `\n   ${t.description}` : ''}`);
+        const icon = TYPE_ICON[t.type] ?? '[task]';
+        lines.push(`${icon} ${t.title}${t.description ? `\n   ${t.description}` : ''}`);
       }
       lines.push('', `*${tasks.length} pending task${tasks.length > 1 ? 's' : ''}. Manage at codeep.dev/dashboard*`);
+      lines.push('*Tasks loaded into agent context — agent will see them in the next message.*');
       ctx.app.addMessage({ role: 'system', content: lines.join('\n') } as Message);
       break;
     }

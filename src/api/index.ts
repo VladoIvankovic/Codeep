@@ -6,6 +6,7 @@ import { logApiRequest, logApiResponse, logAppError } from '../utils/logger';
 import { loadProjectIntelligence, generateContextFromIntelligence, ProjectIntelligence } from '../utils/projectIntelligence';
 import { loadProjectRules } from '../utils/agent';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from '../utils/tokenTracker';
+import { getTaskContextPrompt } from '../utils/taskContext';
 
 // Error messages by language
 const ERROR_MESSAGES: Record<string, Record<string, string>> = {
@@ -310,10 +311,10 @@ ${currentProjectContext.structure}
 When the user mentions a file path, the file content will be automatically attached to their message.
 You can analyze, explain, or suggest improvements to the code.`;
 
-    return basePrompt + projectInfo + loadProjectRules(currentProjectContext.root);
+    return basePrompt + projectInfo + loadProjectRules(currentProjectContext.root) + getTaskContextPrompt();
   }
 
-  return basePrompt;
+  return basePrompt + getTaskContextPrompt();
 }
 
 async function chatOpenAI(

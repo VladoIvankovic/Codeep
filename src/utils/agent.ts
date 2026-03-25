@@ -65,6 +65,7 @@ import { startSession, endSession, undoLastAction, undoAllActions, getCurrentSes
 import { runAllVerifications, formatErrorsForAgent, hasVerificationErrors, getVerificationSummary, VerifyResult } from './verify';
 import { gatherSmartContext, formatSmartContext, extractTargetFile } from './smartContext';
 import { planTasks, getNextTask, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
+import { getTaskContextPrompt } from './taskContext';
 
 // ─── Tool result truncation ───────────────────────────────────────────────────
 
@@ -249,6 +250,11 @@ export async function runAgent(
 
   if (smartContextStr) {
     systemPrompt += '\n\n' + smartContextStr;
+  }
+
+  const taskCtx = getTaskContextPrompt();
+  if (taskCtx) {
+    systemPrompt += taskCtx;
   }
 
   // Inject prior chat session context
