@@ -391,6 +391,42 @@ If errors are found, the agent tries to fix them automatically (up to 3 attempts
 - Dangerous commands blocked (rm -rf /, sudo, etc.)
 - Confirmation mode for destructive actions
 
+## Codeep Dashboard
+
+Link your CLI to [codeep.dev](https://codeep.dev/dashboard) for a personal web dashboard with session stats, project tracking, task management, and API key sync.
+
+```bash
+codeep account   # Opens browser → sign in with GitHub → CLI is linked
+```
+
+### Dashboard features
+
+- **Usage stats** — total sessions, active this week, model/provider breakdown, 30-day trend
+- **Projects** — all projects Codeep was used in, with language tag and git indicator
+- **Project archiving** — hide projects from the list with one click
+- **Tasks** — create bug/feature/task items per project from the web, pull them in the CLI with `/tasks`
+- **API key sync** — store provider keys securely on codeep.dev, sync to any machine in one command
+
+### API key sync
+
+Add keys once on the dashboard, then sync them to any machine:
+
+```bash
+codeep account sync   # Pull keys from codeep.dev → local config
+codeep account push   # Push local keys → codeep.dev
+```
+
+Keys are encrypted at rest using AES-256-GCM.
+
+### Tasks
+
+Create tasks from the codeep.dev dashboard (bug, feature, task) and pull them into any CLI session:
+
+```
+> /tasks
+# Fetches pending tasks for the current project and displays them in chat
+```
+
 ## Installation
 
 ### Option 1: curl (Quickest)
@@ -576,6 +612,20 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 | `/skill delete <name>` | Delete a custom skill |
 | `/c`, `/t`, `/d`, etc. | Skill shortcuts |
 | `/commit+push` | Skill chaining (run multiple skills) |
+
+### Cloud Dashboard
+
+| Command | Description |
+|---------|-------------|
+| `/tasks` | Fetch pending tasks from codeep.dev for current project |
+
+**CLI commands (outside chat):**
+
+| Command | Description |
+|---------|-------------|
+| `codeep account` | Link CLI to codeep.dev (GitHub OAuth) |
+| `codeep account sync` | Pull API keys from codeep.dev → local config |
+| `codeep account push` | Push local API keys → codeep.dev |
 
 ### Authentication
 

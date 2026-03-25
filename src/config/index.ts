@@ -69,6 +69,7 @@ interface ConfigSchema {
   providerApiKeys: ProviderApiKey[];
   githubId: string;
   githubUsername: string;
+  syncToken: string;
 }
 
 export type { AgentMode };
@@ -247,6 +248,7 @@ function createConfig(): Conf<ConfigSchema> {
     providerApiKeys: [],
     githubId: '',
     githubUsername: '',
+    syncToken: '',
   };
 
   // First try standard location
@@ -929,6 +931,14 @@ export function getGithubId(): string {
 export function setGithubAccount(githubId: string, username: string): void {
   config.set('githubId', githubId);
   config.set('githubUsername', username);
+}
+
+export function getSyncToken(): string {
+  return config.get('syncToken') || '';
+}
+
+export function setSyncToken(token: string): void {
+  config.set('syncToken', token);
 }
 
 // ─── Profiles ─────────────────────────────────────────────────────────────────

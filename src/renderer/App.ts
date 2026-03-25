@@ -91,6 +91,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'learn': 'Learn code preferences',
   'cost': 'Show session cost and token usage',
   'profile': 'Save/load settings profiles',
+  'tasks': 'Show pending tasks from codeep.dev dashboard',
 };
 
 import { helpCategories, keyboardShortcuts } from './components/Help';

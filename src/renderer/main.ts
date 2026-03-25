@@ -375,7 +375,9 @@ Codeep - AI-powered coding assistant TUI
 
 Usage:
   codeep              Start interactive chat
-  codeep account      Link CLI to your codeep.dev dashboard
+  codeep account        Link CLI to your codeep.dev dashboard
+  codeep account sync   Pull API keys from codeep.dev
+  codeep account push   Push local API keys to codeep.dev
   codeep acp          Start ACP server (for Zed editor integration)
   codeep --version    Show version
   codeep --help       Show this help
@@ -391,6 +393,60 @@ Commands (in chat):
 
   // Account / dashboard link flow
   if (args[0] === 'account') {
+    const sub = args[1];
+
+    if (sub === 'sync' || sub === 'pull') {
+      // Pull API keys from codeep.dev and save to local config
+      const { pullKeys } = await import('../utils/codeepCloud.js');
+      const { getSyncToken, setApiKey } = await import('../config/index.js');
+      if (!getSyncToken()) {
+        console.log('\n  Not linked to codeep.dev. Run: codeep account\n');
+        process.exit(1);
+      }
+      process.stdout.write('  Pulling keys from codeep.dev...');
+      const keys = await pullKeys();
+      if (!keys) {
+        console.log(' failed.\n  Check your connection or re-link with: codeep account\n');
+        process.exit(1);
+      }
+      const count = Object.keys(keys).length;
+      if (count === 0) {
+        console.log(' no keys found.\n  Add keys at codeep.dev/dashboard\n');
+      } else {
+        for (const [provider, key] of Object.entries(keys)) {
+          setApiKey(key, provider);
+        }
+        console.log(` synced ${count} key${count !== 1 ? 's' : ''}.\n`);
+      }
+      process.exit(0);
+    }
+
+    if (sub === 'push') {
+      // Push local API keys to codeep.dev
+      const { pushKeys } = await import('../utils/codeepCloud.js');
+      const { getSyncToken, getApiKey } = await import('../config/index.js');
+      const { PROVIDERS } = await import('../config/providers.js');
+      if (!getSyncToken()) {
+        console.log('\n  Not linked to codeep.dev. Run: codeep account\n');
+        process.exit(1);
+      }
+      await loadAllApiKeys();
+      const keys: Record<string, string> = {};
+      for (const providerId of Object.keys(PROVIDERS)) {
+        const key = getApiKey(providerId);
+        if (key) keys[providerId] = key;
+      }
+      const count = Object.keys(keys).length;
+      if (count === 0) {
+        console.log('\n  No local API keys to push.\n');
+        process.exit(0);
+      }
+      process.stdout.write(`  Pushing ${count} key${count !== 1 ? 's' : ''} to codeep.dev...`);
+      const ok = await pushKeys(keys);
+      console.log(ok ? ' done.\n' : ' failed.\n');
+      process.exit(ok ? 0 : 1);
+    }
+
     const { runAccountFlow } = await import('../utils/codeepCloud.js');
     await runAccountFlow();
     process.exit(0);

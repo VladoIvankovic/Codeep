@@ -789,6 +789,31 @@ export async function handleCommand(
       break;
     }
 
+    case 'tasks': {
+      const { fetchTasks } = await import('../utils/codeepCloud');
+      const projectName = args[0] || ctx.projectContext?.name;
+      const tasks = await fetchTasks(projectName);
+
+      if (tasks === null) {
+        ctx.app.notify('Not linked to codeep.dev. Run: codeep account');
+        break;
+      }
+      if (tasks.length === 0) {
+        ctx.app.notify(projectName ? `No pending tasks for "${projectName}"` : 'No pending tasks');
+        break;
+      }
+
+      const TYPE_ICON = { bug: '🐛', feature: '✨', task: '☐' };
+      const lines = [`## Tasks${projectName ? ` — ${projectName}` : ''}`, ''];
+      for (const t of tasks) {
+        const icon = TYPE_ICON[t.type] ?? '☐';
+        lines.push(`${icon} **[${t.type}]** ${t.title}${t.description ? `\n   ${t.description}` : ''}`);
+      }
+      lines.push('', `*${tasks.length} pending task${tasks.length > 1 ? 's' : ''}. Manage at codeep.dev/dashboard*`);
+      ctx.app.addMessage({ role: 'system', content: lines.join('\n') } as Message);
+      break;
+    }
+
     case 'profile': {
       const subCmd = args[0]?.toLowerCase();
       const profileName = args[1] || args[0]; // /profile save name OR /profile name

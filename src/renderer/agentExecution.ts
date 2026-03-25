@@ -12,7 +12,7 @@ import { runAgent, AgentResult } from '../utils/agent';
 import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
 import { reportStats } from '../utils/codeepCloud';
-import { getGitStatus } from '../utils/git';
+import { getGitStatus, isGitRepository } from '../utils/git';
 
 function getActionType(toolName: string): string {
   return toolName.includes('write') ? 'write' :
@@ -389,6 +389,7 @@ export async function executeAgentTask(
       cliVersion: getCurrentVersion(),
       projectName: ctx.projectContext?.name,
       language: ctx.projectContext?.type,
+      isGit: isGitRepository(process.cwd()),
     });
 
   } catch (error) {
