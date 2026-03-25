@@ -67,52 +67,39 @@ export function readFromClipboard(): string | null {
 export function readImageFromClipboard(): string | null {
   try {
     if (process.platform === 'darwin') {
-      const { existsSync, readFileSync, unlinkSync, writeFileSync } = require('fs');
+      const { existsSync, readFileSync, unlinkSync } = require('fs');
       const tmpPath = '/tmp/codeep_clipboard_img.png';
-      const tmpTiff = '/tmp/codeep_clipboard_img.tiff';
 
-      // Try PNG format first
+      // Clean up any leftover temp files
+      try { if (existsSync(tmpPath)) unlinkSync(tmpPath); } catch { /* ignore */ }
+
+      // Use Python3 + AppKit (always available on macOS) to read clipboard image
       try {
-        execSync(`osascript -e 'try
-          set imgData to (the clipboard as «class PNGf»)
-          set f to open for access POSIX file "${tmpPath}" with write permission
-          set eof of f to 0
-          write imgData to f
-          close access f
-        end try'`, { stdio: ['pipe', 'pipe', 'ignore'] });
+        execSync(
+          `python3 -c "
+import AppKit, sys
+pb = AppKit.NSPasteboard.generalPasteboard()
+data = pb.dataForType_('public.png')
+if not data:
+    data = pb.dataForType_(AppKit.NSTIFFPboardType)
+    if data:
+        import subprocess, tempfile, os
+        tiff = '/tmp/codeep_cb.tiff'
+        open(tiff,'wb').write(bytes(data))
+        subprocess.run(['sips','-s','format','png',tiff,'--out','${tmpPath}'],capture_output=True)
+        os.unlink(tiff)
+    sys.exit(1)
+else:
+    open('${tmpPath}','wb').write(bytes(data))
+"`,
+          { stdio: ['pipe', 'pipe', 'ignore'] }
+        );
       } catch { /* ignore */ }
 
-      // If PNG worked, return it
       if (existsSync(tmpPath)) {
         const data = readFileSync(tmpPath) as Buffer;
         unlinkSync(tmpPath);
         if (data.length > 100) return 'data:image/png;base64,' + data.toString('base64');
-      }
-
-      // Try TIFF (macOS screenshots are stored as TIFF in clipboard)
-      try {
-        execSync(`osascript -e 'try
-          set imgData to (the clipboard as «class TIFF»)
-          set f to open for access POSIX file "${tmpTiff}" with write permission
-          set eof of f to 0
-          write imgData to f
-          close access f
-        end try'`, { stdio: ['pipe', 'pipe', 'ignore'] });
-      } catch { /* ignore */ }
-
-      if (existsSync(tmpTiff)) {
-        // Convert TIFF to PNG via sips (built into macOS)
-        try {
-          execSync(`sips -s format png "${tmpTiff}" --out "${tmpPath}" 2>/dev/null`);
-          unlinkSync(tmpTiff);
-          if (existsSync(tmpPath)) {
-            const data = readFileSync(tmpPath) as Buffer;
-            unlinkSync(tmpPath);
-            if (data.length > 100) return 'data:image/png;base64,' + data.toString('base64');
-          }
-        } catch {
-          try { unlinkSync(tmpTiff); } catch { /* ignore */ }
-        }
       }
 
       return null;
