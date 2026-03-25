@@ -67,20 +67,54 @@ export function readFromClipboard(): string | null {
 export function readImageFromClipboard(): string | null {
   try {
     if (process.platform === 'darwin') {
-      const { existsSync, readFileSync, unlinkSync } = require('fs');
+      const { existsSync, readFileSync, unlinkSync, writeFileSync } = require('fs');
       const tmpPath = '/tmp/codeep_clipboard_img.png';
-      // Write clipboard PNG to temp file via osascript
-      execSync(`osascript -e 'try
-        set imgData to (the clipboard as «class PNGf»)
-        set f to open for access POSIX file "${tmpPath}" with write permission
-        write imgData to f
-        close access f
-      end try'`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+      const tmpTiff = '/tmp/codeep_clipboard_img.tiff';
+
+      // Try PNG format first
+      try {
+        execSync(`osascript -e 'try
+          set imgData to (the clipboard as «class PNGf»)
+          set f to open for access POSIX file "${tmpPath}" with write permission
+          set eof of f to 0
+          write imgData to f
+          close access f
+        end try'`, { stdio: ['pipe', 'pipe', 'ignore'] });
+      } catch { /* ignore */ }
+
+      // If PNG worked, return it
       if (existsSync(tmpPath)) {
         const data = readFileSync(tmpPath) as Buffer;
         unlinkSync(tmpPath);
-        if (data.length > 0) return 'data:image/png;base64,' + data.toString('base64');
+        if (data.length > 100) return 'data:image/png;base64,' + data.toString('base64');
       }
+
+      // Try TIFF (macOS screenshots are stored as TIFF in clipboard)
+      try {
+        execSync(`osascript -e 'try
+          set imgData to (the clipboard as «class TIFF»)
+          set f to open for access POSIX file "${tmpTiff}" with write permission
+          set eof of f to 0
+          write imgData to f
+          close access f
+        end try'`, { stdio: ['pipe', 'pipe', 'ignore'] });
+      } catch { /* ignore */ }
+
+      if (existsSync(tmpTiff)) {
+        // Convert TIFF to PNG via sips (built into macOS)
+        try {
+          execSync(`sips -s format png "${tmpTiff}" --out "${tmpPath}" 2>/dev/null`);
+          unlinkSync(tmpTiff);
+          if (existsSync(tmpPath)) {
+            const data = readFileSync(tmpPath) as Buffer;
+            unlinkSync(tmpPath);
+            if (data.length > 100) return 'data:image/png;base64,' + data.toString('base64');
+          }
+        } catch {
+          try { unlinkSync(tmpTiff); } catch { /* ignore */ }
+        }
+      }
+
       return null;
     } else if (process.platform === 'linux') {
       const data = execSync('xclip -selection clipboard -t image/png -o 2>/dev/null', { encoding: 'buffer' }) as Buffer;
