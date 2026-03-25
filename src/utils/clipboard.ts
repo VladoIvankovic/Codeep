@@ -67,34 +67,24 @@ export function readFromClipboard(): string | null {
 export function readImageFromClipboard(): string | null {
   try {
     if (process.platform === 'darwin') {
-      const { existsSync, readFileSync, unlinkSync } = require('fs');
+      const { existsSync, readFileSync, unlinkSync, writeFileSync } = require('fs');
       const tmpPath = '/tmp/codeep_clipboard_img.png';
+      const scriptPath = '/tmp/codeep_clipboard.applescript';
 
-      // Clean up any leftover temp files
+      // Clean up leftovers
       try { if (existsSync(tmpPath)) unlinkSync(tmpPath); } catch { /* ignore */ }
 
-      // Use Python3 + AppKit (always available on macOS) to read clipboard image
+      // Write applescript to file (more reliable than -e for multiline)
+      const script = `set imgData to (the clipboard as «class PNGf»)
+set f to open for access POSIX file "${tmpPath}" with write permission
+set eof of f to 0
+write imgData to f
+close access f`;
       try {
-        execSync(
-          `python3 -c "
-import AppKit, sys
-pb = AppKit.NSPasteboard.generalPasteboard()
-data = pb.dataForType_('public.png')
-if not data:
-    data = pb.dataForType_(AppKit.NSTIFFPboardType)
-    if data:
-        import subprocess, tempfile, os
-        tiff = '/tmp/codeep_cb.tiff'
-        open(tiff,'wb').write(bytes(data))
-        subprocess.run(['sips','-s','format','png',tiff,'--out','${tmpPath}'],capture_output=True)
-        os.unlink(tiff)
-    sys.exit(1)
-else:
-    open('${tmpPath}','wb').write(bytes(data))
-"`,
-          { stdio: ['pipe', 'pipe', 'ignore'] }
-        );
+        writeFileSync(scriptPath, script, 'utf-8');
+        execSync(`osascript "${scriptPath}"`, { stdio: ['pipe', 'pipe', 'ignore'] });
       } catch { /* ignore */ }
+      try { if (existsSync(scriptPath)) unlinkSync(scriptPath); } catch { /* ignore */ }
 
       if (existsSync(tmpPath)) {
         const data = readFileSync(tmpPath) as Buffer;
