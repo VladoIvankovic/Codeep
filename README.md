@@ -22,11 +22,11 @@
 ## Features
 
 ### Multi-Provider Support
-- **Z.AI (ZhipuAI)** — GLM-5, GLM-4.7, GLM-4.7 Flash (international & China endpoints)
-- **MiniMax** — MiniMax M2.5 (international & China endpoints)
+- **Z.AI (ZhipuAI)** — GLM-5, GLM-5 Turbo, GLM-4.7, GLM-4.7 Flash — Coding Plan & pay-per-use API (international & China)
+- **MiniMax** — MiniMax M2.7, M2.5, M2.1, M2 — Coding Plan & pay-per-use API (international & China)
 - **DeepSeek** — DeepSeek V3, DeepSeek R1 (reasoning)
 - **Anthropic** — Claude Sonnet 4.6, Claude Opus 4.6, Claude Sonnet 4.5, Claude Haiku 4.5
-- **Google AI** — Gemini 3.1 Pro Preview, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash Lite
+- **Google AI** — Gemini 3.1 Pro Preview, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash Lite
 - Switch between providers with `/provider`
 - Configure different API keys per provider
 - Both OpenAI-compatible and Anthropic API protocols supported
@@ -150,7 +150,9 @@ Codeep works as a **full AI coding agent** that autonomously:
 - **MCP-powered tools** (for Z.AI and Z.AI China providers):
   - `web_search` — Search the web for current information
   - `web_reader` — Fetch and read any web page
-  - `understand_image` — Analyze images via MiniMax vision
+  - `zai_analyze_image` — Analyze images via Z.AI Vision (GLM-4V)
+  - `minimax_understand_image` — Analyze images via MiniMax vision
+- **Image paste** — Ctrl+V an image directly into the terminal to send it to a vision model
 - MCP tools run as secure sub-processes with structured I/O
 
 ### Smart Context
@@ -479,11 +481,15 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 
 | Command | Description |
 |---------|-------------|
-| `/provider` | Switch AI provider (Z.ai, MiniMax) |
+| `/provider` | Switch AI provider |
 | `/model` | Switch AI model |
 | `/protocol` | Switch API protocol (OpenAI/Anthropic) |
 | `/lang` | Set response language (12 languages supported) |
 | `/settings` | Adjust temperature, max tokens, timeout, rate limits |
+| `/profile save <name>` | Save current provider, model and settings as a profile |
+| `/profile load <name>` | Load a saved profile |
+| `/profile list` | List all saved profiles |
+| `/cost` | Show session token usage and estimated API cost |
 
 ### Session Management
 
