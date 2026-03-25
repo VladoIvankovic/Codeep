@@ -69,22 +69,25 @@ export function readImageFromClipboard(): string | null {
     if (process.platform === 'darwin') {
       const { existsSync, readFileSync, unlinkSync, writeFileSync } = require('fs');
       const tmpPath = '/tmp/codeep_clipboard_img.png';
-      const scriptPath = '/tmp/codeep_clipboard.applescript';
+      const shPath = '/tmp/codeep_clipboard.sh';
 
       // Clean up leftovers
       try { if (existsSync(tmpPath)) unlinkSync(tmpPath); } catch { /* ignore */ }
 
-      // Write applescript to file (more reliable than -e for multiline)
-      const script = `set imgData to (the clipboard as «class PNGf»)
+      // Use bash heredoc — direct execSync('osascript') lacks clipboard access
+      const shScript = `#!/bin/bash
+osascript << 'EOF'
+set imgData to (the clipboard as \u00ABclass PNGf\u00BB)
 set f to open for access POSIX file "${tmpPath}" with write permission
 set eof of f to 0
 write imgData to f
-close access f`;
+close access f
+EOF`;
       try {
-        writeFileSync(scriptPath, script, 'utf-8');
-        execSync(`osascript "${scriptPath}"`, { stdio: ['pipe', 'pipe', 'ignore'] });
+        writeFileSync(shPath, shScript, 'utf-8');
+        execSync(`/bin/bash "${shPath}"`, { stdio: ['pipe', 'pipe', 'ignore'] });
       } catch { /* ignore */ }
-      try { if (existsSync(scriptPath)) unlinkSync(scriptPath); } catch { /* ignore */ }
+      try { if (existsSync(shPath)) unlinkSync(shPath); } catch { /* ignore */ }
 
       if (existsSync(tmpPath)) {
         const data = readFileSync(tmpPath) as Buffer;
