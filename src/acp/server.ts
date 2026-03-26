@@ -24,7 +24,7 @@ import { executeCommandAsync } from '../utils/shell.js';
 import { PermissionOutcome } from '../utils/agent.js';
 import { ToolCall } from '../utils/tools.js';
 import { initWorkspace, loadWorkspace, handleCommand, AcpSession } from './commands.js';
-import { autoSaveSession, config, setProvider, listSessionsWithInfo, deleteSession as deleteSessionFile } from '../config/index.js';
+import { autoSaveSession, config, setProvider, listSessionsWithInfo, deleteSession as deleteSessionFile, type LanguageCode } from '../config/index.js';
 import { ApiError } from '../api/index.js';
 import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
@@ -85,6 +85,21 @@ const AGENT_MODES: SessionModeState = {
 
 // ─── Config options ───────────────────────────────────────────────────────────
 
+const LANGUAGE_OPTIONS = [
+  { value: 'auto', name: 'Auto' },
+  { value: 'en',   name: 'English' },
+  { value: 'zh',   name: 'Chinese' },
+  { value: 'es',   name: 'Spanish' },
+  { value: 'fr',   name: 'French' },
+  { value: 'de',   name: 'German' },
+  { value: 'ja',   name: 'Japanese' },
+  { value: 'ru',   name: 'Russian' },
+  { value: 'pt',   name: 'Portuguese' },
+  { value: 'ar',   name: 'Arabic' },
+  { value: 'hi',   name: 'Hindi' },
+  { value: 'hr',   name: 'Croatian' },
+];
+
 /** Check if a provider has an API key stored (reads config directly, no async) */
 function providerHasKey(providerId: string): boolean {
   // Check environment variable first
@@ -122,15 +137,25 @@ function buildConfigOptions(): SessionConfigOption[] {
   const currentValue = modelOptions.some(o => o.value === compositeValue)
     ? compositeValue
     : (modelOptions[0]?.value ?? '');
+  const currentLanguage = (config.get('language') as string) || 'auto';
   return [
     {
       id: 'model',
       name: 'Model',
       description: 'AI model to use',
-      category: 'model',
-      type: 'select',
+      category: 'model' as const,
+      type: 'select' as const,
       currentValue,
       options: modelOptions,
+    },
+    {
+      id: 'language',
+      name: 'Language',
+      description: 'Response language',
+      category: null,
+      type: 'select' as const,
+      currentValue: currentLanguage,
+      options: LANGUAGE_OPTIONS,
     },
   ];
 }
@@ -184,6 +209,7 @@ export function startAcpServer(): Promise<void> {
       agentCapabilities: {
         loadSession: true,
         terminal: true,
+        promptCapabilities: { image: true },
         sessionCapabilities: { list: {} },
       },
       agentInfo: {
@@ -366,6 +392,8 @@ export function startAcpServer(): Promise<void> {
       } else {
         config.set('model', value);
       }
+    } else if (configId === 'language' && typeof value === 'string') {
+      config.set('language', value as LanguageCode);
     }
 
     transport.respond(msg.id, {});
@@ -422,7 +450,7 @@ export function startAcpServer(): Promise<void> {
 
   // ── session/prompt ──────────────────────────────────────────────────────────
 
-  function handleSessionPrompt(msg: JsonRpcRequest): void {
+  async function handleSessionPrompt(msg: JsonRpcRequest): Promise<void> {
     const params = msg.params as SessionPromptParams;
     const session = sessions.get(params.sessionId);
     if (!session) {
@@ -431,10 +459,55 @@ export function startAcpServer(): Promise<void> {
     }
 
     // Extract text from ContentBlock[]
-    const prompt = params.prompt
+    let prompt = params.prompt
       .filter((b) => b.type === 'text')
       .map((b) => b.text ?? '')
       .join('\n');
+
+    // Handle image blocks via vision API
+    const imageBlocks = params.prompt.filter((b) => b.type === 'image' && b.data);
+    if (imageBlocks.length > 0) {
+      const block = imageBlocks[0];
+      const mimeType = block.mimeType || 'image/png';
+      const imageDataUrl = `data:${mimeType};base64,${block.data}`;
+      transport.respond(msg.id, { stopReason: 'end_turn' });
+      const { getZaiVisionConfig, callZaiVisionApi, getMinimaxMcpConfig, callMinimaxApi } = await import('../utils/mcpIntegration.js');
+      const zaiConfig = getZaiVisionConfig();
+      const mmConfig = getMinimaxMcpConfig();
+      if (!zaiConfig && !mmConfig) {
+        transport.notify('session/update', {
+          sessionId: params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Image paste requires a Z.AI or MiniMax API key.' } },
+        });
+        return;
+      }
+      transport.notify('session/update', {
+        sessionId: params.sessionId,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '_Analyzing image…_\n\n' } },
+      });
+      try {
+        const visionPrompt = prompt || 'Describe this image in detail.';
+        let description: string;
+        if (zaiConfig) {
+          description = await callZaiVisionApi(zaiConfig.baseUrl, zaiConfig.apiKey, visionPrompt, imageDataUrl);
+        } else {
+          description = await callMinimaxApi(mmConfig!.host, '/v1/coding_plan/vlm', { prompt: visionPrompt, image_url: imageDataUrl }, mmConfig!.apiKey);
+        }
+        transport.notify('session/update', {
+          sessionId: params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: description } },
+        });
+        session.history.push({ role: 'user', content: prompt ? `[Image] ${prompt}` : '[Image pasted from clipboard]' });
+        session.history.push({ role: 'assistant', content: description });
+        autoSaveSession(session.history, session.workspaceRoot);
+      } catch (err) {
+        transport.notify('session/update', {
+          sessionId: params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `Image analysis failed: ${(err as Error).message}` } },
+        });
+      }
+      return;
+    }
 
     const abortController = new AbortController();
     session.abortController = abortController;

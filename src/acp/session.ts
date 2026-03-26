@@ -74,6 +74,10 @@ function buildRawOutput(
   params: Record<string, string>,
   toolResult: { success: boolean; output: string; error?: string }
 ): string | undefined {
+  // Always surface error details when a tool fails
+  if (!toolResult.success && toolResult.error) {
+    return `Error: ${toolResult.error}`;
+  }
   switch (toolName) {
     case 'write_file': {
       const content = params.content ?? '';
