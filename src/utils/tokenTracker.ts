@@ -42,10 +42,14 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // DeepSeek
   'deepseek-chat':     { inputPer1M: 0.27,  outputPer1M: 1.10 },
   'deepseek-reasoner': { inputPer1M: 0.55,  outputPer1M: 2.19 },
+  'deepseek-speciale': { inputPer1M: 0.27,  outputPer1M: 1.10 },
   // Google
-  'gemini-2.5-pro':         { inputPer1M: 1.25, outputPer1M: 10.00 },
-  'gemini-2.5-flash':       { inputPer1M: 0.15, outputPer1M: 0.60 },
-  'gemini-2.5-flash-lite':  { inputPer1M: 0.10, outputPer1M: 0.40 },
+  'gemini-3.1-pro-preview':       { inputPer1M: 1.25, outputPer1M: 10.00 },
+  'gemini-3-flash-preview':       { inputPer1M: 0.50, outputPer1M: 3.00 },
+  'gemini-3.1-flash-lite-preview':{ inputPer1M: 0.50, outputPer1M: 3.00 },
+  'gemini-2.5-pro':               { inputPer1M: 1.25, outputPer1M: 10.00 },
+  'gemini-2.5-flash':             { inputPer1M: 0.15, outputPer1M: 0.60 },
+  'gemini-2.5-flash-lite':        { inputPer1M: 0.10, outputPer1M: 0.40 },
   // MiniMax
   'MiniMax-M2.7':           { inputPer1M: 0.80, outputPer1M: 2.20 },
   'MiniMax-M2.5':           { inputPer1M: 0.80, outputPer1M: 2.20 },
