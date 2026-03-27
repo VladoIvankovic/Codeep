@@ -42,7 +42,7 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // DeepSeek
   'deepseek-chat':     { inputPer1M: 0.27,  outputPer1M: 1.10 },
   'deepseek-reasoner': { inputPer1M: 0.55,  outputPer1M: 2.19 },
-  'deepseek-speciale': { inputPer1M: 0.27,  outputPer1M: 1.10 },
+
   // Google
   'gemini-3.1-pro-preview':       { inputPer1M: 1.25, outputPer1M: 10.00 },
   'gemini-3-flash-preview':       { inputPer1M: 0.50, outputPer1M: 3.00 },

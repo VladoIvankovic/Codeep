@@ -227,7 +227,6 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     models: [
       { id: 'deepseek-chat', name: 'DeepSeek V3.2', description: 'Latest general-purpose model' },
       { id: 'deepseek-reasoner', name: 'DeepSeek V3.2 Reasoner', description: 'Reasoning model with chain-of-thought' },
-      { id: 'deepseek-speciale', name: 'DeepSeek V3.2 Speciale', description: 'Reasoning-first model for complex agentic tasks' },
     ],
     defaultModel: 'deepseek-chat',
     defaultProtocol: 'openai',
