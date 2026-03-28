@@ -13,6 +13,7 @@ import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
 import { reportStats } from '../utils/codeepCloud';
 import { getGitStatus, isGitRepository } from '../utils/git';
+import { getSessionStats } from '../utils/tokenTracker';
 
 function getActionType(toolName: string): string {
   return toolName.includes('write') ? 'write' :
@@ -380,6 +381,7 @@ export async function executeAgentTask(
     // Report stats to codeep.dev (fire-and-forget, only if github_id is set)
     const { getCurrentVersion } = await import('../utils/update.js');
     const sessionId = getCurrentSessionId();
+    const tokenStats = getSessionStats();
     reportStats({
       model: config.get('model'),
       provider: config.get('provider'),
@@ -390,6 +392,9 @@ export async function executeAgentTask(
       projectName: ctx.projectContext?.name,
       language: ctx.projectContext?.type,
       isGit: isGitRepository(process.cwd()),
+      inputTokens: tokenStats.totalPromptTokens || undefined,
+      outputTokens: tokenStats.totalCompletionTokens || undefined,
+      estimatedCost: tokenStats.estimatedCost || undefined,
     });
 
   } catch (error) {

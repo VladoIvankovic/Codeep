@@ -106,6 +106,9 @@ export interface StatsPayload {
   projectName?: string;
   language?: string;
   isGit?: boolean;
+  inputTokens?: number;
+  outputTokens?: number;
+  estimatedCost?: number;
 }
 
 /**
