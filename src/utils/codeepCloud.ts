@@ -203,6 +203,34 @@ export async function pushKeys(keys: Record<string, string>): Promise<boolean> {
   }
 }
 
+// ─── Session history sync ─────────────────────────────────────────────────────
+
+/**
+ * Sync session conversation history to codeep.dev.
+ * Only user/assistant messages are sent — system messages are filtered out.
+ * Fire-and-forget. Only sends if linked and sync_token is available.
+ */
+export function syncSession(payload: {
+  sessionId: string;
+  sessionName?: string;
+  projectName?: string;
+  messages: { role: string; content: string }[];
+}): void {
+  const githubId = getGithubId();
+  const syncToken = getSyncToken();
+  if (!githubId || !syncToken) return;
+
+  // Filter to only user/assistant messages
+  const filtered = payload.messages.filter(m => m.role === 'user' || m.role === 'assistant');
+  if (filtered.length === 0) return;
+
+  fetch(`${API_BASE}/api/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+    body: JSON.stringify({ ...payload, messages: filtered, githubId }),
+  }).catch(() => {});
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {

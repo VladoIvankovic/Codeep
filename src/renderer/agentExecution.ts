@@ -11,7 +11,7 @@ import { chat } from '../api/index';
 import { runAgent, AgentResult } from '../utils/agent';
 import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
-import { reportStats } from '../utils/codeepCloud';
+import { reportStats, syncSession } from '../utils/codeepCloud';
 import { getGitStatus, isGitRepository } from '../utils/git';
 import { getSessionStats } from '../utils/tokenTracker';
 
@@ -382,6 +382,12 @@ export async function executeAgentTask(
     const { getCurrentVersion } = await import('../utils/update.js');
     const sessionId = getCurrentSessionId();
     const tokenStats = getSessionStats();
+    syncSession({
+      sessionId,
+      sessionName: sessionId,
+      projectName: ctx.projectContext?.name,
+      messages: app.getMessages(),
+    });
     reportStats({
       model: config.get('model'),
       provider: config.get('provider'),
