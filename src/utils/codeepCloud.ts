@@ -127,6 +127,17 @@ export function reportStats(payload: StatsPayload): void {
   });
 }
 
+export async function reportStatsAsync(payload: StatsPayload): Promise<void> {
+  const githubId = getGithubId();
+  if (!githubId) return;
+
+  await fetch(`${API_BASE}/api/stats`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...payload, githubId, isGit: payload.isGit ?? false }),
+  }).catch(() => {});
+}
+
 // ─── Tasks ────────────────────────────────────────────────────────────────────
 
 export interface CloudTask {
@@ -225,6 +236,26 @@ export function syncSession(payload: {
   if (filtered.length === 0) return;
 
   fetch(`${API_BASE}/api/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+    body: JSON.stringify({ ...payload, messages: filtered, githubId }),
+  }).catch(() => {});
+}
+
+export async function syncSessionAsync(payload: {
+  sessionId: string;
+  sessionName?: string;
+  projectName?: string;
+  messages: { role: string; content: string }[];
+}): Promise<void> {
+  const githubId = getGithubId();
+  const syncToken = getSyncToken();
+  if (!githubId || !syncToken) return;
+
+  const filtered = payload.messages.filter(m => m.role === 'user' || m.role === 'assistant');
+  if (filtered.length === 0) return;
+
+  await fetch(`${API_BASE}/api/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
     body: JSON.stringify({ ...payload, messages: filtered, githubId }),
