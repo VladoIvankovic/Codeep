@@ -604,7 +604,8 @@ Commands (in chat):
 async function gracefulShutdown() {
   // Restore terminal immediately so it looks normal
   if (app) app.stop();
-  console.log('\nGoodbye!');
+  process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+  console.log('Goodbye!');
 
   // Abort any running agent and wait for it to finish (max 5s)
   if (isAgentRunningFlag) {
