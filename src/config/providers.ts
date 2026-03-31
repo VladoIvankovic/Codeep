@@ -234,6 +234,29 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'DEEPSEEK_API_KEY',
     subscribeUrl: 'https://platform.deepseek.com/sign_up',
   },
+  'openai': {
+    name: 'OpenAI',
+    description: 'GPT and o-series models',
+    protocols: {
+      openai: {
+        baseUrl: 'https://api.openai.com/v1',
+        authHeader: 'Bearer',
+        supportsNativeTools: true,
+      },
+    },
+    models: [
+      { id: 'gpt-4.1',      name: 'GPT-4.1',       description: 'Latest GPT model — best for coding, 1M context' },
+      { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini',   description: 'Faster and cheaper GPT-4.1' },
+      { id: 'gpt-4.1-nano', name: 'GPT-4.1 Nano',   description: 'Most affordable, great for simple tasks' },
+      { id: 'o3',           name: 'o3',              description: 'Reasoning model — complex problems' },
+      { id: 'o4-mini',      name: 'o4-mini',         description: 'Fast reasoning model, best value' },
+      { id: 'gpt-4o',       name: 'GPT-4o',          description: 'Multimodal model' },
+    ],
+    defaultModel: 'gpt-4.1',
+    defaultProtocol: 'openai',
+    envKey: 'OPENAI_API_KEY',
+    subscribeUrl: 'https://platform.openai.com/api-keys',
+  },
   'anthropic': {
     name: 'Anthropic',
     description: 'Claude AI models',
