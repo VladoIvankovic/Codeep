@@ -485,7 +485,7 @@ Commands (in chat):
   app = new App({
     onSubmit: handleSubmit,
     onCommand: handleCommand,
-    onExit: () => { console.log('\nGoodbye!'); process.exit(0); },
+    onExit: () => { gracefulShutdown().finally(() => process.exit(0)); },
     onStopAgent: () => {
       if (isAgentRunningFlag && agentAbortController) {
         agentAbortController.abort();
@@ -599,52 +599,50 @@ Commands (in chat):
   }
 }
 
-// ─── Graceful shutdown on Ctrl+C ─────────────────────────────────────────────
+// ─── Graceful shutdown ────────────────────────────────────────────────────────
+
+async function gracefulShutdown() {
+  // Abort any running agent and wait for it to finish (max 5s)
+  if (isAgentRunningFlag) {
+    agentAbortController?.abort();
+    await new Promise<void>(resolve => {
+      const check = setInterval(() => {
+        if (!isAgentRunningFlag) { clearInterval(check); resolve(); }
+      }, 100);
+      setTimeout(() => { clearInterval(check); resolve(); }, 5000);
+    });
+  }
+
+  if (!app) return;
+
+  const messages = app.getMessages();
+  autoSaveSession(messages, projectPath);
+
+  const { syncSessionAsync, reportStatsAsync } = require('../utils/codeepCloud.js');
+  const tokenStats = getSessionStats();
+  await Promise.all([
+    syncSessionAsync({
+      sessionId,
+      sessionName: sessionId,
+      projectName: projectContext?.name,
+      messages,
+    }),
+    reportStatsAsync({
+      model: config.get('model'),
+      provider: config.get('provider'),
+      sessionId,
+      sessionName: sessionId,
+      messageCount: messages.length,
+      projectName: projectContext?.name,
+      inputTokens: tokenStats.totalPromptTokens || undefined,
+      outputTokens: tokenStats.totalCompletionTokens || undefined,
+      estimatedCost: tokenStats.estimatedCost || undefined,
+    }),
+  ]);
+}
 
 process.on('SIGINT', () => {
-  // Abort any running agent
-  agentAbortController?.abort();
-
-  const doShutdown = async () => {
-    // Wait for agent to finish processing the abort (max 5s)
-    if (isAgentRunningFlag) {
-      await new Promise<void>(resolve => {
-        const check = setInterval(() => {
-          if (!isAgentRunningFlag) { clearInterval(check); resolve(); }
-        }, 100);
-        setTimeout(() => { clearInterval(check); resolve(); }, 5000);
-      });
-    }
-
-    if (!app) return;
-
-    const messages = app.getMessages();
-    autoSaveSession(messages, projectPath);
-
-    const { syncSessionAsync, reportStatsAsync } = require('../utils/codeepCloud.js');
-    const tokenStats = getSessionStats();
-    await Promise.all([
-      syncSessionAsync({
-        sessionId,
-        sessionName: sessionId,
-        projectName: projectContext?.name,
-        messages,
-      }),
-      reportStatsAsync({
-        model: config.get('model'),
-        provider: config.get('provider'),
-        sessionId,
-        sessionName: sessionId,
-        messageCount: messages.length,
-        projectName: projectContext?.name,
-        inputTokens: tokenStats.totalPromptTokens || undefined,
-        outputTokens: tokenStats.totalCompletionTokens || undefined,
-        estimatedCost: tokenStats.estimatedCost || undefined,
-      }),
-    ]);
-  };
-
-  doShutdown().finally(() => process.exit(0));
+  gracefulShutdown().finally(() => process.exit(0));
 });
 
 main().catch((error) => {
