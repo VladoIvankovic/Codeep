@@ -605,14 +605,25 @@ process.on('SIGINT', () => {
   // Abort any running agent
   agentAbortController?.abort();
 
-  // Save session and sync to codeep.dev before exiting
-  if (app) {
+  const doShutdown = async () => {
+    // Wait for agent to finish processing the abort (max 5s)
+    if (isAgentRunningFlag) {
+      await new Promise<void>(resolve => {
+        const check = setInterval(() => {
+          if (!isAgentRunningFlag) { clearInterval(check); resolve(); }
+        }, 100);
+        setTimeout(() => { clearInterval(check); resolve(); }, 5000);
+      });
+    }
+
+    if (!app) return;
+
     const messages = app.getMessages();
     autoSaveSession(messages, projectPath);
 
     const { syncSessionAsync, reportStatsAsync } = require('../utils/codeepCloud.js');
     const tokenStats = getSessionStats();
-    Promise.all([
+    await Promise.all([
       syncSessionAsync({
         sessionId,
         sessionName: sessionId,
@@ -630,10 +641,10 @@ process.on('SIGINT', () => {
         outputTokens: tokenStats.totalCompletionTokens || undefined,
         estimatedCost: tokenStats.estimatedCost || undefined,
       }),
-    ]).finally(() => process.exit(0));
-  } else {
-    process.exit(0);
-  }
+    ]);
+  };
+
+  doShutdown().finally(() => process.exit(0));
 });
 
 main().catch((error) => {
