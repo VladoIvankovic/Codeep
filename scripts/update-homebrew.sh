@@ -67,22 +67,26 @@ echo "Users can now update with:"
 echo "  brew update"
 echo "  brew upgrade codeep"
 
-# ── Update Zed extension ──────────────────────────────────────────────────────
-ZED_REPO_PATH="/Users/vladoivankovic/github/Codeep/codeep-zed"
-ZED_TOML="$ZED_REPO_PATH/extension.toml"
+# ── Update ACP Registry ───────────────────────────────────────────────────────
+ACP_REGISTRY_PATH="/Users/vladoivankovic/github/Codeep/acp-registry"
+ACP_AGENT_JSON="$ACP_REGISTRY_PATH/codeep/agent.json"
 
-echo "📝 Updating Zed extension to v${VERSION}..."
+if [ ! -f "$ACP_AGENT_JSON" ]; then
+  echo "⚠️  ACP registry not found at $ACP_REGISTRY_PATH — skipping"
+  echo "   Clone your fork: gh repo clone VladoIvankovic/registry $ACP_REGISTRY_PATH"
+  exit 0
+fi
 
-# Bump version and archive URLs in extension.toml
-sed -i '' "s/^version = \".*\"/version = \"${VERSION}\"/" "$ZED_TOML"
-sed -i '' "s|/releases/download/v[^/]*/|/releases/download/v${VERSION}/|g" "$ZED_TOML"
+echo "📝 Updating ACP registry agent.json to v${VERSION}..."
 
-cd "$ZED_REPO_PATH"
-git add extension.toml
-git commit -m "Update codeep to v${VERSION}"
-git tag "v${VERSION}"
-git push
-git push origin "v${VERSION}"
+# Bump version and archive URLs
+sed -i '' "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" "$ACP_AGENT_JSON"
+sed -i '' "s|/releases/download/v[^/]*/|/releases/download/v${VERSION}/|g" "$ACP_AGENT_JSON"
 
-echo "✅ Done! Zed extension updated to v${VERSION}"
-echo "   GitHub Action will build binaries automatically."
+cd "$ACP_REGISTRY_PATH"
+git add codeep/agent.json
+git commit -m "Update Codeep to v${VERSION}"
+git push origin add-codeep
+
+echo "✅ Done! ACP registry updated to v${VERSION}"
+echo "   PR: https://github.com/agentclientprotocol/registry/pull/200"

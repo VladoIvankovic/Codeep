@@ -42,3 +42,7 @@ package-lock.json
 yarn.lock
 pnpm-lock.yaml
 *.bun-build
+
+# Local repos
+acp-registry/
+codeep-zed/
