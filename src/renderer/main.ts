@@ -602,6 +602,10 @@ Commands (in chat):
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 
 async function gracefulShutdown() {
+  // Restore terminal immediately so it looks normal
+  if (app) app.stop();
+  console.log('\nGoodbye!');
+
   // Abort any running agent and wait for it to finish (max 5s)
   if (isAgentRunningFlag) {
     agentAbortController?.abort();
