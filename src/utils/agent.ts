@@ -80,7 +80,7 @@ function truncateToolResult(output: string, toolName: string): string {
 
 // ─── Context window compression ───────────────────────────────────────────────
 
-const CONTEXT_COMPRESS_THRESHOLD = 80_000; // ~20K tokens, safe for all providers
+const CONTEXT_COMPRESS_THRESHOLD = 200_000; // ~50K tokens, safe for all providers
 const RECENT_MESSAGES_TO_KEEP = 6; // Always preserve the last N messages verbatim
 
 /**
@@ -285,6 +285,7 @@ export async function runAgent(
   let result: AgentResult;
   let consecutiveTimeouts = 0;
   let incompleteWorkRetries = 0;
+  let lastCompressNotifyChars = 0; // track chars at last compression notification
   const maxIncompleteWorkRetries = 5;
   // Track tools permanently allowed this session via allow_always
   const alwaysAllowedTools = new Set<string>();
@@ -341,11 +342,16 @@ export async function runAgent(
       opts.onIteration?.(iteration, `Iteration ${iteration}/${opts.maxIterations}`);
 
       // Compress messages if context window is getting full
+      const totalCharsBeforeCompress = messages.reduce((s, m) => s + m.content.length, 0);
       const compressed = compressMessages(messages, actions);
       if (compressed !== messages) {
         messages.length = 0;
         messages.push(...compressed);
-        opts.onIteration?.(iteration, `Context compressed to save memory — continuing with last ${compressed.length} messages`);
+        // Only notify if we haven't notified recently (suppress repeated messages)
+        if (totalCharsBeforeCompress - lastCompressNotifyChars > 20_000) {
+          lastCompressNotifyChars = totalCharsBeforeCompress;
+          opts.onIteration?.(iteration, `Context compressed to save memory — continuing with last ${compressed.length} messages`);
+        }
       }
 
       debug(`Starting iteration ${iteration}/${opts.maxIterations}, actions: ${actions.length}`);
