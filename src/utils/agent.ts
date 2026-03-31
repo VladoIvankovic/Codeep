@@ -97,7 +97,6 @@ function compressMessages(messages: Message[], actions: ActionLog[]): Message[] 
   if (messages.length <= RECENT_MESSAGES_TO_KEEP + 1) return messages;
 
   const firstMessage = messages[0];
-  const recentMessages = messages.slice(-RECENT_MESSAGES_TO_KEEP);
 
   // Build summary from action log
   const fileWrites = actions.filter(a => a.type === 'write' || a.type === 'edit');
@@ -122,7 +121,18 @@ function compressMessages(messages: Message[], actions: ActionLog[]): Message[] 
 
   const summaryMessage: Message = { role: 'user', content: summaryLines.join('\n') };
 
-  debug(`Context compressed: ${totalChars} chars → keeping first + summary + last ${RECENT_MESSAGES_TO_KEEP} messages`);
+  // Reduce recent messages kept until compressed result fits under threshold (min 2)
+  let keep = RECENT_MESSAGES_TO_KEEP;
+  let recentMessages = messages.slice(-keep);
+  while (keep > 2) {
+    const compressedChars = firstMessage.content.length + summaryMessage.content.length +
+      recentMessages.reduce((sum, m) => sum + m.content.length, 0);
+    if (compressedChars < CONTEXT_COMPRESS_THRESHOLD) break;
+    keep--;
+    recentMessages = messages.slice(-keep);
+  }
+
+  debug(`Context compressed: ${totalChars} chars → keeping first + summary + last ${keep} messages`);
   return [firstMessage, summaryMessage, ...recentMessages];
 }
 
