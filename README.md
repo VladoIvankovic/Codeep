@@ -22,11 +22,12 @@
 ## Features
 
 ### Multi-Provider Support
-- **Z.AI (ZhipuAI)** — GLM-5, GLM-5 Turbo, GLM-4.7, GLM-4.7 Flash — Coding Plan & pay-per-use API (international & China)
-- **MiniMax** — MiniMax M2.7, M2.5, M2.1, M2 — Coding Plan & pay-per-use API (international & China)
-- **DeepSeek** — DeepSeek V3, DeepSeek R1 (reasoning)
+- **Z.AI (ZhipuAI)** — GLM-5.1, GLM-5, GLM-5 Turbo, GLM-4.5 Air — Coding Plan & pay-per-use API (international & China)
+- **OpenAI** — GPT-4.1, GPT-4.1 Mini, GPT-4.1 Nano, o3, o4-mini, GPT-4o
 - **Anthropic** — Claude Sonnet 4.6, Claude Opus 4.6, Claude Sonnet 4.5, Claude Haiku 4.5
-- **Google AI** — Gemini 3.1 Pro Preview, Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash Lite
+- **DeepSeek** — DeepSeek V3.2, DeepSeek Reasoner
+- **Google AI** — Gemini 3.1 Pro Preview, Gemini 3 Flash Preview, Gemini 2.5 Pro, Gemini 2.5 Flash
+- **MiniMax** — MiniMax M2.7, M2.5, M2.1, M2 — Coding Plan & pay-per-use API (international & China)
 - Switch between providers with `/provider`
 - Configure different API keys per provider
 - Both OpenAI-compatible and Anthropic API protocols supported
@@ -721,11 +722,12 @@ With write access enabled:
 |----------|-------------|
 | `ZAI_API_KEY` | Z.AI (international) API key |
 | `ZAI_CN_API_KEY` | Z.AI China API key |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `ANTHROPIC_API_KEY` | Anthropic Claude API key |
+| `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `GOOGLE_API_KEY` | Google AI (Gemini) API key |
 | `MINIMAX_API_KEY` | MiniMax (international) API key |
 | `MINIMAX_CN_API_KEY` | MiniMax China API key |
-| `DEEPSEEK_API_KEY` | DeepSeek API key |
-| `ANTHROPIC_API_KEY` | Anthropic Claude API key |
-| `GOOGLE_API_KEY` | Google AI (Gemini) API key |
 
 ### Settings (`/settings`)
 
