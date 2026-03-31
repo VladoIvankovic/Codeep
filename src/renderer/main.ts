@@ -599,6 +599,41 @@ Commands (in chat):
   }
 }
 
+// ─── Graceful shutdown on Ctrl+C ─────────────────────────────────────────────
+
+process.on('SIGINT', () => {
+  // Abort any running agent
+  agentAbortController?.abort();
+
+  // Save session and sync to codeep.dev before exiting
+  if (app) {
+    const messages = app.getMessages();
+    autoSaveSession(messages, projectPath);
+
+    const { syncSession, reportStats } = require('../utils/codeepCloud.js');
+    const tokenStats = getSessionStats();
+    syncSession({
+      sessionId,
+      sessionName: sessionId,
+      projectName: projectContext?.name,
+      messages,
+    });
+    reportStats({
+      model: config.get('model'),
+      provider: config.get('provider'),
+      sessionId,
+      sessionName: sessionId,
+      messageCount: messages.length,
+      projectName: projectContext?.name,
+      inputTokens: tokenStats.totalPromptTokens || undefined,
+      outputTokens: tokenStats.totalCompletionTokens || undefined,
+      estimatedCost: tokenStats.estimatedCost || undefined,
+    });
+  }
+
+  process.exit(0);
+});
+
 main().catch((error) => {
   console.error('Fatal error:', error);
   process.exit(1);
