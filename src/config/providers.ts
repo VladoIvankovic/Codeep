@@ -25,6 +25,7 @@ export interface ProviderConfig {
   defaultModel: string;
   defaultProtocol: 'openai' | 'anthropic';
   maxOutputTokens?: number; // Provider-specific max output tokens limit
+  useMaxCompletionTokens?: boolean; // Use max_completion_tokens instead of max_tokens (e.g. OpenAI GPT-5+)
   envKey?: string; // Environment variable name for API key
   subscribeUrl?: string; // URL to get API key
   mcpEndpoints?: { // Z.AI MCP service endpoints
@@ -236,6 +237,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     ],
     defaultModel: 'gpt-5.4',
     defaultProtocol: 'openai',
+    useMaxCompletionTokens: true,
     envKey: 'OPENAI_API_KEY',
     subscribeUrl: 'https://platform.openai.com/api-keys',
   },
@@ -320,6 +322,13 @@ export function supportsNativeTools(providerId: string, protocol: 'openai' | 'an
   const provider = PROVIDERS[providerId];
   if (!provider) return false;
   return provider.protocols[protocol]?.supportsNativeTools ?? false; // Default to false (safer)
+}
+
+/**
+ * Returns true if the provider uses max_completion_tokens instead of max_tokens.
+ */
+export function usesMaxCompletionTokens(providerId: string): boolean {
+  return PROVIDERS[providerId]?.useMaxCompletionTokens ?? false;
 }
 
 /**

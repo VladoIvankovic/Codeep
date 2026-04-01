@@ -436,7 +436,8 @@ export async function runAgent(
           const code = isRateLimit ? '429' : isServerError ? '5xx' : 'error';
           const waitSec = Math.min(5 * retryCount, 30);
           debug(`${code} (retry ${retryCount}/${maxTimeoutRetries}): ${err.message}`);
-          opts.onIteration?.(iteration, `API ${code}, retrying in ${waitSec}s... (${retryCount}/${maxTimeoutRetries})`);
+          const shortMsg = err.message.length > 80 ? err.message.slice(0, 80) + '…' : err.message;
+          opts.onIteration?.(iteration, `API ${code}: ${shortMsg} — retrying in ${waitSec}s (${retryCount}/${maxTimeoutRetries})`);
           if (retryCount >= maxTimeoutRetries) {
             // Don't throw — skip this iteration like timeouts do
             consecutiveTimeouts++;

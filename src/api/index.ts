@@ -1,7 +1,7 @@
 import { Message, config, getApiKey } from '../config/index';
 import { withRetry, isNetworkError, isTimeoutError } from '../utils/retry';
 import { ProjectContext } from '../utils/project';
-import { getProvider, getProviderBaseUrl, getProviderAuthHeader } from '../config/providers';
+import { getProvider, getProviderBaseUrl, getProviderAuthHeader, usesMaxCompletionTokens } from '../config/providers';
 import { logApiRequest, logApiResponse, logAppError } from '../utils/logger';
 import { loadProjectIntelligence, generateContextFromIntelligence, ProjectIntelligence } from '../utils/projectIntelligence';
 import { loadProjectRules } from '../utils/agent';
@@ -335,11 +335,12 @@ async function chatOpenAI(
   const timeout = config.get('apiTimeout');
   const temperature = config.get('temperature');
   const maxTokens = config.get('maxTokens');
-  
+
   // Get provider-specific URL and auth
   const providerId = config.get('provider');
   const baseUrl = getProviderBaseUrl(providerId, 'openai');
   const authHeader = getProviderAuthHeader(providerId, 'openai');
+  const useCompletionTokens = usesMaxCompletionTokens(providerId);
 
   if (!baseUrl) {
     throw new Error(`Provider ${providerId} does not support OpenAI protocol`);
@@ -375,7 +376,7 @@ async function chatOpenAI(
         stream,
         ...(stream ? { stream_options: { include_usage: true } } : {}),
         temperature,
-        max_tokens: maxTokens,
+        ...(useCompletionTokens ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }),
       }),
       signal: controller.signal,
     });
@@ -646,17 +647,14 @@ export async function validateApiKey(apiKey: string, providerId?: string): Promi
 
   // Build request based on protocol
   const endpoint = protocol === 'openai' ? '/chat/completions' : '/v1/messages';
-  const body = protocol === 'openai' 
-    ? {
-        model,
-        messages: [{ role: 'user', content: 'hi' }],
-        max_tokens: 5,
-      }
-    : {
-        model,
-        messages: [{ role: 'user', content: 'hi' }],
-        max_tokens: 5,
-      };
+  const tokenParam = protocol === 'openai' && usesMaxCompletionTokens(provider)
+    ? { max_completion_tokens: 5 }
+    : { max_tokens: 5 };
+  const body = {
+    model,
+    messages: [{ role: 'user', content: 'hi' }],
+    ...tokenParam,
+  };
 
   try {
     const response = await fetch(`${baseUrl}${endpoint}`, {

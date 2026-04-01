@@ -16,7 +16,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { ProjectContext } from './project';
 import { config, getApiKey, Message } from '../config/index';
-import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens } from '../config/providers';
+import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens } from '../config/providers';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { formatToolDefinitions, getOpenAITools, getAnthropicTools } from './tools';
@@ -283,11 +283,13 @@ export async function agentChat(
     const useStreaming = Boolean(onChunk);
 
     if (protocol === 'openai') {
+      const maxTok = getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384));
+      const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };
       endpoint = `${baseUrl}/chat/completions`;
       body = {
         model, messages: [{ role: 'system', content: systemPrompt }, ...messages],
         tools: getOpenAITools(), tool_choice: 'auto', stream: useStreaming,
-        temperature: config.get('temperature'), max_tokens: getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384)),
+        temperature: config.get('temperature'), ...tokParam,
       };
     } else {
       endpoint = `${baseUrl}/v1/messages`;
@@ -404,11 +406,12 @@ export async function agentChatFallback(
     let body: Record<string, unknown>;
 
     if (protocol === 'openai') {
+      const maxTok = getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384));
+      const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };
       endpoint = `${baseUrl}/chat/completions`;
       body = {
         model, messages: [{ role: 'system', content: fallbackPrompt }, ...messages],
-        stream: Boolean(onChunk), temperature: config.get('temperature'),
-        max_tokens: getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384)),
+        stream: Boolean(onChunk), temperature: config.get('temperature'), ...tokParam,
       };
     } else {
       endpoint = `${baseUrl}/v1/messages`;
