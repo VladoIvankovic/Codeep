@@ -79,7 +79,7 @@ export interface ProjectIntelligence {
 // Constants
 // ============================================================================
 
-const INTELLIGENCE_VERSION = '1.0';
+const INTELLIGENCE_VERSION = '1.1';
 const INTELLIGENCE_FILE = 'intelligence.json';
 
 const IGNORE_DIRS = new Set([
@@ -211,8 +211,9 @@ export function loadProjectIntelligence(projectPath: string): ProjectIntelligenc
   try {
     const filePath = join(projectPath, '.codeep', INTELLIGENCE_FILE);
     if (!existsSync(filePath)) return null;
-    
+
     const data = JSON.parse(readFileSync(filePath, 'utf-8'));
+    if (data.version !== INTELLIGENCE_VERSION) return null;
     return data as ProjectIntelligence;
   } catch {
     return null;
@@ -491,12 +492,28 @@ function detectProjectType(projectPath: string, intelligence: ProjectIntelligenc
       const composer = JSON.parse(readFileSync(join(projectPath, 'composer.json'), 'utf-8'));
       intelligence.name = composer.name?.split('/').pop() || intelligence.name;
       intelligence.description = composer.description || '';
-      
+
       if (composer.require?.['laravel/framework']) {
         intelligence.dependencies.frameworks.push('Laravel');
       }
     } catch {}
     return;
+  }
+
+  // Fallback: detect type from already-scanned file extension counts
+  const skipExts = new Set(['.svg', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.ttf', '.woff', '.woff2', '.eot', '.map', '.lock', '.md', '.txt', '.json', '.xml', '.yml', '.yaml', '.sql', '.env', '.gitignore', '.zip', '.gz', '.pdf']);
+  const extToType: Record<string, string> = {
+    '.php': 'PHP', '.py': 'Python', '.rb': 'Ruby', '.java': 'Java',
+    '.kt': 'Kotlin', '.swift': 'Swift', '.cs': 'C#', '.cpp': 'C++', '.c': 'C/C++',
+    '.ex': 'Elixir', '.exs': 'Elixir', '.dart': 'Dart/Flutter',
+    '.html': 'HTML/CSS', '.htm': 'HTML/CSS', '.css': 'HTML/CSS', '.scss': 'HTML/CSS',
+    '.ts': 'TypeScript', '.tsx': 'TypeScript', '.js': 'JavaScript', '.jsx': 'JavaScript',
+  };
+  const dominant = Object.entries(intelligence.structure.languages)
+    .filter(([ext]) => !skipExts.has(ext) && extToType[ext])
+    .sort((a, b) => b[1] - a[1])[0];
+  if (dominant) {
+    intelligence.type = extToType[dominant[0]];
   }
 }
 

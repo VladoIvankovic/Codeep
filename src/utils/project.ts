@@ -454,7 +454,7 @@ export function getProjectContext(dir: string = process.cwd()): ProjectContext |
     if (projectType === 'Unknown' || projectType === 'generic') {
       const extCounts: Record<string, number> = {};
       files.filter(f => !f.isDirectory).forEach(f => {
-        const ext = (f.path.split('.').pop() || '').toLowerCase();
+        const ext = (f.extension || '').toLowerCase().replace(/^\./, '');
         if (ext && ext.length <= 6) extCounts[ext] = (extCounts[ext] || 0) + 1;
       });
       const extTypeMap: Record<string, string> = {
