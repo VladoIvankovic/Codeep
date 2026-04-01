@@ -108,11 +108,20 @@ export function getProjectType(dir: string = process.cwd()): string {
   if (existsSync(join(dir, 'mix.exs'))) return 'Elixir';
   if (existsSync(join(dir, 'pubspec.yaml'))) return 'Dart/Flutter';
   if (existsSync(join(dir, 'CMakeLists.txt'))) return 'C/C++';
-  // Fallback: detect by file count
+  // Fallback: detect by scanning root + one level of subdirectories
   try {
-    const files = readdirSync(dir);
-    const phpFiles = files.filter(f => f.endsWith('.php')).length;
-    if (phpFiles > 0) return 'PHP';
+    const entries = readdirSync(dir, { withFileTypes: true });
+    const phpInRoot = entries.filter(e => e.isFile() && e.name.endsWith('.php')).length;
+    if (phpInRoot > 0) return 'PHP';
+    // Check subdirectories
+    const phpInSubs = entries
+      .filter(e => e.isDirectory())
+      .reduce((count, subdir) => {
+        try {
+          return count + readdirSync(join(dir, subdir.name)).filter(f => f.endsWith('.php')).length;
+        } catch { return count; }
+      }, 0);
+    if (phpInSubs > 0) return 'PHP';
   } catch { /* ignore */ }
   return 'Unknown';
 }
