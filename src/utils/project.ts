@@ -101,9 +101,19 @@ export function getProjectType(dir: string = process.cwd()): string {
   }
   if (existsSync(join(dir, 'Cargo.toml'))) return 'Rust';
   if (existsSync(join(dir, 'go.mod'))) return 'Go';
-  if (existsSync(join(dir, 'requirements.txt')) || existsSync(join(dir, 'setup.py'))) return 'Python';
+  if (existsSync(join(dir, 'requirements.txt')) || existsSync(join(dir, 'setup.py')) || existsSync(join(dir, 'pyproject.toml'))) return 'Python';
   if (existsSync(join(dir, 'Gemfile'))) return 'Ruby';
   if (existsSync(join(dir, 'pom.xml')) || existsSync(join(dir, 'build.gradle'))) return 'Java';
+  if (existsSync(join(dir, 'composer.json'))) return 'PHP';
+  if (existsSync(join(dir, 'mix.exs'))) return 'Elixir';
+  if (existsSync(join(dir, 'pubspec.yaml'))) return 'Dart/Flutter';
+  if (existsSync(join(dir, 'CMakeLists.txt'))) return 'C/C++';
+  // Fallback: detect by file count
+  try {
+    const files = readdirSync(dir);
+    const phpFiles = files.filter(f => f.endsWith('.php')).length;
+    if (phpFiles > 0) return 'PHP';
+  } catch { /* ignore */ }
   return 'Unknown';
 }
 
