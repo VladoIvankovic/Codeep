@@ -84,6 +84,7 @@ sed -i '' "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" "$ACP_AGENT_JSON"
 sed -i '' "s|/releases/download/v[^/]*/|/releases/download/v${VERSION}/|g" "$ACP_AGENT_JSON"
 
 cd "$ACP_REGISTRY_PATH"
+git pull origin add-codeep --rebase --quiet
 git add codeep/agent.json
 git commit -m "Update Codeep to v${VERSION}"
 git push origin add-codeep
