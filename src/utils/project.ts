@@ -449,23 +449,27 @@ export function getProjectContext(dir: string = process.cwd()): ProjectContext |
   try {
     const files = scanDirectory(dir, 3);
     const isProject = isProjectDirectory(dir);
-    let projectType = isProject ? getProjectType(dir) : 'generic';
-    // If still Unknown, use scanned file extensions to detect type
-    if (projectType === 'Unknown') {
+    let projectType = isProject ? getProjectType(dir) : 'Unknown';
+    // Fallback: detect type from scanned file extensions
+    if (projectType === 'Unknown' || projectType === 'generic') {
       const extCounts: Record<string, number> = {};
       files.filter(f => !f.isDirectory).forEach(f => {
-        const ext = f.path.split('.').pop()?.toLowerCase() || '';
-        if (ext) extCounts[ext] = (extCounts[ext] || 0) + 1;
+        const ext = (f.path.split('.').pop() || '').toLowerCase();
+        if (ext && ext.length <= 6) extCounts[ext] = (extCounts[ext] || 0) + 1;
       });
-      const dominant = Object.entries(extCounts).sort((a, b) => b[1] - a[1])[0];
-      if (dominant) {
-        const extTypeMap: Record<string, string> = {
-          php: 'PHP', py: 'Python', rb: 'Ruby', java: 'Java',
-          kt: 'Kotlin', swift: 'Swift', cs: 'C#', cpp: 'C++',
-          c: 'C/C++', ex: 'Elixir', exs: 'Elixir', dart: 'Dart/Flutter',
-        };
-        projectType = extTypeMap[dominant[0]] || 'Unknown';
-      }
+      const extTypeMap: Record<string, string> = {
+        php: 'PHP', py: 'Python', rb: 'Ruby', java: 'Java',
+        kt: 'Kotlin', swift: 'Swift', cs: 'C#', cpp: 'C++',
+        c: 'C/C++', ex: 'Elixir', exs: 'Elixir', dart: 'Dart/Flutter',
+        html: 'HTML/CSS', htm: 'HTML/CSS', css: 'HTML/CSS',
+        ts: 'TypeScript', js: 'JavaScript',
+      };
+      // Skip non-code extensions when finding dominant type
+      const skipExt = new Set(['svg', 'png', 'jpg', 'jpeg', 'gif', 'ico', 'ttf', 'woff', 'woff2', 'eot', 'map', 'lock', 'md', 'txt', 'json', 'xml', 'yml', 'yaml', 'env', 'z', 'sql']);
+      const codeDominant = Object.entries(extCounts)
+        .filter(([ext]) => !skipExt.has(ext) && extTypeMap[ext])
+        .sort((a, b) => b[1] - a[1])[0];
+      if (codeDominant) projectType = extTypeMap[codeDominant[0]];
     }
     const structure = generateTreeStructure(files, 25);
     
