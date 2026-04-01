@@ -449,7 +449,24 @@ export function getProjectContext(dir: string = process.cwd()): ProjectContext |
   try {
     const files = scanDirectory(dir, 3);
     const isProject = isProjectDirectory(dir);
-    const projectType = isProject ? getProjectType(dir) : 'generic';
+    let projectType = isProject ? getProjectType(dir) : 'generic';
+    // If still Unknown, use scanned file extensions to detect type
+    if (projectType === 'Unknown') {
+      const extCounts: Record<string, number> = {};
+      files.filter(f => !f.isDirectory).forEach(f => {
+        const ext = f.path.split('.').pop()?.toLowerCase() || '';
+        if (ext) extCounts[ext] = (extCounts[ext] || 0) + 1;
+      });
+      const dominant = Object.entries(extCounts).sort((a, b) => b[1] - a[1])[0];
+      if (dominant) {
+        const extTypeMap: Record<string, string> = {
+          php: 'PHP', py: 'Python', rb: 'Ruby', java: 'Java',
+          kt: 'Kotlin', swift: 'Swift', cs: 'C#', cpp: 'C++',
+          c: 'C/C++', ex: 'Elixir', exs: 'Elixir', dart: 'Dart/Flutter',
+        };
+        projectType = extTypeMap[dominant[0]] || 'Unknown';
+      }
+    }
     const structure = generateTreeStructure(files, 25);
     
     // Find key files that exist
