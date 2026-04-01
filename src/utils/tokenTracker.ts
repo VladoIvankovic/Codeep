@@ -35,6 +35,9 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'glm-4.5-air':       { inputPer1M: 0.014, outputPer1M: 0.056 },
   'glm-4.7-flash':     { inputPer1M: 0.035, outputPer1M: 0.14 },
   // OpenAI
+  'gpt-5.4':      { inputPer1M: 2.00,  outputPer1M: 8.00 },
+  'gpt-5.4-mini': { inputPer1M: 0.40,  outputPer1M: 1.60 },
+  'gpt-5.4-nano': { inputPer1M: 0.10,  outputPer1M: 0.40 },
   'gpt-4.1':      { inputPer1M: 2.00,  outputPer1M: 8.00 },
   'gpt-4.1-mini': { inputPer1M: 0.40,  outputPer1M: 1.60 },
   'gpt-4.1-nano': { inputPer1M: 0.10,  outputPer1M: 0.40 },
