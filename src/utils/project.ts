@@ -80,8 +80,17 @@ export interface DetectedFile {
  * Check if current directory is a project (has package.json or other markers)
  */
 export function isProjectDirectory(dir: string = process.cwd()): boolean {
-  const markers = ['package.json', 'Cargo.toml', 'go.mod', 'requirements.txt', 'pom.xml', '.git'];
-  return markers.some(marker => existsSync(join(dir, marker)));
+  const markers = ['package.json', 'Cargo.toml', 'go.mod', 'requirements.txt', 'pom.xml', '.git', 'composer.json', 'Gemfile', 'mix.exs', 'pubspec.yaml', 'CMakeLists.txt'];
+  if (markers.some(marker => existsSync(join(dir, marker)))) return true;
+  // PHP projects without composer.json — check for .php files in root or one level deep
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    if (entries.some(e => e.isFile() && e.name.endsWith('.php'))) return true;
+    return entries.filter(e => e.isDirectory()).some(sub => {
+      try { return readdirSync(join(dir, sub.name)).some(f => f.endsWith('.php')); }
+      catch { return false; }
+    });
+  } catch { return false; }
 }
 
 /**
