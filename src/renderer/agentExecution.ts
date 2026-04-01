@@ -211,7 +211,7 @@ export async function executeAgentTask(
 
     // Show N/M progress in status bar
     const rawIterations = config.get('agentMaxIterations') || 100;
-    app.setAgentMaxIterations(Math.max(5, Math.min(500, rawIterations)));
+    app.setAgentMaxIterations(Math.max(5, rawIterations));
 
     const result: AgentResult = await runAgent(enrichedTask, context, {
       dryRun,

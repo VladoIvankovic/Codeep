@@ -240,7 +240,7 @@ function createConfig(): Conf<ConfigSchema> {
     autoSave: true,
     currentSessionId: '',
     temperature: 0.7,
-    maxTokens: 8192,
+    maxTokens: 32768,
     apiTimeout: 60000,
     rateLimitApi: 10000,
     rateLimitCommands: 10000,
@@ -295,13 +295,15 @@ if ((config.get('agentMode') as string) === 'auto') {
   config.set('agentMode', 'on');
 }
 
-// Migrate old conservative limits to new unlimited defaults.
-// Only upgrade values that are still at the old defaults — don't override user-set values.
-if (config.get('agentMaxIterations') <= 200) {
+// Migrate old conservative limits to new defaults.
+if (config.get('agentMaxIterations') < 10000) {
   config.set('agentMaxIterations', 10000);
 }
-if (config.get('agentMaxDuration') <= 20) {
+if (config.get('agentMaxDuration') < 480) {
   config.set('agentMaxDuration', 480);
+}
+if (config.get('maxTokens') < 32768) {
+  config.set('maxTokens', 32768);
 }
 if (config.get('agentApiTimeout') <= 180000) {
   config.set('agentApiTimeout', 600000);
