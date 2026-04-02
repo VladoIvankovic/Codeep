@@ -16,7 +16,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { ProjectContext } from './project';
 import { config, getApiKey, Message } from '../config/index';
-import { syncProgress } from './codeepCloud';
+import { syncProgress, generateProjectId } from './codeepCloud';
 import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens } from '../config/providers';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
@@ -147,8 +147,8 @@ export function writeProgressLog(
 
     const content = lines.join('\n');
     writeFileSync(join(codeepDir, 'progress.md'), content, 'utf-8');
-    if (projectName) {
-      syncProgress({ projectName, content });
+    if (projectName && projectRoot) {
+      syncProgress({ projectName, projectId: generateProjectId(projectRoot), content });
     }
   } catch (err) {
     debug('Failed to write progress log:', err);

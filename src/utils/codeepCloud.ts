@@ -278,6 +278,7 @@ export async function syncSessionAsync(payload: {
  */
 export function syncProgress(payload: {
   projectName: string;
+  projectId: string;
   content: string;
 }): void {
   const githubId = getGithubId();
