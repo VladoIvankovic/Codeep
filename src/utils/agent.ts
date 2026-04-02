@@ -676,7 +676,7 @@ export async function runAgent(
         finalResponse: partialLines.join('\n'),
         error: `Exceeded maximum of ${opts.maxIterations} iterations`,
       };
-      writeProgressLog(projectContext.root || '', prompt, result);
+      writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
       return result;
     }
     
@@ -838,7 +838,7 @@ export async function runAgent(
       actions,
       finalResponse,
     };
-    writeProgressLog(projectContext.root || '', prompt, result);
+    writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
     return result;
     
   } catch (error) {
