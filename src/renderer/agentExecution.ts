@@ -397,6 +397,7 @@ export async function executeAgentTask(
       messageCount: app.getMessages().length,
       cliVersion: getCurrentVersion(),
       projectName: ctx.projectContext?.name,
+      projectId:   ctx.projectPath ? generateProjectId(ctx.projectPath) : undefined,
       language: ctx.projectContext?.type,
       isGit: isGitRepository(process.cwd()),
       inputTokens: tokenStats.totalPromptTokens || undefined,
