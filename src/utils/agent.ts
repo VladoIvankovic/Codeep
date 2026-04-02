@@ -320,7 +320,7 @@ export async function runAgent(
           finalResponse: partialLines.join('\n'),
           error: `Exceeded maximum duration of ${durationMin} min`,
         };
-        writeProgressLog(projectContext.root || '', prompt, result);
+        writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
         return result;
       }
       

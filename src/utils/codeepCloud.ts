@@ -270,6 +270,27 @@ export async function syncSessionAsync(payload: {
   }).catch(() => {});
 }
 
+// ─── Progress log sync ────────────────────────────────────────────────────────
+
+/**
+ * Sync progress.md content to codeep.dev.
+ * Fire-and-forget. Only sends if linked (githubId + syncToken).
+ */
+export function syncProgress(payload: {
+  projectName: string;
+  content: string;
+}): void {
+  const githubId = getGithubId();
+  const syncToken = getSyncToken();
+  if (!githubId || !syncToken) return;
+
+  fetch(`${API_BASE}/api/progress`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+    body: JSON.stringify({ ...payload, githubId }),
+  }).catch(() => {});
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {

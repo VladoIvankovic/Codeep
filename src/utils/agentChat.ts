@@ -16,6 +16,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { ProjectContext } from './project';
 import { config, getApiKey, Message } from '../config/index';
+import { syncProgress } from './codeepCloud';
 import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens } from '../config/providers';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
@@ -93,7 +94,8 @@ export function loadProgressLog(projectRoot: string): string {
 export function writeProgressLog(
   projectRoot: string,
   prompt: string,
-  result: { success: boolean; iterations: number; actions: Array<{ type: string; target: string }>; finalResponse: string }
+  result: { success: boolean; iterations: number; actions: Array<{ type: string; target: string }>; finalResponse: string },
+  projectName?: string,
 ): void {
   if (!projectRoot) return;
   const codeepDir = join(projectRoot, '.codeep');
@@ -143,7 +145,11 @@ export function writeProgressLog(
       lines.push('');
     }
 
-    writeFileSync(join(codeepDir, 'progress.md'), lines.join('\n'), 'utf-8');
+    const content = lines.join('\n');
+    writeFileSync(join(codeepDir, 'progress.md'), content, 'utf-8');
+    if (projectName) {
+      syncProgress({ projectName, content });
+    }
   } catch (err) {
     debug('Failed to write progress log:', err);
   }
