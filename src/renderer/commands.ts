@@ -793,7 +793,9 @@ export async function handleCommand(
       const { fetchTasks } = await import('../utils/codeepCloud');
       const { setTaskContext, clearTaskContext } = await import('../utils/taskContext');
       const projectName = args[0] || ctx.projectContext?.name;
-      const tasks = await fetchTasks(projectName);
+      const { generateProjectId } = await import('../utils/codeepCloud');
+      const projectId = ctx.projectContext?.root ? generateProjectId(ctx.projectContext.root) : undefined;
+      const tasks = await fetchTasks(projectName, projectId);
 
       if (tasks === null) {
         ctx.app.notify('Not linked to codeep.dev. Run: codeep account');
