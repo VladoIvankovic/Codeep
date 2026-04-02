@@ -6,7 +6,7 @@
  *  - Sending usage stats to codeep.dev/api/stats after each agent run
  */
 
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { spawn } from 'child_process';
 import { getGithubId, getSyncToken, setGithubAccount, setSyncToken, setApiKey } from '../config/index.js';
 
@@ -104,11 +104,19 @@ export interface StatsPayload {
   messageCount?: number;
   cliVersion: string;
   projectName?: string;
+  projectId?: string;
   language?: string;
   isGit?: boolean;
   inputTokens?: number;
   outputTokens?: number;
   estimatedCost?: number;
+}
+
+/**
+ * Generate a stable project ID from the project root path.
+ */
+export function generateProjectId(projectRoot: string): string {
+  return createHash('sha256').update(projectRoot).digest('hex').slice(0, 16);
 }
 
 /**

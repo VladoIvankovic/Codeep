@@ -623,8 +623,9 @@ async function gracefulShutdown() {
   const messages = app.getMessages();
   autoSaveSession(messages, projectPath);
 
-  const { syncSessionAsync, reportStatsAsync } = require('../utils/codeepCloud.js');
+  const { syncSessionAsync, reportStatsAsync, generateProjectId } = require('../utils/codeepCloud.js');
   const tokenStats = getSessionStats();
+  const projectId = projectPath ? generateProjectId(projectPath) : undefined;
   await Promise.all([
     syncSessionAsync({
       sessionId,
@@ -639,6 +640,7 @@ async function gracefulShutdown() {
       sessionName: sessionId,
       messageCount: messages.length,
       projectName: projectContext?.name,
+      projectId,
       inputTokens: tokenStats.totalPromptTokens || undefined,
       outputTokens: tokenStats.totalCompletionTokens || undefined,
       estimatedCost: tokenStats.estimatedCost || undefined,
