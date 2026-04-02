@@ -161,13 +161,14 @@ export interface CloudTask {
  * Fetch pending tasks from codeep.dev for the current user.
  * Returns null if not linked or network error.
  */
-export async function fetchTasks(projectName?: string): Promise<CloudTask[] | null> {
+export async function fetchTasks(projectName?: string, projectId?: string): Promise<CloudTask[] | null> {
   const githubId = getGithubId();
   if (!githubId) return null;
 
   const url = new URL(`${API_BASE}/api/tasks`);
   url.searchParams.set('githubId', githubId);
-  if (projectName) url.searchParams.set('project', projectName);
+  if (projectId) url.searchParams.set('projectId', projectId);
+  else if (projectName) url.searchParams.set('project', projectName);
 
   try {
     const res = await fetch(url.toString());
@@ -233,6 +234,7 @@ export function syncSession(payload: {
   sessionId: string;
   sessionName?: string;
   projectName?: string;
+  projectId?: string;
   messages: { role: string; content: string }[];
 }): void {
   const githubId = getGithubId();
@@ -254,6 +256,7 @@ export async function syncSessionAsync(payload: {
   sessionId: string;
   sessionName?: string;
   projectName?: string;
+  projectId?: string;
   messages: { role: string; content: string }[];
 }): Promise<void> {
   const githubId = getGithubId();
