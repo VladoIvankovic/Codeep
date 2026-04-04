@@ -28,9 +28,8 @@ import { logger } from './logger';
 export type { AgentChatResponse };
 
 const debug = (...args: unknown[]) => {
-  logger.debug(args.map(String).join(' '));
   if (process.env.CODEEP_DEBUG === '1') {
-    console.error('[DEBUG]', ...args);
+    logger.debug(args.map(String).join(' '));
   }
 };
 

@@ -9,11 +9,10 @@ import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from '.
 import { ToolCall } from './tools';
 import { logger } from './logger';
 
-// Debug logging helper - always writes to log file, terminal output only when CODEEP_DEBUG=1
+// Debug logging helper - writes to log file when CODEEP_DEBUG=1
 const debug = (...args: unknown[]) => {
-  logger.debug(args.map(String).join(' '));
   if (process.env.CODEEP_DEBUG === '1') {
-    console.error('[DEBUG]', ...args);
+    logger.debug(args.map(String).join(' '));
   }
 };
 

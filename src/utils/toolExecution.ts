@@ -18,9 +18,8 @@ import { ToolCall, ToolResult, ActionLog } from './tools';
 import { logger } from './logger';
 
 const debug = (...args: unknown[]) => {
-  logger.debug(args.map(String).join(' '));
   if (process.env.CODEEP_DEBUG === '1') {
-    console.error('[DEBUG]', ...args);
+    logger.debug(args.map(String).join(' '));
   }
 };
 
