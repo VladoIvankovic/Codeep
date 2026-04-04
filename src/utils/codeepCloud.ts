@@ -162,16 +162,17 @@ export interface CloudTask {
  * Returns null if not linked or network error.
  */
 export async function fetchTasks(projectName?: string, projectId?: string): Promise<CloudTask[] | null> {
-  const githubId = getGithubId();
-  if (!githubId) return null;
+  const syncToken = getSyncToken();
+  if (!syncToken) return null;
 
   const url = new URL(`${API_BASE}/api/tasks`);
-  url.searchParams.set('githubId', githubId);
   if (projectId) url.searchParams.set('projectId', projectId);
   else if (projectName) url.searchParams.set('project', projectName);
 
   try {
-    const res = await fetch(url.toString());
+    const res = await fetch(url.toString(), {
+      headers: { 'x-sync-token': syncToken },
+    });
     if (!res.ok) return null;
     const data = await res.json() as { ok: boolean; tasks: CloudTask[] };
     return data.ok ? data.tasks : null;
