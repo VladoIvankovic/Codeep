@@ -23,10 +23,12 @@ import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from '.
 import { formatToolDefinitions, getOpenAITools, getAnthropicTools } from './tools';
 import { handleStream, handleOpenAIAgentStream, handleAnthropicAgentStream } from './agentStream';
 import type { AgentChatResponse } from './agentStream';
+import { logger } from './logger';
 
 export type { AgentChatResponse };
 
 const debug = (...args: unknown[]) => {
+  logger.debug(args.map(String).join(' '));
   if (process.env.CODEEP_DEBUG === '1') {
     console.error('[DEBUG]', ...args);
   }

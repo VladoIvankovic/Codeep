@@ -7,9 +7,11 @@
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { ToolCall } from './tools';
+import { logger } from './logger';
 
-// Debug logging helper - only logs when CODEEP_DEBUG=1
+// Debug logging helper - always writes to log file, terminal output only when CODEEP_DEBUG=1
 const debug = (...args: unknown[]) => {
+  logger.debug(args.map(String).join(' '));
   if (process.env.CODEEP_DEBUG === '1') {
     console.error('[DEBUG]', ...args);
   }

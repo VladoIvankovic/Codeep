@@ -6,8 +6,10 @@
 
 import { ProjectContext } from './project';
 
-// Debug logging helper - only logs when CODEEP_DEBUG=1
+// Debug logging helper - always writes to log file, terminal output only when CODEEP_DEBUG=1
+import { logger } from './logger';
 const debug = (...args: unknown[]) => {
+  logger.debug(args.map(String).join(' '));
   if (process.env.CODEEP_DEBUG === '1') {
     console.error('[DEBUG]', ...args);
   }

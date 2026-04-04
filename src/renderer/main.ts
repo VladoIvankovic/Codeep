@@ -45,6 +45,7 @@ import { getProviderList } from '../config/providers';
 import { getSessionStats } from '../utils/tokenTracker';
 import { checkApiRateLimit } from '../utils/ratelimit';
 import { handleCommand as dispatchCommand, AppCommandContext } from './commands';
+import { logger, logAppError } from '../utils/logger';
 import {
   executeAgentTask,
   runAgentTask,
@@ -670,6 +671,7 @@ process.on('SIGINT', () => {
 });
 
 main().catch((error) => {
+  logAppError(error instanceof Error ? error : new Error(String(error)), 'main');
   console.error('Fatal error:', error);
   process.exit(1);
 });

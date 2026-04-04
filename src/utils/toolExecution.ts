@@ -15,8 +15,10 @@ import { loadIgnoreRules, isIgnored } from './gitignore';
 import { normalizeToolName } from './toolParsing';
 import { getZaiMcpConfig, getZaiVisionConfig, getMinimaxMcpConfig, callZaiMcp, callZaiVisionApi, callMinimaxApi } from './mcpIntegration';
 import { ToolCall, ToolResult, ActionLog } from './tools';
+import { logger } from './logger';
 
 const debug = (...args: unknown[]) => {
+  logger.debug(args.map(String).join(' '));
   if (process.env.CODEEP_DEBUG === '1') {
     console.error('[DEBUG]', ...args);
   }
