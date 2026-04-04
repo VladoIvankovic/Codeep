@@ -49,11 +49,11 @@
     "@vitest/coverage-v8": "^4.0.18",
     "pkg": "^5.8.1",
     "tsx": "^4.7.0",
-    "typescript": "^5.3.0",
+    "typescript": "^6.0.2",
     "vitest": "^4.0.18"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "files": [
     "bin/**/*",
