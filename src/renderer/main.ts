@@ -546,6 +546,23 @@ Commands (in chat):
     }
   }).catch(() => { /* ignore update check failures */ });
 
+  // Auto-sync learning preferences from cloud if newer — fire-and-forget
+  (async () => {
+    try {
+      const { getSyncToken } = await import('../config/index.js');
+      if (!getSyncToken()) return;
+      const { pullLearning } = await import('../utils/codeepCloud.js');
+      const { loadGlobalPreferences, saveGlobalPreferences } = await import('../utils/learning.js');
+      const remote = await pullLearning();
+      if (!remote) return;
+      const local = loadGlobalPreferences();
+      const remoteTs = new Date(remote.updatedAt).getTime();
+      if (remoteTs > (local.lastUpdated || 0)) {
+        saveGlobalPreferences(remote.preferences as any);
+      }
+    } catch { /* ignore — best effort */ }
+  })();
+
   const showIntroAnimation = process.stdout.rows >= 20;
 
   const showPermissionAndContinue = () => {
