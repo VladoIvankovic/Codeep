@@ -121,29 +121,28 @@ export function generateProjectId(projectRoot: string): string {
 
 /**
  * Fire-and-forget stats report. Only sends if github_id is configured.
+ * Retries up to 2 times on network errors or 5xx responses.
  */
 export function reportStats(payload: StatsPayload): void {
   const githubId = getGithubId();
   if (!githubId) return; // not linked, skip silently
 
-  fetch(`${API_BASE}/api/stats`, {
+  fetchWithRetry(`${API_BASE}/api/stats`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...payload, githubId, isGit: payload.isGit ?? false }),
-  }).catch(() => {
-    // ignore network errors — stats are best-effort
-  });
+  }).catch(() => {});
 }
 
 export async function reportStatsAsync(payload: StatsPayload): Promise<void> {
   const githubId = getGithubId();
   if (!githubId) return;
 
-  await fetch(`${API_BASE}/api/stats`, {
+  await fetchWithRetry(`${API_BASE}/api/stats`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...payload, githubId, isGit: payload.isGit ?? false }),
-  }).catch(() => {});
+  });
 }
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
@@ -191,14 +190,13 @@ export async function pullKeys(): Promise<Record<string, string> | null> {
   const syncToken = getSyncToken();
   if (!syncToken) return null;
 
+  const res = await fetchWithRetry(`${API_BASE}/api/keys`, {
+    headers: { 'x-sync-token': syncToken },
+  });
+  if (!res?.ok) return null;
   try {
-    const res = await fetch(`${API_BASE}/api/keys`, {
-      headers: { 'x-sync-token': syncToken },
-    });
-    if (!res.ok) return null;
     const data = await res.json() as { ok: boolean; keys: Record<string, string> };
-    if (!data.ok) return null;
-    return data.keys;
+    return data.ok ? data.keys : null;
   } catch {
     return null;
   }
@@ -212,16 +210,12 @@ export async function pushKeys(keys: Record<string, string>): Promise<boolean> {
   const syncToken = getSyncToken();
   if (!syncToken) return false;
 
-  try {
-    const res = await fetch(`${API_BASE}/api/keys`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
-      body: JSON.stringify({ keys }),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+  const res = await fetchWithRetry(`${API_BASE}/api/keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+    body: JSON.stringify({ keys }),
+  });
+  return res?.ok ?? false;
 }
 
 // ─── Session history sync ─────────────────────────────────────────────────────
@@ -246,7 +240,7 @@ export function syncSession(payload: {
   const filtered = payload.messages.filter(m => m.role === 'user' || m.role === 'assistant');
   if (filtered.length === 0) return;
 
-  fetch(`${API_BASE}/api/sessions`, {
+  fetchWithRetry(`${API_BASE}/api/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
     body: JSON.stringify({ ...payload, messages: filtered, githubId }),
@@ -267,11 +261,11 @@ export async function syncSessionAsync(payload: {
   const filtered = payload.messages.filter(m => m.role === 'user' || m.role === 'assistant');
   if (filtered.length === 0) return;
 
-  await fetch(`${API_BASE}/api/sessions`, {
+  await fetchWithRetry(`${API_BASE}/api/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
     body: JSON.stringify({ ...payload, messages: filtered, githubId }),
-  }).catch(() => {});
+  });
 }
 
 // ─── Progress log sync ────────────────────────────────────────────────────────
@@ -289,7 +283,7 @@ export function syncProgress(payload: {
   const syncToken = getSyncToken();
   if (!githubId || !syncToken) return;
 
-  fetch(`${API_BASE}/api/progress`, {
+  fetchWithRetry(`${API_BASE}/api/progress`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
     body: JSON.stringify({ ...payload, githubId }),
@@ -302,27 +296,23 @@ export async function pushLearning(preferences: object): Promise<boolean> {
   const syncToken = getSyncToken();
   if (!syncToken) return false;
 
-  try {
-    const res = await fetch(`${API_BASE}/api/sync/learning`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
-      body: JSON.stringify({ preferences }),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+  const res = await fetchWithRetry(`${API_BASE}/api/sync/learning`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+    body: JSON.stringify({ preferences }),
+  });
+  return res?.ok ?? false;
 }
 
 export async function pullLearning(): Promise<{ preferences: object; updatedAt: string } | null> {
   const syncToken = getSyncToken();
   if (!syncToken) return null;
 
+  const res = await fetchWithRetry(`${API_BASE}/api/sync/learning`, {
+    headers: { 'x-sync-token': syncToken },
+  });
+  if (!res?.ok) return null;
   try {
-    const res = await fetch(`${API_BASE}/api/sync/learning`, {
-      headers: { 'x-sync-token': syncToken },
-    });
-    if (!res.ok) return null;
     const data = await res.json() as { ok: boolean; preferences: object | null; updatedAt: string };
     if (!data.ok || !data.preferences) return null;
     return { preferences: data.preferences, updatedAt: data.updatedAt };
@@ -337,27 +327,23 @@ export async function pushProfiles(profiles: Record<string, object>): Promise<bo
   const syncToken = getSyncToken();
   if (!syncToken) return false;
 
-  try {
-    const res = await fetch(`${API_BASE}/api/sync/profiles`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
-      body: JSON.stringify({ profiles }),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+  const res = await fetchWithRetry(`${API_BASE}/api/sync/profiles`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+    body: JSON.stringify({ profiles }),
+  });
+  return res?.ok ?? false;
 }
 
 export async function pullProfiles(): Promise<Record<string, object> | null> {
   const syncToken = getSyncToken();
   if (!syncToken) return null;
 
+  const res = await fetchWithRetry(`${API_BASE}/api/sync/profiles`, {
+    headers: { 'x-sync-token': syncToken },
+  });
+  if (!res?.ok) return null;
   try {
-    const res = await fetch(`${API_BASE}/api/sync/profiles`, {
-      headers: { 'x-sync-token': syncToken },
-    });
-    if (!res.ok) return null;
     const data = await res.json() as { ok: boolean; profiles: Record<string, object> | null };
     return data.ok ? data.profiles : null;
   } catch {
@@ -369,4 +355,33 @@ export async function pullProfiles(): Promise<Record<string, object> | null> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Fetch with exponential backoff retry.
+ * Retries on network errors and 5xx responses. Never retries on 4xx.
+ */
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 2,
+): Promise<Response | null> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok || (res.status >= 400 && res.status < 500)) {
+        return res; // success or client error — no retry
+      }
+      // 5xx — retryable
+      if (attempt < maxRetries) {
+        await sleep(1000 * Math.pow(2, attempt));
+      }
+    } catch {
+      // network error — retryable
+      if (attempt < maxRetries) {
+        await sleep(1000 * Math.pow(2, attempt));
+      }
+    }
+  }
+  return null;
 }
