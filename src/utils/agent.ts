@@ -66,7 +66,7 @@ import { runAllVerifications, formatErrorsForAgent, hasVerificationErrors, getVe
 import { gatherSmartContext, formatSmartContext, extractTargetFile } from './smartContext';
 import { planTasks, getNextTask, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
 import { getTaskContextPrompt } from './taskContext';
-import { getSessionStats } from './tokenTracker';
+import { getLastUsage, getModelContextWindow } from './tokenTracker';
 
 // ─── Tool result truncation ───────────────────────────────────────────────────
 
@@ -301,6 +301,8 @@ export async function runAgent(
 
   // Duplicate read cache: path → truncated output (avoid re-sending large file content)
   const readCache = new Map<string, string>();
+  // Track last token budget warning threshold to avoid repeated messages
+  let lastBudgetWarning = 0;
   
   try {
     while (iteration < opts.maxIterations) {
@@ -470,13 +472,21 @@ export async function runAgent(
         continue;
       }
 
-      // Token budget warning — alert when approaching context limit
+      // Token budget warning — warn once per threshold based on % of model's context window
       {
-        const tokenStats = getSessionStats();
-        const maxTok = config.get('maxTokens') as number;
-        if (maxTok > 0 && tokenStats.totalPromptTokens > maxTok * 0.85) {
-          const pct = Math.round(tokenStats.totalPromptTokens / maxTok * 100);
-          opts.onIteration?.(iteration, `⚠ Context at ${pct}% of token budget — agent may stop soon`);
+        const lastUsage = getLastUsage();
+        const inputTokens = lastUsage?.promptTokens ?? 0;
+        if (inputTokens > 0) {
+          const contextWindow = getModelContextWindow(config.get('model') as string);
+          const pct = Math.round(inputTokens / contextWindow * 100);
+          const threshold = pct >= 95 ? 95 : pct >= 80 ? 80 : 0;
+          if (threshold > 0 && threshold > lastBudgetWarning) {
+            lastBudgetWarning = threshold;
+            const msg = threshold >= 95
+              ? `⚠ Context at ${pct}% of ${Math.round(contextWindow / 1000)}k window — agent may stop soon`
+              : `⚠ Context at ${pct}% of ${Math.round(contextWindow / 1000)}k window`;
+            opts.onIteration?.(iteration, msg);
+          }
         }
       }
 
