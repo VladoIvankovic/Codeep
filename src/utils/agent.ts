@@ -66,6 +66,7 @@ import { runAllVerifications, formatErrorsForAgent, hasVerificationErrors, getVe
 import { gatherSmartContext, formatSmartContext, extractTargetFile } from './smartContext';
 import { planTasks, getNextTask, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
 import { getTaskContextPrompt } from './taskContext';
+import { getSessionStats } from './tokenTracker';
 
 // ─── Tool result truncation ───────────────────────────────────────────────────
 
@@ -468,7 +469,17 @@ export async function runAgent(
       if (!chatResponse) {
         continue;
       }
-      
+
+      // Token budget warning — alert when approaching context limit
+      {
+        const tokenStats = getSessionStats();
+        const maxTok = config.get('maxTokens') as number;
+        if (maxTok > 0 && tokenStats.totalPromptTokens > maxTok * 0.85) {
+          const pct = Math.round(tokenStats.totalPromptTokens / maxTok * 100);
+          opts.onIteration?.(iteration, `⚠ Context at ${pct}% of token budget — agent may stop soon`);
+        }
+      }
+
       let { content, toolCalls, usedNativeTools } = chatResponse;
       
       // If native tools were used but no tool calls returned, try parsing text-based tool calls
