@@ -35,7 +35,7 @@ const mockReaddirSync = readdirSync as ReturnType<typeof vi.fn>;
 // Minimal valid intelligence object for testing generateContextFromIntelligence
 function makeIntelligence(overrides: Partial<ProjectIntelligence> = {}): ProjectIntelligence {
   return {
-    version: '1.0',
+    version: '1.1',
     scannedAt: new Date().toISOString(),
     projectPath: '/project',
     name: 'my-app',

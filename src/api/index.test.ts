@@ -28,6 +28,7 @@ vi.mock('../config/providers', () => ({
   })),
   getProviderBaseUrl: vi.fn((_id: string, _proto: string) => 'https://api.example.com'),
   getProviderAuthHeader: vi.fn(() => 'Bearer'),
+  usesMaxCompletionTokens: vi.fn(() => false),
 }));
 
 vi.mock('../utils/retry', () => ({

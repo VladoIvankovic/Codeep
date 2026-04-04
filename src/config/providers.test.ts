@@ -116,10 +116,10 @@ describe('providers', () => {
       expect(models.length).toBe(0);
     });
 
-    it('should include glm-4.7 for z.ai', () => {
+    it('should include glm-5.1 for z.ai', () => {
       const models = getProviderModels('z.ai');
       const ids = models.map(m => m.id);
-      expect(ids).toContain('glm-4.7');
+      expect(ids).toContain('glm-5.1');
     });
   });
 
@@ -195,12 +195,11 @@ describe('providers', () => {
   });
 
   describe('anthropic provider', () => {
-    it('should include Claude Sonnet 4.6 as default model', () => {
-      expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-sonnet-4-6');
+    it('should include Claude Opus 4.6 as default model', () => {
+      expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-4-6');
       const modelIds = PROVIDERS['anthropic'].models.map(m => m.id);
-      expect(modelIds).toContain('claude-sonnet-4-6');
       expect(modelIds).toContain('claude-opus-4-6');
-      expect(modelIds).toContain('claude-sonnet-4-5-20250929');
+      expect(modelIds).toContain('claude-sonnet-4-6');
       expect(modelIds).toContain('claude-haiku-4-5-20251001');
     });
   });
@@ -236,7 +235,7 @@ describe('providers', () => {
       expect(provider!.name).toBe('Google AI');
       expect(provider!.description).toBe('Gemini models');
       expect(provider!.defaultProtocol).toBe('openai');
-      expect(provider!.defaultModel).toBe('gemini-2.5-flash');
+      expect(provider!.defaultModel).toBe('gemini-3.1-pro-preview');
       expect(provider!.protocols.openai?.baseUrl).toBe(
         'https://generativelanguage.googleapis.com/v1beta/openai'
       );
@@ -245,14 +244,9 @@ describe('providers', () => {
       expect(provider!.protocols.anthropic).toBeUndefined();
       expect(provider!.envKey).toBe('GOOGLE_API_KEY');
       expect(provider!.subscribeUrl).toBe('https://aistudio.google.com/apikey');
-      expect(provider!.models).toHaveLength(6);
       const modelIds = provider!.models.map(m => m.id);
       expect(modelIds).toContain('gemini-3.1-pro-preview');
-      expect(modelIds).toContain('gemini-3-pro-preview');
       expect(modelIds).toContain('gemini-3-flash-preview');
-      expect(modelIds).toContain('gemini-2.5-pro');
-      expect(modelIds).toContain('gemini-2.5-flash');
-      expect(modelIds).toContain('gemini-2.5-flash-lite');
     });
   });
 });
