@@ -93,6 +93,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'cost': 'Show session cost and token usage',
   'profile': 'Save/load settings profiles',
   'tasks': 'Show pending tasks from codeep.dev dashboard',
+  'sync': 'Sync learning preferences and profiles to codeep.dev',
 };
 
 import { helpCategories, keyboardShortcuts } from './components/Help';
@@ -274,7 +275,7 @@ export class App {
     'multiline',
     'provider', 'model', 'protocol', 'lang', 'grant', 'login', 'logout',
     'context-save', 'context-load', 'context-clear', 'learn',
-    'cost', 'tasks', 'account',
+    'cost', 'tasks', 'account', 'sync',
     'c', 't', 'd', 'r', 'f', 'e', 'o', 'b', 'p',
   ];
   

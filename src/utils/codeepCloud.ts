@@ -296,6 +296,75 @@ export function syncProgress(payload: {
   }).catch(() => {});
 }
 
+// ─── Learning preferences sync ────────────────────────────────────────────────
+
+export async function pushLearning(preferences: object): Promise<boolean> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return false;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/sync/learning`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+      body: JSON.stringify({ preferences }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function pullLearning(): Promise<{ preferences: object; updatedAt: string } | null> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return null;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/sync/learning`, {
+      headers: { 'x-sync-token': syncToken },
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { ok: boolean; preferences: object | null; updatedAt: string };
+    if (!data.ok || !data.preferences) return null;
+    return { preferences: data.preferences, updatedAt: data.updatedAt };
+  } catch {
+    return null;
+  }
+}
+
+// ─── Profiles sync ────────────────────────────────────────────────────────────
+
+export async function pushProfiles(profiles: Record<string, object>): Promise<boolean> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return false;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/sync/profiles`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+      body: JSON.stringify({ profiles }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function pullProfiles(): Promise<Record<string, object> | null> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return null;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/sync/profiles`, {
+      headers: { 'x-sync-token': syncToken },
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { ok: boolean; profiles: Record<string, object> | null };
+    return data.ok ? data.profiles : null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {

@@ -872,6 +872,78 @@ export async function handleCommand(
       break;
     }
 
+    case 'sync': {
+      const subCmd = args[0]?.toLowerCase() || 'all';
+      const { pushLearning, pullLearning, pushProfiles, pullProfiles } = await import('../utils/codeepCloud');
+      const { getSyncToken } = await import('../config/index');
+      const { loadGlobalPreferences, saveGlobalPreferences } = await import('../utils/learning');
+
+      if (!getSyncToken()) {
+        ctx.app.notify('Not linked to codeep.dev. Run: codeep account');
+        break;
+      }
+
+      const results: string[] = [];
+
+      // Sync learning preferences
+      if (subCmd === 'all' || subCmd === 'learning') {
+        // Push local → cloud
+        const prefs = loadGlobalPreferences();
+        const pushed = await pushLearning(prefs);
+        if (pushed) {
+          results.push('✓ Learning preferences pushed');
+        } else {
+          results.push('✗ Failed to push learning preferences');
+        }
+      }
+
+      // Sync profiles
+      if (subCmd === 'all' || subCmd === 'profiles') {
+        // Push all local profiles → cloud
+        const profileNames = listProfiles();
+        if (profileNames.length > 0) {
+          const profileMap: Record<string, object> = {};
+          for (const name of profileNames) {
+            const p = loadProfile(name);
+            if (p) profileMap[name] = p;
+          }
+          const pushed = await pushProfiles(profileMap);
+          if (pushed) {
+            results.push(`✓ ${profileNames.length} profile(s) pushed`);
+          } else {
+            results.push('✗ Failed to push profiles');
+          }
+        } else {
+          results.push('No local profiles to push');
+        }
+
+        // Pull cloud profiles → local (merge)
+        const cloudProfiles = await pullProfiles();
+        if (cloudProfiles) {
+          let pulled = 0;
+          for (const [name, data] of Object.entries(cloudProfiles)) {
+            const existing = loadProfile(name);
+            if (!existing) {
+              const { writeFileSync, mkdirSync, existsSync } = await import('fs');
+              const { join } = await import('path');
+              const { homedir } = await import('os');
+              const dir = join(homedir(), '.codeep', 'profiles');
+              if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+              writeFileSync(join(dir, `${name}.json`), JSON.stringify(data, null, 2));
+              pulled++;
+            }
+          }
+          if (pulled > 0) results.push(`✓ ${pulled} new profile(s) pulled`);
+        }
+      }
+
+      ctx.app.addMessage({
+        role: 'system',
+        content: `## Sync\n\n${results.map(r => `- ${r}`).join('\n')}`,
+      } as Message);
+      break;
+    }
+
     case 'cost': {
       const { getCostBreakdown, getSessionStats, formatTokenCount, getPricingTable } = await import('../utils/tokenTracker');
       const stats = getSessionStats();
