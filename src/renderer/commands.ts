@@ -35,6 +35,7 @@ import { getCurrentVersion } from '../utils/update';
 import { getProviderList, getProvider } from '../config/providers';
 import { setProjectContext } from '../api/index';
 import { AppExecutionContext, runSkill, runCommandChain } from './agentExecution';
+import { loadProjectIntelligence, saveProjectIntelligence } from '../utils/projectIntelligence';
 
 // ─── Extended context for command handlers ────────────────────────────────────
 
@@ -979,6 +980,26 @@ export async function handleCommand(
       }
 
       ctx.app.addMessage({ role: 'system', content: lines.join('\n') } as Message);
+      break;
+    }
+
+    case 'memory': {
+      const note = args.join(' ').trim();
+      if (!note) {
+        ctx.app.notify('Usage: /memory <note>  — adds a note to project intelligence');
+        break;
+      }
+      const projectCtx = getProjectContext(ctx.projectPath);
+      const projectRoot = projectCtx?.root || ctx.projectPath;
+      const intelligence = loadProjectIntelligence(projectRoot);
+      if (!intelligence) {
+        ctx.app.notify('No project intelligence found. Run /scan first.');
+        break;
+      }
+      intelligence.notes = intelligence.notes || [];
+      intelligence.notes.push(note);
+      saveProjectIntelligence(projectRoot, intelligence);
+      ctx.app.notify(`Memory saved: "${note}"`);
       break;
     }
 

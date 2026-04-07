@@ -65,6 +65,7 @@ export const helpCategories: HelpCategory[] = [
       { key: '/branch', description: 'Create/manage branches' },
       { key: '/stash', description: 'Stash changes' },
       { key: '/scan', description: 'Scan project structure' },
+      { key: '/memory <note>', description: 'Add note to project intelligence' },
       { key: '/review', description: 'Code review' },
     ],
   },

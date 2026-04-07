@@ -16,6 +16,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { ProjectContext } from './project';
 import { config, getApiKey, Message } from '../config/index';
+import { loadProjectIntelligence, generateContextFromIntelligence } from './projectIntelligence';
 import { syncProgress, generateProjectId } from './codeepCloud';
 import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens } from '../config/providers';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
@@ -235,7 +236,10 @@ export function getAgentSystemPrompt(projectContext: ProjectContext): string {
 Name: ${projectContext.name || 'Unknown'}
 Type: ${projectContext.type || 'unknown'}
 Root: ${projectContext.root || process.cwd()}
-${projectContext.structure ? `\n## Project Structure\n${projectContext.structure}` : ''}`;
+${projectContext.structure ? `\n## Project Structure\n${projectContext.structure}` : ''}${(() => {
+  const intelligence = loadProjectIntelligence(projectContext.root || process.cwd());
+  return intelligence ? `\n\n${generateContextFromIntelligence(intelligence)}` : '';
+})()}`;
 }
 
 export function getFallbackSystemPrompt(projectContext: ProjectContext): string {
