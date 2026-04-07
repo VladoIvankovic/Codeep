@@ -1493,7 +1493,7 @@ export class App {
     if (this.pasteInfoOpen && this.pasteInfo) {
       const previewLines = Math.min(this.pasteInfo.preview.split('\n').length, 5);
       bottomPanelHeight = previewLines + 6; // title + preview + extra line indicator + options
-    } else if (this.isAgentRunning) {
+    } else if (this.isAgentRunning && !(this.confirmOpen && this.confirmOptions)) {
       bottomPanelHeight = 9; // Agent progress box: top + 5 log lines + stats + bottom + 1 margin
     } else if (this.permissionOpen) {
       bottomPanelHeight = 10; // Permission dialog
@@ -1618,8 +1618,8 @@ export class App {
       this.renderInlineSessionPicker(statusLine + 1, width);
     }
     
-    // Inline agent progress renders BELOW status bar
-    if (this.isAgentRunning) {
+    // Inline agent progress renders BELOW status bar (but not when confirm dialog is active)
+    if (this.isAgentRunning && !(this.confirmOpen && this.confirmOptions)) {
       this.renderInlineAgentProgress(statusLine + 1, width);
     }
     
