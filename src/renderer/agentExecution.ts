@@ -232,7 +232,7 @@ export async function executeAgentTask(
             confirmLabel: 'Allow',
             cancelLabel: 'Deny',
             onConfirm: () => resolve('allow_once'),
-            onCancel: () => resolve('reject_once'),
+            onCancel: () => resolve('reject_always'),
           });
         })
       : undefined;

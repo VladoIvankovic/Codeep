@@ -290,6 +290,8 @@ export async function runAgent(
   const maxIncompleteWorkRetries = 5;
   // Track tools permanently allowed this session via allow_always
   const alwaysAllowedTools = new Set<string>();
+  // Track tools permanently rejected this session via reject_always
+  const alwaysRejectedTools = new Set<string>();
   // Tools that require permission when onRequestPermission is set
   const dangerousTools = new Set(['delete_file', 'execute_command']);
   const maxTimeoutRetries = 3;
@@ -559,10 +561,7 @@ export async function runAgent(
 
         // Permission check for dangerous tools (only when callback is provided, e.g. ACP/Zed)
         if (opts.onRequestPermission && dangerousTools.has(toolCall.tool) && !alwaysAllowedTools.has(toolCall.tool)) {
-          const outcome = await opts.onRequestPermission(toolCall);
-          if (outcome === 'allow_always') {
-            alwaysAllowedTools.add(toolCall.tool);
-          } else if (outcome === 'reject_once' || outcome === 'reject_always') {
+          const rejectResult = () => {
             const toolResult: ToolResult = {
               success: false,
               output: '',
@@ -572,7 +571,25 @@ export async function runAgent(
             };
             opts.onToolResult?.(toolResult, toolCall);
             actions.push(createActionLog(toolCall, toolResult));
-            toolResults.push(`Tool ${toolCall.tool} was rejected by user.`);
+            toolResults.push(`Tool ${toolCall.tool} was denied by user. Do not attempt this action again.`);
+            return toolResult;
+          };
+
+          // Skip without asking if permanently rejected this session
+          if (alwaysRejectedTools.has(toolCall.tool)) {
+            rejectResult();
+            continue;
+          }
+
+          const outcome = await opts.onRequestPermission(toolCall);
+          if (outcome === 'allow_always') {
+            alwaysAllowedTools.add(toolCall.tool);
+          } else if (outcome === 'reject_always') {
+            alwaysRejectedTools.add(toolCall.tool);
+            rejectResult();
+            continue;
+          } else if (outcome === 'reject_once') {
+            rejectResult();
             continue;
           }
         }
