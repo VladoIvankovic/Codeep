@@ -292,8 +292,12 @@ export async function runAgent(
   const alwaysAllowedTools = new Set<string>();
   // Track tools permanently rejected this session via reject_always
   const alwaysRejectedTools = new Set<string>();
-  // Tools that require permission when onRequestPermission is set
-  const dangerousTools = new Set(['delete_file', 'execute_command']);
+  // Tools that require permission when onRequestPermission is set (configurable)
+  const dangerousTools = new Set<string>([
+    ...(config.get('agentConfirmDeleteFile') !== false ? ['delete_file'] : []),
+    ...(config.get('agentConfirmExecuteCommand') !== false ? ['execute_command'] : []),
+    ...(config.get('agentConfirmWriteFile') === true ? ['write_file', 'edit_file'] : []),
+  ]);
   const maxTimeoutRetries = 3;
   const maxConsecutiveTimeouts = 30; // Allow more consecutive timeouts before giving up
   const baseTimeout = config.get('agentApiTimeout');

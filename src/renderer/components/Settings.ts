@@ -101,6 +101,36 @@ export const SETTINGS: SettingItem[] = [
     ],
   },
   {
+    key: 'agentConfirmDeleteFile',
+    label: 'Confirm: delete_file',
+    getValue: () => config.get('agentConfirmDeleteFile') !== false,
+    type: 'select',
+    options: [
+      { value: true, label: 'ON' },
+      { value: false, label: 'OFF' },
+    ],
+  },
+  {
+    key: 'agentConfirmExecuteCommand',
+    label: 'Confirm: execute_command',
+    getValue: () => config.get('agentConfirmExecuteCommand') !== false,
+    type: 'select',
+    options: [
+      { value: true, label: 'ON' },
+      { value: false, label: 'OFF' },
+    ],
+  },
+  {
+    key: 'agentConfirmWriteFile',
+    label: 'Confirm: write_file / edit_file',
+    getValue: () => config.get('agentConfirmWriteFile') === true,
+    type: 'select',
+    options: [
+      { value: false, label: 'OFF' },
+      { value: true, label: 'ON' },
+    ],
+  },
+  {
     key: 'agentApiTimeout',
     label: 'Agent API Timeout (ms)',
     getValue: () => config.get('agentApiTimeout'),

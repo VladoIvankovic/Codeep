@@ -57,6 +57,9 @@ interface ConfigSchema {
   rateLimitCommands: number; // Commands per minute
   agentMode: AgentMode; // on = always use agent, manual = use /agent command
   agentConfirmation: 'always' | 'dangerous' | 'never'; // Confirmation mode for agent actions
+  agentConfirmDeleteFile: boolean; // Confirm before delete_file in dangerous mode
+  agentConfirmExecuteCommand: boolean; // Confirm before execute_command in dangerous mode
+  agentConfirmWriteFile: boolean; // Confirm before write_file/edit_file in dangerous mode
   agentAutoCommit: boolean; // Auto-commit after agent completes
   agentAutoCommitBranch: boolean; // Create new branch for commits
   agentAutoVerify: 'off' | 'build' | 'typecheck' | 'test' | 'all'; // Auto-run verification after changes
@@ -226,6 +229,9 @@ function createConfig(): Conf<ConfigSchema> {
     model: 'glm-4.7',
     agentMode: 'on',
     agentConfirmation: 'dangerous',
+    agentConfirmDeleteFile: true,
+    agentConfirmExecuteCommand: true,
+    agentConfirmWriteFile: false,
     agentAutoCommit: false,
     agentAutoCommitBranch: false,
     agentAutoVerify: 'off',

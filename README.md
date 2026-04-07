@@ -401,7 +401,7 @@ If errors are found, the agent tries to fix them automatically (up to 3 attempts
 - Configurable rate limiting
 - Agent sandboxed to project directory
 - Dangerous commands blocked (rm -rf /, sudo, etc.)
-- Confirmation mode for destructive actions
+- Configurable confirmation per tool — choose which agent actions require approval via `/settings`
 
 ## Codeep Dashboard
 
@@ -572,6 +572,20 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 | `/undo-all` | Undo all actions from current session |
 | `/history` | Show recent agent sessions |
 | `/changes` | Show all file changes from current session |
+| `/settings` | Configure confirmation mode and which tools require approval |
+
+**Confirmation mode** (set via `/settings → Agent Confirmation`):
+
+| Mode | Behavior |
+|------|----------|
+| `dangerous` (default) | Ask before configurable dangerous tools |
+| `always` | Ask before every action |
+| `never` | Execute without asking |
+
+In `dangerous` mode, configure which tools require confirmation via `/settings`:
+- **Confirm: delete_file** — ON by default
+- **Confirm: execute_command** — ON by default
+- **Confirm: write_file / edit_file** — OFF by default
 
 ### Git Integration
 
