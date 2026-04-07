@@ -273,7 +273,7 @@ export class App {
     'split', 'rename', 'coverage', 'e2e', 'mock', 'readme', 'translate',
     'docker', 'ci', 'env', 'k8s', 'terraform', 'nginx', 'monitor',
     'test-fix', 'api-docs',
-    'multiline',
+    'multiline', 'memory',
     'provider', 'model', 'protocol', 'lang', 'grant', 'login', 'logout',
     'context-save', 'context-load', 'context-clear', 'learn',
     'cost', 'tasks', 'account', 'sync',
