@@ -8,7 +8,7 @@
 
 import { App, Message } from './App';
 import { chat } from '../api/index';
-import { runAgent, AgentResult } from '../utils/agent';
+import { runAgent, AgentResult, PermissionOutcome } from '../utils/agent';
 import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
@@ -213,8 +213,33 @@ export async function executeAgentTask(
     const rawIterations = config.get('agentMaxIterations') || 100;
     app.setAgentMaxIterations(Math.max(5, rawIterations));
 
+    const confirmationMode = config.get('agentConfirmation') || 'dangerous';
+    const onRequestPermission = confirmationMode === 'dangerous'
+      ? (toolCall: import('../utils/tools').ToolCall) => new Promise<PermissionOutcome>((resolve) => {
+          const target = (toolCall.parameters.path as string) ||
+            (toolCall.parameters.command as string) || 'unknown';
+          const shortTarget = target.length > 50 ? '...' + target.slice(-47) : target;
+          app.showConfirm({
+            title: '⚠️  Confirm Action',
+            message: [
+              'The agent wants to execute:',
+              '',
+              `  ${toolCall.tool}`,
+              `  ${shortTarget}`,
+              '',
+              'Allow this action?',
+            ],
+            confirmLabel: 'Allow',
+            cancelLabel: 'Deny',
+            onConfirm: () => resolve('allow_once'),
+            onCancel: () => resolve('reject_once'),
+          });
+        })
+      : undefined;
+
     const result: AgentResult = await runAgent(enrichedTask, context, {
       dryRun,
+      onRequestPermission,
       chatHistory: app.getChatHistory(),
       onIteration: (iteration, message) => {
         app.updateAgentProgress(iteration);
