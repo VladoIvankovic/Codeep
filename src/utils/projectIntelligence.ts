@@ -290,7 +290,14 @@ export function generateContextFromIntelligence(intelligence: ProjectIntelligenc
     intelligence.entryPoints.forEach(ep => lines.push(`- ${ep}`));
     lines.push('');
   }
-  
+
+  // API Endpoints
+  if (intelligence.architecture.apiEndpoints && intelligence.architecture.apiEndpoints.length > 0) {
+    lines.push('## API Endpoints');
+    intelligence.architecture.apiEndpoints.forEach(ep => lines.push(`- ${ep}`));
+    lines.push('');
+  }
+
   // Scripts
   if (Object.keys(intelligence.scripts).length > 0) {
     lines.push('## Available Scripts');
@@ -631,14 +638,130 @@ function detectArchitecture(projectPath: string, intelligence: ProjectIntelligen
   }
   
   // Detect API endpoints
-  const apiDir = join(projectPath, 'src', 'api');
-  const pagesApiDir = join(projectPath, 'pages', 'api');
-  const appApiDir = join(projectPath, 'app', 'api');
-  
-  if (existsSync(apiDir) || existsSync(pagesApiDir) || existsSync(appApiDir)) {
-    intelligence.architecture.apiEndpoints = [];
-    // Could scan for route files here
+  intelligence.architecture.apiEndpoints = detectApiEndpoints(projectPath);
+}
+
+function collectFiles(dir: string, exts: Set<string>, ignore: Set<string>, maxFiles = 500): string[] {
+  const results: string[] = [];
+  function walk(current: string) {
+    if (results.length >= maxFiles) return;
+    let entries: string[];
+    try { entries = readdirSync(current); } catch { return; }
+    for (const entry of entries) {
+      if (ignore.has(entry)) continue;
+      const full = join(current, entry);
+      let stat;
+      try { stat = statSync(full); } catch { continue; }
+      if (stat.isDirectory()) {
+        walk(full);
+      } else if (exts.has(extname(entry).toLowerCase())) {
+        results.push(full);
+      }
+    }
   }
+  walk(dir);
+  return results;
+}
+
+function detectApiEndpoints(projectPath: string): string[] {
+  const endpoints: string[] = [];
+  const seen = new Set<string>();
+
+  function add(method: string, path: string) {
+    // Normalise: ensure path starts with /
+    const p = path.startsWith('/') ? path : '/' + path;
+    const key = `${method} ${p}`;
+    if (!seen.has(key)) { seen.add(key); endpoints.push(key); }
+  }
+
+  // ── Next.js App Router: app/**/route.ts|js ──────────────────────────────
+  const appDirs = [
+    join(projectPath, 'app'),
+    join(projectPath, 'src', 'app'),
+    join(projectPath, 'Codeep-web', 'src', 'app'), // monorepo fallback
+  ];
+  for (const appDir of appDirs) {
+    if (!existsSync(appDir)) continue;
+    const routeFiles = collectFiles(appDir, new Set(['.ts', '.tsx', '.js', '.jsx']), IGNORE_DIRS);
+    for (const file of routeFiles) {
+      if (!basename(file).match(/^route\.(ts|tsx|js|jsx)$/)) continue;
+      // Derive path from file location: app/api/users/route.ts → /api/users
+      const rel = relative(appDir, file).replace(/\\/g, '/');
+      const routePath = '/' + rel.replace(/\/route\.(ts|tsx|js|jsx)$/, '').replace(/\(.*?\)\//g, '');
+      let content: string;
+      try { content = readFileSync(file, 'utf-8'); } catch { continue; }
+      const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+      for (const m of methods) {
+        if (new RegExp(`export\\s+(?:async\\s+)?function\\s+${m}\\b`).test(content)) {
+          add(m, routePath);
+        }
+      }
+    }
+  }
+
+  // ── Next.js Pages Router: pages/api/**/*.ts|js ──────────────────────────
+  const pagesApiDirs = [
+    join(projectPath, 'pages', 'api'),
+    join(projectPath, 'src', 'pages', 'api'),
+  ];
+  for (const pagesApiDir of pagesApiDirs) {
+    if (!existsSync(pagesApiDir)) continue;
+    const files = collectFiles(pagesApiDir, new Set(['.ts', '.tsx', '.js', '.jsx']), IGNORE_DIRS);
+    for (const file of files) {
+      const rel = relative(pagesApiDir, file).replace(/\\/g, '/');
+      const routePath = '/api/' + rel.replace(/\.(ts|tsx|js|jsx)$/, '').replace(/\/index$/, '');
+      add('*', routePath);
+    }
+  }
+
+  // ── Express / Fastify ────────────────────────────────────────────────────
+  const jsFiles = collectFiles(projectPath, new Set(['.ts', '.js']), IGNORE_DIRS, 300);
+  // Match: app.get('/path', ...) or router.post('/path', ...)
+  const expressRe = /(?:app|router|server)\.(get|post|put|patch|delete|all)\s*\(\s*['"`]([^'"`\s]+)['"`]/gi;
+  for (const file of jsFiles) {
+    // Skip test files and node_modules (already excluded by collectFiles)
+    if (file.includes('.test.') || file.includes('.spec.')) continue;
+    let content: string;
+    try { content = readFileSync(file, 'utf-8'); } catch { continue; }
+    let m: RegExpExecArray | null;
+    expressRe.lastIndex = 0;
+    while ((m = expressRe.exec(content)) !== null) {
+      add(m[1].toUpperCase(), m[2]);
+    }
+  }
+
+  // ── Laravel: routes/api.php, routes/web.php ──────────────────────────────
+  const laravelRouteDirs = [join(projectPath, 'routes')];
+  const phpRouteRe = /Route::(get|post|put|patch|delete|any)\s*\(\s*['"]([^'"]+)['"]/gi;
+  for (const dir of laravelRouteDirs) {
+    if (!existsSync(dir)) continue;
+    const phpFiles = collectFiles(dir, new Set(['.php']), IGNORE_DIRS, 20);
+    for (const file of phpFiles) {
+      let content: string;
+      try { content = readFileSync(file, 'utf-8'); } catch { continue; }
+      let m: RegExpExecArray | null;
+      phpRouteRe.lastIndex = 0;
+      while ((m = phpRouteRe.exec(content)) !== null) {
+        add(m[1].toUpperCase(), m[2]);
+      }
+    }
+  }
+
+  // ── Django: urls.py ──────────────────────────────────────────────────────
+  const djangoRe = /path\s*\(\s*['"]([^'"]+)['"]/g;
+  const pyFiles = collectFiles(projectPath, new Set(['.py']), IGNORE_DIRS, 200);
+  for (const file of pyFiles) {
+    if (!basename(file).includes('urls')) continue;
+    let content: string;
+    try { content = readFileSync(file, 'utf-8'); } catch { continue; }
+    let m: RegExpExecArray | null;
+    djangoRe.lastIndex = 0;
+    while ((m = djangoRe.exec(content)) !== null) {
+      add('*', '/' + m[1]);
+    }
+  }
+
+  return endpoints.slice(0, 50); // cap at 50
 }
 
 function analyzeConventions(projectPath: string, intelligence: ProjectIntelligence): void {
