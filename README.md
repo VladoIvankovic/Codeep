@@ -311,6 +311,7 @@ Scan your project once and cache deep analysis for faster AI responses:
 /scan          # Full project scan - analyzes structure, dependencies, patterns
 /scan status   # Show last scan info (age, file count, project type)
 /scan clear    # Clear cached intelligence
+/memory <note> # Add a custom note to project intelligence
 ```
 
 **What gets analyzed and cached:**
@@ -329,6 +330,16 @@ Scan your project once and cache deep analysis for faster AI responses:
 - Faster responses - no need to scan files repeatedly  
 - Consistent context across sessions
 - Framework-aware suggestions (React, Vue, Express, Django, etc.)
+
+You can also add your own notes to the project intelligence with `/memory`:
+
+```
+/memory Always use pnpm, never npm
+/memory Main entry point is src/renderer/main.ts
+/memory Database migrations are in db/migrations/
+```
+
+Notes are included in every AI and agent conversation for this project.
 
 **Storage:** `.codeep/intelligence.json` (project-local)
 
@@ -598,6 +609,7 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 | `/scan` | Scan project and cache intelligence for AI |
 | `/scan status` | Show last scan info |
 | `/scan clear` | Clear cached intelligence |
+| `/memory <note>` | Add a custom note to project intelligence |
 
 ### Skills
 
