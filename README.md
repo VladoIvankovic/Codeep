@@ -311,7 +311,10 @@ Scan your project once and cache deep analysis for faster AI responses:
 /scan          # Full project scan - analyzes structure, dependencies, patterns
 /scan status   # Show last scan info (age, file count, project type)
 /scan clear    # Clear cached intelligence
-/memory <note> # Add a custom note to project intelligence
+/memory <note>        # Add a custom note to project intelligence
+/memory list          # Show all notes with indices
+/memory remove <n>    # Remove note by index
+/memory clear         # Clear all notes
 ```
 
 **What gets analyzed and cached:**
@@ -624,6 +627,9 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 | `/scan status` | Show last scan info |
 | `/scan clear` | Clear cached intelligence |
 | `/memory <note>` | Add a custom note to project intelligence |
+| `/memory list` | Show all notes with indices |
+| `/memory remove <n>` | Remove note by index |
+| `/memory clear` | Clear all notes |
 
 ### Skills
 
