@@ -119,6 +119,16 @@ export const helpCategories: HelpCategory[] = [
       { key: '/learn rule <text>', description: 'Add custom rule' },
     ],
   },
+  {
+    title: 'Ollama (Local AI)',
+    items: [
+      { key: '/provider', description: 'Select "ollama" for local models' },
+      { key: '/settings > Ollama URL', description: 'Set URL (default: http://localhost:11434)' },
+      { key: '/model', description: 'Pick installed Ollama model dynamically' },
+      { key: 'ollama pull <model>', description: 'Install a model (run in terminal)' },
+      { key: 'OLLAMA_HOST=0.0.0.0', description: 'Required env var for remote Ollama access' },
+    ],
+  },
 ];
 
 /**
