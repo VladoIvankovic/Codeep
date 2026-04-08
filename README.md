@@ -28,6 +28,7 @@
 - **DeepSeek** — DeepSeek V3.2, DeepSeek Reasoner
 - **Google AI** — Gemini 3.1 Pro Preview, Gemini 3 Flash Preview, Gemini 2.5 Pro, Gemini 2.5 Flash
 - **MiniMax** — MiniMax M2.7, M2.5, M2.1, M2 — Coding Plan & pay-per-use API (international & China)
+- **Ollama** — Run any model locally or on a remote server, no API key required. Models are fetched dynamically from your Ollama instance.
 - Switch between providers with `/provider`
 - Configure different API keys per provider
 - Both OpenAI-compatible and Anthropic API protocols supported
@@ -121,6 +122,8 @@ Codeep works as a **full AI coding agent** that autonomously:
 ```
 
 **Manual mode**: Use `/agent <task>` when you want explicit control.
+
+> **Note for Ollama users:** Agent mode requires a capable model — at least **7B parameters** (e.g. `qwen2.5-coder:7b`, `llama3.1:8b`). Smaller models (1–3B) lack the instruction-following capacity for reliable tool use and may produce incorrect output. For small models, set Agent Mode to **Manual** or **Off** in `/settings`.
 
 **Agent Tools:**
 | Tool | Description |
