@@ -87,17 +87,36 @@ export async function handleCommand(
     }
 
     case 'model': {
-      const models = getModelsForCurrentProvider();
-      const modelItems = Object.entries(models).map(([name, info]) => ({
-        key: name,
-        label: name,
-        description: typeof info === 'object' && info !== null ? (info as { description?: string }).description || '' : '',
-      }));
-      const currentModel = config.get('model');
-      ctx.app.showSelect('Select Model', modelItems, currentModel, (item) => {
-        config.set('model', item.key);
-        ctx.app.notify(`Model: ${item.label}`);
-      });
+      const providerId = config.get('provider');
+      const { isDynamicModelsProvider, isNoApiKeyProvider: _noKey } = await import('../config/providers');
+      if (isDynamicModelsProvider(providerId)) {
+        const { fetchOllamaModels } = await import('../config/index');
+        ctx.app.notify('Fetching models from Ollama...');
+        const ollamaModels = await fetchOllamaModels();
+        if (!ollamaModels || ollamaModels.length === 0) {
+          const ollamaUrl = config.get('ollamaUrl') || 'http://localhost:11434';
+          ctx.app.notify(`Could not reach Ollama at ${ollamaUrl}. Is it running?`);
+          break;
+        }
+        const modelItems = ollamaModels.map(m => ({ key: m.id, label: m.name, description: m.description }));
+        const currentModel = config.get('model');
+        ctx.app.showSelect('Select Ollama Model', modelItems, currentModel, (item) => {
+          config.set('model', item.key);
+          ctx.app.notify(`Model: ${item.label}`);
+        });
+      } else {
+        const models = getModelsForCurrentProvider();
+        const modelItems = Object.entries(models).map(([name, info]) => ({
+          key: name,
+          label: name,
+          description: typeof info === 'object' && info !== null ? (info as { description?: string }).description || '' : '',
+        }));
+        const currentModel = config.get('model');
+        ctx.app.showSelect('Select Model', modelItems, currentModel, (item) => {
+          config.set('model', item.key);
+          ctx.app.notify(`Model: ${item.label}`);
+        });
+      }
       break;
     }
 

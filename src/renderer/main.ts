@@ -41,7 +41,7 @@ import {
   ProjectContext,
 } from '../utils/project';
 import { getCurrentVersion, checkForUpdates, getUpdateInstructions } from '../utils/update';
-import { getProviderList } from '../config/providers';
+import { getProviderList, isNoApiKeyProvider } from '../config/providers';
 import { getSessionStats } from '../utils/tokenTracker';
 import { checkApiRateLimit } from '../utils/ratelimit';
 import { handleCommand as dispatchCommand, AppCommandContext } from './commands';
@@ -464,10 +464,14 @@ Commands (in chat):
   await loadAllApiKeys();
   let apiKey: string | null = await loadApiKey();
 
-  if (!apiKey) {
+  if (!apiKey && !isNoApiKeyProvider(config.get('provider'))) {
     const newKey = await showLoginFlow();
     if (!newKey) { console.log('\nSetup cancelled.'); process.exit(0); }
     apiKey = newKey;
+  }
+  // No API key needed for providers like Ollama
+  if (!apiKey && isNoApiKeyProvider(config.get('provider'))) {
+    apiKey = 'ollama';
   }
 
   const isProject = isProjectDirectory(projectPath);

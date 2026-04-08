@@ -15,7 +15,7 @@ export interface SettingItem {
   key: string;
   label: string;
   getValue: () => string | number | boolean;
-  type: 'number' | 'select';
+  type: 'number' | 'select' | 'text';
   min?: number;
   max?: number;
   step?: number;
@@ -129,6 +129,12 @@ export const SETTINGS: SettingItem[] = [
       { value: false, label: 'OFF' },
       { value: true, label: 'ON' },
     ],
+  },
+  {
+    key: 'ollamaUrl',
+    label: 'Ollama URL',
+    getValue: () => config.get('ollamaUrl') || 'http://localhost:11434',
+    type: 'text',
   },
   {
     key: 'agentApiTimeout',
@@ -281,6 +287,8 @@ export function renderSettingsScreen(
       const hintX = valueX + formatValue(setting).length + 2;
       if (setting.type === 'number') {
         screen.write(hintX, y, '(←/→ adjust, Enter edit)', fg.gray);
+      } else if (setting.type === 'text') {
+        screen.write(hintX, y, '(Enter to edit)', fg.gray);
       } else {
         screen.write(hintX, y, '(←/→ or Enter toggle)', fg.gray);
       }
@@ -349,31 +357,41 @@ export function handleSettingsKey(
         if (!isNaN(num)) {
           const clamped = Math.max(setting.min || 0, Math.min(setting.max || Infinity, num));
           config.set(setting.key as any, clamped);
-          
           if (setting.key === 'rateLimitApi' || setting.key === 'rateLimitCommands') {
             updateRateLimits();
           }
-          
           newState.editing = false;
           newState.editValue = '';
           return { handled: true, close: false, notify: `${setting.label}: ${clamped}`, newState };
         }
       }
+      if (setting.type === 'text' && state.editValue.trim()) {
+        config.set(setting.key as any, state.editValue.trim());
+        newState.editing = false;
+        newState.editValue = '';
+        return { handled: true, close: false, notify: `${setting.label}: ${state.editValue.trim()}`, newState };
+      }
       newState.editing = false;
       newState.editValue = '';
       return { handled: true, close: false, newState };
     }
-    
+
     if (key === 'backspace') {
       newState.editValue = state.editValue.slice(0, -1);
       return { handled: true, close: false, newState };
     }
-    
+
+    const setting = SETTINGS[state.selectedIndex];
+    if (setting.type === 'text' && key.length === 1) {
+      newState.editValue = state.editValue + key;
+      return { handled: true, close: false, newState };
+    }
+
     if (/^[0-9.]$/.test(key)) {
       newState.editValue = state.editValue + key;
       return { handled: true, close: false, newState };
     }
-    
+
     return { handled: true, close: false, newState };
   }
   
@@ -421,12 +439,12 @@ export function handleSettingsKey(
   if (key === 'enter') {
     const setting = SETTINGS[state.selectedIndex];
     
-    if (setting.type === 'number') {
+    if (setting.type === 'number' || setting.type === 'text') {
       newState.editing = true;
       newState.editValue = String(setting.getValue());
       return { handled: true, close: false, newState };
     }
-    
+
     if (setting.type === 'select' && setting.options) {
       const current = config.get(setting.key as any);
       const currentIdx = setting.options.findIndex(o => o.value === current);

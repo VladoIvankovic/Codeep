@@ -1,3 +1,5 @@
+import * as http from 'node:http';
+import * as https from 'node:https';
 import { Message, config, getApiKey } from '../config/index';
 import { withRetry, isNetworkError, isTimeoutError } from '../utils/retry';
 import { ProjectContext } from '../utils/project';
@@ -168,8 +170,9 @@ export async function chat(
 
   const protocol = config.get('protocol');
   const model = config.get('model');
-  const apiKey = getApiKey();
   const providerId = config.get('provider');
+  const { isNoApiKeyProvider } = await import('../config/providers.js');
+  const apiKey = getApiKey() || (isNoApiKeyProvider(providerId) ? 'ollama' : null);
 
   if (!apiKey) {
     throw new Error('API key not configured');
@@ -219,10 +222,22 @@ export async function chat(
     }
 
     // Log error
-    logApiResponse(providerId, false, undefined, err.message);
+    const e = error as any;
+    const errDetail = [
+      err.message || '(no message)',
+      e?.code ? `code=${e.code}` : '',
+      e?.cause ? `cause=${e.cause?.message || e.cause?.code || String(e.cause)}` : '',
+      e?.errors ? `errors=${JSON.stringify(e.errors?.map((x: any) => x?.message || x?.code))}` : '',
+    ].filter(Boolean).join(' | ');
+    logApiResponse(providerId, false, undefined, errDetail);
     
     // Translate errors to user-friendly messages
     if (isNetworkError(error)) {
+      const providerId = config.get('provider');
+      if (providerId === 'ollama') {
+        const ollamaUrl = config.get('ollamaUrl') || 'http://localhost:11434';
+        throw new Error(`Cannot connect to Ollama at ${ollamaUrl}. Make sure Ollama is running and OLLAMA_HOST=0.0.0.0 is set.`);
+      }
       throw new Error(getErrorMessage('noInternet'));
     }
     throw error;
@@ -338,7 +353,12 @@ async function chatOpenAI(
 
   // Get provider-specific URL and auth
   const providerId = config.get('provider');
-  const baseUrl = getProviderBaseUrl(providerId, 'openai');
+  let baseUrl = getProviderBaseUrl(providerId, 'openai');
+  // For Ollama, use the configured URL (can't use lazy require in ESM providers.ts)
+  if (providerId === 'ollama') {
+    const ollamaUrl = (config.get('ollamaUrl') || 'http://localhost:11434').replace(/\/$/, '');
+    baseUrl = `${ollamaUrl}/v1`;
+  }
   const authHeader = getProviderAuthHeader(providerId, 'openai');
   const useCompletionTokens = usesMaxCompletionTokens(providerId);
 
@@ -365,19 +385,41 @@ async function chatOpenAI(
   } else {
     headers['x-api-key'] = apiKey;
   }
+  const requestBody = JSON.stringify({
+    model,
+    messages,
+    stream,
+    ...(stream ? { stream_options: { include_usage: true } } : {}),
+    temperature,
+    ...(useCompletionTokens ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }),
+  });
 
   try {
+    // Use node:http for Ollama — bypasses undici connection pooling (AggregateError in Node v24)
+    if (providerId === 'ollama') {
+      const nodeStream = await httpRequest(`${baseUrl}/chat/completions`, {
+        method: 'POST', headers, body: requestBody, timeout,
+      });
+      if (stream) {
+        return handleNodeStream(nodeStream, onChunk!, model);
+      } else {
+        const text = await new Promise<string>((resolve, reject) => {
+          let data = '';
+          nodeStream.on('data', (c: Buffer) => data += c.toString());
+          nodeStream.on('end', () => resolve(data));
+          nodeStream.on('error', reject);
+        });
+        const parsed = JSON.parse(text) as OpenAIResponse;
+        const usage = extractOpenAIUsage(parsed);
+        if (usage) recordTokenUsage(usage, model, providerId);
+        return stripThinkTags(parsed.choices[0]?.message?.content || '');
+      }
+    }
+
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        model,
-        messages,
-        stream,
-        ...(stream ? { stream_options: { include_usage: true } } : {}),
-        temperature,
-        ...(useCompletionTokens ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }),
-      }),
+      body: requestBody,
       signal: controller.signal,
     });
 
@@ -405,6 +447,75 @@ async function chatOpenAI(
   }
 }
 
+/**
+ * HTTP request using node:http/https — bypasses undici connection pooling.
+ * Used for Ollama to avoid AggregateError in Node v24.
+ */
+function httpRequest(url: string, options: { method: string; headers: Record<string, string>; body: string; timeout: number }): Promise<NodeJS.ReadableStream> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const isHttps = parsed.protocol === 'https:';
+    const lib = isHttps ? https : http;
+    const req = lib.request({
+      hostname: parsed.hostname,
+      port: parsed.port || (isHttps ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      method: options.method,
+      headers: { ...options.headers, 'Connection': 'close' },
+      timeout: options.timeout,
+    }, (res) => {
+      if (res.statusCode && res.statusCode >= 400) {
+        let body = '';
+        res.on('data', (chunk) => body += chunk);
+        res.on('end', () => reject(new ApiError(`${getErrorMessage('apiError')}: ${res.statusCode} ${body}`, res.statusCode!)));
+        return;
+      }
+      resolve(res);
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    req.write(options.body);
+    req.end();
+  });
+}
+
+async function handleNodeStream(
+  nodeStream: NodeJS.ReadableStream,
+  onChunk: (chunk: string) => void,
+  model: string
+): Promise<string> {
+  const chunks: string[] = [];
+  let buffer = '';
+
+  return new Promise((resolve, reject) => {
+    nodeStream.on('data', (raw: Buffer) => {
+      buffer += raw.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6);
+        if (data === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.delta?.content;
+          if (content) { chunks.push(content); onChunk(content); }
+          if (parsed.usage) {
+            const usage = extractOpenAIUsage(parsed);
+            if (usage) recordTokenUsage(usage, parsed.model || model, config.get('provider'));
+          }
+        } catch { /* ignore parse errors */ }
+      }
+    });
+    nodeStream.on('end', () => resolve(stripThinkTags(chunks.join(''))));
+    nodeStream.on('error', (err) => {
+      if (chunks.length > 0) resolve(stripThinkTags(chunks.join('')));
+      else reject(err);
+    });
+  });
+}
+
 async function handleOpenAIStream(
   body: ReadableStream<Uint8Array>,
   onChunk: (chunk: string) => void
@@ -414,36 +525,44 @@ async function handleOpenAIStream(
   const chunks: string[] = [];
   let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
 
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const data = line.slice(6);
-        if (data === '[DONE]') continue;
-        
-        try {
-          const parsed = JSON.parse(data);
-          const content = parsed.choices?.[0]?.delta?.content;
-          if (content) {
-            chunks.push(content);
-            onChunk(content);
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6);
+          if (data === '[DONE]') continue;
+
+          try {
+            const parsed = JSON.parse(data);
+            const content = parsed.choices?.[0]?.delta?.content;
+            if (content) {
+              chunks.push(content);
+              onChunk(content);
+            }
+            // Capture usage from final chunk (stream_options: include_usage)
+            if (parsed.usage) {
+              const usage = extractOpenAIUsage(parsed);
+              if (usage) recordTokenUsage(usage, parsed.model || 'unknown', config.get('provider'));
+            }
+          } catch {
+            // Ignore parse errors
           }
-          // Capture usage from final chunk (stream_options: include_usage)
-          if (parsed.usage) {
-            const usage = extractOpenAIUsage(parsed);
-            if (usage) recordTokenUsage(usage, parsed.model || 'unknown', config.get('provider'));
-          }
-        } catch {
-          // Ignore parse errors
         }
       }
     }
+  } catch (e: any) {
+    // AggregateError / undici stream close — if we already have content, treat as complete
+    if (chunks.length > 0) {
+      return stripThinkTags(chunks.join(''));
+    }
+    throw e;
   }
 
   // Strip <think> tags from MiniMax and other providers
@@ -624,7 +743,11 @@ export async function validateApiKey(apiKey: string, providerId?: string): Promi
 
   // Determine which protocol to use for validation
   const protocol = providerConfig.defaultProtocol;
-  const baseUrl = getProviderBaseUrl(provider, protocol);
+  let baseUrl = getProviderBaseUrl(provider, protocol);
+  if (provider === 'ollama' && protocol === 'openai') {
+    const ollamaUrl = (config.get('ollamaUrl') || 'http://localhost:11434').replace(/\/$/, '');
+    baseUrl = `${ollamaUrl}/v1`;
+  }
   const authHeader = getProviderAuthHeader(provider, protocol);
   const model = providerConfig.defaultModel;
 

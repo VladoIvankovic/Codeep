@@ -18,7 +18,7 @@ import { ProjectContext } from './project';
 import { config, getApiKey, Message } from '../config/index';
 import { loadProjectIntelligence, generateContextFromIntelligence } from './projectIntelligence';
 import { syncProgress, generateProjectId } from './codeepCloud';
-import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens } from '../config/providers';
+import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, isNoApiKeyProvider } from '../config/providers';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { formatToolDefinitions, getOpenAITools, getAnthropicTools } from './tools';
@@ -259,10 +259,14 @@ export async function agentChat(
 ): Promise<AgentChatResponse> {
   const protocol = config.get('protocol');
   const model = config.get('model');
-  const apiKey = getApiKey();
   const providerId = config.get('provider');
+  const apiKey = getApiKey() || (isNoApiKeyProvider(providerId) ? 'ollama' : null);
 
-  const baseUrl = getProviderBaseUrl(providerId, protocol);
+  let baseUrl = getProviderBaseUrl(providerId, protocol);
+  if (providerId === 'ollama' && protocol === 'openai') {
+    const ollamaUrl = (config.get('ollamaUrl') || 'http://localhost:11434').replace(/\/$/, '');
+    baseUrl = `${ollamaUrl}/v1`;
+  }
   const authHeader = getProviderAuthHeader(providerId, protocol);
 
   if (!baseUrl) throw new Error(`Provider ${providerId} does not support ${protocol} protocol`);
@@ -282,9 +286,9 @@ export async function agentChat(
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (authHeader === 'Bearer') {
-    headers['Authorization'] = `Bearer ${apiKey}`;
+    headers['Authorization'] = `Bearer ${apiKey ?? ''}`;
   } else {
-    headers['x-api-key'] = apiKey;
+    headers['x-api-key'] = apiKey ?? '';
   }
   if (protocol === 'anthropic') headers['anthropic-version'] = '2023-06-01';
 
@@ -383,10 +387,14 @@ export async function agentChatFallback(
 ): Promise<AgentChatResponse> {
   const protocol = config.get('protocol');
   const model = config.get('model');
-  const apiKey = getApiKey();
   const providerId = config.get('provider');
+  const apiKey = getApiKey() || (isNoApiKeyProvider(providerId) ? 'ollama' : null);
 
-  const baseUrl = getProviderBaseUrl(providerId, protocol);
+  let baseUrl = getProviderBaseUrl(providerId, protocol);
+  if (providerId === 'ollama' && protocol === 'openai') {
+    const ollamaUrl = (config.get('ollamaUrl') || 'http://localhost:11434').replace(/\/$/, '');
+    baseUrl = `${ollamaUrl}/v1`;
+  }
   const authHeader = getProviderAuthHeader(providerId, protocol);
 
   if (!baseUrl) throw new Error(`Provider ${providerId} does not support ${protocol} protocol`);
@@ -402,9 +410,9 @@ export async function agentChatFallback(
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (authHeader === 'Bearer') {
-    headers['Authorization'] = `Bearer ${apiKey}`;
+    headers['Authorization'] = `Bearer ${apiKey ?? ''}`;
   } else {
-    headers['x-api-key'] = apiKey;
+    headers['x-api-key'] = apiKey ?? '';
   }
   if (protocol === 'anthropic') headers['anthropic-version'] = '2023-06-01';
 

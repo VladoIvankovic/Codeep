@@ -28,6 +28,8 @@ export interface ProviderConfig {
   useMaxCompletionTokens?: boolean; // Use max_completion_tokens instead of max_tokens (e.g. OpenAI GPT-5+)
   envKey?: string; // Environment variable name for API key
   subscribeUrl?: string; // URL to get API key
+  noApiKey?: boolean; // Provider doesn't require an API key (e.g. Ollama)
+  dynamicModels?: boolean; // Models are fetched dynamically at runtime
   mcpEndpoints?: { // Z.AI MCP service endpoints
     webSearch?: string;
     webReader?: string;
@@ -279,6 +281,24 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'GOOGLE_API_KEY',
     subscribeUrl: 'https://aistudio.google.com/apikey',
   },
+  'ollama': {
+    name: 'Ollama (local)',
+    description: 'Run models locally with Ollama',
+    protocols: {
+      openai: {
+        baseUrl: 'http://localhost:11434/v1',
+        authHeader: 'Bearer',
+        supportsNativeTools: true,
+      },
+    },
+    models: [
+      { id: 'llama3.2', name: 'Llama 3.2', description: 'Meta Llama 3.2' },
+    ],
+    defaultModel: 'llama3.2',
+    defaultProtocol: 'openai',
+    noApiKey: true,
+    dynamicModels: true,
+  },
 };
 
 export type ProviderId = keyof typeof PROVIDERS;
@@ -299,6 +319,14 @@ export function getProviderList(): { id: string; name: string; description: stri
 export function getProviderModels(providerId: string): { id: string; name: string; description: string }[] {
   const provider = PROVIDERS[providerId];
   return provider ? provider.models : [];
+}
+
+export function isNoApiKeyProvider(providerId: string): boolean {
+  return PROVIDERS[providerId]?.noApiKey === true;
+}
+
+export function isDynamicModelsProvider(providerId: string): boolean {
+  return PROVIDERS[providerId]?.dynamicModels === true;
 }
 
 export function getProviderBaseUrl(providerId: string, protocol: 'openai' | 'anthropic'): string | null {

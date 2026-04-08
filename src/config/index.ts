@@ -56,6 +56,7 @@ interface ConfigSchema {
   rateLimitApi: number; // API requests per minute
   rateLimitCommands: number; // Commands per minute
   agentMode: AgentMode; // on = always use agent, manual = use /agent command
+  ollamaUrl: string; // Ollama base URL (default: http://localhost:11434)
   agentConfirmation: 'always' | 'dangerous' | 'never'; // Confirmation mode for agent actions
   agentConfirmDeleteFile: boolean; // Confirm before delete_file in dangerous mode
   agentConfirmExecuteCommand: boolean; // Confirm before execute_command in dangerous mode
@@ -228,6 +229,7 @@ function createConfig(): Conf<ConfigSchema> {
     provider: 'z.ai',
     model: 'glm-4.7',
     agentMode: 'on',
+    ollamaUrl: 'http://localhost:11434',
     agentConfirmation: 'dangerous',
     agentConfirmDeleteFile: true,
     agentConfirmExecuteCommand: true,
@@ -575,12 +577,29 @@ export function getModelsForCurrentProvider(): Record<string, string> {
   const providerId = config.get('provider');
   const provider = getProvider(providerId);
   if (!provider) return {};
-  
+
   const models: Record<string, string> = {};
   for (const model of provider.models) {
     models[model.id] = `${model.name} - ${model.description}`;
   }
   return models;
+}
+
+export async function fetchOllamaModels(baseUrl?: string): Promise<{ id: string; name: string; description: string }[] | null> {
+  const url = (baseUrl || config.get('ollamaUrl') || 'http://localhost:11434').replace(/\/$/, '');
+  try {
+    const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const data = await res.json() as { models?: { name: string; size?: number }[] };
+    if (!data.models) return null;
+    return data.models.map(m => ({
+      id: m.name,
+      name: m.name,
+      description: m.size ? `${(m.size / 1e9).toFixed(1)} GB` : 'local model',
+    }));
+  } catch {
+    return null;
+  }
 }
 
 // Re-export PROVIDERS for convenience
