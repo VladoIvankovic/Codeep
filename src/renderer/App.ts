@@ -64,7 +64,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'push': 'Git push',
   'pull': 'Git pull',
   'scan': 'Scan project',
-  'memory': 'Add note to project intelligence',
+  'memory': 'Add/list/remove project memory notes',
   'review': 'Code review',
   'copy': 'Copy code block',
   'paste': 'Paste from clipboard',

@@ -984,22 +984,56 @@ export async function handleCommand(
     }
 
     case 'memory': {
-      const note = args.join(' ').trim();
-      if (!note) {
-        ctx.app.notify('Usage: /memory <note>  — adds a note to project intelligence');
-        break;
-      }
+      const sub = args[0]?.toLowerCase();
       const projectCtx = getProjectContext(ctx.projectPath);
       const projectRoot = projectCtx?.root || ctx.projectPath;
       const intelligence = loadProjectIntelligence(projectRoot);
+
       if (!intelligence) {
         ctx.app.notify('No project intelligence found. Run /scan first.');
         break;
       }
       intelligence.notes = intelligence.notes || [];
+
+      if (sub === 'list') {
+        if (intelligence.notes.length === 0) {
+          ctx.app.notify('No memory notes. Add one with: /memory <note>');
+        } else {
+          const lines = intelligence.notes.map((n, i) => `  ${i + 1}. ${n}`).join('\n');
+          ctx.app.addMessage({ role: 'assistant', content: `**Project memory notes:**\n${lines}` });
+        }
+        break;
+      }
+
+      if (sub === 'remove') {
+        const idx = parseInt(args[1], 10);
+        if (isNaN(idx) || idx < 1 || idx > intelligence.notes.length) {
+          ctx.app.notify(`Usage: /memory remove <n>  — run /memory list to see indices`);
+          break;
+        }
+        const removed = intelligence.notes.splice(idx - 1, 1)[0];
+        saveProjectIntelligence(projectRoot, intelligence);
+        ctx.app.notify(`Removed: "${removed}"`);
+        break;
+      }
+
+      if (sub === 'clear') {
+        const count = intelligence.notes.length;
+        intelligence.notes = [];
+        saveProjectIntelligence(projectRoot, intelligence);
+        ctx.app.notify(`Cleared ${count} memory note${count !== 1 ? 's' : ''}.`);
+        break;
+      }
+
+      // Default: add note
+      const note = args.join(' ').trim();
+      if (!note) {
+        ctx.app.notify('Usage: /memory <note> · /memory list · /memory remove <n> · /memory clear');
+        break;
+      }
       intelligence.notes.push(note);
       saveProjectIntelligence(projectRoot, intelligence);
-      ctx.app.notify(`Memory saved: "${note}"`);
+      ctx.app.notify(`Memory saved (${intelligence.notes.length} total): "${note}"`);
       break;
     }
 
