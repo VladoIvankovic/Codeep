@@ -300,6 +300,8 @@ export async function runAgent(
   ]);
   const maxTimeoutRetries = 3;
   const maxConsecutiveTimeouts = 30; // Allow more consecutive timeouts before giving up
+  const maxConsecutiveRateLimits = 2; // Stop quickly on 429 — waiting won't help
+  let consecutiveRateLimits = 0;
   const baseTimeout = config.get('agentApiTimeout');
 
   // Infinite loop detection: track last write hash per file path
@@ -377,6 +379,7 @@ export async function runAgent(
             dynamicTimeout * (1 + retryCount * 0.5) // Increase timeout on retry
           );
           consecutiveTimeouts = 0; // Reset consecutive count on success
+          consecutiveRateLimits = 0;
           break;
         } catch (error) {
           const err = error as Error;
@@ -441,14 +444,33 @@ export async function runAgent(
 
           // All non-abort errors are retryable — retry with backoff
           retryCount++;
-          const isRateLimit = err.message.includes('429');
+          const isRateLimit = err.message.includes('429') || (err instanceof ApiError && err.status === 429);
           const isServerError = err.message.includes('500') || err.message.includes('502') || err.message.includes('503') || err.message.includes('529');
           const code = isRateLimit ? '429' : isServerError ? '5xx' : 'error';
-          const waitSec = Math.min(5 * retryCount, 30);
+          // Rate limits need a longer wait; other errors use shorter backoff
+          const waitSec = isRateLimit ? Math.min(30 * retryCount, 120) : Math.min(5 * retryCount, 30);
           debug(`${code} (retry ${retryCount}/${maxTimeoutRetries}): ${err.message}`);
           const shortMsg = err.message.length > 80 ? err.message.slice(0, 80) + '…' : err.message;
           opts.onIteration?.(iteration, `API ${code}: ${shortMsg} — retrying in ${waitSec}s (${retryCount}/${maxTimeoutRetries})`);
           if (retryCount >= maxTimeoutRetries) {
+            if (isRateLimit) {
+              // Rate limit exhausted — stop immediately, no point hammering a throttled API
+              consecutiveRateLimits++;
+              if (consecutiveRateLimits >= maxConsecutiveRateLimits) {
+                result = {
+                  success: false,
+                  iterations: iteration,
+                  actions,
+                  finalResponse: actions.length > 0
+                    ? `Agent paused after ${actions.length} action(s) — API rate limit reached. Wait a moment and try again.`
+                    : 'API rate limit reached. Wait a moment and run the agent again.',
+                  error: `Rate limited (429) after ${maxTimeoutRetries} retries: ${err.message}`,
+                };
+                return result;
+              }
+            } else {
+              consecutiveRateLimits = 0; // Reset on non-rate-limit errors
+            }
             // Don't throw — skip this iteration like timeouts do
             consecutiveTimeouts++;
             if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
