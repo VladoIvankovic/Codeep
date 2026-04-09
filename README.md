@@ -445,6 +445,7 @@ Create, view, and complete tasks directly from the CLI — or manage them on the
 > /tasks                    # List pending tasks for current project (numbered)
 > /tasks add Fix login bug  # Create a new task on the dashboard
 > /tasks done 2             # Mark task #2 as done
+> /tasks delete 2           # Delete task #2 permanently
 ```
 
 Tasks are loaded into the agent context so the AI sees them automatically on the next message.
@@ -662,6 +663,7 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 | `/tasks` | List pending tasks for current project (numbered) |
 | `/tasks add <title>` | Create a new task on the dashboard |
 | `/tasks done <n>` | Mark task #n as done |
+| `/tasks delete <n>` | Delete task #n permanently |
 
 **CLI commands (outside chat):**
 
