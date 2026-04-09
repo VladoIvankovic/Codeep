@@ -305,6 +305,7 @@ export async function agentChat(
         model, messages: [{ role: 'system', content: systemPrompt }, ...messages],
         tools: getOpenAITools(), tool_choice: 'auto', stream: useStreaming,
         temperature: config.get('temperature'), ...tokParam,
+        ...(useStreaming && providerId === 'openai' ? { stream_options: { include_usage: true } } : {}),
       };
     } else {
       endpoint = `${baseUrl}/v1/messages`;
