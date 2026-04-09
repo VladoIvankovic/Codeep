@@ -209,7 +209,7 @@ export async function handleAnthropicAgentStream(
         if (parsed.type === 'message_start' && parsed.message?.usage) {
           usageData = { usage: { input_tokens: parsed.message.usage.input_tokens || 0, output_tokens: 0 } };
         } else if (parsed.type === 'message_delta' && parsed.usage) {
-          const inputTokens = (usageData as any)?.usage?.input_tokens || 0;
+          const inputTokens: number = (usageData as any)?.usage?.input_tokens || 0;
           usageData = { usage: { input_tokens: inputTokens, output_tokens: parsed.usage.output_tokens || 0 } };
         }
 
