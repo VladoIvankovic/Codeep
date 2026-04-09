@@ -300,7 +300,7 @@ export async function runAgent(
   ]);
   const maxTimeoutRetries = 3;
   const maxConsecutiveTimeouts = 30; // Allow more consecutive timeouts before giving up
-  const maxConsecutiveRateLimits = 2; // Stop quickly on 429 — waiting won't help
+  const maxConsecutiveRateLimits = 5; // Stop after 5 consecutive rate-limited iterations
   let consecutiveRateLimits = 0;
   const baseTimeout = config.get('agentApiTimeout');
 
