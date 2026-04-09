@@ -306,11 +306,12 @@ Custom skill example (`~/.codeep/skills/my-workflow.json`):
 }
 ```
 
-### Project Intelligence (`/scan`)
+### Project Intelligence (`/init`, `/scan`)
 
-Scan your project once and cache deep analysis for faster AI responses:
+Initialize a project and scan it once to cache deep analysis for faster AI responses:
 
 ```
+/init          # Initialize project — creates .codeep/ folder
 /scan          # Full project scan - analyzes structure, dependencies, patterns
 /scan status   # Show last scan info (age, file count, project type)
 /scan clear    # Clear cached intelligence
@@ -626,6 +627,7 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 
 | Command | Description |
 |---------|-------------|
+| `/init` | Initialize project (creates `.codeep/` folder) |
 | `/scan` | Scan project and cache intelligence for AI |
 | `/scan status` | Show last scan info |
 | `/scan clear` | Clear cached intelligence |
@@ -633,6 +635,7 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 | `/memory list` | Show all notes with indices |
 | `/memory remove <n>` | Remove note by index |
 | `/memory clear` | Clear all notes |
+| `/model pull <name>` | Pull an Ollama model (local Ollama only) |
 
 ### Skills
 
