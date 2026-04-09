@@ -751,6 +751,11 @@ export function startAcpServer(): Promise<void> {
           transport.respond(msg.id, { stopReason: 'end_turn' });
         }).catch((err: Error) => {
           if (err.name === 'AbortError') {
+            // Clear plan UI on the client side when session is cancelled
+            if (planEntries.size > 0) {
+              planEntries.clear();
+              sendPlan();
+            }
             transport.respond(msg.id, { stopReason: 'cancelled' });
           } else if (err.message?.includes('API key not configured') || err.message?.includes('API key') || (err instanceof ApiError && err.status === 401)) {
             sendChunk(`❌ No API key configured. Use /login <provider> <key> or set the environment variable (e.g. ZAI_API_KEY, ANTHROPIC_API_KEY).`);
@@ -763,6 +768,7 @@ export function startAcpServer(): Promise<void> {
           }
         }).finally(() => {
           if (session) session.abortController = null;
+          planEntries.clear();
         });
       })
       .catch((err: Error) => {
