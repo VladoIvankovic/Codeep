@@ -100,6 +100,47 @@ const LANGUAGE_OPTIONS = [
   { value: 'hr',   name: 'Croatian' },
 ];
 
+/**
+ * Format a tool call's parameters into a human-readable object for the
+ * permission dialog. Truncates long content fields so the dialog stays readable.
+ */
+function formatToolInputForPermission(tool: string, params: Record<string, unknown>): Record<string, string> {
+  const MAX_LEN = 120;
+  const truncate = (v: unknown): string => {
+    const s = typeof v === 'string' ? v : JSON.stringify(v);
+    return s.length > MAX_LEN ? s.slice(0, MAX_LEN) + '…' : s;
+  };
+
+  switch (tool) {
+    case 'write_file':
+    case 'edit_file': {
+      const path = params.path as string ?? '';
+      const lines = typeof params.content === 'string'
+        ? params.content.split('\n').length + ' lines'
+        : typeof params.old_string === 'string'
+          ? `replace ${(params.old_string as string).split('\n').length} line(s)`
+          : '';
+      return { file: pathBasename(path), path, changes: lines };
+    }
+    case 'delete_file':
+      return { file: pathBasename(params.path as string ?? ''), path: params.path as string ?? '' };
+    case 'execute_command':
+      return {
+        command: params.command as string ?? '',
+        args: Array.isArray(params.args) ? (params.args as string[]).join(' ') : '',
+        cwd: params.cwd as string ?? '',
+      };
+    case 'create_directory':
+      return { path: params.path as string ?? '' };
+    default: {
+      // Generic: show all keys but truncate values
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(params)) out[k] = truncate(v);
+      return out;
+    }
+  }
+}
+
 /** Check if a provider has an API key stored (reads config directly, no async) */
 function providerHasKey(providerId: string): boolean {
   // Check environment variable first
@@ -640,7 +681,7 @@ export function startAcpServer(): Promise<void> {
                   toolCall: {
                     toolCallId: permToolCallId,
                     toolName: toolCall.tool,
-                    toolInput: toolCall.parameters,
+                    toolInput: formatToolInputForPermission(toolCall.tool, toolCall.parameters as Record<string, unknown>),
                     status: 'pending',
                     content: [],
                   },
