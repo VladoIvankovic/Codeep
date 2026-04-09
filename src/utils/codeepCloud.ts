@@ -8,7 +8,8 @@
 
 import { randomBytes, createHash } from 'crypto';
 import { spawn } from 'child_process';
-import { getGithubId, getSyncToken, setGithubAccount, setSyncToken, setApiKey } from '../config/index.js';
+import { getGithubId, getSyncToken, setGithubAccount, setSyncToken, setApiKey, getDeviceId } from '../config/index.js';
+import { hostname } from 'os';
 
 const API_BASE = 'https://codeep.dev';
 const POLL_INTERVAL_MS = 2000;
@@ -36,6 +37,8 @@ function openBrowser(url: string): void {
  */
 export async function runAccountFlow(): Promise<void> {
   const code = randomBytes(24).toString('hex');
+  const deviceId = getDeviceId();
+  const deviceHostname = hostname();
 
   // Register the code on the server
   let registerOk = false;
@@ -79,6 +82,12 @@ export async function runAccountFlow(): Promise<void> {
       if (data.status === 'authorized' && data.github_id) {
         setGithubAccount(data.github_id, data.username ?? '');
         if (data.sync_token) setSyncToken(data.sync_token);
+        // Register device info
+        fetch(`${API_BASE}/api/auth/cli/device`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-sync-token': data.sync_token ?? '' },
+          body: JSON.stringify({ deviceId, hostname: deviceHostname }),
+        }).catch(() => {});
         console.log(`\n\n  Connected as @${data.username ?? data.github_id}\n`);
         authorized = true;
         break;

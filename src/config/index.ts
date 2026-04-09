@@ -74,6 +74,7 @@ interface ConfigSchema {
   githubId: string;
   githubUsername: string;
   syncToken: string;
+  deviceId: string;
 }
 
 export type { AgentMode };
@@ -257,6 +258,7 @@ function createConfig(): Conf<ConfigSchema> {
     githubId: '',
     githubUsername: '',
     syncToken: '',
+    deviceId: '',
   };
 
   // First try standard location
@@ -966,6 +968,16 @@ export function getSyncToken(): string {
 
 export function setSyncToken(token: string): void {
   config.set('syncToken', token);
+}
+
+export function getDeviceId(): string {
+  let id = config.get('deviceId') || '';
+  if (!id) {
+    const { randomBytes } = require('crypto');
+    id = randomBytes(16).toString('hex');
+    config.set('deviceId', id);
+  }
+  return id;
 }
 
 // ─── Profiles ─────────────────────────────────────────────────────────────────
