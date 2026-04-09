@@ -40,6 +40,8 @@ export interface AppExecutionContext {
   setAbortController: (ctrl: AbortController | null) => void;
   formatAddedFilesContext: () => string;
   handleCommand: (command: string, args: string[]) => Promise<void>;
+  sessionDisplayName?: string;
+  setSessionDisplayName?: (name: string) => void;
 }
 
 // ─── Dangerous tool detection ────────────────────────────────────────────────
@@ -407,9 +409,15 @@ export async function executeAgentTask(
     const { getCurrentVersion } = await import('../utils/update.js');
     const sessionId = getCurrentSessionId();
     const tokenStats = getSessionStats();
+    // Auto-name from task if no display name set yet
+    if (!ctx.sessionDisplayName && ctx.setSessionDisplayName) {
+      const taskWords = task.replace(/\s+/g, ' ').trim().split(' ').slice(0, 5).join(' ');
+      ctx.setSessionDisplayName(taskWords.length > 48 ? taskWords.slice(0, 45) + '…' : taskWords);
+    }
+    const displayName = ctx.sessionDisplayName || sessionId;
     syncSession({
       sessionId,
-      sessionName: sessionId,
+      sessionName: displayName,
       projectName: ctx.projectContext?.name,
       projectId:   ctx.projectPath ? generateProjectId(ctx.projectPath) : undefined,
       messages: app.getMessages(),
@@ -418,7 +426,7 @@ export async function executeAgentTask(
       model: config.get('model'),
       provider: config.get('provider'),
       sessionId,
-      sessionName: sessionId,
+      sessionName: displayName,
       messageCount: app.getMessages().length,
       cliVersion: getCurrentVersion(),
       projectName: ctx.projectContext?.name,

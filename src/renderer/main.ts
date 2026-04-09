@@ -34,6 +34,7 @@ import {
   isManuallyInitializedProject,
   setApiKey,
   setProvider,
+  getGithubId,
 } from '../config/index';
 import {
   isProjectDirectory,
@@ -59,8 +60,17 @@ let projectContext: ProjectContext | null = null;
 let hasWriteAccess = false;
 let sessionId = getCurrentSessionId();
 let app: App;
+/** Human-readable session name derived from the first user message */
+let sessionDisplayName: string | null = null;
 
 const addedFiles: Map<string, { relativePath: string; content: string }> = new Map();
+
+/** Derive a short display name from a user message (first ~5 words, max 48 chars). */
+function deriveSessionName(message: string): string {
+  const clean = message.replace(/\s+/g, ' ').trim();
+  const words = clean.split(' ').slice(0, 5).join(' ');
+  return words.length > 48 ? words.slice(0, 45) + '…' : words;
+}
 
 let isAgentRunningFlag = false;
 let agentAbortController: AbortController | null = null;
@@ -76,6 +86,7 @@ function makeCtx(): AppCommandContext {
     hasWriteAccess,
     addedFiles,
     sessionId,
+    sessionDisplayName: sessionDisplayName ?? undefined,
     abortController: agentAbortController,
     isAgentRunning: () => isAgentRunningFlag,
     setAgentRunning: (v) => { isAgentRunningFlag = v; },
@@ -83,6 +94,7 @@ function makeCtx(): AppCommandContext {
     formatAddedFilesContext,
     handleCommand: (cmd, args) => dispatchCommand(cmd, args, makeCtx()),
     setSessionId: (id) => { sessionId = id; },
+    setSessionDisplayName: (name) => { sessionDisplayName = name; },
     setProjectContext: (ctx) => {
       projectContext = ctx;
       if (ctx) setProjectContext(ctx);
@@ -193,6 +205,9 @@ async function handleSubmit(message: string): Promise<void> {
   try {
     app.startStreaming();
     const history = app.getChatHistory();
+    if (!sessionDisplayName && history.filter(m => m.role === 'user').length === 0) {
+      sessionDisplayName = deriveSessionName(message);
+    }
     const fileContext = formatAddedFilesContext();
     const enrichedMessage = fileContext ? fileContext + message : message;
     await chat(enrichedMessage, history, (chunk) => app.addStreamChunk(chunk), undefined, projectContext, undefined);
@@ -538,6 +553,11 @@ Commands (in chat):
     welcomeLines.push('');
     welcomeLines.push('  ⚠  Agent Mode ON  —  messages auto-execute as agent tasks');
   }
+  welcomeLines.push('');
+  const githubId = getGithubId();
+  welcomeLines.push(githubId
+    ? `  Account  codeep.dev linked`
+    : `  Account  not linked  ·  run: codeep account`);
   welcomeLines.push('');
   welcomeLines.push('  /help  ·  Ctrl+L clear  ·  Esc cancel');
   app.addMessage({ role: 'welcome', content: welcomeLines.join('\n') });

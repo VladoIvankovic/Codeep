@@ -161,6 +161,30 @@ export async function handleCommand(
       break;
     }
 
+    case 'status': {
+      const { getGithubId } = await import('../config/index.js');
+      const provider = getCurrentProvider();
+      const providers = getProviderList();
+      const providerInfo = providers.find(p => p.id === provider.id);
+      const model = config.get('model') as string;
+      const githubId = getGithubId();
+      const lines: string[] = ['## Status', ''];
+      lines.push(`**Provider**   ${providerInfo?.name ?? provider.id}  ·  ${model}`);
+      if (ctx.projectContext) {
+        lines.push(`**Project**    ${ctx.projectContext.name}  (${ctx.projectContext.type})`);
+        lines.push(`**Access**     ${ctx.hasWriteAccess ? 'Read & Write' : 'Read only'}`);
+      } else {
+        lines.push(`**Project**    none  ·  chat only`);
+      }
+      if (ctx.addedFiles.size > 0) {
+        lines.push(`**Context**    ${ctx.addedFiles.size} file${ctx.addedFiles.size !== 1 ? 's' : ''} added`);
+      }
+      lines.push(`**Account**    ${githubId ? `linked (${githubId})` : 'not linked — run: codeep account'}`);
+      lines.push(`**Session**    ${ctx.sessionId}`);
+      ctx.app.addMessage({ role: 'system', content: lines.join('\n') } as Message);
+      break;
+    }
+
     case 'grant': {
       setProjectPermission(ctx.projectPath, true, true);
       ctx.setHasWriteAccess(true);
@@ -327,8 +351,20 @@ export async function handleCommand(
       if (messages.length === 0) { ctx.app.notify('No messages to save. Start a conversation first.'); return; }
       saveSession(ctx.sessionId, messages, ctx.projectPath);
       if (renameSession(ctx.sessionId, newName, ctx.projectPath)) {
+        const oldId = ctx.sessionId;
         ctx.setSessionId(newName);
+        if (ctx.setSessionDisplayName) ctx.setSessionDisplayName(newName);
         ctx.app.notify(`Session renamed to: ${newName}`);
+        // Sync new name to dashboard
+        import('../utils/codeepCloud.js').then(({ syncSession, generateProjectId: gpi }) => {
+          syncSession({
+            sessionId: oldId,
+            sessionName: newName,
+            projectName: ctx.projectContext?.name,
+            projectId: ctx.projectPath ? gpi(ctx.projectPath) : undefined,
+            messages: ctx.app.getMessages(),
+          });
+        }).catch(() => {});
       } else {
         ctx.app.notify('Failed to rename session');
       }
@@ -883,6 +919,32 @@ export async function handleCommand(
           clearTaskContext();
         } else {
           ctx.app.notify('Failed to mark task as done');
+        }
+        break;
+      }
+
+      // /tasks delete <n>  — delete task #n permanently
+      if (subCmd === 'delete') {
+        const idx = parseInt(args[1] ?? '', 10);
+        if (isNaN(idx) || idx < 1) { ctx.app.notify('Usage: /tasks delete <number>'); break; }
+        const projectName = ctx.projectContext?.name;
+        const projectId = ctx.projectContext?.root ? generateProjectId(ctx.projectContext.root) : undefined;
+        const tasks = await fetchTasks(projectName, projectId);
+        if (tasks === null) { ctx.app.notify('Not linked to codeep.dev. Run: codeep account'); break; }
+        const task = tasks[idx - 1];
+        if (!task) { ctx.app.notify(`No task #${idx}. Run /tasks to see the list.`); break; }
+        const { getSyncToken } = await import('../config/index.js');
+        const syncToken = getSyncToken();
+        if (!syncToken) { ctx.app.notify('Not linked to codeep.dev. Run: codeep account'); break; }
+        try {
+          const res = await fetch('https://codeep.dev/api/tasks', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+            body: JSON.stringify({ id: task.id }),
+          });
+          ctx.app.notify(res.ok ? `✗ Deleted: ${task.title}` : 'Failed to delete task');
+        } catch {
+          ctx.app.notify('Failed to delete task (network error)');
         }
         break;
       }
