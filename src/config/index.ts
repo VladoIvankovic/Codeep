@@ -973,8 +973,7 @@ export function setSyncToken(token: string): void {
 export function getDeviceId(): string {
   let id = config.get('deviceId') || '';
   if (!id) {
-    const { randomBytes } = require('crypto');
-    id = randomBytes(16).toString('hex');
+    id = randomUUID().replace(/-/g, '');
     config.set('deviceId', id);
   }
   return id;
