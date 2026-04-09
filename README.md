@@ -423,7 +423,7 @@ codeep account   # Opens browser → sign in with GitHub → CLI is linked
 - **Usage stats** — total sessions, active this week, model/provider breakdown, 30-day trend
 - **Projects** — all projects Codeep was used in, with language tag and git indicator
 - **Project archiving** — hide projects from the list with one click
-- **Tasks** — create bug/feature/task items per project from the web, pull them in the CLI with `/tasks`
+- **Tasks** — create/complete bug, feature, and task items from the web or directly from the CLI with `/tasks add` and `/tasks done`
 - **API key sync** — store provider keys securely on codeep.dev, sync to any machine in one command
 
 ### API key sync
@@ -439,12 +439,15 @@ Keys are encrypted at rest using AES-256-GCM.
 
 ### Tasks
 
-Create tasks from the codeep.dev dashboard (bug, feature, task) and pull them into any CLI session:
+Create, view, and complete tasks directly from the CLI — or manage them on the codeep.dev dashboard:
 
 ```
-> /tasks
-# Fetches pending tasks for the current project and displays them in chat
+> /tasks                    # List pending tasks for current project (numbered)
+> /tasks add Fix login bug  # Create a new task on the dashboard
+> /tasks done 2             # Mark task #2 as done
 ```
+
+Tasks are loaded into the agent context so the AI sees them automatically on the next message.
 
 ## Installation
 
@@ -656,7 +659,9 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 
 | Command | Description |
 |---------|-------------|
-| `/tasks` | Fetch pending tasks from codeep.dev for current project |
+| `/tasks` | List pending tasks for current project (numbered) |
+| `/tasks add <title>` | Create a new task on the dashboard |
+| `/tasks done <n>` | Mark task #n as done |
 
 **CLI commands (outside chat):**
 
