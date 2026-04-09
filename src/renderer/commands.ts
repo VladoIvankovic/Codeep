@@ -46,6 +46,22 @@ export interface AppCommandContext extends AppExecutionContext {
   setHasWriteAccess: (v: boolean) => void;
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Returns a hint for an Ollama model name based on parameter count.
+ * Models ≥7B are suitable for agent mode; smaller ones are chat-only.
+ */
+function ollamaModelHint(modelId: string): string {
+  const lower = modelId.toLowerCase();
+  // Extract number before 'b' (e.g. "7b", "1.5b", "14b", "72b")
+  const match = lower.match(/(\d+(?:\.\d+)?)b/);
+  if (!match) return '';
+  const params = parseFloat(match[1]);
+  if (params >= 7) return '✓ agent mode';
+  return '⚠ chat only (< 7B)';
+}
+
 // ─── Main dispatch ────────────────────────────────────────────────────────────
 
 export async function handleCommand(
@@ -98,7 +114,11 @@ export async function handleCommand(
           ctx.app.notify(`Could not reach Ollama at ${ollamaUrl}. Is it running?`);
           break;
         }
-        const modelItems = ollamaModels.map(m => ({ key: m.id, label: m.name, description: m.description }));
+        const modelItems = ollamaModels.map(m => ({
+          key: m.id,
+          label: m.name,
+          description: ollamaModelHint(m.id),
+        }));
         const currentModel = config.get('model');
         ctx.app.showSelect('Select Ollama Model', modelItems, currentModel, (item) => {
           config.set('model', item.key);

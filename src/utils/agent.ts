@@ -498,13 +498,23 @@ export async function runAgent(
       }
 
       let { content, toolCalls, usedNativeTools } = chatResponse;
-      
+
       // If native tools were used but no tool calls returned, try parsing text-based tool calls
       // This handles models that accept tools parameter but respond with text anyway
       if (usedNativeTools && toolCalls.length === 0 && iteration === 1) {
         const textToolCalls = parseToolCalls(content);
         if (textToolCalls.length > 0) {
           toolCalls = textToolCalls;
+        }
+      }
+
+      // Warn the user if Ollama model fails to produce tool calls early on
+      if (toolCalls.length === 0 && iteration <= 2 && providerId === 'ollama') {
+        const model = config.get('model');
+        const paramMatch = model.toLowerCase().match(/(\d+(?:\.\d+)?)b/);
+        const params = paramMatch ? parseFloat(paramMatch[1]) : null;
+        if (params !== null && params < 7) {
+          opts.onChunk?.(`\n\n⚠️ **Model too small for agent mode** — \`${model}\` (${params}B) does not reliably support tool calling. Use a 7B+ model (e.g. \`qwen2.5-coder:7b\`) or set Agent Mode to Manual/Off in \`/settings\`.\n`);
         }
       }
       
