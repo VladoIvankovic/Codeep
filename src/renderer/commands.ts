@@ -863,10 +863,58 @@ export async function handleCommand(
     }
 
     case 'tasks': {
-      const { fetchTasks } = await import('../utils/codeepCloud');
+      const { fetchTasks, markTaskDone, generateProjectId } = await import('../utils/codeepCloud');
       const { setTaskContext, clearTaskContext } = await import('../utils/taskContext');
-      const projectName = args[0] || ctx.projectContext?.name;
-      const { generateProjectId } = await import('../utils/codeepCloud');
+      const subCmd = args[0]?.toLowerCase();
+
+      // /tasks done <n>  — mark task #n as done (1-based index from last /tasks list)
+      if (subCmd === 'done') {
+        const idx = parseInt(args[1] ?? '', 10);
+        if (isNaN(idx) || idx < 1) { ctx.app.notify('Usage: /tasks done <number>'); break; }
+        const projectName = ctx.projectContext?.name;
+        const projectId = ctx.projectContext?.root ? generateProjectId(ctx.projectContext.root) : undefined;
+        const tasks = await fetchTasks(projectName, projectId);
+        if (tasks === null) { ctx.app.notify('Not linked to codeep.dev. Run: codeep account'); break; }
+        const task = tasks[idx - 1];
+        if (!task) { ctx.app.notify(`No task #${idx}. Run /tasks to see the list.`); break; }
+        const ok = await markTaskDone(task.id);
+        if (ok) {
+          ctx.app.notify(`✓ Done: ${task.title}`);
+          clearTaskContext();
+        } else {
+          ctx.app.notify('Failed to mark task as done');
+        }
+        break;
+      }
+
+      // /tasks add <title>  — create a new task on the dashboard
+      if (subCmd === 'add') {
+        const title = args.slice(1).join(' ').trim();
+        if (!title) { ctx.app.notify('Usage: /tasks add <title>'); break; }
+        const projectName = ctx.projectContext?.name;
+        const projectId = ctx.projectContext?.root ? generateProjectId(ctx.projectContext.root) : undefined;
+        const { getSyncToken } = await import('../config/index.js');
+        const syncToken = getSyncToken();
+        if (!syncToken) { ctx.app.notify('Not linked to codeep.dev. Run: codeep account'); break; }
+        try {
+          const res = await fetch('https://codeep.dev/api/tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+            body: JSON.stringify({ projectName: projectName || '', projectId: projectId ?? null, title, type: 'task' }),
+          });
+          if (res.ok) {
+            ctx.app.notify(`+ Task added: ${title}`);
+          } else {
+            ctx.app.notify('Failed to add task');
+          }
+        } catch {
+          ctx.app.notify('Failed to add task (network error)');
+        }
+        break;
+      }
+
+      // /tasks  — list pending tasks and load into agent context
+      const projectName = ctx.projectContext?.name;
       const projectId = ctx.projectContext?.root ? generateProjectId(ctx.projectContext.root) : undefined;
       const tasks = await fetchTasks(projectName, projectId);
 
@@ -884,11 +932,11 @@ export async function handleCommand(
 
       const TYPE_ICON: Record<string, string> = { bug: '[bug]', feature: '[feature]', task: '[task]' };
       const lines = [`## Tasks${projectName ? ` — ${projectName}` : ''}`, ''];
-      for (const t of tasks) {
+      tasks.forEach((t, i) => {
         const icon = TYPE_ICON[t.type] ?? '[task]';
-        lines.push(`${icon} ${t.title}${t.description ? `\n   ${t.description}` : ''}`);
-      }
-      lines.push('', `*${tasks.length} pending task${tasks.length > 1 ? 's' : ''}. Manage at codeep.dev/dashboard*`);
+        lines.push(`${i + 1}. ${icon} ${t.title}${t.description ? `\n   ${t.description}` : ''}`);
+      });
+      lines.push('', `*${tasks.length} pending task${tasks.length > 1 ? 's' : ''}. Use /tasks done <n> to mark complete.*`);
       lines.push('*Tasks loaded into agent context — agent will see them in the next message.*');
       ctx.app.addMessage({ role: 'system', content: lines.join('\n') } as Message);
       break;

@@ -180,6 +180,26 @@ export async function fetchTasks(projectName?: string, projectId?: string): Prom
   }
 }
 
+/**
+ * Mark a task as done by ID.
+ * Returns true on success, false if not linked or network error.
+ */
+export async function markTaskDone(taskId: number): Promise<boolean> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return false;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/tasks`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+      body: JSON.stringify({ id: taskId, status: 'done' }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ─── API key sync ─────────────────────────────────────────────────────────────
 
 /**
