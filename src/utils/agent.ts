@@ -352,6 +352,14 @@ export async function runAgent(
       iteration++;
       opts.onIteration?.(iteration, `Iteration ${iteration}/${opts.maxIterations}`);
 
+      // Throttle between iterations to avoid rate limits on token-heavy providers.
+      // Delay scales with context size: ~1s per 10K tokens, capped at 5s.
+      if (iteration > 1) {
+        const totalTokensEstimate = messages.reduce((sum, m) => sum + Math.ceil((m.content as string).length / 4), 0);
+        const throttleMs = Math.min(Math.floor(totalTokensEstimate / 10000) * 1000, 5000);
+        if (throttleMs > 0) await new Promise(resolve => setTimeout(resolve, throttleMs));
+      }
+
       // Compress messages if context window is getting full (silent)
       const compressed = compressMessages(messages, actions);
       if (compressed !== messages) {
