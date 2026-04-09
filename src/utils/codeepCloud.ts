@@ -83,11 +83,13 @@ export async function runAccountFlow(): Promise<void> {
         setGithubAccount(data.github_id, data.username ?? '');
         if (data.sync_token) setSyncToken(data.sync_token);
         // Register device info
-        fetch(`${API_BASE}/api/auth/cli/device`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-sync-token': data.sync_token ?? '' },
-          body: JSON.stringify({ deviceId, hostname: deviceHostname }),
-        }).catch(() => {});
+        try {
+          await fetch(`${API_BASE}/api/auth/cli/device`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-sync-token': data.sync_token ?? '' },
+            body: JSON.stringify({ deviceId, hostname: deviceHostname }),
+          });
+        } catch { /* ignore */ }
         console.log(`\n\n  Connected as @${data.username ?? data.github_id}\n`);
         authorized = true;
         break;
