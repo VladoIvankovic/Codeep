@@ -13,7 +13,7 @@ import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
 import { getGitStatus, isGitRepository } from '../utils/git';
-import { getSessionStats } from '../utils/tokenTracker';
+import { getSessionStats, resetTokenTracking } from '../utils/tokenTracker';
 
 function getActionType(toolName: string): string {
   return toolName.includes('write') ? 'write' :
@@ -200,6 +200,7 @@ export async function executeAgentTask(
   ctx.setAgentRunning(true);
   const abortController = new AbortController();
   ctx.setAbortController(abortController);
+  resetTokenTracking(); // Reset per-run so reportStats sends only this run's tokens
 
   const prefix = dryRun ? '[DRY RUN] ' : '[AGENT] ';
   app.addMessage({ role: 'user', content: prefix + task });
