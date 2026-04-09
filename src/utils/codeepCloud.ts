@@ -351,6 +351,16 @@ export async function pullProfiles(): Promise<Record<string, object> | null> {
   }
 }
 
+export async function syncMemoryNotes(projectName: string, notes: string[]): Promise<void> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return;
+  fetchWithRetry(`${API_BASE}/api/projects/notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+    body: JSON.stringify({ projectName, notes }),
+  }).catch(() => { /* best effort */ });
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {

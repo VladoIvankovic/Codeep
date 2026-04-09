@@ -551,6 +551,41 @@ Commands (in chat):
     }
   }).catch(() => { /* ignore update check failures */ });
 
+  // Auto-detect Ollama on startup — suggest switching if it's running and provider isn't ollama
+  if (config.get('provider') !== 'ollama') {
+    (async () => {
+      try {
+        const { fetchOllamaModels } = await import('../config/index.js');
+        const models = await fetchOllamaModels();
+        if (models && models.length > 0) {
+          const names = models.slice(0, 3).map(m => m.name).join(', ') + (models.length > 3 ? '…' : '');
+          app.notify(`Ollama detected (${models.length} model${models.length > 1 ? 's' : ''}: ${names})\nRun /provider to switch to Ollama`);
+        }
+      } catch { /* ignore */ }
+    })();
+  }
+
+  // Ollama health check — ping every 30s while Ollama is the active provider
+  let ollamaWasDown = false;
+  const ollamaHealthInterval = setInterval(async () => {
+    if (config.get('provider') !== 'ollama') return;
+    try {
+      const { fetchOllamaModels } = await import('../config/index.js');
+      const result = await fetchOllamaModels();
+      if (!result) {
+        if (!ollamaWasDown) {
+          ollamaWasDown = true;
+          app.notify('⚠ Ollama is not responding. Check if it is still running.');
+        }
+      } else if (ollamaWasDown) {
+        ollamaWasDown = false;
+        app.notify('✓ Ollama is back online.');
+      }
+    } catch { /* ignore */ }
+  }, 30_000);
+  // Clean up on exit
+  process.on('exit', () => clearInterval(ollamaHealthInterval));
+
   // Auto-sync learning preferences from cloud if newer — fire-and-forget
   (async () => {
     try {

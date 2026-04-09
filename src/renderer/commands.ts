@@ -29,6 +29,8 @@ import {
   applyProfile,
   listProfiles,
   deleteProfile,
+  initializeAsProject,
+  isManuallyInitializedProject,
 } from '../config/index';
 import { getProjectContext } from '../utils/project';
 import { getCurrentVersion } from '../utils/update';
@@ -103,6 +105,25 @@ export async function handleCommand(
     }
 
     case 'model': {
+      // /model pull <name> — pull an Ollama model (local only)
+      if (args[0] === 'pull') {
+        const modelName = args[1];
+        if (!modelName) { ctx.app.notify('Usage: /model pull <model-name>'); break; }
+        const ollamaUrl = (config.get('ollamaUrl') || 'http://localhost:11434').toLowerCase();
+        const isLocal = ollamaUrl.includes('localhost') || ollamaUrl.includes('127.0.0.1') || ollamaUrl.includes('[::1]');
+        if (!isLocal) {
+          ctx.app.notify(`Ollama is on a remote server (${config.get('ollamaUrl')}).\nSSH into that machine and run: ollama pull ${modelName}`);
+          break;
+        }
+        ctx.app.notify(`Pulling ${modelName}... (this may take a while)`);
+        const { execFile } = await import('child_process');
+        execFile('ollama', ['pull', modelName], { timeout: 600_000 }, (err) => {
+          if (err) ctx.app.notify(`Pull failed: ${err.message}`);
+          else ctx.app.notify(`✓ ${modelName} ready — use /model to select it`);
+        });
+        break;
+      }
+
       const providerId = config.get('provider');
       const { isDynamicModelsProvider, isNoApiKeyProvider: _noKey } = await import('../config/providers');
       if (isDynamicModelsProvider(providerId)) {
@@ -246,6 +267,18 @@ export async function handleCommand(
         const result = undoAllActions();
         ctx.app.notify(result.success ? `Undone ${result.results.length} action(s)` : 'Nothing to undo');
       });
+      break;
+    }
+
+    case 'init': {
+      const initPath = ctx.projectPath || process.cwd();
+      if (isManuallyInitializedProject(initPath)) {
+        ctx.app.notify('Already initialized. Use /scan to refresh project intelligence.');
+        break;
+      }
+      const ok = initializeAsProject(initPath);
+      if (!ok) { ctx.app.notify('Failed to create .codeep/ directory.'); break; }
+      ctx.app.notify('✓ Project initialized (.codeep/ created)\nRun /scan to analyze the project and build AI context.');
       break;
     }
 
@@ -1000,11 +1033,15 @@ export async function handleCommand(
           lines.push('');
           lines.push('### By model');
           for (const b of breakdown) {
-            const costStr = b.estimatedCost > 0 ? `~$${b.estimatedCost.toFixed(4)}` : '(no pricing data)';
+            const isFree = b.provider === 'ollama';
+            const costStr = isFree ? 'free' : b.estimatedCost > 0 ? `~$${b.estimatedCost.toFixed(4)}` : '(no pricing data)';
             lines.push(`- **${b.model}** (${b.provider}): ${formatTokenCount(b.promptTokens)} in / ${formatTokenCount(b.completionTokens)} out — ${costStr}`);
           }
-          if (stats.estimatedCost > 0) {
-            lines.push('');
+          lines.push('');
+          const currentProvider = config.get('provider');
+          if (currentProvider === 'ollama') {
+            lines.push(`**Total: free · ${formatTokenCount(stats.totalTokens)} tokens**`);
+          } else if (stats.estimatedCost > 0) {
             lines.push(`**Total: ~$${stats.estimatedCost.toFixed(4)}**`);
           }
         }
@@ -1052,6 +1089,7 @@ export async function handleCommand(
         }
         const removed = intelligence.notes.splice(idx - 1, 1)[0];
         saveProjectIntelligence(projectRoot, intelligence);
+        import('../utils/codeepCloud.js').then(({ syncMemoryNotes }) => syncMemoryNotes(projectCtx?.name || '', intelligence.notes)).catch(() => {});
         ctx.app.notify(`Removed: "${removed}"`);
         break;
       }
@@ -1060,6 +1098,7 @@ export async function handleCommand(
         const count = intelligence.notes.length;
         intelligence.notes = [];
         saveProjectIntelligence(projectRoot, intelligence);
+        import('../utils/codeepCloud.js').then(({ syncMemoryNotes }) => syncMemoryNotes(projectCtx?.name || '', [])).catch(() => {});
         ctx.app.notify(`Cleared ${count} memory note${count !== 1 ? 's' : ''}.`);
         break;
       }
@@ -1072,6 +1111,7 @@ export async function handleCommand(
       }
       intelligence.notes.push(note);
       saveProjectIntelligence(projectRoot, intelligence);
+      import('../utils/codeepCloud.js').then(({ syncMemoryNotes }) => syncMemoryNotes(projectCtx?.name || '', intelligence.notes)).catch(() => {});
       ctx.app.notify(`Memory saved (${intelligence.notes.length} total): "${note}"`);
       break;
     }
