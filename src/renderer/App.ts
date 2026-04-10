@@ -117,6 +117,7 @@ export interface ConfirmOptions {
   message: string[];
   confirmLabel?: string;
   cancelLabel?: string;
+  extraOption?: { label: string; onSelect: () => void };
   onConfirm: () => void;
   onCancel?: () => void;
 }
@@ -191,7 +192,7 @@ export class App {
   // Inline confirmation dialog state
   private confirmOpen = false;
   private confirmOptions: ConfirmOptions | null = null;
-  private confirmSelection: 'yes' | 'no' = 'no';
+  private confirmSelection: 'yes' | 'no' | 'extra' = 'no';
   
   // Inline menu state (renders below input/status)
   private menuOpen = false;
@@ -1374,11 +1375,12 @@ export class App {
       options: this.confirmOptions,
       selection: this.confirmSelection,
       setSelection: (v) => { this.confirmSelection = v; },
-      close: (confirmed) => {
+      close: (result) => {
         const options = this.confirmOptions!;
         this.confirmOptions = null;
         this.confirmOpen = false;
-        if (confirmed) options.onConfirm();
+        if (result === 'yes') options.onConfirm();
+        else if (result === 'extra') options.extraOption?.onSelect();
         else if (options.onCancel) options.onCancel();
       },
       render: () => this.scheduleRender(),
@@ -1656,17 +1658,25 @@ export class App {
     y++;
     const yesLabel = this.confirmOptions.confirmLabel || 'Yes';
     const noLabel = this.confirmOptions.cancelLabel || 'No';
-    
-    const yesStyle = this.confirmSelection === 'yes' ? PRIMARY_COLOR + style.bold : fg.gray;
-    const noStyle = this.confirmSelection === 'no' ? PRIMARY_COLOR + style.bold : fg.gray;
-    
-    const yesButton = this.confirmSelection === 'yes' ? `► ${yesLabel}` : `  ${yesLabel}`;
-    const noButton = this.confirmSelection === 'no' ? `► ${noLabel}` : `  ${noLabel}`;
-    
+    const extraLabel = this.confirmOptions.extraOption?.label;
+
+    const yesStyle   = this.confirmSelection === 'yes'   ? PRIMARY_COLOR + style.bold : fg.gray;
+    const noStyle    = this.confirmSelection === 'no'    ? PRIMARY_COLOR + style.bold : fg.gray;
+    const extraStyle = this.confirmSelection === 'extra' ? PRIMARY_COLOR + style.bold : fg.gray;
+
+    const yesButton   = this.confirmSelection === 'yes'   ? `► ${yesLabel}` : `  ${yesLabel}`;
+    const noButton    = this.confirmSelection === 'no'    ? `► ${noLabel}`  : `  ${noLabel}`;
+    const extraButton = extraLabel
+      ? (this.confirmSelection === 'extra' ? `► ${extraLabel}` : `  ${extraLabel}`)
+      : null;
+
     this.screen.write(2, y, yesButton, yesStyle);
     this.screen.write(2 + yesButton.length + 4, y, noButton, noStyle);
+    if (extraButton) {
+      this.screen.write(2 + yesButton.length + 4 + noButton.length + 4, y, extraButton, extraStyle);
+    }
     y++;
-    
+
     // Footer
     this.screen.writeLine(y, '←/→ select • y/n quick • Enter confirm • Esc cancel', fg.gray);
   }

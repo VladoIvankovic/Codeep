@@ -229,21 +229,25 @@ export function handleInlineSessionPickerKey(event: KeyEvent, ctx: SessionPicker
 
 export interface ConfirmHandlerContext {
   options: ConfirmOptions;
-  selection: 'yes' | 'no';
-  setSelection(v: 'yes' | 'no'): void;
-  close(confirmed: boolean): void;
+  selection: 'yes' | 'no' | 'extra';
+  setSelection(v: 'yes' | 'no' | 'extra'): void;
+  close(result: 'yes' | 'no' | 'extra'): void;
   render(): void;
 }
 
 export function handleInlineConfirmKey(event: KeyEvent, ctx: ConfirmHandlerContext): void {
+  const hasExtra = !!ctx.options.extraOption;
+
   if (event.key === 'escape') {
-    ctx.close(false);
+    ctx.close('no');
     ctx.render();
     return;
   }
 
   if (event.key === 'left' || event.key === 'right' || event.key === 'tab') {
-    ctx.setSelection(ctx.selection === 'yes' ? 'no' : 'yes');
+    if (ctx.selection === 'yes') ctx.setSelection('no');
+    else if (ctx.selection === 'no') ctx.setSelection(hasExtra ? 'extra' : 'yes');
+    else ctx.setSelection('yes');
     ctx.render();
     return;
   }
@@ -260,8 +264,14 @@ export function handleInlineConfirmKey(event: KeyEvent, ctx: ConfirmHandlerConte
     return;
   }
 
+  if (event.key === 'a' && hasExtra) {
+    ctx.setSelection('extra');
+    ctx.render();
+    return;
+  }
+
   if (event.key === 'enter') {
-    ctx.close(ctx.selection === 'yes');
+    ctx.close(ctx.selection);
     ctx.render();
   }
 }
