@@ -144,6 +144,7 @@ export class App {
   private options: AppOptions;
   private scrollOffset = 0;
   private notification = '';
+  private notificationIsWarn = false;
   private notificationTimeout: NodeJS.Timeout | null = null;
   
   // Render scheduling
@@ -627,14 +628,36 @@ export class App {
    */
   notify(message: string, duration = 3000): void {
     this.notification = message;
+    this.notificationIsWarn = false;
     this.scheduleRender();
-    
+
     if (this.notificationTimeout) {
       clearTimeout(this.notificationTimeout);
     }
-    
+
     this.notificationTimeout = setTimeout(() => {
       this.notification = '';
+      this.notificationIsWarn = false;
+      this.scheduleRender();
+    }, duration);
+  }
+
+  /**
+   * Show warning toast (orange) — replaces itself if called repeatedly.
+   * Used for API errors / retries so they don't pollute the chat.
+   */
+  notifyWarn(message: string, duration = 8000): void {
+    this.notification = message;
+    this.notificationIsWarn = true;
+    this.scheduleRender();
+
+    if (this.notificationTimeout) {
+      clearTimeout(this.notificationTimeout);
+    }
+
+    this.notificationTimeout = setTimeout(() => {
+      this.notification = '';
+      this.notificationIsWarn = false;
       this.scheduleRender();
     }, duration);
   }
@@ -2431,9 +2454,10 @@ export class App {
     this.screen.writeLine(y, '');
 
     if (this.notification) {
-      // Notification: gradient colored, full width
-      const notifText = ` ${this.notification}`;
-      this.screen.write(0, y, PRIMARY_COLOR + notifText + style.reset);
+      const notifColor = this.notificationIsWarn ? '\x1b[38;5;208m' : PRIMARY_COLOR; // orange for warn
+      const maxLen = width - 2;
+      const msg = this.notification.length > maxLen ? this.notification.slice(0, maxLen - 1) + '…' : this.notification;
+      this.screen.write(0, y, notifColor + ' ' + msg + style.reset);
       return;
     }
 

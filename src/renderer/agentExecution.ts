@@ -248,9 +248,13 @@ export async function executeAgentTask(
       onIteration: (iteration, message) => {
         app.updateAgentProgress(iteration);
         app.setAgentWaitingForAI(true); // Waiting for AI response between tool calls
-        // Show special status messages (timeout retries, verification) but not generic iteration messages
+        // API errors/retries → toast (replaces itself, auto-dismisses), other messages → chat
         if (message && !message.startsWith('Iteration ')) {
-          app.addMessage({ role: 'system', content: `_${message}_` });
+          if (message.startsWith('API ')) {
+            app.notifyWarn(message);
+          } else {
+            app.addMessage({ role: 'system', content: `_${message}_` });
+          }
         }
       },
       onToolCall: (tool) => {
