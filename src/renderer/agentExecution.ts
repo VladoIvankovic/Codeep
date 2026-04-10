@@ -13,7 +13,7 @@ import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
 import { getGitStatus, isGitRepository } from '../utils/git';
-import { getSessionStats, resetTokenTracking } from '../utils/tokenTracker';
+import { getSessionStats, getCostBreakdown, resetTokenTracking } from '../utils/tokenTracker';
 
 function getActionType(toolName: string): string {
   return toolName.includes('write') ? 'write' :
@@ -414,7 +414,6 @@ export async function executeAgentTask(
     // Report stats to codeep.dev (fire-and-forget, only if github_id is set)
     const { getCurrentVersion } = await import('../utils/update.js');
     const sessionId = getCurrentSessionId();
-    const tokenStats = getSessionStats();
     // Auto-name from task if no display name set yet
     if (!ctx.sessionDisplayName && ctx.setSessionDisplayName) {
       const taskWords = task.replace(/\s+/g, ' ').trim().split(' ').slice(0, 5).join(' ');
@@ -428,9 +427,10 @@ export async function executeAgentTask(
       projectId:   ctx.projectPath ? generateProjectId(ctx.projectPath) : undefined,
       messages: app.getMessages(),
     });
-    reportStats({
-      model: config.get('model'),
-      provider: config.get('provider'),
+    // Report per-model so tokens are attributed to the correct model/provider
+    // even if the user switched model mid-session.
+    const costBreakdown = getCostBreakdown();
+    const sharedFields = {
       sessionId,
       sessionName: displayName,
       messageCount: app.getMessages().length,
@@ -439,10 +439,26 @@ export async function executeAgentTask(
       projectId:   ctx.projectPath ? generateProjectId(ctx.projectPath) : undefined,
       language: ctx.projectContext?.type,
       isGit: isGitRepository(process.cwd()),
-      inputTokens: tokenStats.totalPromptTokens || undefined,
-      outputTokens: tokenStats.totalCompletionTokens || undefined,
-      estimatedCost: tokenStats.estimatedCost || undefined,
-    });
+    };
+    if (costBreakdown.length > 0) {
+      for (const entry of costBreakdown) {
+        reportStats({
+          ...sharedFields,
+          model: entry.model,
+          provider: entry.provider,
+          inputTokens: entry.promptTokens || undefined,
+          outputTokens: entry.completionTokens || undefined,
+          estimatedCost: entry.estimatedCost || undefined,
+        });
+      }
+    } else {
+      // No token data (e.g. provider doesn't report usage) — fall back to config model
+      reportStats({
+        ...sharedFields,
+        model: config.get('model'),
+        provider: config.get('provider'),
+      });
+    }
 
   } catch (error) {
     const err = error as Error;
