@@ -285,7 +285,7 @@ export function startAcpServer(): Promise<void> {
     const params = msg.params as SessionNewParams;
     const acpSessionId = randomUUID();
 
-    const { codeepSessionId, history, welcomeText } = initWorkspace(params.cwd);
+    const { codeepSessionId, history, welcomeText } = initWorkspace(params.cwd, params.fresh);
 
     sessions.set(acpSessionId, {
       sessionId: acpSessionId,

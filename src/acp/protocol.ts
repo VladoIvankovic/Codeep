@@ -81,6 +81,7 @@ export interface SessionConfigOption {
 export interface SessionNewParams {
   cwd: string;
   mcpServers?: McpServer[];
+  fresh?: boolean;
 }
 
 export interface SessionNewResult {

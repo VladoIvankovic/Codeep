@@ -61,7 +61,7 @@ export interface CommandResult {
  *
  * Returns the welcome message to stream back to the client.
  */
-export function initWorkspace(workspaceRoot: string): {
+export function initWorkspace(workspaceRoot: string, fresh = false): {
   codeepSessionId: string;
   history: Message[];
   welcomeText: string;
@@ -87,7 +87,7 @@ export function initWorkspace(workspaceRoot: string): {
   let codeepSessionId: string;
   let history: Message[] = [];
 
-  if (sessions.length > 0) {
+  if (!fresh && sessions.length > 0) {
     const latest = sessions[0]; // already sorted newest-first
     const loaded = loadSession(latest.name, workspaceRoot);
     if (loaded) {
