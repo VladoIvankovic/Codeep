@@ -167,12 +167,20 @@ Agent automatically gathers relevant files before making changes:
 - Prevents duplicate code and inconsistencies
 
 ### Code Review Mode
-Built-in static analysis with `/review`:
-- Security vulnerabilities (XSS, injection, hardcoded secrets)
-- Performance issues (inefficient patterns)
-- Type safety problems (any types, ts-ignore)
-- Best practices and maintainability
-- Generates a score (0-100)
+AI-powered review of your git diff with `/review`:
+- **Bugs** — logic errors, off-by-one, null/undefined issues
+- **Security** — injection, auth issues, exposed secrets
+- **Performance** — unnecessary loops, memory leaks
+- **Edge cases** — unhandled inputs, missing error handling
+- References file names and line numbers from the diff
+
+```
+> /review            # AI review of unstaged changes
+> /review --staged   # AI review of staged changes
+> /review --static   # Static regex analysis with score (0-100)
+```
+
+If there are no git changes, falls back to static analysis automatically.
 
 ### Interactive Mode
 Agent asks clarifying questions when tasks are ambiguous:
@@ -420,11 +428,12 @@ codeep account   # Opens browser → sign in with GitHub → CLI is linked
 
 ### Dashboard features
 
-- **Usage stats** — total sessions, active this week, model/provider breakdown, 30-day trend
+- **Usage stats** — total sessions, active this week, model/provider breakdown, token usage, estimated cost per model, 30-day trend
 - **Projects** — all projects Codeep was used in, with language tag and git indicator
 - **Project archiving** — hide projects from the list with one click
 - **Tasks** — create/complete bug, feature, and task items from the web or directly from the CLI with `/tasks add` and `/tasks done`
 - **API key sync** — store provider keys securely on codeep.dev, sync to any machine in one command
+- **Connected devices** — see all machines linked to your account (hostname, last seen), revoke access per device
 
 ### API key sync
 
@@ -542,13 +551,30 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 |---------|-------------|
 | `/provider` | Switch AI provider |
 | `/model` | Switch AI model |
+| `/model <name>` | Load a saved profile shortcut (e.g. `/model fast`) |
 | `/protocol` | Switch API protocol (OpenAI/Anthropic) |
 | `/lang` | Set response language (12 languages supported) |
 | `/settings` | Adjust temperature, max tokens, timeout, rate limits |
-| `/profile save <name>` | Save current provider, model and settings as a profile |
+| `/profile save <name>` | Save current provider+model as a named profile |
 | `/profile load <name>` | Load a saved profile |
+| `/profile <name>` | Shorthand for `/profile load <name>` |
 | `/profile list` | List all saved profiles |
-| `/cost` | Show session token usage and estimated API cost |
+| `/profile delete <name>` | Delete a saved profile |
+| `/cost` `/stats` | Show session token usage and estimated API cost per model |
+
+**Model favorites** — save provider+model combos and switch instantly:
+```
+> /provider      # switch to z.ai
+> /model glm-5.1
+> /profile save fast
+
+> /provider      # switch to openai
+> /model gpt-4.1
+> /profile save work
+
+> /model fast    # instantly switch to z.ai / glm-5.1
+> /model work    # instantly switch to openai / gpt-4.1
+```
 
 ### Session Management
 
@@ -621,8 +647,9 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 
 | Command | Description |
 |---------|-------------|
-| `/review` | Run code review on changed files |
-| `/review <file>` | Review specific file |
+| `/review` | AI code review of unstaged git diff |
+| `/review --staged` | AI code review of staged changes |
+| `/review --static` | Static regex analysis with score (0-100) |
 | `/learn` | Learn preferences from project files |
 | `/learn status` | Show learned preferences |
 | `/learn rule <text>` | Add a custom coding rule |

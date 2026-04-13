@@ -105,6 +105,16 @@ export async function handleCommand(
     }
 
     case 'model': {
+      // /model <profile-name> — load a saved profile as a shortcut
+      if (args[0] && args[0] !== 'pull') {
+        const profileMatch = loadProfile(args[0]);
+        if (profileMatch) {
+          applyProfile(profileMatch);
+          ctx.app.notify(`${profileMatch.name}: ${profileMatch.provider} / ${profileMatch.model}`);
+          break;
+        }
+      }
+
       // /model pull <name> — pull an Ollama model (local only)
       if (args[0] === 'pull') {
         const modelName = args[1];
@@ -324,10 +334,66 @@ export async function handleCommand(
 
     case 'review': {
       if (!ctx.projectContext) { ctx.app.notify('No project context'); return; }
-      import('../utils/codeReview').then(({ performCodeReview, formatReviewResult }) => {
-        const reviewFiles = args.length > 0 ? args : undefined;
-        const result = performCodeReview(ctx.projectContext!, reviewFiles);
-        ctx.app.addMessage({ role: 'assistant', content: formatReviewResult(result) });
+      const staged = args.includes('--staged') || args.includes('-s');
+      const staticOnly = args.includes('--static');
+
+      if (staticOnly) {
+        // Static regex analysis
+        import('../utils/codeReview').then(({ performCodeReview, formatReviewResult }) => {
+          const reviewFiles = args.filter(a => !a.startsWith('-'));
+          const result = performCodeReview(ctx.projectContext!, reviewFiles.length ? reviewFiles : undefined);
+          ctx.app.addMessage({ role: 'system', content: `/review --static` });
+          ctx.app.addMessage({ role: 'assistant', content: formatReviewResult(result) });
+        });
+        break;
+      }
+
+      // AI-powered review of git diff
+      ctx.app.notify(staged ? 'Reviewing staged changes...' : 'Reviewing changes...');
+      import('../utils/git').then(({ getGitDiff }) => {
+        const diffResult = getGitDiff(staged, ctx.projectPath);
+
+        if (!diffResult.success || !diffResult.diff) {
+          // No diff — fall back to static analysis
+          ctx.app.notify('No git changes found, running static review...');
+          import('../utils/codeReview').then(({ performCodeReview, formatReviewResult }) => {
+            const result = performCodeReview(ctx.projectContext!);
+            ctx.app.addMessage({ role: 'assistant', content: formatReviewResult(result) });
+          });
+          return;
+        }
+
+        const diffText = diffResult.diff.length > 12000
+          ? diffResult.diff.slice(0, 12000) + '\n\n[diff truncated]'
+          : diffResult.diff;
+
+        const prompt = `You are doing a code review. Analyze this git diff and give structured feedback.
+
+\`\`\`diff
+${diffText}
+\`\`\`
+
+Review for:
+1. **Bugs** — logic errors, off-by-one, null/undefined issues
+2. **Security** — injection, auth issues, exposed secrets, unsafe operations
+3. **Performance** — unnecessary loops, missing indexes, memory leaks
+4. **Edge cases** — unhandled inputs, missing error handling
+5. **Code quality** — readability, naming, duplication
+
+Format: use headers per category, only include categories where you found issues. End with a short overall verdict (1-2 sentences). Be concise and specific — reference file names and line numbers from the diff where possible.`;
+
+        ctx.app.addMessage({ role: 'user', content: `/review${staged ? ' --staged' : ''}` });
+        import('../api/index').then(({ chat }) => {
+          ctx.app.startStreaming();
+          chat(
+            prompt,
+            [],
+            (chunk) => ctx.app.addStreamChunk(chunk),
+            undefined,
+            ctx.projectContext,
+            undefined,
+          ).then(() => ctx.app.endStreaming()).catch(() => ctx.app.endStreaming());
+        });
       });
       break;
     }
@@ -1127,6 +1193,7 @@ export async function handleCommand(
       break;
     }
 
+    case 'stats':
     case 'cost': {
       const { getCostBreakdown, getSessionStats, formatTokenCount, getPricingTable } = await import('../utils/tokenTracker');
       const stats = getSessionStats();

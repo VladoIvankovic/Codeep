@@ -26,6 +26,7 @@ export const helpCategories: HelpCategory[] = [
       { key: '/settings', description: 'Open settings' },
       { key: '/version', description: 'Show version' },
       { key: '/update', description: 'Check for updates' },
+      { key: '/stats (/cost)', description: 'Token usage & cost this session' },
       { key: '/clear', description: 'Clear chat' },
       { key: '/exit', description: 'Quit application' },
     ],
@@ -70,7 +71,9 @@ export const helpCategories: HelpCategory[] = [
       { key: '/memory list', description: 'Show all memory notes' },
       { key: '/memory remove <n>', description: 'Remove note by index' },
       { key: '/memory clear', description: 'Clear all memory notes' },
-      { key: '/review', description: 'Code review' },
+      { key: '/review', description: 'AI code review of git diff' },
+      { key: '/review --staged', description: 'AI review of staged changes' },
+      { key: '/review --static', description: 'Static code analysis (regex)' },
     ],
   },
   {
@@ -102,11 +105,14 @@ export const helpCategories: HelpCategory[] = [
     items: [
       { key: '/provider', description: 'Change AI provider' },
       { key: '/model', description: 'Change model' },
+      { key: '/model <name>', description: 'Load saved profile (e.g. /model fast)' },
       { key: '/protocol', description: 'Switch API protocol' },
       { key: '/lang', description: 'Set response language' },
       { key: '/grant', description: 'Grant write permission' },
       { key: '/login', description: 'Login with API key' },
       { key: '/logout', description: 'Logout from provider' },
+      { key: '/profile save <name>', description: 'Save current provider+model as profile' },
+      { key: '/profile list', description: 'List saved profiles' },
     ],
   },
   {
