@@ -28,6 +28,10 @@ import { autoSaveSession, config, setProvider, listSessionsWithInfo, deleteSessi
 import { ApiError } from '../api/index.js';
 import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
+import { reportStats, generateProjectId } from '../utils/codeepCloud.js';
+import { getCostBreakdown, resetTokenTracking } from '../utils/tokenTracker.js';
+import { isGitRepository } from '../utils/git.js';
+import { getProjectContext } from '../utils/project.js';
 
 // ─── Slash commands advertised to Zed ────────────────────────────────────────
 
@@ -566,6 +570,8 @@ export function startAcpServer(): Promise<void> {
       });
     };
 
+    resetTokenTracking();
+
     const agentResponseChunks: string[] = [];
     const sendChunk = (text: string) => {
       agentResponseChunks.push(text);
@@ -741,6 +747,34 @@ export function startAcpServer(): Promise<void> {
             session.history.push({ role: 'assistant', content: agentResponse });
           }
           autoSaveSession(session.history, session.workspaceRoot);
+
+          // Report token usage to dashboard
+          const projectCtx = getProjectContext(session.workspaceRoot);
+          const sharedFields = {
+            sessionId: session.codeepSessionId,
+            sessionName: session.codeepSessionId,
+            messageCount: session.history.length,
+            cliVersion: getCurrentVersion(),
+            projectName: projectCtx?.name,
+            projectId: generateProjectId(session.workspaceRoot),
+            language: projectCtx?.type,
+            isGit: isGitRepository(session.workspaceRoot),
+          };
+          const costBreakdown = getCostBreakdown();
+          if (costBreakdown.length > 0) {
+            for (const entry of costBreakdown) {
+              reportStats({
+                ...sharedFields,
+                model: entry.model,
+                provider: entry.provider,
+                inputTokens: entry.promptTokens || undefined,
+                outputTokens: entry.completionTokens || undefined,
+                estimatedCost: entry.estimatedCost || undefined,
+              });
+            }
+          } else {
+            reportStats({ ...sharedFields, model: config.get('model'), provider: config.get('provider') });
+          }
 
           // Update title with first real prompt if session had no history
           if (!session.titleSent && !session.hadHistory) {
