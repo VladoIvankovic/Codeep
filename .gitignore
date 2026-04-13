@@ -6,6 +6,7 @@ dist/
 homebrew-codeep/
 Codeep-web/
 codeep-zed/
+Codeep-vscode/
 
 # IDE
 .idea/
