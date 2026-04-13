@@ -28,7 +28,7 @@ import { autoSaveSession, config, setProvider, listSessionsWithInfo, deleteSessi
 import { ApiError } from '../api/index.js';
 import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
-import { reportStats, generateProjectId } from '../utils/codeepCloud.js';
+import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud.js';
 import { getCostBreakdown, resetTokenTracking } from '../utils/tokenTracker.js';
 import { isGitRepository } from '../utils/git.js';
 import { getProjectContext } from '../utils/project.js';
@@ -775,6 +775,14 @@ export function startAcpServer(): Promise<void> {
           } else {
             reportStats({ ...sharedFields, model: config.get('model'), provider: config.get('provider') });
           }
+
+          // Sync session history to dashboard
+          syncSession({
+            sessionId: session.codeepSessionId,
+            projectName: projectCtx?.name,
+            projectId: generateProjectId(session.workspaceRoot),
+            messages: session.history,
+          });
 
           // Update title with first real prompt if session had no history
           if (!session.titleSent && !session.hadHistory) {
