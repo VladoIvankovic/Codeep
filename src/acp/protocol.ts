@@ -99,6 +99,7 @@ export interface SessionLoadParams {
 }
 
 export interface SessionLoadResult {
+  sessionId?: string;
   modes?: SessionModeState | null;
   configOptions?: SessionConfigOption[] | null;
 }

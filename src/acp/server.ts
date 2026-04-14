@@ -352,20 +352,22 @@ export function startAcpServer(): Promise<void> {
 
     // Session not in memory — try to load from disk
     const { codeepSessionId, history, welcomeText } = loadWorkspace(params.cwd, params.sessionId);
+    const acpSessionId = randomUUID();
 
-    sessions.set(params.sessionId, {
-      sessionId: params.sessionId,
+    sessions.set(acpSessionId, {
+      sessionId: acpSessionId,
       workspaceRoot: params.cwd,
       history,
       codeepSessionId,
       addedFiles: new Map(),
       abortController: null,
-      titleSent: false,
+      titleSent: true,
       hadHistory: history.length > 0,
       currentModeId: 'auto',
     });
 
     const result: SessionLoadResult = {
+      sessionId: acpSessionId,
       modes: AGENT_MODES,
       configOptions: buildConfigOptions(),
     };
