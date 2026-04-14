@@ -368,6 +368,7 @@ export function startAcpServer(): Promise<void> {
 
     const result: SessionLoadResult = {
       sessionId: acpSessionId,
+      history: history.filter(m => m.role === 'user' || m.role === 'assistant'),
       modes: AGENT_MODES,
       configOptions: buildConfigOptions(),
     };

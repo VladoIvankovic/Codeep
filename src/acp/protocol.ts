@@ -100,6 +100,7 @@ export interface SessionLoadParams {
 
 export interface SessionLoadResult {
   sessionId?: string;
+  history?: { role: string; content: string }[];
   modes?: SessionModeState | null;
   configOptions?: SessionConfigOption[] | null;
 }
