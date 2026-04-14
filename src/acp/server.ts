@@ -24,7 +24,7 @@ import { executeCommandAsync } from '../utils/shell.js';
 import { PermissionOutcome } from '../utils/agent.js';
 import { ToolCall } from '../utils/tools.js';
 import { initWorkspace, loadWorkspace, handleCommand, AcpSession } from './commands.js';
-import { autoSaveSession, config, setProvider, listSessionsWithInfo, deleteSession as deleteSessionFile, type LanguageCode } from '../config/index.js';
+import { autoSaveSession, config, setProvider, setApiKey, listSessionsWithInfo, deleteSession as deleteSessionFile, type LanguageCode } from '../config/index.js';
 import { ApiError } from '../api/index.js';
 import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
@@ -442,6 +442,17 @@ export function startAcpServer(): Promise<void> {
       }
     } else if (configId === 'language' && typeof value === 'string') {
       config.set('language', value as LanguageCode);
+    } else if (configId === 'login' && typeof value === 'string') {
+      // value is "providerId:apiKey"
+      const colonIdx = value.indexOf(':');
+      if (colonIdx !== -1) {
+        const providerId = value.slice(0, colonIdx);
+        const apiKey = value.slice(colonIdx + 1);
+        if (providerId && apiKey) {
+          setProvider(providerId);
+          setApiKey(apiKey, providerId);
+        }
+      }
     }
 
     transport.respond(msg.id, {});
@@ -488,11 +499,12 @@ export function startAcpServer(): Promise<void> {
   // ── session/delete ───────────────────────────────────────────────────────────
 
   function handleSessionDelete(msg: JsonRpcRequest): void {
-    const { sessionId } = (msg.params ?? {}) as DeleteSessionParams;
+    const { sessionId, cwd } = (msg.params ?? {}) as DeleteSessionParams;
     // Remove from in-memory sessions map if present
     sessions.delete(sessionId);
-    // Delete from disk — sessionId is used as the session file name
-    deleteSessionFile(sessionId);
+    // Try project dir first, then global
+    const deleted = deleteSessionFile(sessionId, cwd || undefined);
+    if (!deleted && cwd) deleteSessionFile(sessionId);
     transport.respond(msg.id, {});
   }
 

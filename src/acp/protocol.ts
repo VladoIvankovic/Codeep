@@ -273,6 +273,7 @@ export interface ListSessionsResult {
 
 export interface DeleteSessionParams {
   sessionId: string;
+  cwd?: string;
 }
 
 export interface DeleteSessionResult {
