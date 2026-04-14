@@ -572,6 +572,12 @@ export function startAcpServer(): Promise<void> {
 
     resetTokenTracking();
 
+    // In manual mode, confirm write/edit operations
+    const prevConfirmWrite = config.get('agentConfirmWriteFile');
+    if (session.currentModeId === 'manual') {
+      config.set('agentConfirmWriteFile', true);
+    }
+
     const agentResponseChunks: string[] = [];
     const sendChunk = (text: string) => {
       agentResponseChunks.push(text);
@@ -746,6 +752,7 @@ export function startAcpServer(): Promise<void> {
           if (agentResponse) {
             session.history.push({ role: 'assistant', content: agentResponse });
           }
+          config.set('agentConfirmWriteFile', prevConfirmWrite);
           autoSaveSession(session.history, session.workspaceRoot);
 
           // Report token usage to dashboard
@@ -809,6 +816,7 @@ export function startAcpServer(): Promise<void> {
             transport.error(msg.id, -32000, err.message);
           }
         }).finally(() => {
+          config.set('agentConfirmWriteFile', prevConfirmWrite);
           if (session) session.abortController = null;
           planEntries.clear();
         });
