@@ -130,13 +130,13 @@ export function handleInlinePermissionKey(event: KeyEvent, ctx: PermissionHandle
     return;
   }
 
-  if (event.key === 'up') {
+  if (event.key === 'up' || event.key === 'left') {
     ctx.setIndex(Math.max(0, ctx.index - 1));
     ctx.render();
     return;
   }
 
-  if (event.key === 'down') {
+  if (event.key === 'down' || event.key === 'right') {
     ctx.setIndex(Math.min(PERMISSION_OPTIONS.length - 1, ctx.index + 1));
     ctx.render();
     return;
