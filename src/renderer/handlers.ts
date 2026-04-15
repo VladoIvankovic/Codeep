@@ -244,10 +244,20 @@ export function handleInlineConfirmKey(event: KeyEvent, ctx: ConfirmHandlerConte
     return;
   }
 
-  if (event.key === 'left' || event.key === 'right' || event.key === 'tab') {
+  if (event.key === 'right' || event.key === 'tab') {
+    // cycle forward: yes → no → extra → yes
     if (ctx.selection === 'yes') ctx.setSelection('no');
     else if (ctx.selection === 'no') ctx.setSelection(hasExtra ? 'extra' : 'yes');
     else ctx.setSelection('yes');
+    ctx.render();
+    return;
+  }
+
+  if (event.key === 'left') {
+    // cycle backward: yes → extra → no → yes
+    if (ctx.selection === 'yes') ctx.setSelection(hasExtra ? 'extra' : 'no');
+    else if (ctx.selection === 'no') ctx.setSelection('yes');
+    else ctx.setSelection('no');
     ctx.render();
     return;
   }
