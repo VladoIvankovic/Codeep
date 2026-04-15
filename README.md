@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  <img src="Codeep.gif" alt="Codeep demo" width="700">
+</p>
+
+<p align="center">
   AI-powered coding assistant built for the terminal. Multiple LLM providers, project-aware context, and a seamless development workflow.
 </p>
 
