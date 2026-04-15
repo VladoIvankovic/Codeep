@@ -1129,6 +1129,25 @@ export class App {
       return;
     }
     
+    // While agent is running: allow typing and Enter to interrupt+reply
+    if (this.isAgentRunning) {
+      if (event.key === 'enter' && !this.showAutocomplete) {
+        const text = this.editor.getValue().trim();
+        if (text && this.options.onStopAgent) {
+          // Stop agent, then submit the typed reply
+          this.options.onStopAgent();
+          // Small delay so abort propagates before next submit
+          setTimeout(() => { this.submitInput(); }, 100);
+        }
+        return;
+      }
+      // Allow regular typing while agent runs
+      if (this.editor.handleKey(event)) {
+        this.scheduleRender();
+      }
+      return;
+    }
+
     // Enter to submit (only if not in autocomplete)
     if (event.key === 'enter' && !this.isLoading && !this.isStreaming && !this.showAutocomplete) {
       const rawValue = this.editor.getValue();
@@ -1780,13 +1799,27 @@ export class App {
     
     // Agent running state - show special prompt with gradient
     if (this.isAgentRunning) {
-      const spinner = SPINNER_FRAMES[this.spinnerFrame];
-      const stepLabel = this.agentMaxIterations > 0
-        ? `step ${this.agentIteration}/${this.agentMaxIterations}`
-        : `step ${this.agentIteration}`;
-      const agentText = `${spinner} Agent working... ${stepLabel} | ${this.agentActions.length} actions (Esc to stop)`;
-      this.screen.write(0, y, PRIMARY_COLOR + style.bold + agentText + style.reset);
-      this.screen.showCursor(false);
+      if (inputValue) {
+        // User is typing a reply — show their input with a prompt
+        const promptSymbol = '❯ ';
+        const maxInputWidth = width - promptSymbol.length - 1;
+        const displayInput = inputValue.length <= maxInputWidth ? inputValue : '…' + inputValue.slice(-(maxInputWidth - 1));
+        this.screen.write(0, y, promptSymbol, PRIMARY_COLOR);
+        this.screen.write(promptSymbol.length, y, displayInput + ' ');
+        const cursorX = promptSymbol.length + Math.min(cursorPos, maxInputWidth);
+        if (!hideCursor) {
+          this.screen.setCursor(cursorX, y);
+          this.screen.showCursor(true);
+        }
+      } else {
+        const spinner = SPINNER_FRAMES[this.spinnerFrame];
+        const stepLabel = this.agentMaxIterations > 0
+          ? `step ${this.agentIteration}/${this.agentMaxIterations}`
+          : `step ${this.agentIteration}`;
+        const agentText = `${spinner} Agent working... ${stepLabel} | ${this.agentActions.length} actions (Esc · or type to reply)`;
+        this.screen.write(0, y, PRIMARY_COLOR + style.bold + agentText + style.reset);
+        this.screen.showCursor(false);
+      }
       return;
     }
 

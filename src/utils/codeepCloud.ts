@@ -127,7 +127,9 @@ export interface StatsPayload {
  * Generate a stable project ID from the project root path.
  */
 export function generateProjectId(projectRoot: string): string {
-  return createHash('sha256').update(projectRoot).digest('hex').slice(0, 16);
+  // Normalize: remove trailing slash, resolve to real path format
+  const normalized = projectRoot.replace(/\/+$/, '').toLowerCase();
+  return createHash('sha256').update(normalized).digest('hex').slice(0, 16);
 }
 
 /**
