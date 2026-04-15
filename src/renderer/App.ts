@@ -1129,19 +1129,22 @@ export class App {
       return;
     }
     
-    // While agent is running: allow typing and Enter to interrupt+reply
-    if (this.isAgentRunning) {
+    // While agent/loading/streaming: allow typing and Enter to interrupt+reply
+    if (this.isAgentRunning || this.isLoading || this.isStreaming) {
       if (event.key === 'enter' && !this.showAutocomplete) {
         const text = this.editor.getValue().trim();
-        if (text && this.options.onStopAgent) {
-          // Stop agent, then submit the typed reply
-          this.options.onStopAgent();
-          // Small delay so abort propagates before next submit
-          setTimeout(() => { this.submitInput(); }, 100);
+        if (text) {
+          if (this.isStreaming) {
+            this.endStreaming();
+            setTimeout(() => { this.submitInput(); }, 50);
+          } else if (this.options.onStopAgent) {
+            this.options.onStopAgent();
+            setTimeout(() => { this.submitInput(); }, 100);
+          }
         }
         return;
       }
-      // Allow regular typing while agent runs
+      // Allow regular typing while busy
       if (this.editor.handleKey(event)) {
         this.scheduleRender();
       }
@@ -1823,13 +1826,25 @@ export class App {
       return;
     }
 
-    // Loading/streaming state with animated spinner + gradient
+    // Loading/streaming state — show typed input if any, else spinner
     if (this.isLoading || this.isStreaming) {
-      const spinner = SPINNER_FRAMES[this.spinnerFrame];
-      const message = this.isStreaming ? 'Writing...' : 'Thinking...';
-      const spinnerText = `${spinner} ${message}`;
-      this.screen.write(0, y, PRIMARY_COLOR + spinnerText + style.reset);
-      this.screen.showCursor(false);
+      if (inputValue) {
+        const promptSymbol = '❯ ';
+        const maxInputWidth = width - promptSymbol.length - 1;
+        const displayInput = inputValue.length <= maxInputWidth ? inputValue : '…' + inputValue.slice(-(maxInputWidth - 1));
+        this.screen.write(0, y, promptSymbol, PRIMARY_COLOR);
+        this.screen.write(promptSymbol.length, y, displayInput + ' ');
+        const cursorX = promptSymbol.length + Math.min(cursorPos, maxInputWidth);
+        if (!hideCursor) {
+          this.screen.setCursor(cursorX, y);
+          this.screen.showCursor(true);
+        }
+      } else {
+        const spinner = SPINNER_FRAMES[this.spinnerFrame];
+        const message = this.isStreaming ? 'Writing...' : 'Thinking...';
+        this.screen.write(0, y, PRIMARY_COLOR + `${spinner} ${message} (type to interrupt)` + style.reset);
+        this.screen.showCursor(false);
+      }
       return;
     }
     
