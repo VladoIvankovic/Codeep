@@ -307,12 +307,13 @@ export function getProvider(id: string): ProviderConfig | null {
   return PROVIDERS[id] || null;
 }
 
-export function getProviderList(): { id: string; name: string; description: string; subscribeUrl?: string }[] {
+export function getProviderList(): { id: string; name: string; description: string; subscribeUrl?: string; noApiKey?: boolean }[] {
   return Object.entries(PROVIDERS).map(([id, config]) => ({
     id,
     name: config.name,
     description: config.description,
     subscribeUrl: config.subscribeUrl,
+    noApiKey: config.noApiKey,
   }));
 }
 

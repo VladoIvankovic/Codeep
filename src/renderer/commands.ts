@@ -524,7 +524,7 @@ Format: use headers per category, only include categories where you found issues
 
     case 'login': {
       const providers = getProviderList();
-      ctx.app.showLogin(providers.map(p => ({ id: p.id, name: p.name, subscribeUrl: p.subscribeUrl })), async (result) => {
+      ctx.app.showLogin(providers.map(p => ({ id: p.id, name: p.name, subscribeUrl: p.subscribeUrl, noApiKey: p.noApiKey })), async (result) => {
         if (result) {
           setProvider(result.providerId);
           await setApiKey(result.apiKey);

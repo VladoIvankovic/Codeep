@@ -252,7 +252,7 @@ export class App {
   // Inline login state
   private loginOpen = false;
   private loginStep: 'provider' | 'apikey' = 'provider';
-  private loginProviders: Array<{ id: string; name: string; subscribeUrl?: string }> = [];
+  private loginProviders: Array<{ id: string; name: string; subscribeUrl?: string; noApiKey?: boolean }> = [];
   private loginProviderIndex = 0;
   private loginApiKey = '';
   private loginError = '';

@@ -292,6 +292,7 @@ export interface LoginProvider {
   id: string;
   name: string;
   subscribeUrl?: string;
+  noApiKey?: boolean;
 }
 
 export interface LoginHandlerContext {
@@ -325,10 +326,17 @@ export function handleLoginKey(event: KeyEvent, ctx: LoginHandlerContext): void 
       return;
     }
     if (event.key === 'enter') {
-      ctx.setStep('apikey');
-      ctx.setApiKey('');
-      ctx.setError('');
-      ctx.render();
+      const selected = ctx.providers[ctx.providerIndex];
+      if (selected?.noApiKey) {
+        // No API key needed (e.g. Ollama) — close immediately
+        ctx.close({ providerId: selected.id, apiKey: '' });
+        ctx.render();
+      } else {
+        ctx.setStep('apikey');
+        ctx.setApiKey('');
+        ctx.setError('');
+        ctx.render();
+      }
     }
     return;
   }
