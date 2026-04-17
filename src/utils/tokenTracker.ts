@@ -45,6 +45,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'o4-mini':              200_000,
   'gpt-4o':               128_000,
   // Anthropic
+  'claude-opus-4-7':              1_000_000,
   'claude-opus-4-6':              1_000_000,
   'claude-sonnet-4-6':            1_000_000,
   'claude-sonnet-4-5-20250929':   200_000,
@@ -96,6 +97,7 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'o4-mini':      { inputPer1M: 0.55,  outputPer1M: 2.20 },
   'gpt-4o':       { inputPer1M: 2.50,  outputPer1M: 10.00 },
   // Anthropic
+  'claude-opus-4-7':              { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-opus-4-6':              { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-sonnet-4-6':            { inputPer1M: 3.00,  outputPer1M: 15.00 },
   'claude-sonnet-4-5-20250929':   { inputPer1M: 3.00,  outputPer1M: 15.00 },
