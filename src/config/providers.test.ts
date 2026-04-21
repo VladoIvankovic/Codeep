@@ -195,10 +195,11 @@ describe('providers', () => {
   });
 
   describe('anthropic provider', () => {
-    it('should include Claude Opus 4.6 as default model', () => {
-      expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-4-6');
+    it('should include Claude Opus 4.7 as default model', () => {
+      expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-4-7');
       const modelIds = PROVIDERS['anthropic'].models.map(m => m.id);
-      expect(modelIds).toContain('claude-opus-4-6');
+      expect(modelIds).toContain('claude-opus-4-7');
+      expect(modelIds).toContain('claude-opus-4-6'); // kept as previous-gen option
       expect(modelIds).toContain('claude-sonnet-4-6');
       expect(modelIds).toContain('claude-haiku-4-5-20251001');
     });

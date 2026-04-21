@@ -121,9 +121,13 @@ export function fetchWithTimeout(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-  // Merge abort signals if one was provided
-  if (fetchOptions.signal) {
-    fetchOptions.signal.addEventListener('abort', () => controller.abort());
+  // Merge abort signals if one was provided. Named handler + explicit removal
+  // so listeners don't accumulate on a reused caller-owned AbortSignal
+  // (e.g. inside an agent loop that fires many requests with the same signal).
+  const externalSignal = fetchOptions.signal as AbortSignal | null | undefined;
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    externalSignal.addEventListener('abort', onExternalAbort, { once: true });
   }
 
   return fetch(url, {
@@ -131,5 +135,6 @@ export function fetchWithTimeout(
     signal: controller.signal,
   }).finally(() => {
     clearTimeout(timeoutId);
+    if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
   });
 }

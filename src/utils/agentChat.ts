@@ -201,43 +201,35 @@ export function formatChatHistoryForAgent(
 }
 
 export function getAgentSystemPrompt(projectContext: ProjectContext): string {
-  return `You are Codeep, an AI coding agent with FULL autonomous access to this project. Never refer to yourself as Claude or any other AI — you are Codeep.
+  const root = projectContext.root || process.cwd();
+  return `You are Codeep, an autonomous AI coding agent operating inside this project. Never refer to yourself as Claude or any other AI.
 
-## Your Capabilities
-- Read, write, edit, and delete files and directories
-- Create directories with create_directory tool
-- Execute shell commands (npm, git, build tools, etc.)
-- Search code in the project
-- List directory contents
+## Tools
+- read_file / write_file / edit_file / delete_file — file ops (prefer edit_file for modifications to keep surrounding content intact)
+- create_directory / list_files / search_code — project navigation
+- execute_command — ONLY for package managers & version control: npm, yarn, pnpm, bun, git, composer, pip, cargo, go, make. Never for ls/cat/grep/mkdir/rm/cp/mv/touch — use the dedicated tools.
 
-## IMPORTANT: Follow User Instructions Exactly
-- Do EXACTLY what the user asks
-- If user says "create a website" -> create ALL necessary files (HTML, CSS, JS, images, etc.)
-- If user says "create folder X" -> use create_directory tool to create folder X
-- If user says "delete file X" -> use delete_file tool to delete file X
-- The user may write in any language - understand their request and execute it
-- Tool names and parameters must ALWAYS be in English (e.g., "create_directory", not "kreiraj_direktorij")
-- KEEP WORKING until the ENTIRE task is finished - do NOT stop after creating just directories or partial files
-- Only stop when you have created ALL files needed for a complete, working solution
+## Behavior
+- Do what the user asked — in whatever language they wrote. Tool names stay English.
+- Read a file before editing it unless you just created it.
+- Keep working until the task is actually finished. If you still have work to do, CALL A TOOL — don't just narrate. If you're done, reply with a short summary and no tool calls.
+- Don't ask permission for routine work; the user already launched the agent.
 
-## Rules
-1. Always read files before editing them to understand the current content
-2. Use edit_file for modifications to existing files (preserves other content)
-3. Use write_file only for creating new files or complete overwrites
-4. Use create_directory to create new folders/directories
-5. Use list_files to see directory contents
-6. Use search_code to find files or search patterns
-7. NEVER use execute_command for: ls, find, cat, grep, mkdir, rm, cp, mv, touch
-8. Use execute_command ONLY for: npm, git, composer, pip, cargo (build/package managers)
-9. When the task is complete, respond with a summary WITHOUT any tool calls
-10. CRITICAL: If the task is NOT complete, you MUST call a tool — never respond with only text mid-task. Do not "think out loud" or describe what you are about to do without calling a tool. Act immediately.
+## Codeep App Storage (your own metadata)
+This project uses Codeep. The following paths are Codeep's internal state — **read** them if you need context about prior sessions, but do not edit them manually during a task:
+- \`${root}/.codeep/intelligence.json\` — cached project analysis (structure, frameworks, CI/CD, conventions). Refresh via \`/scan\`.
+- \`${root}/.codeep/progress.md\` — rolling log of actions from recent sessions.
+- \`${root}/.codeep/sessions/\` — saved chat + agent sessions for undo/replay.
+- \`${root}/.codeep/rules.md\` or \`${root}/CODEEP.md\` — project-specific rules you must follow (if present).
+- \`${root}/.codeep/config.json\` — project-level config (permissions etc.).
+- \`~/.config/codeep/config.json\` — global user config + API keys.
 
 ## Project Information
 Name: ${projectContext.name || 'Unknown'}
 Type: ${projectContext.type || 'unknown'}
-Root: ${projectContext.root || process.cwd()}
+Root: ${root}
 ${projectContext.structure ? `\n## Project Structure\n${projectContext.structure}` : ''}${(() => {
-  const intelligence = loadProjectIntelligence(projectContext.root || process.cwd());
+  const intelligence = loadProjectIntelligence(root);
   return intelligence ? `\n\n${generateContextFromIntelligence(intelligence)}` : '';
 })()}`;
 }
@@ -280,8 +272,12 @@ export async function agentChat(
   let isTimeout = false;
 
   const timeout = setTimeout(() => { isTimeout = true; controller.abort(); }, timeoutMs);
+  // Named handler + removal in `finally`. Each agent iteration reuses the same
+  // external `abortSignal` — without cleanup, listeners pile up and Node warns
+  // after 11 are attached (MaxListenersExceededWarning on AbortSignal).
+  const onExternalAbort = () => { isTimeout = false; controller.abort(); };
   if (abortSignal) {
-    abortSignal.addEventListener('abort', () => { isTimeout = false; controller.abort(); }, { once: true });
+    abortSignal.addEventListener('abort', onExternalAbort, { once: true });
   }
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -373,6 +369,7 @@ export async function agentChat(
     throw error;
   } finally {
     clearTimeout(timeout);
+    if (abortSignal) abortSignal.removeEventListener('abort', onExternalAbort);
   }
 }
 
@@ -405,8 +402,11 @@ export async function agentChatFallback(
   let isTimeout = false;
 
   const timeout = setTimeout(() => { isTimeout = true; controller.abort(); }, timeoutMs);
+  // See note in main agentChat above — listener cleanup prevents MaxListenersExceededWarning
+  // when an agent loop calls this repeatedly with the same external signal.
+  const onExternalAbort = () => { isTimeout = false; controller.abort(); };
   if (abortSignal) {
-    abortSignal.addEventListener('abort', () => { isTimeout = false; controller.abort(); }, { once: true });
+    abortSignal.addEventListener('abort', onExternalAbort, { once: true });
   }
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -478,5 +478,6 @@ export async function agentChatFallback(
     throw error;
   } finally {
     clearTimeout(timeout);
+    if (abortSignal) abortSignal.removeEventListener('abort', onExternalAbort);
   }
 }

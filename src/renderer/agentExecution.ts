@@ -213,7 +213,7 @@ export async function executeAgentTask(
     const enrichedTask = fileContext ? fileContext + task : task;
 
     // Show N/M progress in status bar
-    const rawIterations = config.get('agentMaxIterations') || 100;
+    const rawIterations = config.get('agentMaxIterations') || 50;
     app.setAgentMaxIterations(Math.max(5, rawIterations));
 
     const confirmationMode = config.get('agentConfirmation') || 'dangerous';

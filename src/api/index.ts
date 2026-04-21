@@ -370,10 +370,13 @@ async function chatOpenAI(
   const controller = new AbortController();
   let timedOut = false;
   const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
-  
-  // Listen to external abort signal if provided (user cancel)
+
+  // Listen to external abort signal if provided (user cancel).
+  // Named handler + explicit removal in `finally` — `{ once: true }` alone leaks
+  // when the request completes normally, piling up listeners across agent iterations.
+  const onExternalAbort = () => controller.abort();
   if (abortSignal) {
-    abortSignal.addEventListener('abort', () => controller.abort(), { once: true });
+    abortSignal.addEventListener('abort', onExternalAbort, { once: true });
   }
 
   // Build headers based on auth type
@@ -444,6 +447,7 @@ async function chatOpenAI(
     throw error;
   } finally {
     clearTimeout(timeoutId);
+    if (abortSignal) abortSignal.removeEventListener('abort', onExternalAbort);
   }
 }
 
@@ -606,10 +610,13 @@ async function chatAnthropic(
   const controller = new AbortController();
   let timedOut = false;
   const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
-  
-  // Listen to external abort signal if provided (user cancel)
+
+  // Listen to external abort signal if provided (user cancel).
+  // Named handler + explicit removal in `finally` — `{ once: true }` alone leaks
+  // when the request completes normally, piling up listeners across agent iterations.
+  const onExternalAbort = () => controller.abort();
   if (abortSignal) {
-    abortSignal.addEventListener('abort', () => controller.abort(), { once: true });
+    abortSignal.addEventListener('abort', onExternalAbort, { once: true });
   }
 
   // Build headers based on auth type
@@ -659,6 +666,7 @@ async function chatAnthropic(
     throw error;
   } finally {
     clearTimeout(timeoutId);
+    if (abortSignal) abortSignal.removeEventListener('abort', onExternalAbort);
   }
 }
 

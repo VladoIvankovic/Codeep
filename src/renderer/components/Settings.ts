@@ -160,8 +160,10 @@ export const SETTINGS: SettingItem[] = [
     getValue: () => config.get('agentMaxIterations'),
     type: 'number',
     min: 10,
-    max: 100000,
-    step: 100,
+    // 500 is the new cap. Anything higher almost always means a stuck loop — it's
+    // more useful for the agent to bail and ask than to chew tokens for an hour.
+    max: 500,
+    step: 5,
   },
   {
     key: 'agentAutoVerify',
@@ -199,7 +201,7 @@ export const SETTINGS: SettingItem[] = [
   {
     key: 'agentMaxFixAttempts',
     label: 'Agent Max Fix Attempts',
-    getValue: () => config.get('agentMaxFixAttempts') || 3,
+    getValue: () => config.get('agentMaxFixAttempts') ?? 1,
     type: 'number',
     min: 0,
     max: 10,

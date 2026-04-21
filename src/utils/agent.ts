@@ -173,7 +173,11 @@ export interface AgentResult {
 }
 
 const DEFAULT_OPTIONS: AgentOptions = {
-  maxIterations: 100, // Increased for large tasks
+  // Modern models (GLM-5.1, Claude 4.5, GPT-4.1) complete typical coding tasks in
+  // 3–8 iterations. The old cap of 100 mostly let broken loops wander for minutes
+  // before giving up. 25 is still generous — covers multi-file refactors — without
+  // turning small fixes into marathons. Users can still raise this via /settings.
+  maxIterations: 25,
   maxDuration: 20 * 60 * 1000, // 20 minutes
   usePlanning: false, // Disable task planning - causes more problems than it solves
 };
@@ -287,7 +291,10 @@ export async function runAgent(
   let result: AgentResult;
   let consecutiveTimeouts = 0;
   let incompleteWorkRetries = 0;
-  const maxIncompleteWorkRetries = 5;
+  // If the model claims completion but the task isn't actually done, we nudge it
+  // once or twice. More retries than that usually means the model is stuck, not
+  // that it needs a third chance — bail out instead of spamming identical hints.
+  const maxIncompleteWorkRetries = 2;
   // Track tools permanently allowed this session via allow_always
   const alwaysAllowedTools = new Set<string>();
   // Track tools permanently rejected this session via reject_always

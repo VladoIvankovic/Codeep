@@ -544,6 +544,9 @@ export async function handleCommand(
 // ─── Renderers ────────────────────────────────────────────────────────────────
 
 function buildHelp(): string {
+  // Keep this mirrored with the switch in handleSlashCommand above. Every `case`
+  // that isn't a skill alias should have a row here, otherwise users in Zed /
+  // VS Code won't discover the command exists.
   return [
     '## Codeep Commands',
     '',
@@ -572,19 +575,31 @@ function buildHelp(): string {
     '|---------|-------------|',
     '| `/add <file...>` | Add files to agent context |',
     '| `/drop [file...]` | Remove files from context (no args = clear all) |',
+    '| `/scan` | Scan project and cache intelligence for the agent |',
+    '| `/learn` | Learn code conventions from source files |',
     '',
-    '**Actions**',
+    '**Review & Git**',
     '| Command | Description |',
     '|---------|-------------|',
+    '| `/review` | AI review of **unstaged git changes** (not full codebase) |',
+    '| `/review --staged` | AI review of staged git changes |',
+    '| `/review --static` | Static analysis — changed files, or full `src/` if clean |',
+    '| `/review <file...>` | Static analysis of specific file(s) |',
     '| `/diff [--staged]` | Git diff with AI review |',
+    '',
+    '**Actions & History**',
+    '| Command | Description |',
+    '|---------|-------------|',
     '| `/undo` | Undo last agent action |',
     '| `/undo-all` | Undo all actions in session |',
     '| `/changes` | Show session changes |',
     '| `/export [json\\|md\\|txt]` | Export conversation |',
     '',
-    '**Skills** (type `/skills` to list all)',
+    '**Skills** (type `/skills` to list all, or `/skills <query>` to search)',
     '`/commit` · `/fix` · `/test` · `/docs` · `/refactor` · `/explain`',
     '`/optimize` · `/debug` · `/push` · `/pr` · `/build` · `/deploy` …',
+    '',
+    '_Skills run as standalone workflows. For general coding requests, just describe the task._',
   ].join('\n');
 }
 

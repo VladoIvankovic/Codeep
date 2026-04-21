@@ -183,6 +183,11 @@ function buildConfigOptions(): SessionConfigOption[] {
     ? compositeValue
     : (modelOptions[0]?.value ?? '');
   const currentLanguage = (config.get('language') as string) || 'auto';
+  const boolToStr = (v: boolean) => (v ? 'true' : 'false');
+  const BOOL_OPTIONS = [
+    { value: 'true',  name: 'ON' },
+    { value: 'false', name: 'OFF' },
+  ];
   return [
     {
       id: 'model',
@@ -201,6 +206,33 @@ function buildConfigOptions(): SessionConfigOption[] {
       type: 'select' as const,
       currentValue: currentLanguage,
       options: LANGUAGE_OPTIONS,
+    },
+    {
+      id: 'agentConfirmDeleteFile',
+      name: 'Confirm: delete_file',
+      description: 'Require permission before deleting files',
+      category: null,
+      type: 'select' as const,
+      currentValue: boolToStr(config.get('agentConfirmDeleteFile') !== false),
+      options: BOOL_OPTIONS,
+    },
+    {
+      id: 'agentConfirmExecuteCommand',
+      name: 'Confirm: execute_command',
+      description: 'Require permission before running shell commands',
+      category: null,
+      type: 'select' as const,
+      currentValue: boolToStr(config.get('agentConfirmExecuteCommand') !== false),
+      options: BOOL_OPTIONS,
+    },
+    {
+      id: 'agentConfirmWriteFile',
+      name: 'Confirm: write_file / edit_file',
+      description: 'Require permission before writing or editing files',
+      category: null,
+      type: 'select' as const,
+      currentValue: boolToStr(config.get('agentConfirmWriteFile') === true),
+      options: BOOL_OPTIONS,
     },
   ];
 }
@@ -442,6 +474,14 @@ export function startAcpServer(): Promise<void> {
       }
     } else if (configId === 'language' && typeof value === 'string') {
       config.set('language', value as LanguageCode);
+    } else if (
+      configId === 'agentConfirmDeleteFile' ||
+      configId === 'agentConfirmExecuteCommand' ||
+      configId === 'agentConfirmWriteFile'
+    ) {
+      // Accept boolean or "true"/"false" string from Zed/VSCode
+      const bool = value === true || value === 'true';
+      config.set(configId, bool);
     } else if (configId === 'login' && typeof value === 'string') {
       // value is "providerId:apiKey"
       const colonIdx = value.indexOf(':');

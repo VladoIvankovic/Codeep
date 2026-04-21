@@ -5,6 +5,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, readdirSync } from 'fs';
 import { join, basename, extname, relative } from 'path';
+import { loadIgnoreRules, isIgnored, type IgnoreRules } from './gitignore';
 
 // ============================================================================
 // Types
@@ -54,6 +55,9 @@ export interface ProjectIntelligence {
     mainModules: string[];   // Key directories/modules
     apiEndpoints?: string[]; // Detected API routes
     components?: string[];   // UI components
+    ciSystem?: string | null;      // GitHub Actions, GitLab CI, CircleCI, etc.
+    containerization?: string[];    // Docker, docker-compose, Kubernetes manifests
+    monorepoTool?: string | null;   // Turborepo, Nx, Lerna, pnpm workspaces
   };
   
   // Code conventions
@@ -79,7 +83,7 @@ export interface ProjectIntelligence {
 // Constants
 // ============================================================================
 
-const INTELLIGENCE_VERSION = '1.1';
+const INTELLIGENCE_VERSION = '1.2';
 const INTELLIGENCE_FILE = 'intelligence.json';
 
 const IGNORE_DIRS = new Set([
@@ -150,6 +154,9 @@ export async function scanProject(projectPath: string): Promise<ProjectIntellige
     architecture: {
       patterns: [],
       mainModules: [],
+      ciSystem: null,
+      containerization: [],
+      monorepoTool: null,
     },
     conventions: {
       indentation: 'spaces',
@@ -165,24 +172,30 @@ export async function scanProject(projectPath: string): Promise<ProjectIntellige
     notes: [],
   };
 
-  // Scan directory structure
-  scanDirectoryStructure(projectPath, intelligence);
-  
+  // Load .gitignore rules once — used by scan and endpoint detection
+  const ignoreRules = loadIgnoreRules(projectPath);
+
+  // Scan directory structure (honors .gitignore)
+  scanDirectoryStructure(projectPath, intelligence, 0, ignoreRules);
+
   // Detect project type and dependencies
   detectProjectType(projectPath, intelligence);
-  
+
   // Analyze key files
   analyzeKeyFiles(projectPath, intelligence);
-  
+
   // Detect architecture patterns
   detectArchitecture(projectPath, intelligence);
-  
+
+  // Detect CI/CD, containerization, monorepo
+  detectDevOps(projectPath, intelligence);
+
   // Analyze code conventions
   analyzeConventions(projectPath, intelligence);
-  
+
   // Detect testing setup
   detectTesting(projectPath, intelligence);
-  
+
   return intelligence;
 }
 
@@ -283,6 +296,23 @@ export function generateContextFromIntelligence(intelligence: ProjectIntelligenc
     }
     lines.push('');
   }
+
+  // DevOps / Tooling — high signal for command execution
+  const devopsLines: string[] = [];
+  if (intelligence.architecture.monorepoTool) {
+    devopsLines.push(`Monorepo: ${intelligence.architecture.monorepoTool}`);
+  }
+  if (intelligence.architecture.ciSystem) {
+    devopsLines.push(`CI/CD: ${intelligence.architecture.ciSystem}`);
+  }
+  if (intelligence.architecture.containerization && intelligence.architecture.containerization.length > 0) {
+    devopsLines.push(`Containerization: ${intelligence.architecture.containerization.join(', ')}`);
+  }
+  if (devopsLines.length > 0) {
+    lines.push('## DevOps');
+    devopsLines.forEach(l => lines.push(l));
+    lines.push('');
+  }
   
   // Entry points
   if (intelligence.entryPoints.length > 0) {
@@ -347,33 +377,41 @@ export function generateContextFromIntelligence(intelligence: ProjectIntelligenc
 // Helper Functions
 // ============================================================================
 
-function scanDirectoryStructure(dir: string, intelligence: ProjectIntelligence, depth: number = 0): void {
+function scanDirectoryStructure(
+  dir: string,
+  intelligence: ProjectIntelligence,
+  depth: number = 0,
+  ignoreRules?: IgnoreRules,
+): void {
   if (depth > 5) return; // Max depth
-  
+
   try {
     const entries = readdirSync(dir);
-    
+
     for (const entry of entries) {
       if (IGNORE_DIRS.has(entry)) continue;
       if (entry.startsWith('.') && entry !== '.env.example') continue;
-      
+
       const fullPath = join(dir, entry);
-      
+
+      // Honor .gitignore — skip anything the user has marked as ignored
+      if (ignoreRules && isIgnored(fullPath, ignoreRules)) continue;
+
       try {
         const stat = statSync(fullPath);
-        
+
         if (stat.isDirectory()) {
           intelligence.structure.totalDirectories++;
-          
+
           // Track top-level directories
           if (depth === 0) {
             intelligence.structure.topDirectories.push(entry);
           }
-          
-          scanDirectoryStructure(fullPath, intelligence, depth + 1);
+
+          scanDirectoryStructure(fullPath, intelligence, depth + 1, ignoreRules);
         } else {
           intelligence.structure.totalFiles++;
-          
+
           const ext = extname(entry).toLowerCase();
           if (ext) {
             intelligence.structure.languages[ext] = (intelligence.structure.languages[ext] || 0) + 1;
@@ -762,6 +800,73 @@ function detectApiEndpoints(projectPath: string): string[] {
   }
 
   return endpoints.slice(0, 50); // cap at 50
+}
+
+/**
+ * Detect CI/CD system, containerization, and monorepo tooling.
+ * These are high-signal facts that shape how the agent should run commands
+ * (e.g. "this uses Turbo — use `turbo run build` not `npm run build`").
+ */
+function detectDevOps(projectPath: string, intelligence: ProjectIntelligence): void {
+  // ─── CI/CD ────────────────────────────────────────────────────────────────
+  if (existsSync(join(projectPath, '.github', 'workflows'))) {
+    intelligence.architecture.ciSystem = 'GitHub Actions';
+  } else if (existsSync(join(projectPath, '.gitlab-ci.yml'))) {
+    intelligence.architecture.ciSystem = 'GitLab CI';
+  } else if (existsSync(join(projectPath, '.circleci', 'config.yml'))) {
+    intelligence.architecture.ciSystem = 'CircleCI';
+  } else if (existsSync(join(projectPath, 'azure-pipelines.yml'))) {
+    intelligence.architecture.ciSystem = 'Azure Pipelines';
+  } else if (existsSync(join(projectPath, '.travis.yml'))) {
+    intelligence.architecture.ciSystem = 'Travis CI';
+  } else if (existsSync(join(projectPath, 'Jenkinsfile'))) {
+    intelligence.architecture.ciSystem = 'Jenkins';
+  } else if (existsSync(join(projectPath, '.drone.yml'))) {
+    intelligence.architecture.ciSystem = 'Drone CI';
+  }
+
+  // ─── Containerization ────────────────────────────────────────────────────
+  const containers: string[] = [];
+  if (existsSync(join(projectPath, 'Dockerfile'))) containers.push('Docker');
+  if (
+    existsSync(join(projectPath, 'docker-compose.yml')) ||
+    existsSync(join(projectPath, 'docker-compose.yaml')) ||
+    existsSync(join(projectPath, 'compose.yml')) ||
+    existsSync(join(projectPath, 'compose.yaml'))
+  ) {
+    containers.push('docker-compose');
+  }
+  if (existsSync(join(projectPath, 'k8s')) || existsSync(join(projectPath, 'kubernetes'))) {
+    containers.push('Kubernetes');
+  }
+  if (existsSync(join(projectPath, 'Chart.yaml'))) {
+    containers.push('Helm');
+  }
+  intelligence.architecture.containerization = containers;
+
+  // ─── Monorepo tooling ────────────────────────────────────────────────────
+  if (existsSync(join(projectPath, 'turbo.json'))) {
+    intelligence.architecture.monorepoTool = 'Turborepo';
+  } else if (existsSync(join(projectPath, 'nx.json'))) {
+    intelligence.architecture.monorepoTool = 'Nx';
+  } else if (existsSync(join(projectPath, 'lerna.json'))) {
+    intelligence.architecture.monorepoTool = 'Lerna';
+  } else if (existsSync(join(projectPath, 'pnpm-workspace.yaml'))) {
+    intelligence.architecture.monorepoTool = 'pnpm workspaces';
+  } else if (existsSync(join(projectPath, 'rush.json'))) {
+    intelligence.architecture.monorepoTool = 'Rush';
+  } else {
+    // Yarn workspaces: detected via package.json "workspaces" field
+    try {
+      const pkgPath = join(projectPath, 'package.json');
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+        if (pkg.workspaces && (Array.isArray(pkg.workspaces) || typeof pkg.workspaces === 'object')) {
+          intelligence.architecture.monorepoTool = 'Yarn/npm workspaces';
+        }
+      }
+    } catch {}
+  }
 }
 
 function analyzeConventions(projectPath: string, intelligence: ProjectIntelligence): void {

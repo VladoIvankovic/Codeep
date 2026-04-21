@@ -29,6 +29,9 @@ vi.mock('../config/providers', () => ({
   getProviderBaseUrl: vi.fn((_id: string, _proto: string) => 'https://api.example.com'),
   getProviderAuthHeader: vi.fn(() => 'Bearer'),
   usesMaxCompletionTokens: vi.fn(() => false),
+  // Added to match the real module — api/index.ts dynamically imports this
+  // to decide whether to skip the API-key requirement (e.g. Ollama runs keyless).
+  isNoApiKeyProvider: vi.fn((_id: string) => false),
 }));
 
 vi.mock('../utils/retry', () => ({

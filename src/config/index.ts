@@ -64,8 +64,8 @@ interface ConfigSchema {
   agentAutoCommit: boolean; // Auto-commit after agent completes
   agentAutoCommitBranch: boolean; // Create new branch for commits
   agentAutoVerify: 'off' | 'build' | 'typecheck' | 'test' | 'all'; // Auto-run verification after changes
-  agentMaxFixAttempts: number; // Max attempts to fix errors (default: 3)
-  agentMaxIterations: number; // Max agent iterations (default: 100)
+  agentMaxFixAttempts: number; // Max attempts to fix errors (default: 1)
+  agentMaxIterations: number; // Max agent iterations (default: 50)
   agentMaxDuration: number; // Max agent duration in minutes (default: 20)
   agentApiTimeout: number; // Base API timeout for agent in ms (default: 90000, dynamically adjusted)
   agentInteractive: boolean; // Show interactive mode (default: true)
@@ -238,8 +238,13 @@ function createConfig(): Conf<ConfigSchema> {
     agentAutoCommit: false,
     agentAutoCommitBranch: false,
     agentAutoVerify: 'off',
-    agentMaxFixAttempts: 3,
-    agentMaxIterations: 10000,
+    // One fix attempt is enough for modern models — if verification fails twice
+    // with the same approach, the agent usually needs human input, not more loops.
+    agentMaxFixAttempts: 1,
+    // Sane ceiling: typical coding tasks finish in 3–8 iterations; 50 covers
+    // multi-file refactors comfortably. Users can raise this in /settings
+    // for large autonomous tasks.
+    agentMaxIterations: 50,
     agentMaxDuration: 480,
     agentApiTimeout: 600000,
     agentInteractive: true,
@@ -305,9 +310,11 @@ if ((config.get('agentMode') as string) === 'auto') {
   config.set('agentMode', 'on');
 }
 
-// Migrate old conservative limits to new defaults.
-if (config.get('agentMaxIterations') < 10000) {
-  config.set('agentMaxIterations', 10000);
+// Migrate the old runaway default (10000 iterations) back down to a sane ceiling.
+// The old migration kept forcing it up, so a user who had the bad default baked
+// into their local config will still see "step X/10000" until this trims it.
+if (config.get('agentMaxIterations') >= 10000) {
+  config.set('agentMaxIterations', 50);
 }
 if (config.get('agentMaxDuration') < 480) {
   config.set('agentMaxDuration', 480);

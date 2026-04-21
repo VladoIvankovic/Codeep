@@ -337,12 +337,13 @@ Initialize a project and scan it once to cache deep analysis for faster AI respo
 
 | Category | Information |
 |----------|-------------|
-| **Structure** | File count, directory tree, language distribution |
+| **Structure** | File count, directory tree, language distribution (respects `.gitignore`) |
 | **Dependencies** | Runtime & dev dependencies, detected frameworks |
 | **Architecture** | Patterns (MVC, Component-based), main modules, entry points |
 | **Scripts** | Available npm/composer/make scripts |
 | **Conventions** | Indentation style, quotes, semicolons, naming conventions |
 | **Testing** | Test framework, test directory location |
+| **DevOps** | CI/CD system (GitHub Actions, GitLab CI, CircleCI, Azure, Travis, Jenkins, Drone), containerization (Docker, docker-compose, Kubernetes, Helm), monorepo tooling (Turborepo, Nx, Lerna, pnpm/Yarn workspaces, Rush) |
 
 **Benefits:**
 - AI understands your project deeply without re-analyzing each time
@@ -389,6 +390,11 @@ Main modules: src, components, hooks, utils
 - Quotes: single
 - Semicolons: no
 - Naming: camelCase
+
+## DevOps
+- CI/CD: GitHub Actions
+- Containerization: Docker, docker-compose
+- Monorepo: Turborepo
 ```
 
 ### Self-Verification (Optional)
@@ -817,12 +823,12 @@ With write access enabled:
 | Agent Mode | ON | `ON` = agent runs automatically (requires write permission via `/grant`), `Manual` = use /agent |
 | Agent API Timeout | 180000ms | Timeout per agent API call (auto-adjusted for complexity) |
 | Agent Max Duration | 20 min | Maximum time for agent to run (5-60 min) |
-| Agent Max Iterations | 200 | Maximum agent iterations (10-500) |
+| Agent Max Iterations | 50 | Maximum agent iterations (10-500). Modern models finish typical tasks in 3–8 iterations — raise for large autonomous refactors. |
 | Agent Confirmation | Dangerous | `Never`, `Dangerous` (default), or `Always` |
 | Agent Auto-Commit | Off | Automatically commit after agent completes |
 | Agent Branch | Off | Create new branch for agent commits |
 | Agent Auto-Verify | Off | `Off`, `Build only`, `Typecheck only`, `Test only`, or `Build + Typecheck + Test` |
-| Agent Max Fix Attempts | 3 | Max attempts to auto-fix errors (when Auto-Verify is enabled) |
+| Agent Max Fix Attempts | 1 | Max attempts to auto-fix errors when Auto-Verify is enabled. More than 1 usually means the agent is stuck — bail and let the user decide. |
 
 ## Usage Examples
 
@@ -936,3 +942,28 @@ export DEEPSEEK_API_KEY=your_key   # or whichever provider
 ```
 
 4. Open Zed's AI panel and select **Codeep** as the agent.
+
+### Configurable permissions (Zed & VS Code extension)
+
+Via the agent settings panel you can toggle which tools ask for approval before running — same controls available in the TUI via `/settings`:
+
+- **Confirm: delete_file** — ON by default
+- **Confirm: execute_command** — ON by default
+- **Confirm: write_file / edit_file** — OFF by default
+
+These apply in `Dangerous` confirmation mode (the default). Choose `Always` to confirm every action, or `Never` to skip all prompts.
+
+## VS Code Extension
+
+Install **Codeep** from the VS Code marketplace. The extension is a thin UI around the CLI — all credentials and sessions live in the CLI's config (`~/.config/codeep/config.json`), so keys set anywhere are visible everywhere.
+
+### Set API keys without leaving VS Code
+
+Open the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`) and run:
+
+- **`Codeep: Set API Key`** — pick a provider, paste the key, done. Writes into the CLI config, so running `codeep` in a terminal immediately sees the new key.
+- **`Codeep: Open Chat`** — open the Codeep sidebar.
+- **`Codeep: Review Current File`** — run `/review <file>` on the active editor.
+- **`Codeep: New Session`** — start a fresh session in the chat.
+
+If you already set up keys in the CLI (or via the [codeep.dev](https://codeep.dev/dashboard) dashboard + `codeep account sync`), the extension picks them up automatically on first launch — no welcome prompt.

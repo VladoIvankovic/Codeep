@@ -31,6 +31,12 @@ export interface ReviewResult {
   issues: ReviewIssue[];
   summary: ReviewSummary;
   score: number; // 0-100
+  /**
+   * Human-readable description of what was actually scanned. Users often assume
+   * `/review` analyzes the entire codebase — spell out whether it was specific
+   * files, git changes, or a fallback `src/` scan so the scope is obvious.
+   */
+  scope: string;
 }
 
 export interface ReviewSummary {
@@ -357,6 +363,17 @@ export function performCodeReview(
   const projectRoot = projectContext.root || process.cwd();
   const filesToReview = getFilesToReview(projectRoot, specificFiles);
   const allIssues: ReviewIssue[] = [];
+
+  // Determine scope — mirrors the branching in getFilesToReview so the user
+  // sees exactly which branch ran.
+  let scope: string;
+  if (specificFiles && specificFiles.length > 0) {
+    scope = `specific file${specificFiles.length === 1 ? '' : 's'} (${filesToReview.length})`;
+  } else if (getChangedFiles(projectRoot).length > 0) {
+    scope = `unstaged git changes (${filesToReview.length} file${filesToReview.length === 1 ? '' : 's'})`;
+  } else {
+    scope = `full src/ scan — no git changes (${filesToReview.length} file${filesToReview.length === 1 ? '' : 's'})`;
+  }
   
   for (const filePath of filesToReview) {
     try {
@@ -390,6 +407,7 @@ export function performCodeReview(
     issues: allIssues,
     summary,
     score,
+    scope,
   };
 }
 
@@ -410,6 +428,9 @@ export function formatReviewResult(result: ReviewResult): string {
   
   // Summary
   lines.push('## Summary');
+  if (result.scope) {
+    lines.push(`- Scope: ${result.scope}`);
+  }
   lines.push(`- Files reviewed: ${result.files.length}`);
   lines.push(`- Total issues: ${result.summary.totalIssues}`);
   lines.push(`  - Errors: ${result.summary.bySeverity.error}`);
