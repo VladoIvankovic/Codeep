@@ -198,10 +198,35 @@ describe('providers', () => {
     it('should include Claude Opus 4.7 as default model', () => {
       expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-4-7');
       const modelIds = PROVIDERS['anthropic'].models.map(m => m.id);
+      expect(modelIds).toContain('claude-mythos-preview');
       expect(modelIds).toContain('claude-opus-4-7');
       expect(modelIds).toContain('claude-opus-4-6'); // kept as previous-gen option
       expect(modelIds).toContain('claude-sonnet-4-6');
       expect(modelIds).toContain('claude-haiku-4-5-20251001');
+    });
+  });
+
+  describe('deepseek provider', () => {
+    it('should include DeepSeek V4 models and not include legacy ones', () => {
+      const provider = getProvider('deepseek');
+      expect(provider).not.toBeNull();
+      expect(provider!.defaultModel).toBe('deepseek-v4-pro');
+      const modelIds = provider!.models.map(m => m.id);
+      expect(modelIds).toContain('deepseek-v4-pro');
+      expect(modelIds).toContain('deepseek-v4-flash');
+      expect(modelIds).not.toContain('deepseek-chat');
+      expect(modelIds).not.toContain('deepseek-reasoner');
+    });
+  });
+
+  describe('openai provider', () => {
+    it('should include GPT-5.5 as default model', () => {
+      const provider = getProvider('openai');
+      expect(provider).not.toBeNull();
+      expect(provider!.defaultModel).toBe('gpt-5.5');
+      const modelIds = provider!.models.map(m => m.id);
+      expect(modelIds).toContain('gpt-5.5');
+      expect(modelIds).toContain('gpt-5.4');
     });
   });
 

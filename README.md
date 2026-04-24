@@ -27,9 +27,9 @@
 
 ### Multi-Provider Support
 - **Z.AI (ZhipuAI)** — GLM-5.1, GLM-5, GLM-5 Turbo, GLM-4.5 Air — Coding Plan & pay-per-use API (international & China)
-- **OpenAI** — GPT-4.1, GPT-4.1 Mini, GPT-4.1 Nano, o3, o4-mini, GPT-4o
-- **Anthropic** — Claude Sonnet 4.6, Claude Opus 4.6, Claude Sonnet 4.5, Claude Haiku 4.5
-- **DeepSeek** — DeepSeek V3.2, DeepSeek Reasoner
+- **OpenAI** — GPT-5.5, GPT-5.4, GPT-5.4 Mini, GPT-5.4 Nano
+- **Anthropic** — Claude Mythos Preview, Claude Opus 4.7, Claude Opus 4.6, Claude Sonnet 4.6, Claude Haiku 4.5
+- **DeepSeek** — DeepSeek V4 Pro, DeepSeek V4 Flash
 - **Google AI** — Gemini 3.1 Pro Preview, Gemini 3 Flash Preview, Gemini 2.5 Pro, Gemini 2.5 Flash
 - **MiniMax** — MiniMax M2.7, M2.5, M2.1, M2 — Coding Plan & pay-per-use API (international & China)
 - **Ollama** — Run any model locally or on a remote server, no API key required. Models are fetched dynamically from your Ollama instance.

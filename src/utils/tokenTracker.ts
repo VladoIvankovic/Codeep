@@ -35,6 +35,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'glm-4.5-air':          131_072,
   'glm-4.7-flash':        202_752,
   // OpenAI
+  'gpt-5.5':              1_200_000,
   'gpt-5.4':              1_050_000,
   'gpt-5.4-mini':         400_000,
   'gpt-5.4-nano':         400_000,
@@ -45,14 +46,15 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'o4-mini':              200_000,
   'gpt-4o':               128_000,
   // Anthropic
+  'claude-mythos-preview':        1_000_000,
   'claude-opus-4-7':              1_000_000,
   'claude-opus-4-6':              1_000_000,
   'claude-sonnet-4-6':            1_000_000,
   'claude-sonnet-4-5-20250929':   200_000,
   'claude-haiku-4-5-20251001':    200_000,
   // DeepSeek
-  'deepseek-chat':        128_000,
-  'deepseek-reasoner':    128_000,
+  'deepseek-v4-pro':      1_000_000,
+  'deepseek-v4-flash':    1_000_000,
   // Google
   'gemini-3.1-pro-preview':        1_048_576,
   'gemini-3-flash-preview':        1_000_000,
@@ -87,6 +89,7 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'glm-4.5-air':       { inputPer1M: 0.20,  outputPer1M: 1.10 },
   'glm-4.7-flash':     { inputPer1M: 0.06,  outputPer1M: 0.40 },
   // OpenAI
+  'gpt-5.5':      { inputPer1M: 5.00,  outputPer1M: 30.00 },
   'gpt-5.4':      { inputPer1M: 2.50,  outputPer1M: 15.00 },
   'gpt-5.4-mini': { inputPer1M: 0.75,  outputPer1M: 4.50 },
   'gpt-5.4-nano': { inputPer1M: 0.20,  outputPer1M: 1.25 },
@@ -97,14 +100,15 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'o4-mini':      { inputPer1M: 0.55,  outputPer1M: 2.20 },
   'gpt-4o':       { inputPer1M: 2.50,  outputPer1M: 10.00 },
   // Anthropic
+  'claude-mythos-preview':        { inputPer1M: 6.00,  outputPer1M: 30.00 },
   'claude-opus-4-7':              { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-opus-4-6':              { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-sonnet-4-6':            { inputPer1M: 3.00,  outputPer1M: 15.00 },
   'claude-sonnet-4-5-20250929':   { inputPer1M: 3.00,  outputPer1M: 15.00 },
   'claude-haiku-4-5-20251001':    { inputPer1M: 1.00,  outputPer1M: 5.00 },
-  // DeepSeek
-  'deepseek-chat':     { inputPer1M: 0.28,  outputPer1M: 0.42 },
-  'deepseek-reasoner': { inputPer1M: 0.28,  outputPer1M: 0.42 },
+  // DeepSeek (cache-miss input pricing)
+  'deepseek-v4-pro':   { inputPer1M: 1.74,  outputPer1M: 3.48 },
+  'deepseek-v4-flash': { inputPer1M: 0.14,  outputPer1M: 0.28 },
   // Google
   'gemini-3.1-pro-preview':        { inputPer1M: 2.00, outputPer1M: 12.00 },
   'gemini-3-flash-preview':        { inputPer1M: 0.50, outputPer1M: 3.00 },

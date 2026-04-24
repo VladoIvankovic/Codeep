@@ -47,3 +47,5 @@ pnpm-lock.yaml
 # Local repos
 acp-registry/
 codeep-zed/
+Codeep-MacOs/
+Codeep-iOS/
