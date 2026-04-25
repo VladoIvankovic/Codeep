@@ -26,6 +26,7 @@ export interface ProviderConfig {
   defaultProtocol: 'openai' | 'anthropic';
   maxOutputTokens?: number; // Provider-specific max output tokens limit
   useMaxCompletionTokens?: boolean; // Use max_completion_tokens instead of max_tokens (e.g. OpenAI GPT-5+)
+  requiresDefaultTemperature?: boolean; // Provider rejects custom temperature (e.g. OpenAI GPT-5+ only allows 1)
   envKey?: string; // Environment variable name for API key
   subscribeUrl?: string; // URL to get API key
   noApiKey?: boolean; // Provider doesn't require an API key (e.g. Ollama)
@@ -246,6 +247,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultModel: 'gpt-5.5',
     defaultProtocol: 'openai',
     useMaxCompletionTokens: true,
+    requiresDefaultTemperature: true,
     envKey: 'OPENAI_API_KEY',
     subscribeUrl: 'https://platform.openai.com/api-keys',
   },
@@ -260,7 +262,6 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'claude-mythos-preview',     name: 'Claude Mythos Preview', description: 'Experimental next-gen Claude (preview)' },
       { id: 'claude-opus-4-7',           name: 'Claude Opus 4.7',       description: 'Most capable Claude model' },
       { id: 'claude-opus-4-6',           name: 'Claude Opus 4.6',       description: 'Previous generation Opus' },
       { id: 'claude-sonnet-4-6',         name: 'Claude Sonnet',         description: 'Best balance of speed and intelligence' },
@@ -366,6 +367,14 @@ export function supportsNativeTools(providerId: string, protocol: 'openai' | 'an
  */
 export function usesMaxCompletionTokens(providerId: string): boolean {
   return PROVIDERS[providerId]?.useMaxCompletionTokens ?? false;
+}
+
+/**
+ * Returns true if the provider rejects custom temperature values
+ * (e.g. OpenAI GPT-5+ only accepts the default of 1).
+ */
+export function requiresDefaultTemperature(providerId: string): boolean {
+  return PROVIDERS[providerId]?.requiresDefaultTemperature ?? false;
 }
 
 /**

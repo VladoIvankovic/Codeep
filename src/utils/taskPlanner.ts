@@ -3,7 +3,7 @@
  */
 
 import { config, getApiKey, Message } from '../config/index';
-import { getProviderBaseUrl, getProviderAuthHeader } from '../config/providers';
+import { getProviderBaseUrl, getProviderAuthHeader, requiresDefaultTemperature } from '../config/providers';
 
 export interface SubTask {
   id: number;
@@ -83,7 +83,7 @@ Break this down into subtasks. Each task = one file or one logical unit. Respond
             { role: 'system', content: 'You are a task planning assistant. Respond with JSON only.' },
             ...messages
           ],
-          temperature: 0.3,
+          ...(requiresDefaultTemperature(provider) ? {} : { temperature: 0.3 }),
           max_tokens: 2048,
         };
 

@@ -198,7 +198,6 @@ describe('providers', () => {
     it('should include Claude Opus 4.7 as default model', () => {
       expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-4-7');
       const modelIds = PROVIDERS['anthropic'].models.map(m => m.id);
-      expect(modelIds).toContain('claude-mythos-preview');
       expect(modelIds).toContain('claude-opus-4-7');
       expect(modelIds).toContain('claude-opus-4-6'); // kept as previous-gen option
       expect(modelIds).toContain('claude-sonnet-4-6');

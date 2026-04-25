@@ -18,7 +18,7 @@ import { ProjectContext } from './project';
 import { config, getApiKey, Message } from '../config/index';
 import { loadProjectIntelligence, generateContextFromIntelligence } from './projectIntelligence';
 import { syncProgress, generateProjectId } from './codeepCloud';
-import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, isNoApiKeyProvider } from '../config/providers';
+import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, isNoApiKeyProvider } from '../config/providers';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { formatToolDefinitions, getOpenAITools, getAnthropicTools } from './tools';
@@ -293,6 +293,7 @@ export async function agentChat(
     let body: Record<string, unknown>;
     const useStreaming = Boolean(onChunk);
 
+    const tempParam = requiresDefaultTemperature(providerId) ? {} : { temperature: config.get('temperature') };
     if (protocol === 'openai') {
       const maxTok = getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384));
       const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };
@@ -300,7 +301,7 @@ export async function agentChat(
       body = {
         model, messages: [{ role: 'system', content: systemPrompt }, ...messages],
         tools: getOpenAITools(), tool_choice: 'auto', stream: useStreaming,
-        temperature: config.get('temperature'), ...tokParam,
+        ...tempParam, ...tokParam,
         ...(useStreaming && providerId === 'openai' ? { stream_options: { include_usage: true } } : {}),
       };
     } else {
@@ -308,7 +309,7 @@ export async function agentChat(
       body = {
         model, system: systemPrompt, messages,
         tools: getAnthropicTools(), stream: useStreaming,
-        temperature: config.get('temperature'), max_tokens: getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384)),
+        ...tempParam, max_tokens: getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384)),
       };
     }
 
@@ -425,13 +426,14 @@ export async function agentChatFallback(
     let endpoint: string;
     let body: Record<string, unknown>;
 
+    const tempParam = requiresDefaultTemperature(providerId) ? {} : { temperature: config.get('temperature') };
     if (protocol === 'openai') {
       const maxTok = getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384));
       const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };
       endpoint = `${baseUrl}/chat/completions`;
       body = {
         model, messages: [{ role: 'system', content: fallbackPrompt }, ...messages],
-        stream: Boolean(onChunk), temperature: config.get('temperature'), ...tokParam,
+        stream: Boolean(onChunk), ...tempParam, ...tokParam,
       };
     } else {
       endpoint = `${baseUrl}/v1/messages`;
@@ -442,7 +444,7 @@ export async function agentChatFallback(
           { role: 'assistant', content: 'Understood. I will use the tools as specified.' },
           ...messages,
         ],
-        stream: Boolean(onChunk), temperature: config.get('temperature'),
+        stream: Boolean(onChunk), ...tempParam,
         max_tokens: getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384)),
       };
     }

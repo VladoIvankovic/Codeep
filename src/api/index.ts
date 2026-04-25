@@ -3,7 +3,7 @@ import * as https from 'node:https';
 import { Message, config, getApiKey } from '../config/index';
 import { withRetry, isNetworkError, isTimeoutError } from '../utils/retry';
 import { ProjectContext } from '../utils/project';
-import { getProvider, getProviderBaseUrl, getProviderAuthHeader, usesMaxCompletionTokens } from '../config/providers';
+import { getProvider, getProviderBaseUrl, getProviderAuthHeader, usesMaxCompletionTokens, requiresDefaultTemperature } from '../config/providers';
 import { logApiRequest, logApiResponse, logAppError } from '../utils/logger';
 import { loadProjectIntelligence, generateContextFromIntelligence, ProjectIntelligence } from '../utils/projectIntelligence';
 import { loadProjectRules } from '../utils/agent';
@@ -361,6 +361,7 @@ async function chatOpenAI(
   }
   const authHeader = getProviderAuthHeader(providerId, 'openai');
   const useCompletionTokens = usesMaxCompletionTokens(providerId);
+  const omitTemperature = requiresDefaultTemperature(providerId);
 
   if (!baseUrl) {
     throw new Error(`Provider ${providerId} does not support OpenAI protocol`);
@@ -393,7 +394,7 @@ async function chatOpenAI(
     messages,
     stream,
     ...(stream ? { stream_options: { include_usage: true } } : {}),
-    temperature,
+    ...(omitTemperature ? {} : { temperature }),
     ...(useCompletionTokens ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }),
   });
 
