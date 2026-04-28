@@ -110,21 +110,36 @@ const LANGUAGE_OPTIONS = [
  */
 function formatToolInputForPermission(tool: string, params: Record<string, unknown>): Record<string, string> {
   const MAX_LEN = 120;
+  // Bigger budget for diff/content fields so clients can render an actual preview
+  // before the user clicks Allow. Truncated with a visible marker so users know
+  // they're not seeing the full payload.
+  const MAX_DIFF_LEN = 4000;
+  const MAX_CONTENT_LINES = 200;
   const truncate = (v: unknown): string => {
     const s = typeof v === 'string' ? v : JSON.stringify(v);
     return s.length > MAX_LEN ? s.slice(0, MAX_LEN) + '…' : s;
   };
+  const truncateDiff = (s: string): string =>
+    s.length > MAX_DIFF_LEN ? s.slice(0, MAX_DIFF_LEN) + `\n… (truncated, ${s.length - MAX_DIFF_LEN} more chars)` : s;
 
   switch (tool) {
     case 'write_file':
     case 'edit_file': {
       const path = params.path as string ?? '';
-      const lines = typeof params.content === 'string'
-        ? params.content.split('\n').length + ' lines'
-        : typeof params.old_string === 'string'
-          ? `replace ${(params.old_string as string).split('\n').length} line(s)`
-          : '';
-      return { file: pathBasename(path), path, changes: lines };
+      const out: Record<string, string> = { file: pathBasename(path), path };
+      if (typeof params.content === 'string') {
+        const lines = params.content.split('\n');
+        out.changes = `${lines.length} lines`;
+        out.new_content = lines.length > MAX_CONTENT_LINES
+          ? lines.slice(0, MAX_CONTENT_LINES).join('\n') + `\n… (${lines.length - MAX_CONTENT_LINES} more lines)`
+          : params.content;
+      }
+      if (typeof params.old_string === 'string' && typeof params.new_string === 'string') {
+        out.changes = `replace ${(params.old_string as string).split('\n').length} line(s)`;
+        out.old_string = truncateDiff(params.old_string as string);
+        out.new_string = truncateDiff(params.new_string as string);
+      }
+      return out;
     }
     case 'delete_file':
       return { file: pathBasename(params.path as string ?? ''), path: params.path as string ?? '' };

@@ -967,3 +967,11 @@ Open the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`) and run:
 - **`Codeep: New Session`** — start a fresh session in the chat.
 
 If you already set up keys in the CLI (or via the [codeep.dev](https://codeep.dev/dashboard) dashboard + `codeep account sync`), the extension picks them up automatically on first launch — no welcome prompt.
+
+### Live plan & reasoning stream
+
+The chat sidebar now surfaces two extra ACP signals that previously only the TUI saw:
+
+- **Live plan** — for multi-step tasks the agent's plan appears as a small green card with status icons (`○` pending, `◐` in progress, `●` done) that update in place as work progresses.
+- **Reasoning stream** — when the model exposes a thinking trace (e.g. Claude extended thinking, GPT-5 reasoning), it shows up in a collapsible "Thinking" card above the answer. Closed by default; click to expand.
+- **Diff preview on permission prompts** — manual-mode permission cards now show a `-` / `+` diff for `edit_file`, a content preview for `write_file`, and the full `$ command` + `cwd` for `execute_command`, so users can verify before clicking *Allow*. Payload is truncated (~4 KB per field, 200 lines per file) with a visible marker. Other ACP clients (Zed, etc.) ignore the extra fields silently.
