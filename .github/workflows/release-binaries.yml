@@ -1,5 +1,20 @@
 name: Release Binaries
 
+# Triggered when any v*-prefixed tag is pushed. Three jobs run in sequence:
+#
+#   1. build           — compiles cross-platform binaries and uploads them to
+#                        a GitHub Release for the tag.
+#   2. publish-npm     — publishes the matching tarball to npm.
+#   3. update-homebrew — bumps Formula/codeep.rb in the homebrew-codeep tap to
+#                        point at the just-published npm tarball.
+#
+# Each job depends on the previous one so a failure halts the chain (no half-
+# released states). All credentials come from repository secrets:
+#
+#   GITHUB_TOKEN        (provided by Actions)
+#   NPM_TOKEN           (npm Automation token)
+#   HOMEBREW_TAP_TOKEN  (PAT with write access to VladoIvankovic/homebrew-codeep)
+
 on:
   push:
     tags:
@@ -57,3 +72,117 @@ jobs:
             dist/bin/codeep-darwin-x86_64.tar.gz
             dist/bin/codeep-linux-x86_64.tar.gz
             dist/bin/codeep-linux-aarch64.tar.gz
+
+  publish-npm:
+    name: Publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build TypeScript
+        run: bun run build
+
+      - name: Setup Node + npm registry
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify tag matches package.json version
+        run: |
+          # The tag should be v<version>; if it doesn't match package.json, abort.
+          # Catches the case where someone tagged the wrong commit.
+          TAG="${GITHUB_REF#refs/tags/v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag $TAG does not match package.json version $PKG. Aborting publish."
+            exit 1
+          fi
+
+      - name: Publish
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  update-homebrew:
+    name: Update Homebrew formula
+    needs: publish-npm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout homebrew-codeep tap
+        uses: actions/checkout@v4
+        with:
+          repository: VladoIvankovic/homebrew-codeep
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Resolve version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for npm registry, fetch tarball, compute SHA256
+        id: hash
+        run: |
+          # npm publish is eventually consistent across registry mirrors; give
+          # it up to 60s before giving up. Each retry is 5s apart.
+          VERSION="${{ steps.ver.outputs.version }}"
+          URL="https://registry.npmjs.org/codeep/-/codeep-${VERSION}.tgz"
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if curl -fsSL "$URL" -o codeep.tgz; then
+              echo "Fetched on attempt $i"
+              break
+            fi
+            echo "Attempt $i failed, sleeping 5s..."
+            sleep 5
+          done
+          if [ ! -s codeep.tgz ]; then
+            echo "::error::Could not fetch $URL"
+            exit 1
+          fi
+          SHA=$(shasum -a 256 codeep.tgz | awk '{print $1}')
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Tarball SHA256: $SHA"
+
+      - name: Update Formula/codeep.rb
+        working-directory: tap
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          SHA="${{ steps.hash.outputs.sha }}"
+          URL="${{ steps.hash.outputs.url }}"
+          # Use Python for the substitutions — sed across multiline ruby is
+          # finicky with @-lines and quoting. Python keeps the diff minimal.
+          python3 - <<EOF
+          import re, pathlib
+          p = pathlib.Path('Formula/codeep.rb')
+          src = p.read_text()
+          src = re.sub(r'url ".*"', f'url "$URL"', src, count=1)
+          src = re.sub(r'sha256 ".*"', f'sha256 "$SHA"', src, count=1)
+          src = re.sub(r'codeep@\d+\.\d+\.\d+', f'codeep@$VERSION', src)
+          p.write_text(src)
+          EOF
+          echo "--- updated codeep.rb ---"
+          cat Formula/codeep.rb
+
+      - name: Commit and push
+        working-directory: tap
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Formula/codeep.rb
+          # Skip the commit if nothing actually changed (e.g. a re-run of the
+          # same tag) — `git commit` would otherwise fail and break the job.
+          if git diff --staged --quiet; then
+            echo "Formula already up to date for v$VERSION; nothing to commit."
+            exit 0
+          fi
+          git commit -m "codeep $VERSION"
+          git push
