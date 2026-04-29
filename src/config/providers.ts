@@ -31,6 +31,11 @@ export interface ProviderConfig {
   subscribeUrl?: string; // URL to get API key
   noApiKey?: boolean; // Provider doesn't require an API key (e.g. Ollama)
   dynamicModels?: boolean; // Models are fetched dynamically at runtime
+  // UI metadata exposed to ACP clients (Codeep VS Code extension, etc.) so
+  // they don't have to hardcode their own copy of the provider list. Keep these
+  // strings short and human-readable — they show up in dropdowns and hints.
+  groupLabel?: string; // Heading shown in grouped model selectors / settings
+  hint?: string;       // One-line hint about pricing/auth model
   mcpEndpoints?: { // Z.AI MCP service endpoints
     webSearch?: string;
     webReader?: string;
@@ -63,6 +68,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultProtocol: 'openai',
     envKey: 'ZAI_API_KEY',
     subscribeUrl: 'https://z.ai/subscribe?ic=NXYNXZOV14',
+    groupLabel: 'Z.AI — Subscription (GLM Coding Plan)',
+    hint: 'Uses your Z.AI subscription — no per-token charges.',
     mcpEndpoints: {
       webSearch: 'https://api.z.ai/api/mcp/web_search_prime/mcp',
       webReader: 'https://api.z.ai/api/mcp/web_reader/mcp',
@@ -88,6 +95,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultProtocol: 'openai',
     envKey: 'ZAI_API_KEY',
     subscribeUrl: 'https://api.z.ai',
+    groupLabel: 'Z.AI — API (pay-per-use)',
+    hint: 'Pay-per-use via Z.AI API key (zai.ai → API Keys).',
   },
   'z.ai-cn': {
     name: 'Z.AI China (ZhipuAI)',
@@ -113,6 +122,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultProtocol: 'openai',
     envKey: 'ZAI_CN_API_KEY',
     subscribeUrl: 'https://open.bigmodel.cn/glm-coding',
+    groupLabel: 'Z.AI China — Subscription (GLM Coding Plan)',
+    hint: 'Uses your ZhipuAI China subscription.',
     mcpEndpoints: {
       webSearch: 'https://open.bigmodel.cn/api/mcp/web_search_prime/mcp',
       webReader: 'https://open.bigmodel.cn/api/mcp/web_reader/mcp',
@@ -138,6 +149,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultProtocol: 'openai',
     envKey: 'ZAI_CN_API_KEY',
     subscribeUrl: 'https://open.bigmodel.cn',
+    groupLabel: 'Z.AI China — API (pay-per-use)',
+    hint: 'Pay-per-use via ZhipuAI China API key.',
   },
   'minimax': {
     name: 'MiniMax',
@@ -161,6 +174,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultProtocol: 'anthropic',
     envKey: 'MINIMAX_API_KEY',
     subscribeUrl: 'https://platform.minimax.io/subscribe/coding-plan?code=2lWvoWUhrp&source=link',
+    groupLabel: 'MiniMax — Subscription',
+    hint: 'Uses your MiniMax subscription — no per-token charges.',
   },
   'minimax-api': {
     name: 'MiniMax API (pay-per-use)',
@@ -179,6 +194,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultProtocol: 'openai',
     envKey: 'MINIMAX_API_KEY',
     subscribeUrl: 'https://platform.minimax.io',
+    groupLabel: 'MiniMax — API (pay-per-use)',
+    hint: 'Pay-per-use via MiniMax API key (minimaxi.com → API Keys).',
   },
   'minimax-cn': {
     name: 'MiniMax China',
@@ -202,6 +219,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultProtocol: 'anthropic',
     envKey: 'MINIMAX_CN_API_KEY',
     subscribeUrl: 'https://platform.minimaxi.com',
+    groupLabel: 'MiniMax China — Subscription',
+    hint: 'Uses your MiniMax China subscription.',
   },
   'deepseek': {
     name: 'DeepSeek',
@@ -227,6 +246,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     maxOutputTokens: 384_000, // DeepSeek V4 max output
     envKey: 'DEEPSEEK_API_KEY',
     subscribeUrl: 'https://platform.deepseek.com/sign_up',
+    groupLabel: 'DeepSeek',
+    hint: 'Pay-per-use via DeepSeek API key (platform.deepseek.com).',
   },
   'openai': {
     name: 'OpenAI',
@@ -250,6 +271,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     requiresDefaultTemperature: true,
     envKey: 'OPENAI_API_KEY',
     subscribeUrl: 'https://platform.openai.com/api-keys',
+    groupLabel: 'OpenAI',
+    hint: 'Pay-per-use via OpenAI API key (platform.openai.com).',
   },
   'anthropic': {
     name: 'Anthropic',
@@ -270,6 +293,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultModel: 'claude-opus-4-7',
     defaultProtocol: 'anthropic',
     envKey: 'ANTHROPIC_API_KEY',
+    groupLabel: 'Anthropic',
+    hint: 'Pay-per-use via Anthropic API key (console.anthropic.com).',
   },
   'google': {
     name: 'Google AI',
@@ -289,6 +314,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultProtocol: 'openai',
     envKey: 'GOOGLE_API_KEY',
     subscribeUrl: 'https://aistudio.google.com/apikey',
+    groupLabel: 'Google AI',
+    hint: 'Pay-per-use via Google AI API key (aistudio.google.com).',
   },
   'ollama': {
     name: 'Ollama (local)',
@@ -307,6 +334,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     defaultProtocol: 'openai',
     noApiKey: true,
     dynamicModels: true,
+    groupLabel: 'Ollama (local)',
+    hint: 'Runs locally — no API key or account needed.',
   },
 };
 

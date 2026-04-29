@@ -277,6 +277,7 @@ export function startAcpServer(): Promise<void> {
       case 'session/set_config_option': handleSetConfigOption(req); break;
       case 'session/list':             handleSessionList(req);          break;
       case 'session/delete':           handleSessionDelete(req);        break;
+      case 'session/list_providers':   handleListProviders(req);        break;
       default:
         process.stderr.write(`[codeep-acp] Unknown method: ${req.method}\n`);
         transport.error(req.id, -32601, `Method not found: ${req.method}`);
@@ -561,6 +562,24 @@ export function startAcpServer(): Promise<void> {
     const deleted = deleteSessionFile(sessionId, cwd || undefined);
     if (!deleted && cwd) deleteSessionFile(sessionId);
     transport.respond(msg.id, {});
+  }
+
+  // ── session/list_providers ──────────────────────────────────────────────────
+  // Canonical provider list for ACP clients (Codeep VS Code extension etc.).
+  // Lets the client populate its API-key dropdowns and group labels from one
+  // source instead of carrying its own hardcoded copy. Keep this stable —
+  // adding new fields is fine, removing/renaming would break existing clients.
+  function handleListProviders(msg: JsonRpcRequest): void {
+    const providers = Object.entries(PROVIDERS).map(([id, p]) => ({
+      id,
+      name: p.name,
+      description: p.description,
+      groupLabel: p.groupLabel ?? p.name,
+      hint: p.hint ?? p.description,
+      requiresKey: !p.noApiKey,
+      subscribeUrl: p.subscribeUrl,
+    }));
+    transport.respond(msg.id, { providers });
   }
 
   // ── session/prompt ──────────────────────────────────────────────────────────
