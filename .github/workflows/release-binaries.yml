@@ -47,6 +47,11 @@ jobs:
           # falls back to an unauthenticated request and the upload step fails
           # with HTTP 401. Has happened intermittently in our runs (v1.3.35–37).
           token: ${{ secrets.GITHUB_TOKEN }}
+          # Auto-generate release notes from commits + PRs since the previous
+          # tag. Patch releases get readable notes for free; major releases can
+          # still be hand-edited afterwards (the action won't overwrite a body
+          # set after creation when files-only updates run later).
+          generate_release_notes: true
           files: |
             dist/bin/codeep-darwin-aarch64.tar.gz
             dist/bin/codeep-darwin-x86_64.tar.gz
