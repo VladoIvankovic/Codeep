@@ -43,6 +43,10 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Explicit GITHUB_TOKEN — without this, action-gh-release@v2 sometimes
+          # falls back to an unauthenticated request and the upload step fails
+          # with HTTP 401. Has happened intermittently in our runs (v1.3.35–37).
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             dist/bin/codeep-darwin-aarch64.tar.gz
             dist/bin/codeep-darwin-x86_64.tar.gz
