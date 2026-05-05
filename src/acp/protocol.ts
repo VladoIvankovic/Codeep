@@ -34,10 +34,10 @@ export interface InitializeParams {
 
 export interface AgentCapabilities {
   loadSession?: boolean;
-  terminal?: boolean;
   promptCapabilities?: { image?: boolean; audio?: boolean; embeddedContext?: boolean };
   mcpCapabilities?: { stdio?: boolean; sse?: boolean; http?: boolean };
-  sessionCapabilities?: Record<string, unknown>;
+  // Per spec: { close?, list?, resume? }
+  sessionCapabilities?: { close?: Record<string, unknown>; list?: Record<string, unknown>; resume?: Record<string, unknown> };
 }
 
 export interface InitializeResult {
@@ -105,15 +105,42 @@ export interface SessionLoadResult {
   configOptions?: SessionConfigOption[] | null;
 }
 
+// ─── session/resume ──────────────────────────────────────────────────────────
+// Lightweight reconnect — client keeps history locally and only needs a fresh
+// hookup to the in-memory session (modes, config). No history replay.
+
+export interface SessionResumeParams {
+  sessionId: string;
+  cwd: string;
+  mcpServers?: McpServer[];
+}
+
+export interface SessionResumeResult {
+  sessionId: string;
+  modes?: SessionModeState | null;
+  configOptions?: SessionConfigOption[] | null;
+}
+
 // ─── session/prompt ──────────────────────────────────────────────────────────
 
 export interface ContentBlock {
   type: 'text' | 'image' | 'audio' | 'resource_link' | 'resource';
-  text?: string;       // type === 'text'
-  data?: string;       // type === 'image' | 'audio' (base64)
+  // type === 'text'
+  text?: string;
+  // type === 'image' | 'audio' (base64-encoded payload)
+  data?: string;
   mimeType?: string;
+  // type === 'resource_link' — flat fields per MCP spec
   uri?: string;
   name?: string;
+  description?: string;
+  // type === 'resource' — embedded content nested under .resource per MCP spec
+  resource?: {
+    uri?: string;
+    mimeType?: string;
+    text?: string;
+    blob?: string; // base64-encoded binary
+  };
 }
 
 export interface SessionPromptParams {

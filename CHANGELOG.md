@@ -6,6 +6,37 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvankovic/Codeep/releases).
 
+## [1.3.38] — 2026-05-05
+
+### Added
+- **`promptCapabilities.embeddedContext`** — dragging a file into the Zed chat
+  (or pinning a code selection) now actually injects the file content into the
+  prompt. Previously the `resource_link` / `resource` blocks were silently
+  dropped. 200 KB cap per resource with a visible truncation marker.
+- **`session/resume` ACP method** — lightweight reconnect on panel reload.
+  The client keeps history locally and only re-wires the in-memory session
+  (modes + config), avoiding a full history replay. Advertised via
+  `sessionCapabilities.resume`.
+- **Dashboard sync after every manual chat** in the CLI — previously only
+  the agent-mode and graceful-shutdown paths reported to `codeep.dev`, so
+  Agent Mode: OFF looked like it never synced.
+
+### Changed
+- **ACP boolean dropdown labels** in the Zed agent settings panel now include
+  the action prefix (`Confirm delete: ON`, `Confirm exec: ON`,
+  `Confirm write: ON`) so the three toggles are distinguishable. Previously
+  Zed rendered all three identically as `ON`.
+
+### Fixed
+- **`terminal/wait_for_exit`** — was calling the camelCase `terminal/waitForExit`
+  variant; corrected to the spec snake_case name. Also dropped the non-standard
+  `timeoutMs` parameter.
+- **Removed `terminal: true` from `agentCapabilities`** — `terminal` is a
+  *client* capability per the ACP spec, not an agent capability. Codeep now
+  reads `clientCapabilities.terminal` from the initialize params and routes
+  `execute_command` through the editor's terminal only when the client
+  supports it (falling back to local execution otherwise).
+
 ## [1.3.37] — 2026-04-29
 
 ### Changed

@@ -953,6 +953,18 @@ Via the agent settings panel you can toggle which tools ask for approval before 
 
 These apply in `Dangerous` confirmation mode (the default). Choose `Always` to confirm every action, or `Never` to skip all prompts.
 
+### ACP capabilities
+
+Codeep advertises the following [ACP](https://agentclientprotocol.com) capabilities so Zed (and other ACP clients) can use them:
+
+- **`promptCapabilities.image`** — paste/drag images into chat for vision analysis.
+- **`promptCapabilities.embeddedContext`** — drag a file or pin a code selection into the chat and the actual file content is injected into the prompt (resource & resource_link blocks, 200 KB cap per file).
+- **`sessionCapabilities.list`** — recent sessions appear in Zed's session picker.
+- **`sessionCapabilities.resume`** — instant reconnect on panel reload without replaying history.
+- **`loadSession`** — restore a previous session by id.
+
+Codeep also reads `clientCapabilities.terminal` from the client and routes shell commands through the editor's terminal when supported (so you see them in Zed's terminal panel), falling back to local execution otherwise.
+
 ## VS Code Extension
 
 Install **Codeep** from the VS Code marketplace. The extension is a thin UI around the CLI — all credentials and sessions live in the CLI's config (`~/.config/codeep/config.json`), so keys set anywhere are visible everywhere.

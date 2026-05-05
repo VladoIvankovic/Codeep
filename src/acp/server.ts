@@ -3,11 +3,14 @@
 
 import { randomUUID } from 'crypto';
 import { basename as pathBasename } from 'path';
+import { readFile } from 'fs/promises';
+import { fileURLToPath } from 'url';
 import { StdioTransport } from './transport.js';
 import {
   InitializeParams, InitializeResult,
   SessionNewParams, SessionNewResult,
   SessionLoadParams, SessionLoadResult,
+  SessionResumeParams, SessionResumeResult,
   SessionPromptParams,
   SessionCancelParams,
   SetSessionModeParams,
@@ -160,6 +163,77 @@ function formatToolInputForPermission(tool: string, params: Record<string, unkno
   }
 }
 
+/**
+ * Resolve a `file://` (or absolute path) URI to a local filesystem path.
+ * Returns null for unsupported schemes (http/https/git/etc.) — we only embed
+ * local content for safety/privacy.
+ */
+function resolveLocalPath(uri: string): string | null {
+  if (!uri) return null;
+  if (uri.startsWith('file://')) {
+    try { return fileURLToPath(uri); } catch { return null; }
+  }
+  // Bare absolute path (some clients drop the scheme)
+  if (uri.startsWith('/')) return uri;
+  return null;
+}
+
+/**
+ * Walk the prompt's ContentBlock[] looking for ResourceLink and Resource
+ * blocks. ResourceLink → read file from disk. Resource → use embedded text.
+ * Returns a markdown-fenced snippet block ready to prepend to the prompt,
+ * or empty string if there are no embedded contexts.
+ */
+async function collectEmbeddedContext(blocks: import('./protocol.js').ContentBlock[]): Promise<string> {
+  const MAX_BYTES_PER_FILE = 200_000; // ~200 KB cap per resource
+  const snippets: string[] = [];
+
+  for (const block of blocks) {
+    if (block.type === 'resource_link') {
+      const local = resolveLocalPath(block.uri ?? '');
+      const label = block.name || block.uri || 'resource';
+      if (!local) {
+        snippets.push(`[Resource link: ${label}] (skipped — non-local URI)`);
+        continue;
+      }
+      try {
+        const buf = await readFile(local);
+        const truncated = buf.byteLength > MAX_BYTES_PER_FILE;
+        const text = buf.subarray(0, MAX_BYTES_PER_FILE).toString('utf8');
+        const note = truncated ? `\n… (truncated, ${buf.byteLength - MAX_BYTES_PER_FILE} more bytes)` : '';
+        snippets.push(`File: ${block.name || pathBasename(local)}\n\`\`\`\n${text}${note}\n\`\`\``);
+      } catch (err) {
+        snippets.push(`[Resource link: ${label}] (read failed: ${(err as Error).message})`);
+      }
+    } else if (block.type === 'resource' && block.resource) {
+      const r = block.resource;
+      const label = r.uri || 'resource';
+      if (typeof r.text === 'string' && r.text.length > 0) {
+        const truncated = r.text.length > MAX_BYTES_PER_FILE;
+        const text = truncated ? r.text.slice(0, MAX_BYTES_PER_FILE) : r.text;
+        const note = truncated ? `\n… (truncated, ${r.text.length - MAX_BYTES_PER_FILE} more chars)` : '';
+        snippets.push(`Resource: ${label}\n\`\`\`\n${text}${note}\n\`\`\``);
+      } else if (r.uri) {
+        // Embedded resource without text — try local file fallback
+        const local = resolveLocalPath(r.uri);
+        if (local) {
+          try {
+            const buf = await readFile(local);
+            const truncated = buf.byteLength > MAX_BYTES_PER_FILE;
+            const text = buf.subarray(0, MAX_BYTES_PER_FILE).toString('utf8');
+            const note = truncated ? `\n… (truncated, ${buf.byteLength - MAX_BYTES_PER_FILE} more bytes)` : '';
+            snippets.push(`Resource: ${pathBasename(local)}\n\`\`\`\n${text}${note}\n\`\`\``);
+          } catch (err) {
+            snippets.push(`[Resource: ${label}] (read failed: ${(err as Error).message})`);
+          }
+        }
+      }
+    }
+  }
+
+  return snippets.join('\n\n');
+}
+
 /** Check if a provider has an API key stored (reads config directly, no async) */
 function providerHasKey(providerId: string): boolean {
   // Check environment variable first
@@ -199,9 +273,12 @@ function buildConfigOptions(): SessionConfigOption[] {
     : (modelOptions[0]?.value ?? '');
   const currentLanguage = (config.get('language') as string) || 'auto';
   const boolToStr = (v: boolean) => (v ? 'true' : 'false');
-  const BOOL_OPTIONS = [
-    { value: 'true',  name: 'ON' },
-    { value: 'false', name: 'OFF' },
+  // Zed (and most ACP clients) only show the selected option's name — not the
+  // dropdown's `name`. Prefix each option with the action so three different
+  // boolean toggles aren't all displayed as just "ON" / "OFF".
+  const makeBoolOptions = (label: string) => [
+    { value: 'true',  name: `${label}: ON` },
+    { value: 'false', name: `${label}: OFF` },
   ];
   return [
     {
@@ -229,7 +306,7 @@ function buildConfigOptions(): SessionConfigOption[] {
       category: null,
       type: 'select' as const,
       currentValue: boolToStr(config.get('agentConfirmDeleteFile') !== false),
-      options: BOOL_OPTIONS,
+      options: makeBoolOptions('Confirm delete'),
     },
     {
       id: 'agentConfirmExecuteCommand',
@@ -238,7 +315,7 @@ function buildConfigOptions(): SessionConfigOption[] {
       category: null,
       type: 'select' as const,
       currentValue: boolToStr(config.get('agentConfirmExecuteCommand') !== false),
-      options: BOOL_OPTIONS,
+      options: makeBoolOptions('Confirm exec'),
     },
     {
       id: 'agentConfirmWriteFile',
@@ -247,7 +324,7 @@ function buildConfigOptions(): SessionConfigOption[] {
       category: null,
       type: 'select' as const,
       currentValue: boolToStr(config.get('agentConfirmWriteFile') === true),
-      options: BOOL_OPTIONS,
+      options: makeBoolOptions('Confirm write'),
     },
   ];
 }
@@ -272,6 +349,7 @@ export function startAcpServer(): Promise<void> {
       case 'initialized':          /* no-op acknowledgment */        break;
       case 'session/new':          handleSessionNew(req);           break;
       case 'session/load':         handleSessionLoad(req);          break;
+      case 'session/resume':       handleSessionResume(req);        break;
       case 'session/prompt':       handleSessionPrompt(req);        break;
       case 'session/set_mode':     handleSetMode(req);              break;
       case 'session/set_config_option': handleSetConfigOption(req); break;
@@ -295,15 +373,35 @@ export function startAcpServer(): Promise<void> {
 
   // ── initialize ──────────────────────────────────────────────────────────────
 
+  // Tracks what the connected client supports — populated from initialize params.
+  // Per ACP spec, `terminal` and `fs` are CLIENT capabilities (the agent calls
+  // these methods on the client), so we must read them from the client, not
+  // advertise them ourselves.
+  let clientSupportsTerminal = false;
+  let clientSupportsFsRead = false;
+  let clientSupportsFsWrite = false;
+
   function handleInitialize(msg: JsonRpcRequest): void {
-    const _params = msg.params as InitializeParams;
+    const params = msg.params as InitializeParams;
+    clientSupportsTerminal = params.clientCapabilities?.terminal === true;
+    clientSupportsFsRead = params.clientCapabilities?.fs?.readTextFile === true;
+    clientSupportsFsWrite = params.clientCapabilities?.fs?.writeTextFile === true;
+
     const result: InitializeResult = {
       protocolVersion: 1,
       agentCapabilities: {
         loadSession: true,
-        terminal: true,
-        promptCapabilities: { image: true },
-        sessionCapabilities: { list: {} },
+        promptCapabilities: {
+          image: true,
+          // Codeep parses ContentBlock::Resource and ::ResourceLink in
+          // session/prompt — see handleSessionPrompt below.
+          embeddedContext: true,
+        },
+        sessionCapabilities: {
+          list: {},
+          // Lightweight reconnect — see handleSessionResume below.
+          resume: {},
+        },
       },
       agentInfo: {
         name: 'codeep',
@@ -433,6 +531,49 @@ export function startAcpServer(): Promise<void> {
         content: { type: 'text', text: welcomeText },
       },
     });
+  }
+
+  // ── session/resume ──────────────────────────────────────────────────────────
+  // Lightweight reconnect path. Unlike `session/load`, the client keeps history
+  // locally and only needs to be wired back up to the in-memory session
+  // (modes + config). No history replay → instant reconnect on UI reload.
+  // Falls back to `session/load` semantics if the session isn't in memory yet.
+
+  function handleSessionResume(msg: JsonRpcRequest): void {
+    const params = msg.params as SessionResumeParams;
+    const existing = sessions.get(params.sessionId);
+    if (existing) {
+      existing.workspaceRoot = params.cwd;
+      const result: SessionResumeResult = {
+        sessionId: params.sessionId,
+        modes: AGENT_MODES,
+        configOptions: buildConfigOptions(),
+      };
+      transport.respond(msg.id, result);
+      return;
+    }
+
+    // Session not in memory — load from disk but skip the welcome banner and
+    // the history echo (resume contract: client already has history).
+    const { codeepSessionId, history } = loadWorkspace(params.cwd, params.sessionId);
+    const acpSessionId = randomUUID();
+    sessions.set(acpSessionId, {
+      sessionId: acpSessionId,
+      workspaceRoot: params.cwd,
+      history,
+      codeepSessionId,
+      addedFiles: new Map(),
+      abortController: null,
+      titleSent: true,
+      hadHistory: history.length > 0,
+      currentModeId: 'auto',
+    });
+    const result: SessionResumeResult = {
+      sessionId: acpSessionId,
+      modes: AGENT_MODES,
+      configOptions: buildConfigOptions(),
+    };
+    transport.respond(msg.id, result);
   }
 
   // ── session/set_mode ────────────────────────────────────────────────────────
@@ -597,6 +738,17 @@ export function startAcpServer(): Promise<void> {
       .filter((b) => b.type === 'text')
       .map((b) => b.text ?? '')
       .join('\n');
+
+    // Inject embedded context (Resource + ResourceLink blocks).
+    // Zed sends these when the user drags a file into the chat or pins a
+    // selection — we advertise `embeddedContext: true` so the client uses
+    // these block types instead of dropping the context silently.
+    const contextSnippets = await collectEmbeddedContext(params.prompt);
+    if (contextSnippets) {
+      prompt = prompt
+        ? `${contextSnippets}\n\n${prompt}`
+        : contextSnippets;
+    }
 
     // Handle image blocks via vision API
     const imageBlocks = params.prompt.filter((b) => b.type === 'image' && b.data);
@@ -800,6 +952,12 @@ export function startAcpServer(): Promise<void> {
               }
             : undefined,
           onExecuteCommand: async (command: string, args: string[], cwd: string) => {
+            // Per ACP spec, only call terminal/* if the client advertised the
+            // capability in initialize. Otherwise execute locally.
+            if (!clientSupportsTerminal) {
+              const r = await executeCommandAsync(command, args, { cwd, projectRoot: cwd, timeout: 120000 });
+              return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 0 };
+            }
             try {
               const createResult = await transport.request('terminal/create', {
                 sessionId: params.sessionId,
@@ -811,10 +969,11 @@ export function startAcpServer(): Promise<void> {
 
               const { terminalId } = createResult;
 
-              const waitResult = await transport.request('terminal/waitForExit', {
+              // Spec method is snake_case `terminal/wait_for_exit` and takes
+              // only { sessionId, terminalId } — no timeoutMs.
+              const waitResult = await transport.request('terminal/wait_for_exit', {
                 sessionId: params.sessionId,
                 terminalId,
-                timeoutMs: 120_000,
               }) as TerminalWaitForExitResult;
 
               const outputResult = await transport.request('terminal/output', {
@@ -830,7 +989,7 @@ export function startAcpServer(): Promise<void> {
               const exitCode = waitResult.exitStatus.type === 'exited' ? waitResult.exitStatus.code : 1;
               return { stdout: outputResult.output ?? '', stderr: '', exitCode };
             } catch (err) {
-              // Zed terminal unavailable — fall back to local execution
+              // Client terminal failed — fall back to local execution
               const r = await executeCommandAsync(command, args, { cwd, projectRoot: cwd, timeout: 120000 });
               return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 0 };
             }

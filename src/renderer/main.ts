@@ -43,7 +43,9 @@ import {
 } from '../utils/project';
 import { getCurrentVersion, checkForUpdates, getUpdateInstructions } from '../utils/update';
 import { getProviderList, isNoApiKeyProvider } from '../config/providers';
-import { getSessionStats } from '../utils/tokenTracker';
+import { getSessionStats, getCostBreakdown } from '../utils/tokenTracker';
+import { isGitRepository } from '../utils/git';
+import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
 import { checkApiRateLimit } from '../utils/ratelimit';
 import { handleCommand as dispatchCommand, AppCommandContext } from './commands';
 import { logger, logAppError } from '../utils/logger';
@@ -213,6 +215,45 @@ async function handleSubmit(message: string): Promise<void> {
     await chat(enrichedMessage, history, (chunk) => app.addStreamChunk(chunk), undefined, projectContext, undefined);
     app.endStreaming();
     autoSaveSession(app.getMessages(), projectPath);
+
+    // Sync to dashboard after every successful manual chat (not just on shutdown).
+    // Mirrors the agent-mode behaviour in agentExecution.ts so dashboard stays
+    // in sync regardless of Agent Mode setting.
+    const messagesNow = app.getMessages();
+    const projectId = projectPath ? generateProjectId(projectPath) : undefined;
+    const displayName = sessionDisplayName || sessionId;
+    syncSession({
+      sessionId,
+      sessionName: displayName,
+      projectName: projectContext?.name,
+      projectId,
+      messages: messagesNow,
+    });
+    const sharedFields = {
+      sessionId,
+      sessionName: displayName,
+      messageCount: messagesNow.length,
+      cliVersion: getCurrentVersion(),
+      projectName: projectContext?.name,
+      projectId,
+      language: projectContext?.type,
+      isGit: isGitRepository(process.cwd()),
+    };
+    const costBreakdown = getCostBreakdown();
+    if (costBreakdown.length > 0) {
+      for (const entry of costBreakdown) {
+        reportStats({
+          ...sharedFields,
+          model: entry.model,
+          provider: entry.provider,
+          inputTokens: entry.promptTokens || undefined,
+          outputTokens: entry.completionTokens || undefined,
+          estimatedCost: entry.estimatedCost || undefined,
+        });
+      }
+    } else {
+      reportStats({ ...sharedFields, model: config.get('model'), provider: config.get('provider') });
+    }
   } catch (error) {
     app.endStreaming();
     const err = error as Error & { name: string };
