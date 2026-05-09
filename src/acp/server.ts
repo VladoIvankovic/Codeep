@@ -520,6 +520,17 @@ export function startAcpServer(): Promise<void> {
     };
     transport.respond(msg.id, result);
 
+    // Re-advertise slash commands so `/` autocomplete works after a reload.
+    // Zed only registers commands when AvailableCommandsUpdated fires; without
+    // this the slash menu stays empty after session/load.
+    transport.notify('session/update', {
+      sessionId: acpSessionId,
+      update: {
+        sessionUpdate: 'available_commands_update',
+        availableCommands: AVAILABLE_COMMANDS,
+      },
+    });
+
     // Send title immediately so Zed "Recent" panel shows something useful
     sendSessionTitle(params.sessionId, history, pathBasename(params.cwd));
 
@@ -541,6 +552,20 @@ export function startAcpServer(): Promise<void> {
 
   function handleSessionResume(msg: JsonRpcRequest): void {
     const params = msg.params as SessionResumeParams;
+
+    // Helper — re-advertise commands so `/` autocomplete works after a panel
+    // reload. Without this the slash menu stays empty until a new session is
+    // created. Same notification shape as session/new.
+    const advertiseCommands = (sessionId: string) => {
+      transport.notify('session/update', {
+        sessionId,
+        update: {
+          sessionUpdate: 'available_commands_update',
+          availableCommands: AVAILABLE_COMMANDS,
+        },
+      });
+    };
+
     const existing = sessions.get(params.sessionId);
     if (existing) {
       existing.workspaceRoot = params.cwd;
@@ -550,6 +575,7 @@ export function startAcpServer(): Promise<void> {
         configOptions: buildConfigOptions(),
       };
       transport.respond(msg.id, result);
+      advertiseCommands(params.sessionId);
       return;
     }
 
@@ -574,6 +600,7 @@ export function startAcpServer(): Promise<void> {
       configOptions: buildConfigOptions(),
     };
     transport.respond(msg.id, result);
+    advertiseCommands(acpSessionId);
   }
 
   // ── session/set_mode ────────────────────────────────────────────────────────

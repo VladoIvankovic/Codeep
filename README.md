@@ -959,11 +959,28 @@ Codeep advertises the following [ACP](https://agentclientprotocol.com) capabilit
 
 - **`promptCapabilities.image`** — paste/drag images into chat for vision analysis.
 - **`promptCapabilities.embeddedContext`** — drag a file or pin a code selection into the chat and the actual file content is injected into the prompt (resource & resource_link blocks, 200 KB cap per file).
-- **`sessionCapabilities.list`** — recent sessions appear in Zed's session picker.
+- **`sessionCapabilities.list`** — exposes saved CLI sessions to ACP clients.
 - **`sessionCapabilities.resume`** — instant reconnect on panel reload without replaying history.
 - **`loadSession`** — restore a previous session by id.
 
 Codeep also reads `clientCapabilities.terminal` from the client and routes shell commands through the editor's terminal when supported (so you see them in Zed's terminal panel), falling back to local execution otherwise.
+
+### Loading CLI sessions in Zed
+
+Zed's left sidebar shows only sessions Zed itself created (one per "New Thread") — it does **not** auto-list sessions you saved from the CLI or from a previous Zed window. Two ways to access those:
+
+**Inside the chat (recommended):**
+
+```
+/sessions                    # show all saved sessions for this workspace
+/session load <name>         # restore one
+```
+
+When you open a fresh chat in Zed, Codeep also shows you the most recent CLI sessions for that project right in the welcome message, so you can switch with one command.
+
+**Via Zed's import modal:**
+
+Open Zed's command palette (`Cmd+Shift+P`) and search for **"Import Threads"**. Codeep's saved sessions appear there as an importable list — once imported they show up in Zed's regular sidebar.
 
 ## VS Code Extension
 

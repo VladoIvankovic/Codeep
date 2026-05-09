@@ -6,6 +6,29 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvankovic/Codeep/releases).
 
+## [1.3.39] — 2026-05-06
+
+### Added
+- **CLI sessions surfaced in Zed welcome message** — when you open a chat in
+  Zed, Codeep now lists the most recent saved sessions for that workspace
+  with one-line load instructions. Solves the discoverability gap where
+  users couldn't find their CLI sessions in Zed's sidebar (Zed only lists
+  sessions it created itself; CLI ones live in the hidden "Import Threads"
+  modal).
+- **README "Loading CLI sessions in Zed" section** documenting both the
+  in-chat (`/sessions`, `/session load <name>`) and the import-modal paths.
+
+### Fixed
+- **`available_commands_update` not sent on `session/load` and `session/resume`**
+  — the slash command popup (`/`) stayed empty after a panel reload because
+  Zed registers commands only when the agent emits the notification. Codeep
+  was emitting it only on `session/new`. Now also sent on load and resume.
+
+### Internal
+- Added `npm run release` wrapper script — single command bumps version,
+  verifies CHANGELOG section, runs tests, commits, tags, and pushes. See
+  `scripts/release.js`.
+
 ## [1.3.38] — 2026-05-05
 
 ### Added

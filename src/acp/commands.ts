@@ -122,6 +122,22 @@ export function initWorkspace(workspaceRoot: string, fresh = false): {
     'Type `/help` to see available commands.',
   ];
 
+  // Surface CLI sessions so Zed users discover them without having to know
+  // about the hidden "Import Threads" modal. Show up to 5 most recent.
+  if (sessions.length > 1 || (sessions.length === 1 && sessions[0].name !== codeepSessionId)) {
+    const others = sessions
+      .filter(s => s.name !== codeepSessionId)
+      .slice(0, 5);
+    if (others.length > 0) {
+      lines.push('', '**Other sessions in this project:**');
+      for (const s of others) {
+        const label = s.title && s.title !== s.name ? `${s.title} (\`${s.name}\`)` : `\`${s.name}\``;
+        lines.push(`- ${label} — ${s.messageCount} messages`);
+      }
+      lines.push('', `Type \`/sessions\` for the full list, or \`/session load <name>\` to switch.`);
+    }
+  }
+
   if (history.length > 0) {
     lines.push('', '---', '');
     lines.push(...formatSessionPreviewLines(history));

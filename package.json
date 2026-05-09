@@ -17,7 +17,8 @@
     "build:binary": "npm run build && pkg dist/renderer/main.js --targets node18-macos-arm64,node18-macos-x64,node18-linux-x64 --output bin/codeep",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "release": "node scripts/release.js"
   },
   "repository": {
     "type": "git",
