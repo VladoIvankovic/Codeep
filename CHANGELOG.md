@@ -6,20 +6,35 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvankovic/Codeep/releases).
 
+## [1.3.41] — 2026-05-10
+
+### Fixed
+- **Slash commands (`/`) still showed "Available commands: none" in Zed
+  after v1.3.40.** The earlier patch (removing the spec-extension
+  `session_info_update` notification and re-emitting commands on every
+  prompt) was insufficient — the actual root cause is a **race in Zed**:
+  it processes `AvailableCommandsUpdated` events synchronously and silently
+  drops them if the session's `thread_view` isn't registered yet. Codeep
+  was sending the notification ~1 ms after the `session/new` response —
+  well inside Zed's setup window — so the agent's command list never
+  reached the slash autocomplete and `/help` was rejected as unsupported.
+  Confirmed by reading Zed source (`crates/agent_ui` + `crates/agent`)
+  and reproduced via the new `CODEEP_ACP_DEBUG` log. Codeep now sends
+  `available_commands_update` with a configurable delay (200 ms by
+  default, override via `CODEEP_ACP_COMMANDS_DELAY_MS`) on `session/new`,
+  `session/load`, and `session/resume` — well outside the race window.
+
 ## [1.3.40] — 2026-05-10
 
 ### Fixed
-- **Slash commands (`/`) showed "Available commands: none" in Zed.** Root
-  cause was a race in Zed: it processes `AvailableCommandsUpdated` events
-  synchronously and silently drops them if the session's `thread_view` isn't
-  registered yet. Codeep was sending the notification ~1 ms after the
-  `session/new` response — well inside Zed's setup window — so the agent's
-  command list never reached the slash autocomplete and `/help` was rejected
-  as unsupported. Codeep now sends `available_commands_update` with a
-  configurable delay (200 ms by default, override via
-  `CODEEP_ACP_COMMANDS_DELAY_MS`) and re-emits it on `session/load`,
-  `session/resume`, and at the start of every `session/prompt` turn for
-  resilience against any future client-side race.
+- **First attempt at fixing slash commands in Zed.** Removed a
+  `session_info_update` notification that was emitted between the
+  `session/new` response and `available_commands_update`, on the suspicion
+  that it was poisoning Zed's deserializer. Turned out the variant was
+  actually spec-valid (`SessionInfoUpdate` exists in `agent-client-protocol`
+  v0.11+) and the real fix needed was in v1.3.41. Also added the
+  resilience pass: `available_commands_update` is re-emitted at the start
+  of every `session/prompt` turn.
 
 ### Added
 - **`CODEEP_ACP_DEBUG` env var** for ACP debugging — when set, every inbound
@@ -27,6 +42,7 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
   `~/.cache/codeep/acp-debug.log` (override path via
   `CODEEP_ACP_DEBUG_FILE`). Writes go to a file rather than stderr because
   most ACP clients (Zed included) don't pipe agent stderr anywhere readable.
+  This is what let us confirm the v1.3.41 fix.
 
 ## [1.3.39] — 2026-05-06
 
