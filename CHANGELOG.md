@@ -9,21 +9,24 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 ## [1.3.40] — 2026-05-10
 
 ### Fixed
-- **Slash command autocomplete (`/`) sometimes empty in Zed** — Zed registers
-  agent commands only when its `thread_view` is fully set up, which can lose
-  to the race against the `session/new` response on slow machines or first
-  cold-start. Codeep now re-emits `available_commands_update` at the start of
-  every `session/prompt` turn as a belt-and-suspenders fallback, so the
-  command list is guaranteed to be live by the time the user types their
-  next prompt.
+- **Slash commands (`/`) showed "Available commands: none" in Zed.** Root
+  cause was a race in Zed: it processes `AvailableCommandsUpdated` events
+  synchronously and silently drops them if the session's `thread_view` isn't
+  registered yet. Codeep was sending the notification ~1 ms after the
+  `session/new` response — well inside Zed's setup window — so the agent's
+  command list never reached the slash autocomplete and `/help` was rejected
+  as unsupported. Codeep now sends `available_commands_update` with a
+  configurable delay (200 ms by default, override via
+  `CODEEP_ACP_COMMANDS_DELAY_MS`) and re-emits it on `session/load`,
+  `session/resume`, and at the start of every `session/prompt` turn for
+  resilience against any future client-side race.
 
 ### Added
-- **`CODEEP_ACP_DEBUG` env var** for ACP debugging — when set (any non-empty
-  value), Codeep mirrors every inbound and outbound JSON-RPC frame to stderr
-  prefixed with `[ACP←client]` / `[ACP→client]`. Enable in Zed via the agent
-  config `env` block; lines show up in **Help → Open Log**. Useful for
-  diagnosing client-specific format issues without affecting normal stdio
-  protocol traffic.
+- **`CODEEP_ACP_DEBUG` env var** for ACP debugging — when set, every inbound
+  and outbound JSON-RPC frame is appended to
+  `~/.cache/codeep/acp-debug.log` (override path via
+  `CODEEP_ACP_DEBUG_FILE`). Writes go to a file rather than stderr because
+  most ACP clients (Zed included) don't pipe agent stderr anywhere readable.
 
 ## [1.3.39] — 2026-05-06
 

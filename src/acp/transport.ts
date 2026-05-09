@@ -2,6 +2,26 @@
 // Newline-delimited JSON-RPC over stdio
 
 import { JsonRpcRequest, JsonRpcResponse, JsonRpcNotification } from './protocol.js';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, dirname } from 'node:path';
+
+// Debug log destination — when CODEEP_ACP_DEBUG is set we mirror every
+// inbound and outbound JSON-RPC frame here. Using a file (not stderr) because
+// most ACP clients (Zed included) do not pipe agent stderr to anywhere the
+// user can easily read; a known on-disk path is reliable everywhere.
+const ACP_DEBUG_PATH = process.env.CODEEP_ACP_DEBUG_FILE
+  || join(homedir(), '.cache', 'codeep', 'acp-debug.log');
+const ACP_DEBUG = !!process.env.CODEEP_ACP_DEBUG;
+if (ACP_DEBUG) {
+  try { mkdirSync(dirname(ACP_DEBUG_PATH), { recursive: true }); } catch { /* ignore */ }
+}
+function debugLog(direction: '→' | '←', payload: string): void {
+  if (!ACP_DEBUG) return;
+  try {
+    appendFileSync(ACP_DEBUG_PATH, `${new Date().toISOString()} [ACP${direction}client] ${payload}\n`);
+  } catch { /* swallow — never break the protocol over a logging failure */ }
+}
 
 type MessageHandler = (msg: JsonRpcRequest | JsonRpcNotification) => void;
 
@@ -34,9 +54,7 @@ export class StdioTransport {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
-        if (process.env.CODEEP_ACP_DEBUG) {
-          process.stderr.write(`[ACP←client] ${trimmed}\n`);
-        }
+        debugLog('←', trimmed);
         const msg = JSON.parse(trimmed) as JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
         // Check if this is a response to one of our outbound requests
         if ('result' in msg || 'error' in msg) {
@@ -57,9 +75,7 @@ export class StdioTransport {
 
   send(msg: JsonRpcResponse | JsonRpcNotification): void {
     const line = JSON.stringify(msg);
-    if (process.env.CODEEP_ACP_DEBUG) {
-      process.stderr.write(`[ACP→client] ${line}\n`);
-    }
+    debugLog('→', line);
     process.stdout.write(line + '\n');
   }
 

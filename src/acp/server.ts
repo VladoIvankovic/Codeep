@@ -414,19 +414,17 @@ export function startAcpServer(): Promise<void> {
 
   // ── helpers ──────────────────────────────────────────────────────────────────
 
-  function sendSessionTitle(sessionId: string, history: { role: string; content: string }[], fallback?: string): void {
-    const firstUserMsg = history.find(m => m.role === 'user');
-    const title = firstUserMsg
-      ? firstUserMsg.content.replace(/\n/g, ' ').trim().slice(0, 60)
-      : (fallback ?? 'Codeep session');
-    transport.notify('session/update', {
-      sessionId,
-      update: {
-        sessionUpdate: 'session_info_update',
-        title,
-        updatedAt: new Date().toISOString(),
-      },
-    });
+  // Title hint to the client. The ACP spec does NOT define a
+  // `session_info_update` variant — sending it caused Zed's internally-tagged
+  // SessionUpdate deserializer to reject the notification, which (depending
+  // on client recovery logic) could swallow following valid notifications
+  // like `available_commands_update`. We now no-op here and rely on
+  // session/list (which has a proper `title` field per spec) for any
+  // client-side session naming. Kept as a function with no body so callers
+  // don't need to be touched — easy to wire back up via `_meta` extension if
+  // a future client needs an explicit hint.
+  function sendSessionTitle(_sessionId: string, _history: { role: string; content: string }[], _fallback?: string): void {
+    // intentionally empty — see comment above
   }
 
   // ── session/new ─────────────────────────────────────────────────────────────
@@ -456,14 +454,14 @@ export function startAcpServer(): Promise<void> {
     };
     transport.respond(msg.id, result);
 
-    // Advertise slash commands
-    transport.notify('session/update', {
-      sessionId: acpSessionId,
-      update: {
-        sessionUpdate: 'available_commands_update',
-        availableCommands: AVAILABLE_COMMANDS,
-      },
-    });
+    // Advertise slash commands AFTER a short delay. Zed processes
+    // `AvailableCommandsUpdated` events synchronously and silently drops them
+    // if `thread_view(&session_id)` returns None — which is the case for ~tens
+    // of ms after session/new response is sent (Zed needs to spin up the view
+    // in a separate task). Without the delay the notification arrives ~1 ms
+    // after the response and gets lost, which manifests as
+    // "Available commands: none" in the slash menu.
+    sendCommandsDelayed(acpSessionId);
 
     // Send title immediately so Zed "Recent" panel shows something useful
     sendSessionTitle(acpSessionId, history, pathBasename(params.cwd));
@@ -476,6 +474,22 @@ export function startAcpServer(): Promise<void> {
         content: { type: 'text', text: welcomeText },
       },
     });
+  }
+
+  // Delay configurable via env so we can experimentally tune in production.
+  // 200 ms is comfortably above the observed ~1 ms race window without
+  // making the slash menu feel laggy on first paint.
+  const COMMANDS_DELAY_MS = Number(process.env.CODEEP_ACP_COMMANDS_DELAY_MS ?? 200);
+  function sendCommandsDelayed(sessionId: string): void {
+    setTimeout(() => {
+      transport.notify('session/update', {
+        sessionId,
+        update: {
+          sessionUpdate: 'available_commands_update',
+          availableCommands: AVAILABLE_COMMANDS,
+        },
+      });
+    }, COMMANDS_DELAY_MS);
   }
 
   // ── session/load ────────────────────────────────────────────────────────────
@@ -520,16 +534,9 @@ export function startAcpServer(): Promise<void> {
     };
     transport.respond(msg.id, result);
 
-    // Re-advertise slash commands so `/` autocomplete works after a reload.
-    // Zed only registers commands when AvailableCommandsUpdated fires; without
-    // this the slash menu stays empty after session/load.
-    transport.notify('session/update', {
-      sessionId: acpSessionId,
-      update: {
-        sessionUpdate: 'available_commands_update',
-        availableCommands: AVAILABLE_COMMANDS,
-      },
-    });
+    // Re-advertise commands (delayed for the same race-condition reason as
+    // session/new — see sendCommandsDelayed comment).
+    sendCommandsDelayed(acpSessionId);
 
     // Send title immediately so Zed "Recent" panel shows something useful
     sendSessionTitle(params.sessionId, history, pathBasename(params.cwd));
@@ -553,19 +560,6 @@ export function startAcpServer(): Promise<void> {
   function handleSessionResume(msg: JsonRpcRequest): void {
     const params = msg.params as SessionResumeParams;
 
-    // Helper — re-advertise commands so `/` autocomplete works after a panel
-    // reload. Without this the slash menu stays empty until a new session is
-    // created. Same notification shape as session/new.
-    const advertiseCommands = (sessionId: string) => {
-      transport.notify('session/update', {
-        sessionId,
-        update: {
-          sessionUpdate: 'available_commands_update',
-          availableCommands: AVAILABLE_COMMANDS,
-        },
-      });
-    };
-
     const existing = sessions.get(params.sessionId);
     if (existing) {
       existing.workspaceRoot = params.cwd;
@@ -575,7 +569,8 @@ export function startAcpServer(): Promise<void> {
         configOptions: buildConfigOptions(),
       };
       transport.respond(msg.id, result);
-      advertiseCommands(params.sessionId);
+      // Delayed — see sendCommandsDelayed comment for the race-condition rationale.
+      sendCommandsDelayed(params.sessionId);
       return;
     }
 
@@ -600,7 +595,7 @@ export function startAcpServer(): Promise<void> {
       configOptions: buildConfigOptions(),
     };
     transport.respond(msg.id, result);
-    advertiseCommands(acpSessionId);
+    sendCommandsDelayed(acpSessionId);
   }
 
   // ── session/set_mode ────────────────────────────────────────────────────────
