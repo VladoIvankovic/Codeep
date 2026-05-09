@@ -34,6 +34,9 @@ export class StdioTransport {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
+        if (process.env.CODEEP_ACP_DEBUG) {
+          process.stderr.write(`[ACP←client] ${trimmed}\n`);
+        }
         const msg = JSON.parse(trimmed) as JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
         // Check if this is a response to one of our outbound requests
         if ('result' in msg || 'error' in msg) {
@@ -53,7 +56,11 @@ export class StdioTransport {
   }
 
   send(msg: JsonRpcResponse | JsonRpcNotification): void {
-    process.stdout.write(JSON.stringify(msg) + '\n');
+    const line = JSON.stringify(msg);
+    if (process.env.CODEEP_ACP_DEBUG) {
+      process.stderr.write(`[ACP→client] ${line}\n`);
+    }
+    process.stdout.write(line + '\n');
   }
 
   respond(id: number | string, result: unknown): void {

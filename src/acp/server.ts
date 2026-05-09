@@ -760,6 +760,19 @@ export function startAcpServer(): Promise<void> {
       return;
     }
 
+    // Re-advertise commands on every prompt — Zed sometimes drops the initial
+    // `available_commands_update` from session/new because the thread_view
+    // isn't registered yet on Zed's side (race against the session/new
+    // response). Re-sending here guarantees `/` autocomplete works by the
+    // time the user could plausibly type the next prompt.
+    transport.notify('session/update', {
+      sessionId: params.sessionId,
+      update: {
+        sessionUpdate: 'available_commands_update',
+        availableCommands: AVAILABLE_COMMANDS,
+      },
+    });
+
     // Extract text from ContentBlock[]
     let prompt = params.prompt
       .filter((b) => b.type === 'text')
