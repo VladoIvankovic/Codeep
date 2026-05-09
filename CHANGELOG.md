@@ -6,6 +6,25 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvankovic/Codeep/releases).
 
+## [1.3.40] — 2026-05-10
+
+### Fixed
+- **Slash command autocomplete (`/`) sometimes empty in Zed** — Zed registers
+  agent commands only when its `thread_view` is fully set up, which can lose
+  to the race against the `session/new` response on slow machines or first
+  cold-start. Codeep now re-emits `available_commands_update` at the start of
+  every `session/prompt` turn as a belt-and-suspenders fallback, so the
+  command list is guaranteed to be live by the time the user types their
+  next prompt.
+
+### Added
+- **`CODEEP_ACP_DEBUG` env var** for ACP debugging — when set (any non-empty
+  value), Codeep mirrors every inbound and outbound JSON-RPC frame to stderr
+  prefixed with `[ACP←client]` / `[ACP→client]`. Enable in Zed via the agent
+  config `env` block; lines show up in **Help → Open Log**. Useful for
+  diagnosing client-specific format issues without affecting normal stdio
+  protocol traffic.
+
 ## [1.3.39] — 2026-05-06
 
 ### Added
