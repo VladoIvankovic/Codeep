@@ -228,7 +228,7 @@ function createConfig(): Conf<ConfigSchema> {
   const defaults: ConfigSchema = {
     apiKey: '',
     provider: 'z.ai',
-    model: 'glm-4.7',
+    model: 'glm-5.1',
     agentMode: 'on',
     ollamaUrl: 'http://localhost:11434',
     agentConfirmation: 'dangerous',

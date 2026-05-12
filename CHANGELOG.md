@@ -6,6 +6,30 @@ Versioning: [Semantic Versioning](https://semver.org/).
 
 For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvankovic/Codeep/releases).
 
+## [1.3.42] — 2026-05-12
+
+### Fixed
+- **Default model `glm-4.7` did not exist in the Z.AI catalogue.**
+  `src/config/index.ts` shipped with `model: 'glm-4.7'` as the
+  cold-start default for the `z.ai` provider, but `src/config/providers.ts`
+  only advertises `glm-5.1`, `glm-5-turbo`, and `glm-5`. Fresh installs
+  therefore booted with a model id that wasn't in any picker — the
+  first send had to be preceded by a manual model switch, and any
+  client (Mac / iOS / web dashboard) reading the config saw an unknown
+  model. Default is now `glm-5.1`, matching what `providers.ts` lists
+  as the Z.AI default.
+- `config.test.ts` updated to the new default so the validation
+  test stays in sync.
+
+### Removed
+- **Obsolete Z.AI model entries in `tokenTracker.ts`.** Pricing and
+  context-window rows for `glm-4.7-flash` and `glm-4.5-air` were
+  never reachable through the provider catalogue (`providers.ts`
+  retired both during the GLM-5 rebrand). They only produced phantom
+  cost estimates if a user typed those ids in by hand. Dropping them
+  keeps the tracker's tables in lockstep with the canonical provider
+  list.
+
 ## [1.3.41] — 2026-05-10
 
 ### Fixed

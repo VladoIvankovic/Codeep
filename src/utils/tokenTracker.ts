@@ -32,8 +32,6 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'glm-5.1':              131_072,
   'glm-5':                80_000,
   'glm-5-turbo':          202_752,
-  'glm-4.5-air':          131_072,
-  'glm-4.7-flash':        202_752,
   // OpenAI
   'gpt-5.5':              1_200_000,
   'gpt-5.4':              1_050_000,
@@ -86,8 +84,6 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'glm-5.1':           { inputPer1M: 1.00,  outputPer1M: 3.20 },
   'glm-5':             { inputPer1M: 0.72,  outputPer1M: 2.30 },
   'glm-5-turbo':       { inputPer1M: 1.20,  outputPer1M: 4.00 },
-  'glm-4.5-air':       { inputPer1M: 0.20,  outputPer1M: 1.10 },
-  'glm-4.7-flash':     { inputPer1M: 0.06,  outputPer1M: 0.40 },
   // OpenAI
   'gpt-5.5':      { inputPer1M: 5.00,  outputPer1M: 30.00 },
   'gpt-5.4':      { inputPer1M: 2.50,  outputPer1M: 15.00 },
