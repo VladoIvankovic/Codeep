@@ -96,6 +96,15 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'profile': 'Save/load settings profiles',
   'tasks': 'Show pending tasks from codeep.dev dashboard',
   'sync': 'Sync learning preferences and profiles to codeep.dev',
+  // 2.0 — surfaced for `/` autocomplete; documented in /help too.
+  'compact': 'Summarize older messages to free up context',
+  'commands': 'List custom slash commands in .codeep/commands/*.md',
+  'checkpoint': 'Snapshot the session (conversation + provider/model + git HEAD)',
+  'checkpoints': 'List saved checkpoints for this workspace',
+  'rewind': 'Restore conversation from a saved checkpoint',
+  'hooks': 'List installed lifecycle hooks (.codeep/hooks/<event>.sh)',
+  'mcp': 'Manage MCP servers (browse, install, add, remove, resources, prompts)',
+  'openrouter': 'Tune OpenRouter routing (preferred / ignore providers, fallbacks, privacy)',
 };
 
 import { helpCategories, keyboardShortcuts } from './components/Help';
@@ -284,6 +293,10 @@ export class App {
     'provider', 'model', 'protocol', 'lang', 'grant', 'login', 'logout',
     'context-save', 'context-load', 'context-clear', 'learn',
     'cost', 'tasks', 'account', 'sync',
+    // 2.0 — extensions, checkpoints, MCP, custom commands, OpenRouter prefs.
+    // Keep in lockstep with COMMAND_DESCRIPTIONS below and helpCategories.
+    'compact', 'commands', 'checkpoint', 'checkpoints', 'rewind',
+    'hooks', 'mcp', 'openrouter',
     'c', 't', 'd', 'r', 'f', 'e', 'o', 'b', 'p',
   ];
   

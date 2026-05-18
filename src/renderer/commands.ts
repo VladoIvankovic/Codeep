@@ -1598,6 +1598,291 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       break;
     }
 
+    case 'mcp': {
+      // Mirrors the ACP `/mcp` handler in src/acp/commands.ts. In TUI the
+      // session id is the constant `codeep-tui` (the same one main.ts uses
+      // when it spawns project MCP servers in the background) and the
+      // workspace root is ctx.projectPath. Without a project we can still
+      // browse the marketplace, but anything that mutates project config
+      // refuses with a clear message.
+      const sub = args[0]?.toLowerCase();
+      const TUI_SESSION = 'codeep-tui';
+      const projectPath = ctx.projectPath;
+
+      const requireProject = (): boolean => {
+        if (!projectPath) {
+          ctx.app.notify('Open a project (cd into it before running codeep) to add or modify MCP servers.');
+          return false;
+        }
+        return true;
+      };
+
+      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfig } = await import('../utils/mcpConfig');
+      const { registerSessionServers } = await import('../utils/mcpRegistry');
+
+      if (sub === 'add') {
+        if (!requireProject()) break;
+        const name = args[1];
+        const command = args[2];
+        if (!name || !command) {
+          ctx.app.addMessage({ role: 'system', content: 'Usage: `/mcp add <name> <command> [args...]` — e.g. `/mcp add fs npx @modelcontextprotocol/server-filesystem /path`' });
+          break;
+        }
+        const extraArgs = args.slice(3);
+        addProjectMcpServer(projectPath!, { name, command, args: extraArgs });
+        ctx.app.notify(`Saved MCP server ${name} to .codeep/mcp_servers.json. Spawning…`);
+        const merged = loadMcpServerConfig(projectPath!);
+        const { registered, errors } = await registerSessionServers(TUI_SESSION, merged, { workspaceRoot: projectPath });
+        const ok = registered.filter(t => t.serverName === name);
+        const failed = errors.find(e => e.server === name);
+        ctx.app.addMessage({
+          role: 'system',
+          content: failed
+            ? `Saved \`${name}\` but spawn failed: \`${failed.error}\``
+            : `Added \`${name}\` (${ok.length} tool${ok.length === 1 ? '' : 's'} available).`,
+        });
+        break;
+      }
+
+      if (sub === 'remove') {
+        if (!requireProject()) break;
+        const name = args[1];
+        if (!name) { ctx.app.addMessage({ role: 'system', content: 'Usage: `/mcp remove <name>`' }); break; }
+        const removed = removeProjectMcpServer(projectPath!, name);
+        if (!removed) {
+          ctx.app.addMessage({ role: 'system', content: `No project-scoped MCP server named \`${name}\`.` });
+          break;
+        }
+        const merged = loadMcpServerConfig(projectPath!);
+        await registerSessionServers(TUI_SESSION, merged, { workspaceRoot: projectPath });
+        ctx.app.addMessage({ role: 'system', content: `Removed \`${name}\` from project config and stopped its process.` });
+        break;
+      }
+
+      if (sub === 'browse') {
+        const { formatMarketplaceList, findMarketplaceEntry, formatMarketplaceEntry, MCP_MARKETPLACE } = await import('../utils/mcpMarketplace');
+        const detail = args[1];
+        if (detail) {
+          const entry = findMarketplaceEntry(detail);
+          if (!entry) {
+            ctx.app.addMessage({ role: 'system', content: `Marketplace id not found: \`${detail}\`. Run \`/mcp browse\` for the list.` });
+          } else {
+            const argHints = entry.argHints?.map(h => `<${h.placeholder ?? 'arg'}>`).join(' ') ?? '';
+            ctx.app.addMessage({ role: 'system', content: formatMarketplaceEntry(entry) + `\n\nInstall with \`/mcp install ${entry.id} ${argHints}\`` });
+          }
+          break;
+        }
+        ctx.app.addMessage({ role: 'system', content: formatMarketplaceList() + `\n\nRun \`/mcp browse <id>\` for details or \`/mcp install <id> [args]\` to install. Total: ${MCP_MARKETPLACE.length}.` });
+        break;
+      }
+
+      if (sub === 'install') {
+        if (!requireProject()) break;
+        const id = args[1];
+        if (!id) {
+          ctx.app.addMessage({ role: 'system', content: 'Usage: `/mcp install <id> [extra args...]` — run `/mcp browse` to see ids.' });
+          break;
+        }
+        const { findMarketplaceEntry } = await import('../utils/mcpMarketplace');
+        const entry = findMarketplaceEntry(id);
+        if (!entry) {
+          ctx.app.addMessage({ role: 'system', content: `Marketplace id not found: \`${id}\`. Run \`/mcp browse\` for the list.` });
+          break;
+        }
+        const extraArgs = args.slice(2);
+        const fullArgs = [...(entry.server.args ?? []), ...extraArgs];
+        addProjectMcpServer(projectPath!, {
+          name: entry.id,
+          command: entry.server.command,
+          args: fullArgs,
+          env: entry.server.env,
+          url: entry.server.url,
+          headers: entry.server.headers,
+        });
+        ctx.app.notify(`Saved ${entry.id} to project config. Spawning…`);
+        const merged = loadMcpServerConfig(projectPath!);
+        const { registered, errors } = await registerSessionServers(TUI_SESSION, merged, { workspaceRoot: projectPath });
+        const failed = errors.find(e => e.server === entry.id);
+        const lines: string[] = [];
+        if (failed) {
+          lines.push(`Saved \`${entry.id}\` but spawn failed: \`${failed.error}\``);
+        } else {
+          const ok = registered.filter(t => t.serverName === entry.id);
+          lines.push(`Installed **${entry.name}** (\`${entry.id}\`) — ${ok.length} tool${ok.length === 1 ? '' : 's'} available.`);
+        }
+        if (entry.envNotes?.length) {
+          lines.push('', '**Environment variables you may need:**');
+          for (const e of entry.envNotes) {
+            const req = e.required ? ' (required)' : '';
+            lines.push(`- \`${e.name}\`${req} — ${e.description}`);
+          }
+        }
+        ctx.app.addMessage({ role: 'system', content: lines.join('\n') });
+        break;
+      }
+
+      if (sub === 'reload') {
+        if (!requireProject()) break;
+        ctx.app.notify('Reloading MCP server config…');
+        const merged = loadMcpServerConfig(projectPath!);
+        const { registered, errors } = await registerSessionServers(TUI_SESSION, merged, { workspaceRoot: projectPath });
+        const lines = [`## MCP reloaded`, '', `**${registered.length}** tool${registered.length === 1 ? '' : 's'} from **${merged.length}** server${merged.length === 1 ? '' : 's'}.`];
+        if (errors.length > 0) {
+          lines.push('', '### Failed servers');
+          for (const e of errors) lines.push(`- **${e.server}** — \`${e.error}\``);
+        }
+        ctx.app.addMessage({ role: 'system', content: lines.join('\n') });
+        break;
+      }
+
+      if (sub === 'resources') {
+        const { getSessionResources, awaitSessionReady } = await import('../utils/mcpRegistry');
+        await awaitSessionReady(TUI_SESSION);
+        const groups = await getSessionResources(TUI_SESSION);
+        if (groups.length === 0) {
+          ctx.app.addMessage({ role: 'system', content: '_No MCP server in this session exposes resources._' });
+          break;
+        }
+        const lines = ['## MCP resources', ''];
+        for (const g of groups) {
+          lines.push(`**${g.serverName}** — ${g.resources.length} resource${g.resources.length === 1 ? '' : 's'}`);
+          for (const r of g.resources) {
+            const label = r.name ? `${r.name} — ` : '';
+            const mime = r.mimeType ? ` (${r.mimeType})` : '';
+            lines.push(`- ${label}\`${r.uri}\`${mime}${r.description ? ` — ${r.description}` : ''}`);
+          }
+          lines.push('');
+        }
+        lines.push('Read one with `/mcp read <uri>`.');
+        ctx.app.addMessage({ role: 'system', content: lines.join('\n').trim() });
+        break;
+      }
+
+      if (sub === 'read') {
+        const uri = args[1];
+        if (!uri) { ctx.app.addMessage({ role: 'system', content: 'Usage: `/mcp read <uri>` — run `/mcp resources` to see available URIs.' }); break; }
+        const { readSessionResource } = await import('../utils/mcpRegistry');
+        try {
+          const contents = await readSessionResource(TUI_SESSION, uri);
+          if (contents.length === 0) {
+            ctx.app.addMessage({ role: 'system', content: `_No content returned for \`${uri}\`._` });
+            break;
+          }
+          const lines: string[] = [`## Resource: \`${uri}\``, ''];
+          for (const c of contents) {
+            if (c.text !== undefined) {
+              const fence = c.mimeType?.includes('json') ? 'json' : c.mimeType?.includes('markdown') ? 'markdown' : '';
+              lines.push('```' + fence);
+              lines.push(c.text);
+              lines.push('```');
+            } else if (c.blob) {
+              lines.push(`_(${c.mimeType ?? 'binary'} blob, ${c.blob.length} base64 chars — not rendered)_`);
+            }
+          }
+          ctx.app.addMessage({ role: 'system', content: lines.join('\n') });
+        } catch (err) {
+          ctx.app.addMessage({ role: 'system', content: `Failed to read \`${uri}\`: ${(err as Error).message}` });
+        }
+        break;
+      }
+
+      if (sub === 'prompts') {
+        const { getSessionPrompts, awaitSessionReady } = await import('../utils/mcpRegistry');
+        await awaitSessionReady(TUI_SESSION);
+        const groups = await getSessionPrompts(TUI_SESSION);
+        if (groups.length === 0) {
+          ctx.app.addMessage({ role: 'system', content: '_No MCP server in this session exposes prompt templates._' });
+          break;
+        }
+        const lines = ['## MCP prompt templates', ''];
+        for (const g of groups) {
+          lines.push(`**${g.serverName}** — ${g.prompts.length} prompt${g.prompts.length === 1 ? '' : 's'}`);
+          for (const p of g.prompts) {
+            const argList = p.arguments?.length
+              ? ` (${p.arguments.map(a => a.required ? a.name : `[${a.name}]`).join(', ')})`
+              : '';
+            lines.push(`- \`${p.name}\`${argList}${p.description ? ` — ${p.description}` : ''}`);
+          }
+          lines.push('');
+        }
+        lines.push('Materialise one with `/mcp prompt <server> <name> [key=value...]`.');
+        ctx.app.addMessage({ role: 'system', content: lines.join('\n').trim() });
+        break;
+      }
+
+      if (sub === 'prompt') {
+        const serverName = args[1];
+        const name = args[2];
+        if (!serverName || !name) {
+          ctx.app.addMessage({ role: 'system', content: 'Usage: `/mcp prompt <server> <name> [key=value ...]`' });
+          break;
+        }
+        const promptArgs: Record<string, string> = {};
+        for (const tok of args.slice(3)) {
+          const eq = tok.indexOf('=');
+          if (eq > 0) promptArgs[tok.slice(0, eq)] = tok.slice(eq + 1);
+        }
+        const { getSessionPrompt } = await import('../utils/mcpRegistry');
+        try {
+          const { description, messages } = await getSessionPrompt(TUI_SESSION, serverName, name, promptArgs);
+          const lines: string[] = [`## Prompt \`${serverName}/${name}\``];
+          if (description) lines.push(`_${description}_`);
+          lines.push('');
+          for (const m of messages) {
+            const text = typeof m.content?.text === 'string' ? m.content.text : JSON.stringify(m.content);
+            lines.push(`**${m.role}:** ${text}`);
+            lines.push('');
+          }
+          ctx.app.addMessage({ role: 'system', content: lines.join('\n').trim() });
+        } catch (err) {
+          ctx.app.addMessage({ role: 'system', content: `Failed to materialise prompt: ${(err as Error).message}` });
+        }
+        break;
+      }
+
+      // Default: list servers + tools for the current session.
+      const { getSessionTools, getSessionRegistrationErrors, awaitSessionReady } = await import('../utils/mcpRegistry');
+      await awaitSessionReady(TUI_SESSION);
+      const tools = await getSessionTools(TUI_SESSION);
+      const mcpErrors = getSessionRegistrationErrors(TUI_SESSION);
+
+      if (tools.length === 0 && mcpErrors.length === 0) {
+        ctx.app.addMessage({
+          role: 'system',
+          content: [
+            '_No MCP servers connected to this session._',
+            '',
+            'Add one with `/mcp add <name> <command> [args...]` — it persists to `.codeep/mcp_servers.json`.',
+            'Or browse the marketplace with `/mcp browse` and install with `/mcp install <id>`.',
+          ].join('\n'),
+        });
+        break;
+      }
+
+      const lines: string[] = ['## MCP servers', ''];
+      if (tools.length > 0) {
+        const byServer = new Map<string, typeof tools>();
+        for (const t of tools) {
+          if (!byServer.has(t.serverName)) byServer.set(t.serverName, []);
+          byServer.get(t.serverName)!.push(t);
+        }
+        for (const [serverName, serverTools] of byServer) {
+          lines.push(`**${serverName}** — ${serverTools.length} tool${serverTools.length === 1 ? '' : 's'}`);
+          for (const t of serverTools) {
+            const desc = t.description ? ` — ${t.description}` : '';
+            lines.push(`- \`${t.agentName}\`${desc}`);
+          }
+          lines.push('');
+        }
+      }
+      if (mcpErrors.length > 0) {
+        lines.push('### Failed servers');
+        for (const e of mcpErrors) lines.push(`- **${e.server}** — \`${e.error}\``);
+      }
+      ctx.app.addMessage({ role: 'system', content: lines.join('\n').trim() });
+      break;
+    }
+
     default: {
       // 1. Try custom user command (project + global Markdown templates).
       const { findCustomCommand, expandCommand } = await import('../utils/customCommands');

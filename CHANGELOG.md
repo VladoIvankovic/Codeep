@@ -11,6 +11,41 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.0.1] — 2026-05-18
+
+> Patch: `/mcp` now works in the CLI TUI (was only wired into the ACP path
+> in 2.0.0, so Zed and VS Code worked but `codeep` direct didn't). Full
+> subcommand parity — browse, install, add, remove, reload, resources,
+> read, prompts, prompt.
+
+### Fixed
+
+- **`/mcp` slash command in CLI TUI returned `Unknown command: /mcp`.**
+  The 2.0.0 implementation lived only in `src/acp/commands.ts`, so it
+  worked for ACP clients (Zed, VS Code extension) but TUI users hit the
+  unknown-command path. Ported the full handler to
+  `src/renderer/commands.ts` with TUI-appropriate output (uses the fixed
+  `codeep-tui` session id and `ctx.projectPath` as workspace root).
+  Subcommands now usable from the TUI: `/mcp`, `/mcp browse [id]`,
+  `/mcp install <id> [args...]`, `/mcp add <name> <command> [args...]`,
+  `/mcp remove <name>`, `/mcp reload`, `/mcp resources`,
+  `/mcp read <uri>`, `/mcp prompts`, `/mcp prompt <server> <name> [k=v]`.
+- **Eight 2.0 commands missing from `/` autocomplete and `/help`** —
+  `/mcp`, `/compact`, `/checkpoint`, `/checkpoints`, `/rewind`, `/hooks`,
+  `/openrouter`, `/commands` were all implemented but invisible to
+  discovery. Added to `App.COMMANDS` + `COMMAND_DESCRIPTIONS` so they
+  appear when the user types `/`, and added two new `/help` sections
+  ("Checkpoints (2.0)", "Extensions & MCP (2.0)") plus `/compact`
+  under Sessions and `/openrouter` under Settings.
+- **`/skills publish` rejected global bundles.** The helper required
+  `bundle.scope === 'project'`, blocking a common case: user writes a
+  cross-project skill once in `~/.codeep/skills/<name>/` and tries to
+  share it. The `--public` flag is the user's explicit consent gate,
+  so an extra scope check is redundant gatekeeping. Now publishes
+  project OR global bundles; project wins on slug collision (mirrors
+  `loadSkillBundles`). Error message also clarifies *both* lookup
+  paths when the slug isn't found anywhere.
+
 ## [2.0.0] — 2026-05-18
 
 > Codeep 2.0 is here. Full MCP support (stdio + HTTP), skill bundles with a public marketplace, OpenRouter with accurate per-call cost, checkpoints, custom commands, lifecycle hooks. 921 tests green.

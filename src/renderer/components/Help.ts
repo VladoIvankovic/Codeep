@@ -39,6 +39,16 @@ export const helpCategories: HelpCategory[] = [
       { key: '/rename <name>', description: 'Rename current session' },
       { key: '/search <term>', description: 'Search chat history' },
       { key: '/export [md|json|txt]', description: 'Export chat' },
+      { key: '/compact [keepN]', description: 'AI-summarize older messages to free up context (keeps last N)' },
+    ],
+  },
+  {
+    title: 'Checkpoints (2.0)',
+    items: [
+      { key: '/checkpoint [name]', description: 'Snapshot conversation + provider/model + git HEAD' },
+      { key: '/checkpoints', description: 'List saved checkpoints in this workspace' },
+      { key: '/rewind <id>', description: 'Restore conversation from a checkpoint' },
+      { key: '/checkpoint delete <id>', description: 'Delete a saved checkpoint' },
     ],
   },
   {
@@ -120,6 +130,24 @@ export const helpCategories: HelpCategory[] = [
       { key: '/logout', description: 'Logout from provider' },
       { key: '/profile save <name>', description: 'Save current provider+model as profile' },
       { key: '/profile list', description: 'List saved profiles' },
+      { key: '/openrouter', description: 'OpenRouter routing prefs (prefer/ignore providers, fallbacks, privacy)' },
+    ],
+  },
+  {
+    title: 'Extensions & MCP (2.0)',
+    items: [
+      { key: '/mcp', description: 'List connected MCP servers + their tools' },
+      { key: '/mcp browse [id]', description: 'Browse marketplace (12 servers) or show one' },
+      { key: '/mcp install <id> [args]', description: 'Install a marketplace server into this project' },
+      { key: '/mcp add <name> <cmd>', description: 'Add a custom MCP server (npx, binary, etc.)' },
+      { key: '/mcp remove <name>', description: 'Remove a project-scoped MCP server' },
+      { key: '/mcp reload', description: 'Re-read .codeep/mcp_servers.json (after manual edit)' },
+      { key: '/mcp resources', description: 'List resources exposed by connected servers' },
+      { key: '/mcp read <uri>', description: 'Read one MCP resource' },
+      { key: '/mcp prompts', description: 'List prompt templates exposed by servers' },
+      { key: '/mcp prompt <server> <name>', description: 'Materialize a prompt with arguments (key=value)' },
+      { key: '/hooks', description: 'List installed lifecycle hooks (.codeep/hooks/<event>.sh)' },
+      { key: '/commands', description: 'List custom slash commands (.codeep/commands/*.md)' },
     ],
   },
   {

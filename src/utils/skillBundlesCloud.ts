@@ -34,10 +34,13 @@ export interface RemoteSkill {
 }
 
 /**
- * Publish a project-scoped skill bundle to codeep.dev.
- * The bundle MUST exist under `<workspaceRoot>/.codeep/skills/<slug>/SKILL.md`
- * — global skills aren't publishable from this helper (intentional: users
- * publish work from a project they're owning, not from their global hoard).
+ * Publish a skill bundle to codeep.dev. The bundle may be project-scoped
+ * (`<workspaceRoot>/.codeep/skills/<slug>/SKILL.md`) or global
+ * (`~/.codeep/skills/<slug>/SKILL.md`) — either is publishable. The
+ * `--public` flag (translated into `opts.isPublic`) is the user's
+ * explicit consent gate; we don't gate further on bundle scope. If both
+ * exist with the same slug, the project copy wins (mirrors the rest of
+ * the bundle-loading flow).
  */
 export async function publishBundle(
   workspaceRoot: string,
@@ -48,8 +51,11 @@ export async function publishBundle(
   if (!token) return { ok: false, error: 'Not linked to codeep.dev — run `codeep account` first.' };
 
   const bundle = findSkillBundle(slug, workspaceRoot);
-  if (!bundle || bundle.scope !== 'project') {
-    return { ok: false, error: `Skill bundle "${slug}" not found in this project. Run \`/skills create-bundle ${slug}\` first.` };
+  if (!bundle) {
+    return {
+      ok: false,
+      error: `Skill bundle "${slug}" not found in either \`.codeep/skills/${slug}/\` (project) or \`~/.codeep/skills/${slug}/\` (global). Run \`/skills create-bundle ${slug}\` to scaffold one, or check \`/skills bundles\` to see what's available.`,
+    };
   }
 
   // Build the SKILL.md text we'll publish. We re-serialise from the loaded
