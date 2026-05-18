@@ -245,6 +245,11 @@ export async function executeAgentTask(
       dryRun,
       onRequestPermission,
       chatHistory: app.getChatHistory(),
+      // Route MCP-prefixed tool calls through the shared TUI session id.
+      // Servers were registered against this id at app startup (see
+      // renderer/main.ts) so the agent picks up any `.codeep/mcp_servers.json`
+      // entries plus global ones at runtime.
+      mcpSessionId: 'codeep-tui',
       onIteration: (iteration, message) => {
         app.updateAgentProgress(iteration);
         app.setAgentWaitingForAI(true); // Waiting for AI response between tool calls

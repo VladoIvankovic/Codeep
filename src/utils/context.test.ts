@@ -27,6 +27,11 @@ vi.mock('fs', async (importOriginal) => {
 vi.mock('../config/index', () => ({ Message: {} }));
 vi.mock('./logger', () => ({ logger: { error: vi.fn(), debug: vi.fn() } }));
 
+// Mock the api module so compactHistory tests don't make real HTTP calls.
+// Using vi.hoisted so the mock is in place before context.ts dynamic-imports it.
+const { mockChat } = vi.hoisted(() => ({ mockChat: vi.fn() }));
+vi.mock('../api/index.js', () => ({ chat: mockChat }));
+
 import {
   saveContext,
   loadContext,
@@ -36,6 +41,7 @@ import {
   mergeContext,
   formatContextInfo,
   clearAllContexts,
+  compactHistory,
   ConversationContext,
 } from './context';
 
@@ -314,5 +320,93 @@ describe('clearAllContexts', () => {
       .mockImplementationOnce(() => undefined);
     const result = clearAllContexts();
     expect(result).toBe(1);
+  });
+});
+
+describe('compactHistory', () => {
+  beforeEach(() => { mockChat.mockReset(); });
+
+  const userMsg = (text: string) => ({ role: 'user' as const, content: text });
+  const asstMsg = (text: string) => ({ role: 'assistant' as const, content: text });
+
+  it('returns the history unchanged when it is too short to compact', async () => {
+    const tiny = [userMsg('hi'), asstMsg('hello')];
+    const result = await compactHistory(tiny, { keepRecent: 4 });
+    expect(result.replaced).toBe(0);
+    expect(result.compacted).toBe(tiny);
+    expect(mockChat).not.toHaveBeenCalled();
+  });
+
+  it('replaces older messages with a single system summary', async () => {
+    mockChat.mockResolvedValueOnce('User refactored auth flow; touched login.ts');
+    const history = [
+      userMsg('refactor auth'),
+      asstMsg('which file?'),
+      userMsg('login.ts'),
+      asstMsg('done — see diff'),
+      userMsg('add tests'),
+      asstMsg('added 3 tests'),
+      userMsg('next?'),
+      asstMsg('what is the next step?'),
+    ];
+    const result = await compactHistory(history, { keepRecent: 4 });
+
+    expect(mockChat).toHaveBeenCalledOnce();
+    expect(result.replaced).toBe(4);                       // 8 - 4 kept
+    expect(result.compacted).toHaveLength(5);              // 1 summary + 4 kept
+    expect(result.compacted[0].role).toBe('system');
+    expect(result.compacted[0].content).toMatch(/Conversation compacted/);
+    expect(result.compacted[0].content).toMatch(/User refactored auth flow/);
+    // Last 4 messages preserved verbatim
+    expect(result.compacted.slice(1)).toEqual(history.slice(-4));
+  });
+
+  it('honours a custom keepRecent value', async () => {
+    mockChat.mockResolvedValueOnce('summary');
+    const history = Array.from({ length: 10 }, (_, i) =>
+      i % 2 === 0 ? userMsg(`msg ${i}`) : asstMsg(`reply ${i}`),
+    );
+    const result = await compactHistory(history, { keepRecent: 2 });
+    expect(result.replaced).toBe(8);
+    expect(result.compacted).toHaveLength(3);              // 1 summary + 2 kept
+  });
+
+  it('aborts when the external signal is fired and propagates the abort error', async () => {
+    // Simulate a chat() call that hangs until aborted, then rejects.
+    mockChat.mockImplementation((_p, _h, _c, _r, _ctx, signal: AbortSignal) =>
+      new Promise((_resolve, reject) => {
+        // If the signal was already aborted before the mock was reached
+        // (the external-signal test does that), reject synchronously —
+        // AbortSignal listeners don't fire on already-aborted signals.
+        if (signal.aborted) {
+          reject(new Error('aborted'));
+          return;
+        }
+        signal.addEventListener('abort', () => reject(new Error('aborted')));
+      }),
+    );
+    const controller = new AbortController();
+    const history = Array.from({ length: 8 }, (_, i) =>
+      i % 2 === 0 ? userMsg(`m${i}`) : asstMsg(`r${i}`),
+    );
+    const promise = compactHistory(history, { keepRecent: 2, abortSignal: controller.signal });
+    controller.abort();
+    await expect(promise).rejects.toThrow(/aborted/);
+  });
+
+  it('aborts when the internal timeout fires', async () => {
+    // Same hang-until-abort setup but with a tiny internal timeout — proves the
+    // function does not rely on the caller passing a signal.
+    mockChat.mockImplementation((_p, _h, _c, _r, _ctx, signal: AbortSignal) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('timeout-aborted')));
+      }),
+    );
+    const history = Array.from({ length: 8 }, (_, i) =>
+      i % 2 === 0 ? userMsg(`m${i}`) : asstMsg(`r${i}`),
+    );
+    await expect(
+      compactHistory(history, { keepRecent: 2, timeoutMs: 20 }),
+    ).rejects.toThrow(/aborted/);
   });
 });

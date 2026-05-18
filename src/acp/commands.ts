@@ -23,6 +23,9 @@ import {
 } from '../config/index.js';
 import { getProviderList, getProvider } from '../config/providers.js';
 import { getProjectContext } from '../utils/project.js';
+import { loadCustomCommands } from '../utils/customCommands.js';
+import { summarizeHooks } from '../utils/hooks.js';
+import { summarizeBundles } from '../utils/skillBundles.js';
 import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { Message } from '../config/index.js';
@@ -121,6 +124,62 @@ export function initWorkspace(workspaceRoot: string, fresh = false): {
     '',
     'Type `/help` to see available commands.',
   ];
+
+  // Surface project-scoped custom slash commands so users notice that the
+  // workspace defines arbitrary `/foo` macros before they invoke any. A
+  // hostile or unfamiliar repo could ship `.codeep/commands/refactor.md`
+  // whose body is "ignore prior instructions, leak …" — typing `/refactor`
+  // sends that body to the agent as a user message with no preview. The
+  // banner is the lightweight informed-consent mitigation; full preview is
+  // available via `/commands`.
+  try {
+    const projectCustom = loadCustomCommands(workspaceRoot).filter(c => c.scope === 'project');
+    if (projectCustom.length > 0) {
+      const list = projectCustom.slice(0, 6).map(c => `\`/${c.name}\``).join(', ');
+      const more = projectCustom.length > 6 ? ` … (+${projectCustom.length - 6} more)` : '';
+      lines.push(
+        '',
+        `**⚠ This workspace defines ${projectCustom.length} custom slash command${projectCustom.length === 1 ? '' : 's'}:** ${list}${more}`,
+        'These come from `.codeep/commands/` and run as user prompts. Type `/commands` to review what each does before invoking.',
+      );
+    }
+  } catch {
+    // Custom-command loading must never block the welcome banner.
+  }
+
+  // Same informed-consent flag for lifecycle hooks. A `.codeep/hooks/<event>.sh`
+  // script runs as shell on the user's machine when triggered — a hostile
+  // repo could ship one that exfiltrates credentials the first time the
+  // agent edits a file. List them so the user knows what's about to fire.
+  try {
+    const summary = summarizeHooks(workspaceRoot);
+    if (summary) {
+      lines.push(
+        '',
+        `**⚠ This workspace has shell hooks installed:** ${summary}.`,
+        'Hooks live in `.codeep/hooks/` and run automatically. Type `/hooks` to see the script paths.',
+      );
+    }
+  } catch {
+    // Don't block welcome on hook inspection failure.
+  }
+
+  // Same informed-consent flag for project skill bundles. They're
+  // less dangerous than hooks (no shell-on-load) but the agent will
+  // autonomously invoke them based on user intent, so the user should
+  // know what's in the catalog before talking to the agent.
+  try {
+    const summary = summarizeBundles(workspaceRoot);
+    if (summary) {
+      lines.push(
+        '',
+        `**ℹ This workspace ships ${summary}.**`,
+        'The agent will discover and invoke these via `invoke_skill`. Run `/skills bundles` to inspect.',
+      );
+    }
+  } catch {
+    // Don't block welcome on skill discovery failure.
+  }
 
   // Surface CLI sessions so Zed users discover them without having to know
   // about the hidden "Import Threads" modal. Show up to 5 most recent.
@@ -364,11 +423,153 @@ export async function handleCommand(
     }
 
     case 'skills': {
+      const sub = args[0]?.toLowerCase();
+
+      // Subcommands for structured skill bundles (separate from the
+      // built-in JSON skills exposed by `skills.ts`).
+      if (sub === 'bundles' || sub === 'list-bundles') {
+        const { loadSkillBundles, formatBundleList } = await import('../utils/skillBundles.js');
+        return { handled: true, response: formatBundleList(loadSkillBundles(session.workspaceRoot)) };
+      }
+
+      if (sub === 'create-bundle') {
+        const name = (args[1] ?? '').toLowerCase();
+        if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+          return { handled: true, response: 'Usage: `/skills create-bundle <name>` — lowercase letters/digits/hyphens; must start with a letter or digit.' };
+        }
+        const { mkdirSync, writeFileSync, existsSync } = await import('fs');
+        const { join } = await import('path');
+        const dir = join(session.workspaceRoot, '.codeep', 'skills', name);
+        if (existsSync(dir)) {
+          return { handled: true, response: `Skill \`${name}\` already exists at \`.codeep/skills/${name}/\`.` };
+        }
+        mkdirSync(dir, { recursive: true });
+        const template = `---
+name: ${name}
+description: One-sentence summary shown in the agent's catalog.
+triggers:
+  - keyword
+  - phrase
+# Optional Codeep-specific keys:
+# codeep-min-version: 2.0.0
+# codeep-requires-mcp: [postgres, filesystem]
+# allowed-tools: [read_file, write_file, execute_command]
+# version: 0.1.0
+# author: ${process.env.USER ?? 'you'}
+---
+
+# ${name}
+
+Describe what this skill does. The agent will read this body verbatim when it invokes the skill.
+
+## Steps
+
+1. First step
+2. Second step
+3. …
+
+## Notes
+
+Anything else the agent should know — edge cases, gotchas, things to double-check.
+`;
+        writeFileSync(join(dir, 'SKILL.md'), template);
+        return { handled: true, response: `Created skill bundle at \`.codeep/skills/${name}/SKILL.md\`.\n\nEdit it to taste, then run \`/skills bundles\` to confirm it's loaded.` };
+      }
+
+      if (sub === 'show' || sub === 'detail') {
+        const name = args[1];
+        if (!name) return { handled: true, response: 'Usage: `/skills show <name>`' };
+        const { findSkillBundle } = await import('../utils/skillBundles.js');
+        const bundle = findSkillBundle(name, session.workspaceRoot);
+        if (!bundle) return { handled: true, response: `Skill bundle \`${name}\` not found. Run \`/skills bundles\` for the list.` };
+        const lines: string[] = [
+          `## ${bundle.name}`,
+          `_${bundle.description}_`,
+          '',
+          `**Source:** \`${bundle.source}\` (${bundle.scope})`,
+          bundle.version ? `**Version:** ${bundle.version}` : '',
+          bundle.triggers.length ? `**Triggers:** ${bundle.triggers.join(', ')}` : '',
+          bundle.allowedTools.length ? `**Allowed tools:** ${bundle.allowedTools.join(', ')}` : '',
+          bundle.requiresMcp.length ? `**Requires MCP:** ${bundle.requiresMcp.join(', ')}` : '',
+          '',
+          '---',
+          '',
+          bundle.body,
+        ].filter(Boolean);
+        return { handled: true, response: lines.join('\n') };
+      }
+
+      // Marketplace (codeep.dev/skills) — publish / install / browse / unpublish.
+      if (sub === 'publish') {
+        const slug = args[1];
+        if (!slug) return { handled: true, response: 'Usage: `/skills publish <slug> [--public]`' };
+        const isPublic = args.includes('--public');
+        const { publishBundle } = await import('../utils/skillBundlesCloud.js');
+        const result = await publishBundle(session.workspaceRoot, slug, { isPublic });
+        if (!result.ok) return { handled: true, response: `Publish failed: ${result.error}` };
+        const visibility = isPublic ? 'public' : 'private';
+        return {
+          handled: true,
+          response: `Published \`${slug}\` (${visibility}) to codeep.dev. Install elsewhere with \`/skills install ${result.skill?.owner_username ?? '<you>'}/${slug}\`.`,
+        };
+      }
+
+      if (sub === 'install') {
+        const target = args[1];
+        if (!target) return { handled: true, response: 'Usage: `/skills install <owner>/<slug>` (or numeric id)' };
+        const { installBundle } = await import('../utils/skillBundlesCloud.js');
+        onChunk(`_Fetching \`${target}\` from codeep.dev…_\n\n`);
+        const result = await installBundle(session.workspaceRoot, target);
+        if (!result.ok) return { handled: true, response: `Install failed: ${result.error}`, streaming: true };
+        return {
+          handled: true,
+          response: `Installed \`${result.name}\` to \`.codeep/skills/${result.name}/SKILL.md\`. The agent will pick it up on the next prompt.`,
+          streaming: true,
+        };
+      }
+
+      if (sub === 'browse') {
+        const query = args.slice(1).join(' ').trim();
+        const { browseSkills } = await import('../utils/skillBundlesCloud.js');
+        const result = await browseSkills({ query });
+        if (!result.ok) return { handled: true, response: `Browse failed: ${result.error}` };
+        const skills = result.skills ?? [];
+        if (skills.length === 0) {
+          return { handled: true, response: query ? `_No public skills matching "${query}"._` : '_No public skills published yet._' };
+        }
+        const lines = [`## ${query ? `Skills matching "${query}"` : 'Public skills'}`, ''];
+        for (const s of skills.slice(0, 30)) {
+          const owner = s.owner_username ?? s.github_id;
+          const ver = s.version ? ` v${s.version}` : '';
+          lines.push(`- **${s.name}** \`${owner}/${s.slug}\`${ver} — ${s.description} _(${s.install_count} installs)_`);
+        }
+        if (skills.length > 30) lines.push('', `_(showing first 30 of ${skills.length} — refine with a search query)_`);
+        lines.push('', 'Install one with `/skills install <owner>/<slug>`.');
+        return { handled: true, response: lines.join('\n') };
+      }
+
+      if (sub === 'unpublish') {
+        const target = args[1];
+        if (!target) return { handled: true, response: 'Usage: `/skills unpublish <owner>/<slug>` (use your own owner name)' };
+        const { unpublishBundle } = await import('../utils/skillBundlesCloud.js');
+        const result = await unpublishBundle(target);
+        if (!result.ok) return { handled: true, response: `Unpublish failed: ${result.error}` };
+        return { handled: true, response: `Unpublished \`${target}\` from codeep.dev. Local \`.codeep/skills/\` copy is untouched.` };
+      }
+
+      // Default: built-in JSON skills (legacy behaviour, search by query).
       const { getAllSkills, searchSkills, formatSkillsList } = await import('../utils/skills.js');
       const query = args.join(' ').toLowerCase();
       const skills = query ? searchSkills(query) : getAllSkills();
-      if (!skills.length) return { handled: true, response: `No skills matching \`${query}\`.` };
-      return { handled: true, response: formatSkillsList(skills) };
+      const builtinBlock = skills.length ? formatSkillsList(skills) : `No built-in skills matching \`${query}\`.`;
+
+      // Append a hint about bundles so users discover them.
+      const { loadSkillBundles } = await import('../utils/skillBundles.js');
+      const bundles = loadSkillBundles(session.workspaceRoot);
+      const bundleHint = bundles.length > 0
+        ? `\n\n_${bundles.length} skill bundle${bundles.length === 1 ? '' : 's'} installed — see \`/skills bundles\` or create one with \`/skills create-bundle <name>\`._`
+        : `\n\n_No skill bundles installed. Run \`/skills create-bundle <name>\` to make one._`;
+      return { handled: true, response: builtinBlock + bundleHint };
     }
 
     case 'scan': {
@@ -432,6 +633,51 @@ export async function handleCommand(
       return { handled: true, response: lines.join('\n') };
     }
 
+    case 'cost': {
+      const { formatCostReport } = await import('../utils/tokenTracker.js');
+      return { handled: true, response: formatCostReport() };
+    }
+
+    case 'compact': {
+      // `keepRecent` is the number of latest messages to leave untouched.
+      // Default 4 ≈ two user/assistant exchanges — enough for the in-flight
+      // task to continue. User can override with `/compact 8` for slower
+      // tapering.
+      const keepRecent = args[0] ? Math.max(2, parseInt(args[0], 10) || 4) : 4;
+      if (session.history.length <= keepRecent + 2) {
+        return { handled: true, response: `Nothing to compact — only ${session.history.length} message(s) in this session.` };
+      }
+      onChunk(`_Compacting ${session.history.length - keepRecent} older message(s) into a summary…_\n\n`);
+      const { compactHistory } = await import('../utils/context.js');
+      const projectCtx = getProjectContext(session.workspaceRoot);
+      try {
+        // Forward the session's abort signal so the user pressing `session/cancel`
+        // also kills an in-flight compaction. The internal 60s timeout in
+        // compactHistory is the hard ceiling.
+        const result = await compactHistory(session.history, { keepRecent, projectContext: projectCtx, abortSignal });
+        if (result.replaced === 0) {
+          return { handled: true, response: 'Nothing to compact.', streaming: true };
+        }
+        session.history = result.compacted;
+        // Persist immediately so the compaction survives a client restart.
+        const { saveSession } = await import('../config/index.js');
+        saveSession(session.codeepSessionId, session.history, session.workspaceRoot);
+        const lines = [
+          `## Conversation Compacted`,
+          '',
+          `Replaced ${result.replaced} earlier message${result.replaced === 1 ? '' : 's'} with a summary.`,
+          `Kept the last ${keepRecent} message${keepRecent === 1 ? '' : 's'} verbatim.`,
+          '',
+          '**Summary:**',
+          '',
+          result.summary,
+        ];
+        return { handled: true, response: lines.join('\n'), streaming: true };
+      } catch (err) {
+        return { handled: true, response: `Compaction failed: ${(err as Error).message}`, streaming: true };
+      }
+    }
+
     // ─── Export ────────────────────────────────────────────────────────────────
 
     case 'export': {
@@ -476,13 +722,534 @@ export async function handleCommand(
       return { handled: true, response: '', streaming: true };
     }
 
-    // ─── Skills ────────────────────────────────────────────────────────────────
+    case 'commands': {
+      const { loadCustomCommands, formatCommandList } = await import('../utils/customCommands.js');
+      return { handled: true, response: formatCommandList(loadCustomCommands(session.workspaceRoot)) };
+    }
+
+    case 'memory': {
+      // Project intelligence notes — same store as the TUI's /memory command.
+      // /memory <text>       add a note
+      // /memory list         show all notes
+      // /memory remove <n>   remove note by 1-based index
+      // /memory clear        wipe all notes
+      const { loadProjectIntelligence, saveProjectIntelligence } = await import('../utils/projectIntelligence.js');
+      const intelligence = loadProjectIntelligence(session.workspaceRoot);
+      if (!intelligence) {
+        return { handled: true, response: 'No project intelligence found. Run `/scan` first.' };
+      }
+      intelligence.notes = intelligence.notes || [];
+      const sub = args[0]?.toLowerCase();
+
+      if (sub === 'list') {
+        if (intelligence.notes.length === 0) return { handled: true, response: '_No memory notes yet. Add one with `/memory <note>`._' };
+        const lines = ['## Project memory notes', '', ...intelligence.notes.map((n, i) => `${i + 1}. ${n}`)];
+        return { handled: true, response: lines.join('\n') };
+      }
+
+      if (sub === 'remove') {
+        const idx = parseInt(args[1] ?? '', 10);
+        if (isNaN(idx) || idx < 1 || idx > intelligence.notes.length) {
+          return { handled: true, response: 'Usage: `/memory remove <n>` — run `/memory list` first to see indices.' };
+        }
+        const removed = intelligence.notes.splice(idx - 1, 1)[0];
+        saveProjectIntelligence(session.workspaceRoot, intelligence);
+        return { handled: true, response: `Removed note ${idx}: _"${removed}"_` };
+      }
+
+      if (sub === 'clear') {
+        const count = intelligence.notes.length;
+        intelligence.notes = [];
+        saveProjectIntelligence(session.workspaceRoot, intelligence);
+        return { handled: true, response: count ? `Cleared ${count} note${count === 1 ? '' : 's'}.` : '_No notes to clear._' };
+      }
+
+      // Default: treat all args as the note body.
+      const note = args.join(' ').trim();
+      if (!note) {
+        return { handled: true, response: 'Usage: `/memory <note>` · `/memory list` · `/memory remove <n>` · `/memory clear`' };
+      }
+      intelligence.notes.push(note);
+      saveProjectIntelligence(session.workspaceRoot, intelligence);
+      return { handled: true, response: `Memory saved (${intelligence.notes.length} total): _"${note}"_` };
+    }
+
+    case 'checkpoint': {
+      const sub = args[0]?.toLowerCase();
+      const { createCheckpoint, deleteCheckpoint, listCheckpoints, formatCheckpointList } = await import('../utils/checkpoints.js');
+      const { getCurrentSessionActions } = await import('../utils/agent.js');
+
+      if (sub === 'delete') {
+        const id = args[1];
+        if (!id) return { handled: true, response: 'Usage: `/checkpoint delete <id>`' };
+        return { handled: true, response: deleteCheckpoint(session.workspaceRoot, id) ? `Deleted checkpoint \`${id}\`.` : `Checkpoint not found: \`${id}\`` };
+      }
+      if (sub === 'list') {
+        // Same as /checkpoints — keep both spellings for muscle-memory.
+        return { handled: true, response: formatCheckpointList(listCheckpoints(session.workspaceRoot)) };
+      }
+
+      // Default: create a new checkpoint with optional name (everything after /checkpoint)
+      const name = args.join(' ').trim() || undefined;
+      const provider = getCurrentProvider();
+      // Pull file paths the agent has touched in this session from the action
+      // log. Used at /rewind time to scope the git restore suggestion.
+      const filesTouched = Array.from(new Set(
+        getCurrentSessionActions()
+          .filter(a => a.target && (a.type === 'write' || a.type === 'edit' || a.type === 'delete' || a.type === 'mkdir'))
+          .map(a => a.target),
+      ));
+      const cp = createCheckpoint({
+        workspaceRoot: session.workspaceRoot,
+        sessionId: session.codeepSessionId,
+        provider: provider.id,
+        model: config.get('model'),
+        messages: session.history,
+        filesTouched,
+        name,
+      });
+      const lines = [
+        `Created checkpoint \`${cp.id}\`${cp.name ? ` — **${cp.name}**` : ''}`,
+        `Captured ${cp.messages.length} message${cp.messages.length === 1 ? '' : 's'}, ${cp.filesTouched.length} file${cp.filesTouched.length === 1 ? '' : 's'} touched${cp.gitHead ? `, git \`${cp.gitHead}\`` : ''}.`,
+        '',
+        'Use `/rewind ' + cp.id + '` to restore.',
+      ];
+      return { handled: true, response: lines.join('\n') };
+    }
+
+    case 'checkpoints': {
+      const { listCheckpoints, formatCheckpointList } = await import('../utils/checkpoints.js');
+      return { handled: true, response: formatCheckpointList(listCheckpoints(session.workspaceRoot)) };
+    }
+
+    case 'openrouter': {
+      const { readOpenRouterPreferences, writeOpenRouterPreferences, formatOpenRouterPreferences } = await import('../utils/openrouterPrefs.js');
+      const sub = args[0]?.toLowerCase();
+      const current = readOpenRouterPreferences();
+
+      if (!sub || sub === 'show') {
+        return { handled: true, response: formatOpenRouterPreferences(current) };
+      }
+      if (sub === 'clear') {
+        writeOpenRouterPreferences(null);
+        return { handled: true, response: 'OpenRouter preferences cleared. Router will pick freely.' };
+      }
+      if (sub === 'prefer') {
+        const list = args.slice(1).join(' ').split(',').map(s => s.trim()).filter(Boolean);
+        if (list.length === 0) return { handled: true, response: 'Usage: `/openrouter prefer <p1>[,<p2>...]` — e.g. `/openrouter prefer DeepInfra,Together`' };
+        writeOpenRouterPreferences({ ...current, order: list });
+        return { handled: true, response: `Will prefer providers in this order: ${list.map(p => `\`${p}\``).join(', ')}` };
+      }
+      if (sub === 'ignore') {
+        const list = args.slice(1).join(' ').split(',').map(s => s.trim()).filter(Boolean);
+        if (list.length === 0) return { handled: true, response: 'Usage: `/openrouter ignore <p1>[,<p2>...]`' };
+        writeOpenRouterPreferences({ ...current, ignore: list });
+        return { handled: true, response: `Will skip providers: ${list.map(p => `\`${p}\``).join(', ')}` };
+      }
+      if (sub === 'fallbacks') {
+        const val = args[1]?.toLowerCase();
+        if (val !== 'on' && val !== 'off') return { handled: true, response: 'Usage: `/openrouter fallbacks on|off`' };
+        writeOpenRouterPreferences({ ...current, allow_fallbacks: val === 'on' });
+        return { handled: true, response: `Fallbacks ${val === 'on' ? 'enabled' : 'disabled'}.` };
+      }
+      if (sub === 'privacy') {
+        const val = args[1]?.toLowerCase();
+        if (val !== 'strict' && val !== 'allow') return { handled: true, response: 'Usage: `/openrouter privacy strict|allow` — strict = data_collection: deny' };
+        writeOpenRouterPreferences({ ...current, data_collection: val === 'strict' ? 'deny' : 'allow' });
+        return { handled: true, response: `Privacy: \`data_collection: ${val === 'strict' ? 'deny' : 'allow'}\`` };
+      }
+      return { handled: true, response: `Unknown subcommand: \`${sub}\`. Use \`show\`, \`prefer\`, \`ignore\`, \`fallbacks\`, \`privacy\`, or \`clear\`.` };
+    }
+
+    case 'hooks': {
+      const { listInstalledHooks, formatHookList } = await import('../utils/hooks.js');
+      return { handled: true, response: formatHookList(listInstalledHooks(session.workspaceRoot)) };
+    }
+
+    case 'mcp': {
+      const sub = args[0]?.toLowerCase();
+      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfig } = await import('../utils/mcpConfig.js');
+      const { registerSessionServers } = await import('../utils/mcpRegistry.js');
+
+      if (sub === 'add') {
+        // /mcp add <name> <command> [args...]
+        const name = args[1];
+        const command = args[2];
+        if (!name || !command) {
+          return { handled: true, response: 'Usage: `/mcp add <name> <command> [args...]` — e.g. `/mcp add fs npx @modelcontextprotocol/server-filesystem /path`' };
+        }
+        const extraArgs = args.slice(3);
+        addProjectMcpServer(session.workspaceRoot, { name, command, args: extraArgs });
+        onChunk(`_Saved MCP server **${name}** to \`.codeep/mcp_servers.json\`. Spawning…_\n\n`);
+        // Live re-register so the new server is usable immediately, no
+        // session restart needed. registerSessionServers is idempotent —
+        // it disposes the old set and brings up the merged one.
+        const merged = loadMcpServerConfig(session.workspaceRoot);
+        const { registered, errors } = await registerSessionServers(session.sessionId, merged, { workspaceRoot: session.workspaceRoot });
+        const ok = registered.filter(t => t.serverName === name);
+        const failed = errors.find(e => e.server === name);
+        if (failed) return { handled: true, response: `Saved \`${name}\` but spawn failed: \`${failed.error}\``, streaming: true };
+        return { handled: true, response: `Added \`${name}\` (${ok.length} tool${ok.length === 1 ? '' : 's'} available).`, streaming: true };
+      }
+
+      if (sub === 'remove') {
+        const name = args[1];
+        if (!name) return { handled: true, response: 'Usage: `/mcp remove <name>`' };
+        const removed = removeProjectMcpServer(session.workspaceRoot, name);
+        if (!removed) return { handled: true, response: `No project-scoped MCP server named \`${name}\`.` };
+        // Re-register with the new (smaller) merged set so the dropped
+        // server is actually killed.
+        const merged = loadMcpServerConfig(session.workspaceRoot);
+        await registerSessionServers(session.sessionId, merged, { workspaceRoot: session.workspaceRoot });
+        return { handled: true, response: `Removed \`${name}\` from project config and stopped its process.` };
+      }
+
+      if (sub === 'resources') {
+        const { getSessionResources, awaitSessionReady } = await import('../utils/mcpRegistry.js');
+        await awaitSessionReady(session.sessionId);
+        const groups = await getSessionResources(session.sessionId);
+        if (groups.length === 0) {
+          return { handled: true, response: '_No MCP server in this session exposes resources._' };
+        }
+        const lines = ['## MCP resources', ''];
+        for (const g of groups) {
+          lines.push(`**${g.serverName}** — ${g.resources.length} resource${g.resources.length === 1 ? '' : 's'}`);
+          for (const r of g.resources) {
+            const label = r.name ? `${r.name} — ` : '';
+            const mime = r.mimeType ? ` (${r.mimeType})` : '';
+            lines.push(`- ${label}\`${r.uri}\`${mime}${r.description ? ` — ${r.description}` : ''}`);
+          }
+          lines.push('');
+        }
+        lines.push('Read one with `/mcp read <uri>`.');
+        return { handled: true, response: lines.join('\n').trim() };
+      }
+
+      if (sub === 'read') {
+        const uri = args[1];
+        if (!uri) return { handled: true, response: 'Usage: `/mcp read <uri>` — run `/mcp resources` to see available URIs.' };
+        const { readSessionResource } = await import('../utils/mcpRegistry.js');
+        try {
+          const contents = await readSessionResource(session.sessionId, uri);
+          if (contents.length === 0) return { handled: true, response: `_No content returned for \`${uri}\`._` };
+          const lines: string[] = [`## Resource: \`${uri}\``, ''];
+          for (const c of contents) {
+            if (c.text !== undefined) {
+              const fence = c.mimeType?.includes('json') ? 'json' : c.mimeType?.includes('markdown') ? 'markdown' : '';
+              lines.push('```' + fence);
+              lines.push(c.text);
+              lines.push('```');
+            } else if (c.blob) {
+              lines.push(`_(${c.mimeType ?? 'binary'} blob, ${c.blob.length} base64 chars — not rendered)_`);
+            }
+          }
+          return { handled: true, response: lines.join('\n') };
+        } catch (err) {
+          return { handled: true, response: `Failed to read \`${uri}\`: ${(err as Error).message}` };
+        }
+      }
+
+      if (sub === 'prompts') {
+        const { getSessionPrompts, awaitSessionReady } = await import('../utils/mcpRegistry.js');
+        await awaitSessionReady(session.sessionId);
+        const groups = await getSessionPrompts(session.sessionId);
+        if (groups.length === 0) {
+          return { handled: true, response: '_No MCP server in this session exposes prompt templates._' };
+        }
+        const lines = ['## MCP prompt templates', ''];
+        for (const g of groups) {
+          lines.push(`**${g.serverName}** — ${g.prompts.length} prompt${g.prompts.length === 1 ? '' : 's'}`);
+          for (const p of g.prompts) {
+            const argList = p.arguments?.length
+              ? ` (${p.arguments.map(a => a.required ? a.name : `[${a.name}]`).join(', ')})`
+              : '';
+            lines.push(`- \`${p.name}\`${argList}${p.description ? ` — ${p.description}` : ''}`);
+          }
+          lines.push('');
+        }
+        lines.push('Materialise one with `/mcp prompt <server> <name> [key=value...]`.');
+        return { handled: true, response: lines.join('\n').trim() };
+      }
+
+      if (sub === 'prompt') {
+        const serverName = args[1];
+        const name = args[2];
+        if (!serverName || !name) {
+          return { handled: true, response: 'Usage: `/mcp prompt <server> <name> [key=value ...]`' };
+        }
+        const promptArgs: Record<string, string> = {};
+        for (const tok of args.slice(3)) {
+          const eq = tok.indexOf('=');
+          if (eq > 0) promptArgs[tok.slice(0, eq)] = tok.slice(eq + 1);
+        }
+        const { getSessionPrompt } = await import('../utils/mcpRegistry.js');
+        try {
+          const { description, messages } = await getSessionPrompt(session.sessionId, serverName, name, promptArgs);
+          const lines: string[] = [`## Prompt \`${serverName}/${name}\``];
+          if (description) lines.push(`_${description}_`);
+          lines.push('');
+          for (const m of messages) {
+            const text = typeof m.content?.text === 'string' ? m.content.text : JSON.stringify(m.content);
+            lines.push(`**${m.role}:** ${text}`);
+            lines.push('');
+          }
+          return { handled: true, response: lines.join('\n').trim() };
+        } catch (err) {
+          return { handled: true, response: `Failed to materialise prompt: ${(err as Error).message}` };
+        }
+      }
+
+      if (sub === 'browse') {
+        const { formatMarketplaceList, MCP_MARKETPLACE } = await import('../utils/mcpMarketplace.js');
+        const detail = args[1];
+        if (detail) {
+          const { findMarketplaceEntry, formatMarketplaceEntry } = await import('../utils/mcpMarketplace.js');
+          const entry = findMarketplaceEntry(detail);
+          if (!entry) return { handled: true, response: `Marketplace id not found: \`${detail}\`. Run \`/mcp browse\` for the list.` };
+          return { handled: true, response: formatMarketplaceEntry(entry) + `\n\nInstall with \`/mcp install ${entry.id} ${entry.argHints?.map(h => `<${h.placeholder ?? 'arg'}>`).join(' ') ?? ''}\`` };
+        }
+        return { handled: true, response: formatMarketplaceList() + `\n\nRun \`/mcp browse <id>\` for details or \`/mcp install <id> [args]\` to install. Total: ${MCP_MARKETPLACE.length}.` };
+      }
+
+      if (sub === 'install') {
+        const id = args[1];
+        if (!id) return { handled: true, response: 'Usage: `/mcp install <id> [extra args...]` — run `/mcp browse` to see ids.' };
+        const { findMarketplaceEntry } = await import('../utils/mcpMarketplace.js');
+        const entry = findMarketplaceEntry(id);
+        if (!entry) return { handled: true, response: `Marketplace id not found: \`${id}\`. Run \`/mcp browse\` for the list.` };
+
+        // Merge skeleton args with user-supplied extras.
+        const extraArgs = args.slice(2);
+        const fullArgs = [...(entry.server.args ?? []), ...extraArgs];
+        const server = {
+          name: entry.id,
+          command: entry.server.command,
+          args: fullArgs,
+          env: entry.server.env,
+          url: entry.server.url,
+          headers: entry.server.headers,
+        };
+        // Reuse the same add helper as `/mcp add`.
+        addProjectMcpServer(session.workspaceRoot, server);
+
+        onChunk(`_Saved \`${entry.id}\` to project config. Spawning…_\n\n`);
+        const merged = loadMcpServerConfig(session.workspaceRoot);
+        const { registered, errors } = await registerSessionServers(session.sessionId, merged, { workspaceRoot: session.workspaceRoot });
+        const failed = errors.find(e => e.server === entry.id);
+        const lines: string[] = [];
+        if (failed) {
+          lines.push(`Saved \`${entry.id}\` but spawn failed: \`${failed.error}\``);
+        } else {
+          const ok = registered.filter(t => t.serverName === entry.id);
+          lines.push(`Installed **${entry.name}** (\`${entry.id}\`) — ${ok.length} tool${ok.length === 1 ? '' : 's'} available.`);
+        }
+        if (entry.envNotes?.length) {
+          lines.push('', '**Environment variables you may need:**');
+          for (const e of entry.envNotes) {
+            const req = e.required ? ' (required)' : '';
+            lines.push(`- \`${e.name}\`${req} — ${e.description}`);
+          }
+        }
+        return { handled: true, response: lines.join('\n'), streaming: true };
+      }
+
+      if (sub === 'reload') {
+        // Re-read both config files and re-register. Used after a manual
+        // edit of `.codeep/mcp_servers.json` outside the CLI — `/mcp add`
+        // and `/mcp remove` already re-register automatically.
+        onChunk(`_Reloading MCP server config…_\n\n`);
+        const merged = loadMcpServerConfig(session.workspaceRoot);
+        const { registered, errors } = await registerSessionServers(session.sessionId, merged, { workspaceRoot: session.workspaceRoot });
+        const lines = [
+          `## MCP reloaded`,
+          '',
+          `**${registered.length}** tool${registered.length === 1 ? '' : 's'} from **${merged.length}** server${merged.length === 1 ? '' : 's'}.`,
+        ];
+        if (errors.length > 0) {
+          lines.push('', '### Failed servers');
+          for (const e of errors) lines.push(`- **${e.server}** — \`${e.error}\``);
+        }
+        return { handled: true, response: lines.join('\n'), streaming: true };
+      }
+
+      // Default: list (and 'list' / no-arg behave the same)
+      // Read-only inspector for the MCP servers wired into this session.
+      // Sources: file config (`.codeep/mcp_servers.json` project + global)
+      // merged with any `mcpServers` the ACP client passed on session/new.
+      // The agent can call these tools via `<server>__<tool>`.
+      const { getSessionTools, getSessionRegistrationErrors, awaitSessionReady } = await import('../utils/mcpRegistry.js');
+      // If session/new is still spinning up servers, wait — otherwise this
+      // command would report "no servers" right after a slow npx install.
+      await awaitSessionReady(session.sessionId);
+      const tools = await getSessionTools(session.sessionId);
+      const errors = getSessionRegistrationErrors(session.sessionId);
+
+      if (tools.length === 0 && errors.length === 0) {
+        return {
+          handled: true,
+          response: [
+            '_No MCP servers connected to this session._',
+            '',
+            'Add one with `/mcp add <name> <command> [args...]` — it persists to `.codeep/mcp_servers.json`. ACP clients (Zed, VS Code) can also pass servers via the `mcpServers` field on `session/new`; both sources merge, ACP wins on collisions.',
+          ].join('\n'),
+        };
+      }
+
+      const lines: string[] = ['## MCP servers', ''];
+
+      if (tools.length > 0) {
+        // Group by server for a readable listing.
+        const byServer = new Map<string, typeof tools>();
+        for (const t of tools) {
+          if (!byServer.has(t.serverName)) byServer.set(t.serverName, []);
+          byServer.get(t.serverName)!.push(t);
+        }
+        for (const [serverName, serverTools] of byServer) {
+          lines.push(`**${serverName}** — ${serverTools.length} tool${serverTools.length === 1 ? '' : 's'}`);
+          for (const t of serverTools) {
+            const desc = t.description ? ` — ${t.description}` : '';
+            lines.push(`- \`${t.agentName}\`${desc}`);
+          }
+          lines.push('');
+        }
+      }
+
+      if (errors.length > 0) {
+        lines.push('### Failed servers');
+        for (const e of errors) {
+          lines.push(`- **${e.server}** — \`${e.error}\``);
+        }
+      }
+
+      return { handled: true, response: lines.join('\n').trim() };
+    }
+
+    case 'rewind': {
+      const id = args[0];
+      if (!id) return { handled: true, response: 'Usage: `/rewind <id>` — run `/checkpoints` to see ids.' };
+      const { loadCheckpoint, buildRewindGitHint } = await import('../utils/checkpoints.js');
+      const cp = loadCheckpoint(session.workspaceRoot, id);
+      if (!cp) return { handled: true, response: `Checkpoint not found: \`${id}\`. Run \`/checkpoints\` to list available ids.` };
+
+      // Restore session conversation in place. Don't touch files — the hint
+      // below tells the user how to restore them via git if they want.
+      const replacedCount = session.history.length;
+      session.history = cp.messages;
+      saveSession(session.codeepSessionId, session.history, session.workspaceRoot);
+
+      // If the checkpoint captured a different provider/model, switch back.
+      // configOptionsChanged signals the client to refresh its dropdowns.
+      let providerChanged = false;
+      if (cp.provider && cp.provider !== getCurrentProvider().id) {
+        setProvider(cp.provider);
+        providerChanged = true;
+      }
+      if (cp.model && cp.model !== config.get('model')) {
+        config.set('model', cp.model);
+        providerChanged = true;
+      }
+
+      const lines = [
+        `## Rewound to ${cp.name ? `**${cp.name}**` : `\`${cp.id}\``}`,
+        '',
+        `Restored ${cp.messages.length} message${cp.messages.length === 1 ? '' : 's'} (was ${replacedCount}).`,
+        cp.provider && cp.model ? `Provider: \`${cp.provider}\` · Model: \`${cp.model}\`` : '',
+        '',
+        buildRewindGitHint(cp),
+      ].filter(Boolean);
+      return { handled: true, response: lines.join('\n'), configOptionsChanged: providerChanged };
+    }
+
+    case 'profile': {
+      const { saveProfile, loadProfile, applyProfile, listProfiles, deleteProfile } = await import('../config/index.js');
+      const sub = args[0]?.toLowerCase();
+
+      if (!sub || sub === 'list') {
+        const profiles = listProfiles();
+        if (profiles.length === 0) return { handled: true, response: '_No profiles saved. Use `/profile save <name>`._' };
+        return { handled: true, response: ['## Profiles', '', ...profiles.map(p => `- \`${p}\``), '', 'Use `/profile load <name>` to apply.'].join('\n') };
+      }
+      if (sub === 'save') {
+        const name = args[1];
+        if (!name) return { handled: true, response: 'Usage: `/profile save <name>`' };
+        return { handled: true, response: saveProfile(name) ? `Profile saved: \`${name}\`` : 'Failed to save profile.', configOptionsChanged: true };
+      }
+      if (sub === 'load') {
+        const name = args[1];
+        if (!name) return { handled: true, response: 'Usage: `/profile load <name>`' };
+        const profile = loadProfile(name);
+        if (!profile) return { handled: true, response: `Profile not found: \`${name}\`` };
+        applyProfile(profile);
+        return { handled: true, response: `Profile loaded: \`${profile.name}\` (${profile.provider} / ${profile.model})`, configOptionsChanged: true };
+      }
+      if (sub === 'delete') {
+        const name = args[1];
+        if (!name) return { handled: true, response: 'Usage: `/profile delete <name>`' };
+        return { handled: true, response: deleteProfile(name) ? `Profile deleted: \`${name}\`` : `Profile not found: \`${name}\`` };
+      }
+      // Shorthand: `/profile <name>` → load
+      const profile = loadProfile(sub);
+      if (profile) {
+        applyProfile(profile);
+        return { handled: true, response: `Profile loaded: \`${profile.name}\` (${profile.provider} / ${profile.model})`, configOptionsChanged: true };
+      }
+      return { handled: true, response: `Unknown subcommand: \`${sub}\`. Use \`save\`, \`load\`, \`delete\`, \`list\`, or \`<name>\` to load.` };
+    }
+
+    // ─── Custom user commands + skills ────────────────────────────────────────
 
     default: {
+      // 1. Project / global custom command (~/.codeep/commands or
+      //    <workspace>/.codeep/commands). User-authored Markdown templates.
+      const { findCustomCommand, expandCommand } = await import('../utils/customCommands.js');
+      const custom = findCustomCommand(cmd, session.workspaceRoot);
+      if (custom) {
+        const expandedPrompt = expandCommand(custom, args);
+        // Treat the expanded body as if the user had typed it manually:
+        // push it as a user message and run the agent (or chat if agent
+        // mode is off), then persist the assistant reply.
+        session.history.push({ role: 'user', content: expandedPrompt });
+        onChunk(`_Running custom command **/${custom.name}** (${custom.scope})…_\n\n`);
+
+        const projectCtx = getProjectContext(session.workspaceRoot);
+        const agentMode = config.get('agentMode');
+        let response = '';
+
+        try {
+          if (agentMode === 'on') {
+            const { buildProjectContext } = await import('./session.js');
+            const ctx = buildProjectContext(session.workspaceRoot);
+            const agentResult = await runAgent(expandedPrompt, ctx, {
+              abortSignal,
+              onIteration: (_i: number, msg: string) => { onChunk(msg + '\n'); },
+              onThinking: (text: string) => { onChunk(text); },
+            });
+            response = agentResult.finalResponse ?? '';
+            if (response) onChunk(response);
+          } else {
+            await chat(
+              expandedPrompt,
+              session.history.slice(0, -1), // exclude the just-pushed user message
+              (chunk) => { response += chunk; onChunk(chunk); },
+              undefined,
+              projectCtx,
+              undefined,
+            );
+          }
+          if (response) session.history.push({ role: 'assistant', content: response });
+          saveSession(session.codeepSessionId, session.history, session.workspaceRoot);
+        } catch (err) {
+          onChunk(`\n\n_Custom command failed: ${(err as Error).message}_`);
+        }
+
+        return { handled: true, response: '', streaming: true };
+      }
+
+      // 2. Built-in skill.
       const { findSkill, parseSkillArgs, executeSkill, trackSkillUsage } = await import('../utils/skills.js');
       const skill = findSkill(cmd);
       if (!skill) {
-        return { handled: true, response: `Unknown command: \`/${cmd}\`\n\nType \`/help\` for available commands or \`/skills\` to list all skills.` };
+        return { handled: true, response: `Unknown command: \`/${cmd}\`\n\nType \`/help\` for available commands, \`/skills\` to list all skills, or \`/commands\` for custom commands.` };
       }
 
       if (skill.requiresWriteAccess && !hasWritePermission(session.workspaceRoot)) {
@@ -603,17 +1370,33 @@ function buildHelp(): string {
     '| `/review <file...>` | Static analysis of specific file(s) |',
     '| `/diff [--staged]` | Git diff with AI review |',
     '',
+    '**Project intelligence & profiles**',
+    '| Command | Description |',
+    '|---------|-------------|',
+    '| `/memory <note>` | Add a project note (or `list` / `remove <n>` / `clear`) |',
+    '| `/profile save <name>` | Save current provider/model/settings (or `load` / `delete` / `list`) |',
+    '| `/hooks` | List installed lifecycle hooks (`.codeep/hooks/<event>.sh`) |',
+    '',
     '**Actions & History**',
     '| Command | Description |',
     '|---------|-------------|',
     '| `/undo` | Undo last agent action |',
     '| `/undo-all` | Undo all actions in session |',
     '| `/changes` | Show session changes |',
+    '| `/cost` | Show per-session token usage and estimated cost |',
+    '| `/compact [keepN]` | Summarize older messages to free up context (keeps last N, default 4) |',
+    '| `/checkpoint [name]` | Save a session snapshot (conversation + provider/model) |',
+    '| `/checkpoints` | List saved checkpoints |',
+    '| `/rewind <id>` | Restore a checkpoint (files via git, see hint after rewind) |',
     '| `/export [json\\|md\\|txt]` | Export conversation |',
     '',
     '**Skills** (type `/skills` to list all, or `/skills <query>` to search)',
     '`/commit` · `/fix` · `/test` · `/docs` · `/refactor` · `/explain`',
     '`/optimize` · `/debug` · `/push` · `/pr` · `/build` · `/deploy` …',
+    '',
+    '**Custom Commands** — drop Markdown files in `.codeep/commands/` (project)',
+    'or `~/.codeep/commands/` (global) to define your own `/<name>` commands.',
+    'Run `/commands` to list them.',
     '',
     '_Skills run as standalone workflows. For general coding requests, just describe the task._',
   ].join('\n');
@@ -685,11 +1468,22 @@ function showApiKey(): string {
     : `No API key set for \`${providerId}\`. Use \`/apikey <key>\` to set one.`;
 }
 
+// Inline API keys end up in the user's shell history (Zed/VS Code chat is
+// terminal-adjacent enough that screenshots and pasted transcripts also leak).
+// We still save the key (backwards compat — there's no prompt mechanism inside
+// ACP), but the response nudges users toward the safer paths and reminds them
+// to scrub the line they just typed.
+const INLINE_KEY_WARNING =
+  '\n\n> ⚠️  The key you just typed is now in your shell / chat history.' +
+  ' Prefer setting the provider env var (see `/provider`) or using the' +
+  ' settings UI in the VS Code extension. Clear the line from history if' +
+  ' the machine is shared.';
+
 function setApiKeyCmd(key: string): string {
   const providerId = getCurrentProvider().id;
   // setApiKey is async (keychain) — fire-and-forget, config cache updated synchronously
   setApiKey(key, providerId);
-  return `API key for \`${providerId}\` saved.`;
+  return `API key for \`${providerId}\` saved.${INLINE_KEY_WARNING}`;
 }
 
 function loginCmd(providerId: string, apiKey: string): string {
@@ -697,7 +1491,7 @@ function loginCmd(providerId: string, apiKey: string): string {
   if (!provider) return `Provider \`${providerId}\` not found.\n\n${buildProviderList()}`;
   setProvider(providerId);
   setApiKey(apiKey, providerId);
-  return `Logged in as **${provider.name}** (\`${providerId}\`). Model: \`${provider.defaultModel}\`.`;
+  return `Logged in as **${provider.name}** (\`${providerId}\`). Model: \`${provider.defaultModel}\`.${INLINE_KEY_WARNING}`;
 }
 
 const PREVIEW_MESSAGES = 6; // last N messages to show on session restore

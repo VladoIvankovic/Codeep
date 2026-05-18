@@ -1,0 +1,232 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  recordTokenUsage,
+  extractOpenAIUsage,
+  extractAnthropicUsage,
+  getSessionStats,
+  getCostBreakdown,
+  getLastUsage,
+  getPricingTable,
+  getModelContextWindow,
+  formatTokenCount,
+  formatCostReport,
+  resetTokenTracking,
+} from './tokenTracker';
+
+beforeEach(() => {
+  // Each test gets a fresh in-memory record set — the module's `records`
+  // array is process-wide otherwise and leaks between tests.
+  resetTokenTracking();
+});
+
+describe('extractOpenAIUsage', () => {
+  it('maps OpenAI fields to canonical TokenUsage shape', () => {
+    expect(extractOpenAIUsage({ usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }))
+      .toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
+  });
+
+  it('returns null when usage block is missing', () => {
+    expect(extractOpenAIUsage({})).toBeNull();
+    expect(extractOpenAIUsage(null)).toBeNull();
+  });
+
+  it('defaults missing fields to zero', () => {
+    expect(extractOpenAIUsage({ usage: {} })).toEqual({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+  });
+});
+
+describe('extractAnthropicUsage', () => {
+  it('maps Anthropic input/output_tokens', () => {
+    expect(extractAnthropicUsage({ usage: { input_tokens: 100, output_tokens: 50 } }))
+      .toEqual({ promptTokens: 100, completionTokens: 50, totalTokens: 150 });
+  });
+
+  it('returns null when usage block is missing', () => {
+    expect(extractAnthropicUsage({})).toBeNull();
+  });
+});
+
+describe('getModelContextWindow', () => {
+  it('returns a known window for a listed model', () => {
+    expect(getModelContextWindow('glm-5.1')).toBe(131_072);
+    expect(getModelContextWindow('claude-opus-4-7')).toBe(1_000_000);
+  });
+
+  it('falls back to 128K for unknown models', () => {
+    expect(getModelContextWindow('nonsense-model')).toBe(128_000);
+  });
+});
+
+describe('formatTokenCount', () => {
+  it('formats under 1K as-is', () => {
+    expect(formatTokenCount(0)).toBe('0');
+    expect(formatTokenCount(999)).toBe('999');
+  });
+  it('formats thousands with K suffix and one decimal', () => {
+    expect(formatTokenCount(1000)).toBe('1.0K');
+    expect(formatTokenCount(12_345)).toBe('12.3K');
+  });
+  it('formats millions with M suffix and two decimals', () => {
+    expect(formatTokenCount(1_000_000)).toBe('1.00M');
+    expect(formatTokenCount(2_345_678)).toBe('2.35M');
+  });
+});
+
+describe('recordTokenUsage + getSessionStats', () => {
+  it('returns zeroed stats on empty session', () => {
+    const stats = getSessionStats();
+    expect(stats).toEqual({
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      totalTokens: 0,
+      requestCount: 0,
+      estimatedCost: 0,
+    });
+  });
+
+  it('aggregates across multiple records', () => {
+    recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.1', 'z.ai');
+    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'glm-5.1', 'z.ai');
+    const stats = getSessionStats();
+    expect(stats.totalPromptTokens).toBe(300);
+    expect(stats.totalCompletionTokens).toBe(150);
+    expect(stats.totalTokens).toBe(450);
+    expect(stats.requestCount).toBe(2);
+    // glm-5.1: 1.00 input, 3.20 output per 1M tokens
+    // (300/1M * 1) + (150/1M * 3.20) = 0.0003 + 0.00048 = 0.00078
+    expect(stats.estimatedCost).toBeCloseTo(0.00078, 6);
+  });
+});
+
+describe('getCostBreakdown', () => {
+  it('groups by provider/model', () => {
+    recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.1', 'z.ai');
+    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-4-7', 'anthropic');
+    const breakdown = getCostBreakdown();
+    expect(breakdown).toHaveLength(2);
+    const glm = breakdown.find(b => b.model === 'glm-5.1');
+    expect(glm?.promptTokens).toBe(100);
+    expect(glm?.completionTokens).toBe(50);
+    expect(glm?.provider).toBe('z.ai');
+  });
+
+  it('returns cost of 0 for models without pricing entry', () => {
+    recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'phantom-model', 'phantom');
+    const breakdown = getCostBreakdown();
+    expect(breakdown[0].estimatedCost).toBe(0);
+    expect(breakdown[0].promptTokens).toBe(100);
+  });
+
+  it('uses provider-reported actualCostUsd when given (OpenRouter case)', () => {
+    // Same model logged twice — once with reported cost, once without.
+    // Reported value wins for that record, hardcoded pricing for the other.
+    // For a model NOT in our pricing table, the missing record contributes 0.
+    recordTokenUsage(
+      { promptTokens: 1000, completionTokens: 500, totalTokens: 1500 },
+      'meta-llama/llama-3.1-405b-instruct',
+      'openrouter',
+      0.012,   // explicit USD from OpenRouter
+    );
+    recordTokenUsage(
+      { promptTokens: 2000, completionTokens: 1000, totalTokens: 3000 },
+      'meta-llama/llama-3.1-405b-instruct',
+      'openrouter',
+      0.024,
+    );
+    const breakdown = getCostBreakdown();
+    expect(breakdown).toHaveLength(1);
+    expect(breakdown[0].estimatedCost).toBeCloseTo(0.036, 6);
+  });
+
+  it('falls back to local pricing when actualCostUsd is missing', () => {
+    recordTokenUsage(
+      { promptTokens: 1_000_000, completionTokens: 0, totalTokens: 1_000_000 },
+      'glm-5.1',
+      'z.ai',
+    );
+    const breakdown = getCostBreakdown();
+    // glm-5.1 pricing: 1.00 USD per 1M input tokens.
+    expect(breakdown[0].estimatedCost).toBeCloseTo(1.0, 6);
+  });
+
+  it('mixes reported + computed costs in the same session', () => {
+    recordTokenUsage(
+      { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      'glm-5.1',
+      'z.ai',
+    );
+    recordTokenUsage(
+      { promptTokens: 1000, completionTokens: 500, totalTokens: 1500 },
+      'anthropic/claude-opus-4',
+      'openrouter',
+      0.025,
+    );
+    const breakdown = getCostBreakdown();
+    expect(breakdown).toHaveLength(2);
+    const total = breakdown.reduce((s, b) => s + b.estimatedCost, 0);
+    // glm-5.1: (100/1M * 1) + (50/1M * 3.20) = 0.0001 + 0.00016 = 0.00026
+    // openrouter: 0.025 (reported)
+    // total ≈ 0.02526
+    expect(total).toBeCloseTo(0.02526, 5);
+  });
+});
+
+describe('getLastUsage', () => {
+  it('returns null when no records exist', () => {
+    expect(getLastUsage()).toBeNull();
+  });
+  it('returns the most recent record', () => {
+    recordTokenUsage({ promptTokens: 1, completionTokens: 1, totalTokens: 2 }, 'a', 'p');
+    recordTokenUsage({ promptTokens: 10, completionTokens: 10, totalTokens: 20 }, 'b', 'p');
+    expect(getLastUsage()?.model).toBe('b');
+  });
+});
+
+describe('getPricingTable', () => {
+  it('lists every priced model', () => {
+    const table = getPricingTable();
+    const ids = table.map(e => e.model);
+    expect(ids).toContain('glm-5.1');
+    expect(ids).toContain('claude-opus-4-7');
+  });
+
+  it('only contains models that also have context-window entries', () => {
+    // Cleanup invariant: pricing and context-window tables must stay in lockstep
+    // (we burned that lesson in 1.3.42 / 1.4.0 — see CHANGELOG).
+    for (const entry of getPricingTable()) {
+      expect(getModelContextWindow(entry.model)).not.toBe(128_000); // 128_000 is the unknown-fallback
+    }
+  });
+});
+
+describe('formatCostReport', () => {
+  it('returns the empty-session message when no requests have been recorded', () => {
+    const report = formatCostReport();
+    expect(report).toMatch(/no API requests/i);
+  });
+
+  it('renders requests, tokens, and total cost', () => {
+    recordTokenUsage({ promptTokens: 1_000, completionTokens: 500, totalTokens: 1_500 }, 'glm-5.1', 'z.ai');
+    const report = formatCostReport();
+    expect(report).toMatch(/## Session Cost/);
+    expect(report).toMatch(/\*\*Requests:\*\* 1/);
+    expect(report).toMatch(/1\.0K/);  // prompt 1000 → "1.0K"
+    expect(report).toMatch(/\*\*Estimated cost:\*\* \$0\./);
+  });
+
+  it('includes a per-model table when multiple providers/models are used', () => {
+    recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.1', 'z.ai');
+    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-4-7', 'anthropic');
+    const report = formatCostReport();
+    expect(report).toMatch(/\| Provider \/ Model \| Input \| Output \| Cost \|/);
+    expect(report).toMatch(/`z\.ai` \/ `glm-5\.1`/);
+    expect(report).toMatch(/`anthropic` \/ `claude-opus-4-7`/);
+  });
+
+  it('flags models that produced tokens but no priced cost', () => {
+    recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'phantom-x1', 'phantom');
+    const report = formatCostReport();
+    expect(report).toMatch(/no pricing entry/i);
+    expect(report).toMatch(/phantom-x1/);
+  });
+});

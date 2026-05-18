@@ -155,6 +155,23 @@ export interface AgentOptions {
   onTaskUpdate?: (task: SubTask) => void;
   onRequestPermission?: (toolCall: ToolCall) => Promise<PermissionOutcome>;
   onExecuteCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  /**
+   * Optional filesystem callbacks. When the ACP client advertises `fs`
+   * capability, the server populates these so read_file/write_file/edit_file
+   * tools route through the client (preserving dirty buffers and undo
+   * history) instead of touching disk directly. Falls back to disk if not
+   * provided or if a delegated call throws.
+   */
+  fs?: import('./toolExecution').FsCallbacks;
+  /**
+   * Optional ACP session id used to route MCP-prefixed tool calls
+   * (`<server>__<tool>`) to the per-session `mcpRegistry`. Not set in TUI
+   * mode (no MCP support there yet); set by `runAgentSession` in ACP mode.
+   * When set, the agent loop also fetches the session's MCP tool list and
+   * passes it into the provider's tool catalog so the model can invoke
+   * those tools natively.
+   */
+  mcpSessionId?: string;
   abortSignal?: AbortSignal;
   dryRun?: boolean;
   autoVerify?: 'off' | 'build' | 'typecheck' | 'test' | 'all' | boolean;
@@ -246,11 +263,67 @@ export async function runAgent(
   const protocol = config.get('protocol');
   const providerId = config.get('provider');
   const useNativeTools = supportsNativeTools(providerId, protocol);
-  
+
+  // Fetch the MCP tool catalog once per agent run. The session id keys into
+  // mcpRegistry; if no MCP servers are registered (or mcpSessionId is unset,
+  // e.g. TUI mode) we get back an empty array and the agent behaves as
+  // before. We do this before building the system prompt so the fallback
+  // text path can include MCP tools in its catalog too.
+  //
+  // We also append per-server "virtual" tools that wrap resource_list /
+  // resource_read / prompt_list / prompt_get so the agent can discover and
+  // pull MCP resources & prompts without the user having to type `/mcp
+  // read <uri>` manually. Servers that don't expose resources or prompts
+  // get no virtual tools — the wrappers are only emitted where useful.
+  let mcpToolDefs: { name: string; description?: string; inputSchema?: Record<string, unknown> }[] = [];
+  if (opts.mcpSessionId) {
+    try {
+      const { getSessionTools, getSessionVirtualTools } = await import('./mcpRegistry.js');
+      const [registered, virtuals] = await Promise.all([
+        getSessionTools(opts.mcpSessionId),
+        getSessionVirtualTools(opts.mcpSessionId),
+      ]);
+      mcpToolDefs = [...registered, ...virtuals].map(t => ({
+        name: t.agentName,
+        description: t.description,
+        inputSchema: t.inputSchema,
+      }));
+    } catch {
+      // Don't let a registry blip kill the whole agent run.
+    }
+  }
+
+  // Skill bundles — structured `.codeep/skills/<name>/SKILL.md` directories
+  // the agent can discover and invoke via the `invoke_skill` tool. We just
+  // add the tool def here; the catalog block is appended to systemPrompt
+  // below alongside project rules / progress / etc. so we don't clobber
+  // those.
+  let skillCatalogBlock = '';
+  try {
+    const { loadSkillBundles, formatBundlesForSysprompt } = await import('./skillBundles.js');
+    const bundles = loadSkillBundles(projectContext.root);
+    if (bundles.length > 0) {
+      mcpToolDefs.push({
+        name: 'invoke_skill',
+        description: 'Invoke a Codeep skill bundle (curated workflow). Returns the SKILL.md body — follow its instructions step by step. Use when the user\'s request matches a skill\'s purpose.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Skill name from the catalog (e.g. "deploy").' },
+          },
+          required: ['name'],
+        },
+      });
+      skillCatalogBlock = formatBundlesForSysprompt(bundles);
+    }
+  } catch {
+    // Skill loading failure shouldn't fail the whole agent run.
+  }
+
   // Build system prompt - use fallback format if native tools not supported
-  let systemPrompt = useNativeTools 
+  let systemPrompt = useNativeTools
     ? getAgentSystemPrompt(projectContext)
-    : getFallbackSystemPrompt(projectContext);
+    : getFallbackSystemPrompt(projectContext, mcpToolDefs);
   
   // Inject project rules (from .codeep/rules.md or CODEEP.md)
   const projectRules = loadProjectRules(projectContext.root);
@@ -277,6 +350,13 @@ export async function runAgent(
   const chatHistoryStr = formatChatHistoryForAgent(opts.chatHistory);
   if (chatHistoryStr) {
     systemPrompt += chatHistoryStr;
+  }
+
+  // Skill bundles catalog goes last — closest to the user prompt so the
+  // model is most likely to remember the available skills when matching
+  // intent. Empty string when there are none.
+  if (skillCatalogBlock) {
+    systemPrompt += '\n\n' + skillCatalogBlock;
   }
   
   // Initial user message with optional task plan
@@ -379,7 +459,29 @@ export async function runAgent(
       // Calculate dynamic timeout based on task complexity
       const dynamicTimeout = calculateDynamicTimeout(iteration, baseTimeout);
       debug(`Using timeout: ${dynamicTimeout}ms (base: ${baseTimeout}ms)`);
-      
+
+      // Refresh MCP tool list if a server flagged its catalog as changed
+      // (e.g. via `tools/list_changed` notification, or after an
+      // auto-restart). This keeps the agent in sync mid-run instead of
+      // requiring a session restart to see new tools.
+      if (opts.mcpSessionId) {
+        try {
+          const { consumeSessionCatalogChanges, getSessionTools } = await import('./mcpRegistry.js');
+          const dirty = consumeSessionCatalogChanges(opts.mcpSessionId);
+          if (dirty.has('tools')) {
+            const refreshed = await getSessionTools(opts.mcpSessionId);
+            mcpToolDefs = refreshed.map(t => ({
+              name: t.agentName,
+              description: t.description,
+              inputSchema: t.inputSchema,
+            }));
+            debug(`MCP tool catalog refreshed mid-run: ${mcpToolDefs.length} tool(s)`);
+          }
+        } catch {
+          // Don't let a refresh hiccup break the iteration.
+        }
+      }
+
       // Get AI response with retry logic for timeouts
       let chatResponse: AgentChatResponse | null = null;
       let retryCount = 0;
@@ -391,7 +493,8 @@ export async function runAgent(
             systemPrompt,
             opts.onChunk,
             opts.abortSignal,
-            dynamicTimeout * (1 + retryCount * 0.5) // Increase timeout on retry
+            dynamicTimeout * (1 + retryCount * 0.5), // Increase timeout on retry
+            mcpToolDefs,
           );
           consecutiveTimeouts = 0; // Reset consecutive count on success
           consecutiveRateLimits = 0;
@@ -681,11 +784,11 @@ export async function runAgent(
             } catch (err) {
               debug('onExecuteCommand callback threw, falling back to local execution:', err);
               // Fallback to local execution if callback throws
-              toolResult = await executeTool(toolCall, cwd);
+              toolResult = await executeTool(toolCall, cwd, opts.fs, opts.mcpSessionId);
             }
           }
         } else {
-          toolResult = await executeTool(toolCall, projectContext.root || process.cwd());
+          toolResult = await executeTool(toolCall, projectContext.root || process.cwd(), opts.fs, opts.mcpSessionId);
         }
         
         opts.onToolResult?.(toolResult, toolCall);
@@ -877,7 +980,9 @@ export async function runAgent(
               messages,
               systemPrompt,
               opts.onChunk,
-              opts.abortSignal
+              opts.abortSignal,
+              undefined,
+              mcpToolDefs,
             );
             
             const { content: fixContent, toolCalls: fixToolCalls } = fixResponse;
@@ -894,8 +999,8 @@ export async function runAgent(
             
             for (const toolCall of fixToolCalls) {
               opts.onToolCall?.(toolCall);
-              
-              const toolResult = await executeTool(toolCall, projectContext.root || process.cwd());
+
+              const toolResult = await executeTool(toolCall, projectContext.root || process.cwd(), opts.fs, opts.mcpSessionId);
               opts.onToolResult?.(toolResult, toolCall);
               
               const actionLog = createActionLog(toolCall, toolResult);

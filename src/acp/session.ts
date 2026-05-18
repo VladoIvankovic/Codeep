@@ -5,6 +5,7 @@ import { join, isAbsolute } from 'path';
 import { runAgent, PermissionOutcome } from '../utils/agent.js';
 import { getProjectContext, ProjectContext } from '../utils/project.js';
 import { ToolCall } from '../utils/tools.js';
+import type { FsCallbacks } from '../utils/toolExecution.js';
 
 export interface AgentSessionOptions {
   prompt: string;
@@ -16,6 +17,8 @@ export interface AgentSessionOptions {
   onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[], rawOutput?: string) => void;
   onRequestPermission?: (toolCall: ToolCall) => Promise<PermissionOutcome>;
   onExecuteCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  /** Optional fs delegation when the ACP client advertises `fs` capability. */
+  fs?: FsCallbacks;
 }
 
 /**
@@ -172,6 +175,11 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
     },
     onRequestPermission: opts.onRequestPermission,
     onExecuteCommand: opts.onExecuteCommand,
+    fs: opts.fs,
+    // Route MCP-prefixed tool calls through the per-session registry.
+    // `conversationId` is the ACP session id, which is what
+    // registerSessionServers keyed by in server.ts handleSessionNew.
+    mcpSessionId: opts.conversationId,
   });
 
   // result.finalResponse is already emitted via onChunk streaming above;

@@ -21,7 +21,8 @@ import { syncProgress, generateProjectId } from './codeepCloud';
 import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, isNoApiKeyProvider } from '../config/providers';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
-import { formatToolDefinitions, getOpenAITools, getAnthropicTools } from './tools';
+import { formatToolDefinitions, getOpenAITools, getAnthropicTools, AdditionalToolDef } from './tools';
+import { readOpenRouterPreferences } from './openrouterPrefs';
 import { handleStream, handleOpenAIAgentStream, handleAnthropicAgentStream } from './agentStream';
 import type { AgentChatResponse } from './agentStream';
 import { logger } from './logger';
@@ -234,8 +235,11 @@ ${projectContext.structure ? `\n## Project Structure\n${projectContext.structure
 })()}`;
 }
 
-export function getFallbackSystemPrompt(projectContext: ProjectContext): string {
-  return getAgentSystemPrompt(projectContext) + '\n\n' + formatToolDefinitions();
+export function getFallbackSystemPrompt(
+  projectContext: ProjectContext,
+  additionalTools?: AdditionalToolDef[],
+): string {
+  return getAgentSystemPrompt(projectContext) + '\n\n' + formatToolDefinitions(additionalTools);
 }
 
 /**
@@ -247,7 +251,14 @@ export async function agentChat(
   systemPrompt: string,
   onChunk?: (chunk: string) => void,
   abortSignal?: AbortSignal,
-  dynamicTimeout?: number
+  dynamicTimeout?: number,
+  /**
+   * Extra tool definitions appended to the catalog (currently used to
+   * surface MCP-registered tools as first-class entries the model can
+   * invoke). Optional — built-in tools work the same whether this is
+   * omitted or an empty array.
+   */
+  additionalTools?: AdditionalToolDef[],
 ): Promise<AgentChatResponse> {
   const protocol = config.get('protocol');
   const model = config.get('model');
@@ -287,6 +298,14 @@ export async function agentChat(
     headers['x-api-key'] = apiKey ?? '';
   }
   if (protocol === 'anthropic') headers['anthropic-version'] = '2023-06-01';
+  // OpenRouter branding — surfaces "Codeep" in the OpenRouter dashboard
+  // attribution so users (and OpenRouter itself, for any partnership
+  // tracking) see which app generated the traffic. Spec is informal; both
+  // headers are documented at openrouter.ai/docs#headers.
+  if (providerId === 'openrouter') {
+    headers['HTTP-Referer'] = 'https://codeep.dev';
+    headers['X-Title'] = 'Codeep';
+  }
 
   try {
     let endpoint: string;
@@ -298,17 +317,30 @@ export async function agentChat(
       const maxTok = getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384));
       const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };
       endpoint = `${baseUrl}/chat/completions`;
+
+      // OpenRouter-specific extras: request `usage` block in the response
+      // body so we get per-call cost (skips our local pricing lookup), and
+      // optionally a provider-routing preferences object the user set via
+      // `/openrouter prefer …`.
+      const openRouterExtras: Record<string, unknown> = {};
+      if (providerId === 'openrouter') {
+        openRouterExtras.usage = { include: true };
+        const prefs = readOpenRouterPreferences();
+        if (prefs) openRouterExtras.provider = prefs;
+      }
+
       body = {
         model, messages: [{ role: 'system', content: systemPrompt }, ...messages],
-        tools: getOpenAITools(), tool_choice: 'auto', stream: useStreaming,
+        tools: getOpenAITools(additionalTools), tool_choice: 'auto', stream: useStreaming,
         ...tempParam, ...tokParam,
         ...(useStreaming && providerId === 'openai' ? { stream_options: { include_usage: true } } : {}),
+        ...openRouterExtras,
       };
     } else {
       endpoint = `${baseUrl}/v1/messages`;
       body = {
         model, system: systemPrompt, messages,
-        tools: getAnthropicTools(), stream: useStreaming,
+        tools: getAnthropicTools(additionalTools), stream: useStreaming,
         ...tempParam, max_tokens: getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384)),
       };
     }
@@ -333,7 +365,15 @@ export async function agentChat(
     const data = await response.json();
     const usageExtractor = protocol === 'openai' ? extractOpenAIUsage : extractAnthropicUsage;
     const usage = usageExtractor(data);
-    if (usage) recordTokenUsage(usage, model, providerId);
+    if (usage) {
+      // OpenRouter returns the authoritative per-call cost in
+      // `usage.cost` (USD). Use it instead of our local pricing table
+      // since the catalog has 100+ models we don't track ourselves.
+      const reportedCost = providerId === 'openrouter' && typeof data?.usage?.cost === 'number'
+        ? data.usage.cost
+        : undefined;
+      recordTokenUsage(usage, model, providerId, reportedCost);
+    }
 
     if (protocol === 'openai') {
       const message = data.choices?.[0]?.message;
@@ -465,7 +505,12 @@ export async function agentChatFallback(
       const data = await response.json();
       const fallbackUsageExtractor = protocol === 'openai' ? extractOpenAIUsage : extractAnthropicUsage;
       const fallbackUsage = fallbackUsageExtractor(data);
-      if (fallbackUsage) recordTokenUsage(fallbackUsage, model, providerId);
+      if (fallbackUsage) {
+        const reportedCost = providerId === 'openrouter' && typeof data?.usage?.cost === 'number'
+          ? data.usage.cost
+          : undefined;
+        recordTokenUsage(fallbackUsage, model, providerId, reportedCost);
+      }
       content = protocol === 'openai' ? (data.choices?.[0]?.message?.content || '') : (data.content?.[0]?.text || '');
     }
 

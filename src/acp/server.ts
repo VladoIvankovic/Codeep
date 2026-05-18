@@ -21,8 +21,13 @@ import {
   JsonRpcRequest, JsonRpcNotification,
   RequestPermissionResult,
   TerminalCreateResult, TerminalOutputResult, TerminalWaitForExitResult,
+  McpServer,
 } from './protocol.js';
 import { runAgentSession } from './session.js';
+import { loadCustomCommands } from '../utils/customCommands.js';
+import { registerSessionServers, disposeSession as disposeMcpSession, disposeAllSessions as disposeAllMcpSessions } from '../utils/mcpRegistry.js';
+import { loadMcpServerConfig, mergeMcpServers } from '../utils/mcpConfig.js';
+import { handleMcpSamplingRequest } from '../utils/mcpSamplingBridge.js';
 import { executeCommandAsync } from '../utils/shell.js';
 import { PermissionOutcome } from '../utils/agent.js';
 import { ToolCall } from '../utils/tools.js';
@@ -43,6 +48,7 @@ const AVAILABLE_COMMANDS = [
   { name: 'help',      description: 'Show available commands' },
   { name: 'status',    description: 'Show current config and session info' },
   { name: 'version',   description: 'Show version and current model' },
+  { name: 'provider',  description: 'List or switch provider', input: { hint: '<provider-id>' } },
   { name: 'model',     description: 'List or switch model', input: { hint: '<model-id>' } },
   { name: 'login',     description: 'Set API key for a provider', input: { hint: '<providerId> <apiKey>' } },
   { name: 'apikey',    description: 'Show or set API key for current provider', input: { hint: '<key>' } },
@@ -59,13 +65,24 @@ const AVAILABLE_COMMANDS = [
   { name: 'undo',      description: 'Undo last agent action' },
   { name: 'undo-all',  description: 'Undo all agent actions in session' },
   { name: 'changes',   description: 'Show all changes made in session' },
+  { name: 'cost',      description: 'Show per-session token usage and estimated cost' },
+  { name: 'compact',   description: 'Summarize older messages to free up context', input: { hint: '[keepN]' } },
+  { name: 'checkpoint', description: 'Save a named snapshot of the current session (or `delete <id>`)', input: { hint: '[name] | delete <id>' } },
+  { name: 'checkpoints', description: 'List saved checkpoints in this workspace' },
+  { name: 'rewind',    description: 'Restore a session checkpoint by id', input: { hint: '<id>' } },
+  { name: 'hooks',     description: 'List installed lifecycle hooks in .codeep/hooks/' },
+  { name: 'mcp',       description: 'Manage MCP servers, marketplace, resources, prompts', input: { hint: '[browse | install <id> | add | remove | reload | resources | read <uri> | prompts | prompt <server> <name>]' } },
+  { name: 'openrouter', description: 'OpenRouter routing preferences (prefer/ignore/fallbacks/privacy/clear)', input: { hint: '[show | prefer <p,...> | ignore <p,...> | fallbacks on|off | privacy strict|allow | clear]' } },
   { name: 'export',    description: 'Export conversation', input: { hint: 'json | md | txt' } },
   // Project intelligence
   { name: 'scan',      description: 'Scan project structure and generate summary' },
   { name: 'review',    description: 'Run code review on project or specific files', input: { hint: '[file…]' } },
   { name: 'learn',     description: 'Learn coding preferences from project files' },
-  // Skills
-  { name: 'skills',    description: 'List all available skills', input: { hint: '[query]' } },
+  { name: 'memory',    description: 'Project memory notes — add / list / remove / clear', input: { hint: '<note> | list | remove <n> | clear' } },
+  { name: 'profile',   description: 'Save / load / delete provider+model presets', input: { hint: 'save | load | delete | list | <name>' } },
+  // Skills + custom commands
+  { name: 'skills',    description: 'List/create/share skill bundles. Subcommands: bundles, create-bundle, show, publish, install, browse, unpublish', input: { hint: '[query] | bundles | create-bundle <name> | show <name> | publish <slug> [--public] | install <owner>/<slug> | browse [q] | unpublish <owner>/<slug>' } },
+  { name: 'commands',  description: 'List user-authored commands from .codeep/commands/*.md' },
   { name: 'commit',    description: 'Generate commit message and commit' },
   { name: 'fix',       description: 'Fix bugs or issues' },
   { name: 'test',      description: 'Write or run tests' },
@@ -337,6 +354,28 @@ export function startAcpServer(): Promise<void> {
   // ACP sessionId → full AcpSession (includes history + codeep session tracking)
   const sessions = new Map<string, AcpSession & { abortController: AbortController | null; currentModeId: string; titleSent: boolean; hadHistory: boolean }>();
 
+  // Tear down all MCP child processes when the CLI dies. Without this,
+  // killing `codeep acp` with Ctrl+C orphans any servers we spawned —
+  // they keep running until the user hunts them down with `ps`.
+  // Register only once per process; if the user starts multiple ACP servers
+  // in the same process (we don't but be defensive) the second listener
+  // would double-fire.
+  const shutdownSignals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
+  let shuttingDown = false;
+  const onShutdown = (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    disposeAllMcpSessions().finally(() => {
+      // Mimic default Node exit behaviour after our cleanup runs.
+      process.exit(signal === 'SIGINT' ? 130 : 143);
+    });
+  };
+  for (const sig of shutdownSignals) {
+    // Only attach if nothing else has claimed the signal — Node prints
+    // a warning when listener count > 10 per signal.
+    if (process.listenerCount(sig) === 0) process.on(sig, onShutdown);
+  }
+
   transport.start((msg: JsonRpcRequest | JsonRpcNotification) => {
     // Notifications have no id — handle separately
     if (!('id' in msg)) {
@@ -347,6 +386,7 @@ export function startAcpServer(): Promise<void> {
     switch (req.method) {
       case 'initialize':           handleInitialize(req);           break;
       case 'initialized':          /* no-op acknowledgment */        break;
+      case 'authenticate':         handleAuthenticate(req);         break;
       case 'session/new':          handleSessionNew(req);           break;
       case 'session/load':         handleSessionLoad(req);          break;
       case 'session/resume':       handleSessionResume(req);        break;
@@ -407,9 +447,33 @@ export function startAcpServer(): Promise<void> {
         name: 'codeep',
         version: getCurrentVersion(),
       },
-      authMethods: [],
+      // We advertise a single "agent"-typed auth method even though Codeep
+      // authenticates out-of-band (env var, `codeep` CLI `/login`, or the
+      // VS Code "Codeep: Set API Key" command). The acp-registry CI check
+      // requires at least one method with type `agent` or `terminal` — and
+      // having an entry here also gives Zed something to render in its
+      // "agent settings" surface so users discover where to put their key.
+      authMethods: [
+        {
+          id: 'codeep-cli',
+          name: 'Codeep CLI',
+          description:
+            'Authenticate via the codeep CLI: run `codeep` and use `/login <provider> <key>`, ' +
+            'set the provider\'s env var (e.g. ZAI_API_KEY), or use "Codeep: Set API Key" in VS Code.',
+        },
+      ],
     };
     transport.respond(msg.id, result);
+  }
+
+  // ── authenticate ────────────────────────────────────────────────────────────
+  // We don't actually run anything here — auth is handled out-of-band (env
+  // var, CLI /login, VS Code command). But per ACP spec the client may still
+  // dispatch authenticate after reading our advertised methods. Reply with
+  // empty success so the client unblocks and proceeds to session/new.
+
+  function handleAuthenticate(msg: JsonRpcRequest): void {
+    transport.respond(msg.id, {});
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────────
@@ -427,11 +491,53 @@ export function startAcpServer(): Promise<void> {
     // intentionally empty — see comment above
   }
 
+  /**
+   * Background-spawn MCP servers for a session, merging two sources:
+   *
+   *   1. On-disk config (`.codeep/mcp_servers.json` project + global) —
+   *      so a user who just runs `codeep acp` (no Zed-style settings UI)
+   *      can still drive MCP setup by editing a file.
+   *   2. `mcpServers` passed in the session/* params — clients that have
+   *      their own config (Zed, Claude Desktop) keep using that. ACP-
+   *      provided servers override file entries with the same name.
+   *
+   * Don't block the session/* response on process startup (a hung MCP
+   * server would otherwise keep the chat from opening). Errors are logged
+   * + cached for /mcp display. `mcpRegistry.callSessionTool` awaits the
+   * in-flight registration so tool calls don't race the startup.
+   */
+  function spawnMcpServersForSession(acpSessionId: string, cwd: string, acpServers: McpServer[] | undefined, label: string): void {
+    const fromConfig = loadMcpServerConfig(cwd);
+    const merged = mergeMcpServers(fromConfig, acpServers);
+    if (merged.length === 0) return;
+    registerSessionServers(acpSessionId, merged, {
+      workspaceRoot: cwd,
+      // Servers that opted into the `sampling` capability can ask us to
+      // run a completion on their behalf. We bridge to chat() through
+      // mcpSamplingBridge — using the user's currently active provider
+      // and key. The bridge enforces a per-server rate limit + budget cap
+      // so a misbehaving server can't drain the user's API credits.
+      onSamplingRequest: (params, serverName) => handleMcpSamplingRequest(params, serverName),
+    })
+      .then(({ registered, errors }) => {
+        if (registered.length > 0) {
+          process.stderr.write(`[codeep-acp] MCP (${label}): registered ${registered.length} tool(s) from ${merged.length} server(s)\n`);
+        }
+        for (const e of errors) {
+          process.stderr.write(`[codeep-acp] MCP server "${e.server}" failed (${label}): ${e.error}\n`);
+        }
+      })
+      .catch(err => process.stderr.write(`[codeep-acp] MCP registration crashed (${label}): ${err.message}\n`));
+  }
+
   // ── session/new ─────────────────────────────────────────────────────────────
 
   function handleSessionNew(msg: JsonRpcRequest): void {
     const params = msg.params as SessionNewParams;
     const acpSessionId = randomUUID();
+
+    // Spin up MCP servers in the background. Errors surface via /mcp.
+    spawnMcpServersForSession(acpSessionId, params.cwd, params.mcpServers, 'session/new');
 
     const { codeepSessionId, history, welcomeText } = initWorkspace(params.cwd, params.fresh);
 
@@ -461,7 +567,7 @@ export function startAcpServer(): Promise<void> {
     // in a separate task). Without the delay the notification arrives ~1 ms
     // after the response and gets lost, which manifests as
     // "Available commands: none" in the slash menu.
-    sendCommandsDelayed(acpSessionId);
+    sendCommandsDelayed(acpSessionId, params.cwd);
 
     // Send title immediately so Zed "Recent" panel shows something useful
     sendSessionTitle(acpSessionId, history, pathBasename(params.cwd));
@@ -480,13 +586,37 @@ export function startAcpServer(): Promise<void> {
   // 200 ms is comfortably above the observed ~1 ms race window without
   // making the slash menu feel laggy on first paint.
   const COMMANDS_DELAY_MS = Number(process.env.CODEEP_ACP_COMMANDS_DELAY_MS ?? 200);
-  function sendCommandsDelayed(sessionId: string): void {
+
+  /**
+   * Build the autocomplete catalog for a session: built-in commands plus any
+   * user-authored Markdown templates under `.codeep/commands/`. Custom ones
+   * are tagged in the description so the user can tell them apart from
+   * built-ins in Zed / VS Code dropdowns.
+   */
+  function getAvailableCommandsForSession(workspaceRoot: string): typeof AVAILABLE_COMMANDS {
+    try {
+      const custom = loadCustomCommands(workspaceRoot).map(c => ({
+        name: c.name,
+        description: `[${c.scope === 'project' ? 'project' : 'global'}] ${c.description}`,
+        input: { hint: '[args]' as string },
+      }));
+      // Custom commands can't override built-ins (would break /help, /status etc.)
+      const builtinNames = new Set(AVAILABLE_COMMANDS.map(c => c.name));
+      const safeCustom = custom.filter(c => !builtinNames.has(c.name));
+      return [...AVAILABLE_COMMANDS, ...safeCustom];
+    } catch {
+      // Custom-command loading must never block the autocomplete catalog.
+      return AVAILABLE_COMMANDS;
+    }
+  }
+
+  function sendCommandsDelayed(sessionId: string, workspaceRoot: string): void {
     setTimeout(() => {
       transport.notify('session/update', {
         sessionId,
         update: {
           sessionUpdate: 'available_commands_update',
-          availableCommands: AVAILABLE_COMMANDS,
+          availableCommands: getAvailableCommandsForSession(workspaceRoot),
         },
       });
     }, COMMANDS_DELAY_MS);
@@ -502,6 +632,9 @@ export function startAcpServer(): Promise<void> {
     if (existing) {
       // Session already in memory — update cwd if changed
       existing.workspaceRoot = params.cwd;
+      // Re-spawn any MCP servers the client passed in (they may have changed
+      // since session/new; old ones get disposed by registerSessionServers).
+      spawnMcpServersForSession(params.sessionId, params.cwd, params.mcpServers, 'session/load (warm)');
       const result: SessionLoadResult = {
         modes: AGENT_MODES,
         configOptions: buildConfigOptions(),
@@ -513,6 +646,7 @@ export function startAcpServer(): Promise<void> {
     // Session not in memory — try to load from disk
     const { codeepSessionId, history, welcomeText } = loadWorkspace(params.cwd, params.sessionId);
     const acpSessionId = randomUUID();
+    spawnMcpServersForSession(acpSessionId, params.cwd, params.mcpServers, 'session/load (cold)');
 
     sessions.set(acpSessionId, {
       sessionId: acpSessionId,
@@ -536,7 +670,7 @@ export function startAcpServer(): Promise<void> {
 
     // Re-advertise commands (delayed for the same race-condition reason as
     // session/new — see sendCommandsDelayed comment).
-    sendCommandsDelayed(acpSessionId);
+    sendCommandsDelayed(acpSessionId, params.cwd);
 
     // Send title immediately so Zed "Recent" panel shows something useful
     sendSessionTitle(params.sessionId, history, pathBasename(params.cwd));
@@ -563,6 +697,9 @@ export function startAcpServer(): Promise<void> {
     const existing = sessions.get(params.sessionId);
     if (existing) {
       existing.workspaceRoot = params.cwd;
+      // Resume can carry an updated mcpServers list (e.g. workspace switched
+      // config) — re-register so old servers are torn down and new ones spawn.
+      spawnMcpServersForSession(params.sessionId, params.cwd, params.mcpServers, 'session/resume (warm)');
       const result: SessionResumeResult = {
         sessionId: params.sessionId,
         modes: AGENT_MODES,
@@ -570,7 +707,7 @@ export function startAcpServer(): Promise<void> {
       };
       transport.respond(msg.id, result);
       // Delayed — see sendCommandsDelayed comment for the race-condition rationale.
-      sendCommandsDelayed(params.sessionId);
+      sendCommandsDelayed(params.sessionId, params.cwd);
       return;
     }
 
@@ -578,6 +715,7 @@ export function startAcpServer(): Promise<void> {
     // the history echo (resume contract: client already has history).
     const { codeepSessionId, history } = loadWorkspace(params.cwd, params.sessionId);
     const acpSessionId = randomUUID();
+    spawnMcpServersForSession(acpSessionId, params.cwd, params.mcpServers, 'session/resume (cold)');
     sessions.set(acpSessionId, {
       sessionId: acpSessionId,
       workspaceRoot: params.cwd,
@@ -595,7 +733,7 @@ export function startAcpServer(): Promise<void> {
       configOptions: buildConfigOptions(),
     };
     transport.respond(msg.id, result);
-    sendCommandsDelayed(acpSessionId);
+    sendCommandsDelayed(acpSessionId, params.cwd);
   }
 
   // ── session/set_mode ────────────────────────────────────────────────────────
@@ -721,6 +859,9 @@ export function startAcpServer(): Promise<void> {
     const { sessionId, cwd } = (msg.params ?? {}) as DeleteSessionParams;
     // Remove from in-memory sessions map if present
     sessions.delete(sessionId);
+    // Tear down any MCP server processes attached to this session — leaks
+    // children otherwise. Fire-and-forget; client doesn't wait on stop().
+    disposeMcpSession(sessionId).catch(() => { /* logged inside */ });
     // Try project dir first, then global
     const deleted = deleteSessionFile(sessionId, cwd || undefined);
     if (!deleted && cwd) deleteSessionFile(sessionId);
@@ -759,12 +900,13 @@ export function startAcpServer(): Promise<void> {
     // `available_commands_update` from session/new because the thread_view
     // isn't registered yet on Zed's side (race against the session/new
     // response). Re-sending here guarantees `/` autocomplete works by the
-    // time the user could plausibly type the next prompt.
+    // time the user could plausibly type the next prompt. Also picks up any
+    // custom command Markdown files the user added since session start.
     transport.notify('session/update', {
       sessionId: params.sessionId,
       update: {
         sessionUpdate: 'available_commands_update',
-        availableCommands: AVAILABLE_COMMANDS,
+        availableCommands: getAvailableCommandsForSession(session.workspaceRoot),
       },
     });
 
@@ -986,6 +1128,35 @@ export function startAcpServer(): Promise<void> {
                 return result.outcome.optionId as PermissionOutcome;
               }
             : undefined,
+          // Per ACP spec, `fs/read_text_file` and `fs/write_text_file` are
+          // CLIENT methods — only safe to call when the client advertised
+          // the capability in `initialize`. Routing through the client
+          // means the editor's dirty buffers + undo history stay correct
+          // (otherwise an in-editor unsaved change would be invisible to
+          // the agent, or worse, silently overwritten).
+          fs: {
+            readTextFile: clientSupportsFsRead
+              ? async (absolutePath: string): Promise<string> => {
+                  const result = await transport.request('fs/read_text_file', {
+                    sessionId: params.sessionId,
+                    path: absolutePath,
+                  }) as { content: string } | null;
+                  if (!result || typeof result.content !== 'string') {
+                    throw new Error('fs/read_text_file returned no content');
+                  }
+                  return result.content;
+                }
+              : undefined,
+            writeTextFile: clientSupportsFsWrite
+              ? async (absolutePath: string, content: string): Promise<void> => {
+                  await transport.request('fs/write_text_file', {
+                    sessionId: params.sessionId,
+                    path: absolutePath,
+                    content,
+                  });
+                }
+              : undefined,
+          },
           onExecuteCommand: async (command: string, args: string[], cwd: string) => {
             // Per ACP spec, only call terminal/* if the client advertised the
             // capability in initialize. Otherwise execute locally.

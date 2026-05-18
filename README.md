@@ -23,6 +23,28 @@
   <a href="https://github.com/VladoIvankovic/Codeep"><img src="https://img.shields.io/github/stars/VladoIvankovic/Codeep?style=social" alt="GitHub stars"></a>
 </p>
 
+## Upgrading from 1.x to 2.0
+
+Most users **do not need to do anything** — `npm install -g codeep@latest`
+picks up the new version and everything carries over (config, saved
+profiles, project memory, MCP servers, skill bundles).
+
+Two breaking changes only affect a small audience:
+
+1. **MCP `clientInfo` version bumped from `1.4.0` → `2.0.0`.** If you
+   maintain a custom MCP server that allowlists Codeep by version
+   string, update your check.
+2. **`McpServer` protocol shape** in ACP now has `command?`, `args?`,
+   `url?`, `headers?` (transport-agnostic for stdio + Streamable HTTP).
+   The old required-`command` shape is still accepted — parser handles
+   both — but new clients should emit the optional shape.
+
+See [CHANGELOG.md](CHANGELOG.md#200--2026-05-18) for the full list of
+additions (full MCP support, OpenRouter provider with authoritative
+per-call cost, Claude-Code-compatible skill bundles + web marketplace,
+custom slash commands, lifecycle hooks, checkpoints, `/cost`,
+`/compact`, and more).
+
 ## Features
 
 ### Multi-Provider Support
@@ -33,6 +55,7 @@
 - **Google AI** — Gemini 3.1 Pro Preview, Gemini 3 Flash Preview, Gemini 2.5 Pro, Gemini 2.5 Flash
 - **MiniMax** — MiniMax M2.7, M2.5, M2.1, M2 — Coding Plan & pay-per-use API (international & China)
 - **Ollama** — Run any model locally or on a remote server, no API key required. Models are fetched dynamically from your Ollama instance.
+- **OpenRouter** — One key, 100+ models from Anthropic, OpenAI, Google, Meta, Mistral, DeepSeek, Qwen, xAI and more. Per-call cost reported directly by OpenRouter (matches their dashboard exactly). Use `openrouter/auto` to let OpenRouter pick the best model. Tune routing with `/openrouter prefer|ignore|fallbacks|privacy`.
 - Switch between providers with `/provider`
 - Configure different API keys per provider
 - Both OpenAI-compatible and Anthropic API protocols supported
@@ -52,6 +75,11 @@ When started in a project directory, Codeep automatically:
 - **Rename sessions** - Give meaningful names with `/rename`
 - **Search history** - Find past conversations with `/search`
 - **Export** - Save to Markdown, JSON, or plain text
+- `/cost` - Per-session token usage and estimated cost (per provider/model)
+- `/compact [keepN]` - AI-summarize older messages to free up context (keeps last N, default 4)
+- `/checkpoint [name]` - Snapshot the current session (conversation + provider/model + agent-touched files + git HEAD)
+- `/checkpoints` - List saved checkpoints for this workspace
+- `/rewind <id>` - Restore a checkpoint; file rollback is handled via git (hint printed after rewind)
 
 ### Git Integration
 - `/diff` - Review unstaged changes with AI assistance
@@ -317,6 +345,186 @@ Custom skill example (`~/.codeep/skills/my-workflow.json`):
   ]
 }
 ```
+
+### MCP (Model Context Protocol)
+Full spec coverage in 2.0.0 — stdio and Streamable HTTP transports,
+tools / resources / prompts / sampling, capability negotiation with
+`roots`, auto-restart on crash, mid-run catalog refresh.
+
+**Three ways to wire MCP servers** (all merge; project > global > ACP wins last):
+
+1. **Project config** — `.codeep/mcp_servers.json` (committed with the repo)
+2. **Global config** — `~/.codeep/mcp_servers.json` (per machine)
+3. **ACP client config** — Zed / Claude Desktop pass `mcpServers` on `session/new`
+
+Two transports per entry, mutually exclusive:
+
+```json
+{
+  "mcpServers": {
+    "fs":     { "command": "npx", "args": ["@modelcontextprotocol/server-filesystem", "/path"] },
+    "remote": { "url": "https://mcp.example.com/", "headers": { "Authorization": "Bearer …" } }
+  }
+}
+```
+
+Manage interactively from any Codeep client:
+
+```bash
+/mcp                            # list connected servers + tools + spawn errors
+/mcp browse                     # 12 curated servers (filesystem, github, postgres, …)
+/mcp browse <id>                # details + env-var hints for one entry
+/mcp install <id> [extra args]  # wires it into project config + spawns
+/mcp add <name> <command> [args]
+/mcp remove <name>
+/mcp reload                     # re-read config after a manual edit
+/mcp resources                  # list resources servers expose
+/mcp read <uri>                 # fetch one resource's contents
+/mcp prompts                    # list prompt templates
+/mcp prompt <server> <name> key=val
+```
+
+Resources and prompts also surface as **virtual tools** the agent can
+call natively — `<server>__resource_list`, `<server>__resource_read`,
+`<server>__prompt_list`, `<server>__prompt_get`. No need to type
+`/mcp read` yourself; the model decides when to fetch.
+
+If a server opts into the `sampling` capability, Codeep hosts LLM
+completions on its behalf — routes through your active provider. If it
+opts into `roots/list`, we expose the current workspace folder.
+
+In the VS Code extension, the same operations are available from the
+command palette (no JSON editing required):
+
+- **Codeep: Add MCP Server…** — wizard that writes to project or global config
+- **Codeep: Remove MCP Server…** — quick-pick from both scopes
+- **Codeep: Open MCP Servers Config** — opens the JSON file directly
+
+Each server is spawned as a child process; its tools are surfaced under
+`<server>__<tool>`. MCP tool definitions are automatically injected into
+the agent's tool catalog on each iteration, so the model picks them
+alongside built-ins without you having to mention them by name.
+
+Lifecycle is per-session: servers are torn down when the session is
+deleted or the CLI exits (SIGTERM/SIGINT). The VS Code extension and the
+direct `codeep` CLI both read the same config files, so a server you
+configure once is available everywhere.
+
+A server that crashes is auto-restarted (up to 3 times in a 60 s window,
+with exponential backoff). Persistent failures are reported in `/mcp` so
+you don't have to hunt through stderr. The `roots` capability is
+advertised in the MCP handshake, so filesystem-shaped servers can
+scope their reads to the current workspace.
+
+Hooks apply to MCP tools too: `pre_tool_call` can block a `<server>__<tool>`
+call, and `on_error` fires when it fails. See **Lifecycle Hooks** below.
+
+### Lifecycle Hooks
+Drop executable shell scripts in `.codeep/hooks/<event>.sh` and Codeep runs them at
+the relevant moment during a session. Generalises what `agentAutoCommit` and
+`agentAutoVerify` do — anything those can do, a `post_edit` hook can do too.
+
+| Event | When | Blocking? |
+|---|---|---|
+| `pre_tool_call` | Before every agent tool call (including MCP `<server>__<tool>`) | **Yes** — non-zero exit blocks the call |
+| `post_edit` | After `write_file` / `edit_file` succeeds (built-in only) | No (advisory: auto-format / auto-lint) |
+| `on_error` | When any tool call fails (built-in or MCP) | No (logging / alerting) |
+| `pre_commit` | Before the `/commit` skill stages anything | **Yes** — non-zero exit blocks the commit |
+
+`pre_tool_call` and `on_error` apply uniformly to built-in tools (`read_file`,
+`execute_command`, …) and MCP tools (`fs__read_file`, `gh__create_issue`, …).
+A policy script can therefore allow-list or deny MCP calls just like any
+other agent action.
+
+Each hook receives `CODEEP_HOOK_EVENT`, `CODEEP_WORKSPACE`, `CODEEP_SESSION_ID`,
+plus event-specific extras (`CODEEP_HOOK_TOOL`, `CODEEP_HOOK_PARAMS`, `CODEEP_HOOK_FILE`).
+
+Example — auto-format on edit (`.codeep/hooks/post_edit.sh`):
+
+```bash
+#!/bin/bash
+prettier --write "$CODEEP_HOOK_FILE" 2>/dev/null
+```
+
+Run `/hooks` to see which hooks are installed in the current workspace. Hooks
+trigger a security banner on session start since they're arbitrary shell that
+runs whenever an agent tool fires.
+
+### Skill Bundles (new in 2.0)
+Beyond the built-in skills and custom slash commands, Codeep now supports
+**structured skill bundles** — directory-based capability packs the agent
+discovers and invokes on its own.
+
+A bundle is a directory `.codeep/skills/<name>/SKILL.md` (project-scoped)
+or `~/.codeep/skills/<name>/SKILL.md` (global). The file is Markdown with
+a YAML frontmatter header — the format is a **superset of Claude Code
+skills**, so existing skills drop in unchanged:
+
+```markdown
+---
+name: deploy-staging
+description: Deploy the current branch to staging via npm scripts.
+triggers: [deploy, ship, release]
+# Optional Codeep-specific extensions:
+codeep-min-version: 2.0.0
+codeep-requires-mcp: [postgres]
+allowed-tools: [read_file, write_file, execute_command]
+version: 0.1.0
+---
+
+# deploy-staging
+
+Run the test suite, build, then `npm run deploy:staging`. If the build
+fails, surface the error and stop — don't deploy a broken build.
+```
+
+The agent gets the bundle catalog injected into its system prompt on
+every iteration and can invoke any bundle via the `invoke_skill` tool:
+
+- `/skills bundles` — list installed bundles
+- `/skills create-bundle <name>` — scaffold a new project skill
+- `/skills show <name>` — print the SKILL.md
+- `/skills browse [query]` — search the public marketplace
+- `/skills install <owner>/<slug>` — pull from marketplace
+- `/skills publish <name> [--public]` — share to codeep.dev
+- `/skills unpublish <owner>/<slug>` — remove your published skill
+
+**Web marketplace:** publish skills to [codeep.dev/skills](https://codeep.dev/skills)
+as public (browseable by anyone) or private (only you). Manage your published
+skills at `/dashboard/skills`. From the VS Code extension, use the
+**Codeep: Browse Skill Bundles…** / **Codeep: Create Skill Bundle…** /
+**Codeep: Open Skills Folder** commands.
+
+### Custom Slash Commands
+Drop a Markdown file in `.codeep/commands/<name>.md` (project-scoped) or
+`~/.codeep/commands/<name>.md` (global, all projects) and Codeep exposes it
+as `/<name>` — in the TUI, Zed, and the VS Code extension. The body becomes
+the user prompt; the agent handles it normally.
+
+Example — `.codeep/commands/sec-review.md`:
+
+```markdown
+---
+description: Security review of a file
+aliases: [sec, secrev]
+---
+
+Please perform a thorough security review of {{args}}. Look for:
+- AuthN/AuthZ bypasses, SQL/NoSQL injection, XSS, CSRF
+- Path traversal, insecure deserialization
+- Hardcoded secrets, race conditions
+
+Report findings ordered by severity.
+```
+
+Then call it as `/sec-review src/api/login.ts` (or `/sec` via the alias).
+
+**Placeholders** (Claude Code-compatible):
+- `{{args}}` and `$ARGUMENTS` — full args string
+- `{{arg1}}`, `{{arg2}}` … — positional args
+
+**Discovery:** `/commands` lists all available templates. Project files shadow
+global files with the same name. Aliases also work for autocomplete.
 
 ### Project Intelligence (`/init`, `/scan`)
 

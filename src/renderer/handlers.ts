@@ -73,8 +73,27 @@ export interface MenuHandlerContext {
   render(): void;
 }
 
-export function handleMenuKey(event: KeyEvent, ctx: MenuHandlerContext): void {
+/**
+ * Optional context for type-to-filter support. Callers that supply these
+ * get inline filtering: letters/digits append to `filter`, Backspace
+ * deletes, first Esc clears a non-empty filter, second Esc closes.
+ * Callers that omit them behave exactly as before (back-compat).
+ */
+export interface MenuFilterContext {
+  filter: string;
+  setFilter(v: string): void;
+}
+
+export function handleMenuKey(event: KeyEvent, ctx: MenuHandlerContext & Partial<MenuFilterContext>): void {
+  const supportsFilter = typeof ctx.setFilter === 'function';
+
   if (event.key === 'escape') {
+    // Two-stage Esc when filter is on: first clears the filter, second closes.
+    if (supportsFilter && ctx.filter) {
+      ctx.setFilter!('');
+      ctx.render();
+      return;
+    }
     ctx.close(null, null);
     ctx.render();
     return;
@@ -108,6 +127,30 @@ export function handleMenuKey(event: KeyEvent, ctx: MenuHandlerContext): void {
     const selected = ctx.items[ctx.index];
     ctx.close(null, selected);
     ctx.render();
+    return;
+  }
+
+  if (!supportsFilter) return;
+
+  // Backspace removes the last filter char.
+  if (event.key === 'backspace') {
+    if (ctx.filter) {
+      ctx.setFilter!(ctx.filter.slice(0, -1));
+      ctx.render();
+    }
+    return;
+  }
+
+  // Single printable char (letters, digits, punctuation). Modifier-free,
+  // non-paste. We deliberately exclude bare-space at empty filter so a
+  // stray space doesn't kick the user into an unintended filtered view.
+  if (!event.ctrl && !event.alt && !event.isPaste && event.key.length === 1) {
+    const ch = event.key;
+    if (ch === ' ' && !ctx.filter) return;
+    if (/^[\S ]$/.test(ch)) {
+      ctx.setFilter!((ctx.filter ?? '') + ch);
+      ctx.render();
+    }
   }
 }
 

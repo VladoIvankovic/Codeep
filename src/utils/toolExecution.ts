@@ -16,6 +16,8 @@ import { normalizeToolName } from './toolParsing';
 import { getZaiMcpConfig, getZaiVisionConfig, getMinimaxMcpConfig, callZaiMcp, callZaiVisionApi, callMinimaxApi } from './mcpIntegration';
 import { ToolCall, ToolResult, ActionLog } from './tools';
 import { logger } from './logger';
+import { runHook } from './hooks';
+import { isMcpToolName, callSessionTool, isVirtualMcpToolName, callSessionVirtualTool } from './mcpRegistry';
 
 const debug = (...args: unknown[]) => {
   if (process.env.CODEEP_DEBUG === '1') {
@@ -165,14 +167,144 @@ function htmlToText(html: string): string {
 }
 
 /**
- * Execute a tool call and return the result.
+ * Optional filesystem delegation. When an ACP client advertises `fs`
+ * capability (Zed always does, VS Code may), the server should route
+ * read/write through the client instead of touching disk directly — that
+ * way the client's unsaved buffers, undo history, and virtual filesystems
+ * stay authoritative. Callbacks must already use absolute paths.
  */
-export async function executeTool(toolCall: ToolCall, projectRoot: string): Promise<ToolResult> {
+export interface FsCallbacks {
+  readTextFile?: (absolutePath: string) => Promise<string>;
+  writeTextFile?: (absolutePath: string, content: string) => Promise<void>;
+}
+
+/**
+ * Execute a tool call and return the result.
+ *
+ * `fs` is optional — if provided and the relevant method is defined, file
+ * read/write is delegated to the client. Otherwise we fall back to direct
+ * disk I/O. A delegated call that throws also falls back to disk so a
+ * single client hiccup doesn't kill the agent loop.
+ */
+export async function executeTool(
+  toolCall: ToolCall,
+  projectRoot: string,
+  fs?: FsCallbacks,
+  mcpSessionId?: string,
+): Promise<ToolResult> {
   const tool = normalizeToolName(toolCall.tool);
   const parameters = toolCall.parameters;
 
   debug(`Executing tool: ${tool}`, parameters.path || parameters.command || '');
 
+  // pre_tool_call hook runs first, even for MCP tools. A `pre_tool_call`
+  // script is the policy gate (block writes to certain dirs, refuse risky
+  // commands, deny outbound calls to specific MCP servers, etc.), so
+  // letting MCP traffic bypass it would defeat the gate's purpose.
+  // Failing closed is the safe default.
+  const preHook = runHook({ event: 'pre_tool_call', workspaceRoot: projectRoot, toolName: tool, toolParams: parameters });
+  if (preHook.blocked) {
+    const msg = preHook.stderr?.trim() || preHook.stdout?.trim() || `pre_tool_call hook exited ${preHook.exitCode}`;
+    return {
+      success: false,
+      output: '',
+      error: `Blocked by pre_tool_call hook: ${msg}`,
+      tool,
+      parameters,
+    };
+  }
+
+  // MCP-prefixed tool names (`<server>__<tool>`) route through the
+  // per-session MCP registry. We still fire on_error so logging hooks
+  // see MCP failures the same way they see built-in failures, but skip
+  // post_edit — MCP tools aren't file-edit operations in the local sense
+  // (they may do anything; we don't have enough info to call it an edit).
+  //
+  // IMPORTANT: lookup uses the RAW tool name from the model, not the
+  // normalized one. `normalizeToolName` lowercases and converts hyphens
+  // to underscores — fine for built-in tools, but it mangles MCP server
+  // names that legitimately contain hyphens (e.g. `my-fs__read_file`
+  // would become `my_fs__read_file` and miss the registry lookup).
+  const rawTool = toolCall.tool;
+
+  // invoke_skill — agent-driven skill bundle invocation. Returns the
+  // bundle's SKILL.md body so the agent can read its instructions in
+  // the next iteration. Project-scoped bundles win over global.
+  if (rawTool === 'invoke_skill') {
+    const name = String((parameters as Record<string, unknown>).name ?? '').trim();
+    if (!name) {
+      return { success: false, output: '', error: 'invoke_skill requires a `name` argument', tool: rawTool, parameters };
+    }
+    try {
+      const { findSkillBundle } = await import('./skillBundles');
+      const bundle = findSkillBundle(name, projectRoot);
+      if (!bundle) {
+        return { success: false, output: '', error: `Skill "${name}" not found. Use the catalog in your system prompt or ask the user to /skills bundles.`, tool: rawTool, parameters };
+      }
+      // Prefix the body with a header so the model sees clear framing.
+      const output = `# Skill: ${bundle.name}\n_${bundle.description}_\n\n${bundle.body}`;
+      return { success: true, output, tool: rawTool, parameters };
+    } catch (err) {
+      return { success: false, output: '', error: (err as Error).message, tool: rawTool, parameters };
+    }
+  }
+
+  if (isMcpToolName(rawTool) && mcpSessionId) {
+    let result: ToolResult;
+    try {
+      // Virtual wrappers (resource_list / resource_read / prompt_list /
+      // prompt_get) live in mcpRegistry alongside the real tools. We
+      // dispatch them through their own helper so the registry stays the
+      // single source of truth for what's namespaced under each server.
+      const output = isVirtualMcpToolName(rawTool)
+        ? await callSessionVirtualTool(mcpSessionId, rawTool, parameters)
+        : await callSessionTool(mcpSessionId, rawTool, parameters);
+      result = { success: true, output, tool: rawTool, parameters };
+    } catch (err) {
+      result = { success: false, output: '', error: (err as Error).message, tool: rawTool, parameters };
+    }
+    if (!result.success) {
+      runHook({ event: 'on_error', workspaceRoot: projectRoot, toolName: rawTool, toolParams: parameters });
+    }
+    return result;
+  }
+
+  // Wrap the original dispatch so we can run on_error / post_edit hooks
+  // around it without indenting every case.
+  const result = await dispatchTool(tool, parameters, projectRoot, fs, toolCall);
+
+  if (!result.success) {
+    runHook({
+      event: 'on_error',
+      workspaceRoot: projectRoot,
+      toolName: tool,
+      toolParams: parameters,
+    });
+  } else if (tool === 'write_file' || tool === 'edit_file') {
+    const filePath = parameters.path as string | undefined;
+    if (filePath) {
+      const abs = isAbsolute(filePath) ? filePath : join(projectRoot, filePath);
+      // post_edit is advisory — non-zero exit doesn't roll back the write.
+      // Typical use is `prettier --write "$CODEEP_HOOK_FILE"`.
+      runHook({
+        event: 'post_edit',
+        workspaceRoot: projectRoot,
+        toolName: tool,
+        filePath: abs,
+      });
+    }
+  }
+
+  return result;
+}
+
+async function dispatchTool(
+  tool: string,
+  parameters: Record<string, unknown>,
+  projectRoot: string,
+  fs: FsCallbacks | undefined,
+  toolCall: ToolCall,
+): Promise<ToolResult> {
   try {
     switch (tool) {
       case 'read_file': {
@@ -181,6 +313,29 @@ export async function executeTool(toolCall: ToolCall, projectRoot: string): Prom
 
         const validation = validatePath(path, projectRoot);
         if (!validation.valid) return { success: false, output: '', error: validation.error, tool, parameters };
+
+        // Try client delegation first. The client owns the source of truth
+        // for unsaved buffers, so we prefer it even if the file also exists
+        // on disk. The 100 KB cap below is enforced on the delegated result
+        // too — a malicious or misconfigured client could otherwise return
+        // an arbitrarily large blob that blows up the agent's context.
+        if (fs?.readTextFile) {
+          try {
+            const content = await fs.readTextFile(validation.absolutePath);
+            // Cap is on character count, not raw bytes — JS strings are
+            // UTF-16 in memory, so 100K chars ≈ 200K bytes of process
+            // memory plus whatever the model context costs. Either way,
+            // a 1GB blob from a misbehaving client gets rejected here.
+            if (content.length > 100 * 1024) {
+              return { success: false, output: '', error: `File too large (${content.length} chars via client). Max: 100K chars`, tool, parameters };
+            }
+            return { success: true, output: content, tool, parameters };
+          } catch (err) {
+            debug('fs/read_text_file delegation failed, falling back to disk:', err);
+            // fall through to disk read
+          }
+        }
+
         if (!existsSync(validation.absolutePath)) return { success: false, output: '', error: `File not found: ${path}`, tool, parameters };
 
         const stat = statSync(validation.absolutePath);
@@ -206,12 +361,30 @@ export async function executeTool(toolCall: ToolCall, projectRoot: string): Prom
         const validation = validatePath(path, projectRoot);
         if (!validation.valid) return { success: false, output: '', error: validation.error, tool, parameters };
 
+        // Client delegation: lets editors keep dirty buffers, undo history,
+        // and lint-on-save reactions consistent. The client is responsible
+        // for creating parent directories — VS Code's WorkspaceEdit does;
+        // for the disk fallback below we do it ourselves.
+        if (fs?.writeTextFile) {
+          try {
+            const existed = existsSync(validation.absolutePath);
+            await fs.writeTextFile(validation.absolutePath, content);
+            // Only record after the write actually succeeded — otherwise a
+            // failed delegation that falls through to disk would double-log.
+            recordWrite(validation.absolutePath);
+            return { success: true, output: `${existed ? 'Updated' : 'Created'} file: ${path}`, tool, parameters };
+          } catch (err) {
+            debug('fs/write_text_file delegation failed, falling back to disk:', err);
+            // fall through to disk write
+          }
+        }
+
         const dir = dirname(validation.absolutePath);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-        recordWrite(validation.absolutePath);
         const existed = existsSync(validation.absolutePath);
         writeFileSync(validation.absolutePath, content, 'utf-8');
+        recordWrite(validation.absolutePath);
         return { success: true, output: `${existed ? 'Updated' : 'Created'} file: ${path}`, tool, parameters };
       }
 
@@ -226,9 +399,25 @@ export async function executeTool(toolCall: ToolCall, projectRoot: string): Prom
 
         const validation = validatePath(path, projectRoot);
         if (!validation.valid) return { success: false, output: '', error: validation.error, tool, parameters };
-        if (!existsSync(validation.absolutePath)) return { success: false, output: '', error: `File not found: ${path}`, tool, parameters };
 
-        const content = readFileSync(validation.absolutePath, 'utf-8');
+        // Read through the client when delegation is available — the dirty
+        // buffer in the editor is the authoritative version for an edit.
+        let content: string;
+        let readDelegated = false;
+        if (fs?.readTextFile) {
+          try {
+            content = await fs.readTextFile(validation.absolutePath);
+            readDelegated = true;
+          } catch (err) {
+            debug('fs/read_text_file (in edit_file) failed, falling back to disk:', err);
+            if (!existsSync(validation.absolutePath)) return { success: false, output: '', error: `File not found: ${path}`, tool, parameters };
+            content = readFileSync(validation.absolutePath, 'utf-8');
+          }
+        } else {
+          if (!existsSync(validation.absolutePath)) return { success: false, output: '', error: `File not found: ${path}`, tool, parameters };
+          content = readFileSync(validation.absolutePath, 'utf-8');
+        }
+
         if (!content.includes(oldText)) {
           return { success: false, output: '', error: 'Text not found in file. Make sure old_text matches exactly.', tool, parameters };
         }
@@ -245,7 +434,21 @@ export async function executeTool(toolCall: ToolCall, projectRoot: string): Prom
         }
 
         recordEdit(validation.absolutePath);
-        writeFileSync(validation.absolutePath, content.replace(oldText, newText), 'utf-8');
+        const updated = content.replace(oldText, newText);
+
+        if (fs?.writeTextFile) {
+          try {
+            await fs.writeTextFile(validation.absolutePath, updated);
+            return { success: true, output: `Edited file: ${path}`, tool, parameters };
+          } catch (err) {
+            debug('fs/write_text_file (in edit_file) failed, falling back to disk:', err);
+            // If we read through the client but write back to disk, the
+            // editor's dirty buffer could be discarded next save. Log and
+            // continue — better than silently dropping the edit.
+            if (readDelegated) debug('warning: edit_file read via client but writing to disk');
+          }
+        }
+        writeFileSync(validation.absolutePath, updated, 'utf-8');
         return { success: true, output: `Edited file: ${path}`, tool, parameters };
       }
 

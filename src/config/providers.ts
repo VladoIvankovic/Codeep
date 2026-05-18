@@ -317,6 +317,42 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     groupLabel: 'Google AI',
     hint: 'Pay-per-use via Google AI API key (aistudio.google.com).',
   },
+  'openrouter': {
+    name: 'OpenRouter',
+    description: 'Unified access to 100+ models via one API key',
+    protocols: {
+      openai: {
+        baseUrl: 'https://openrouter.ai/api/v1',
+        authHeader: 'Bearer',
+        supportsNativeTools: true,
+      },
+    },
+    // Top 12 — the full catalog (100+) is fetched lazily via
+    // fetchOpenRouterModels() because dynamicModels is true.
+    // We keep these hardcoded so first-time users without network
+    // get a working dropdown.
+    models: [
+      { id: 'openrouter/auto',                  name: 'Auto-route',         description: 'OpenRouter picks the best model for the task' },
+      { id: 'anthropic/claude-opus-4',          name: 'Claude Opus 4',      description: 'Anthropic — most capable' },
+      { id: 'anthropic/claude-sonnet-4',        name: 'Claude Sonnet 4',    description: 'Anthropic — balanced' },
+      { id: 'openai/gpt-5.5',                   name: 'GPT-5.5',            description: 'OpenAI — flagship' },
+      { id: 'openai/gpt-5.4-mini',              name: 'GPT-5.4 Mini',       description: 'OpenAI — fast/cheap' },
+      { id: 'google/gemini-3.1-pro',            name: 'Gemini 3.1 Pro',     description: 'Google — multimodal' },
+      { id: 'meta-llama/llama-3.1-405b-instruct', name: 'Llama 3.1 405B',   description: 'Meta — open weights, largest' },
+      { id: 'meta-llama/llama-3.1-70b-instruct',  name: 'Llama 3.1 70B',    description: 'Meta — open weights, fast' },
+      { id: 'deepseek/deepseek-v4',             name: 'DeepSeek V4',        description: 'DeepSeek via OpenRouter' },
+      { id: 'mistralai/mistral-large',          name: 'Mistral Large',      description: 'Mistral — flagship' },
+      { id: 'qwen/qwen-2.5-coder-32b-instruct', name: 'Qwen 2.5 Coder 32B', description: 'Alibaba — coding-tuned' },
+      { id: 'x-ai/grok-2',                      name: 'Grok 2',             description: 'xAI via OpenRouter' },
+    ],
+    defaultModel: 'anthropic/claude-opus-4',
+    defaultProtocol: 'openai',
+    envKey: 'OPENROUTER_API_KEY',
+    subscribeUrl: 'https://openrouter.ai/keys',
+    dynamicModels: true,
+    groupLabel: 'OpenRouter — Aggregator',
+    hint: 'One key for 100+ models. Pay-per-use via openrouter.ai.',
+  },
   'ollama': {
     name: 'Ollama (local)',
     description: 'Run models locally with Ollama',
@@ -345,8 +381,44 @@ export function getProvider(id: string): ProviderConfig | null {
   return PROVIDERS[id] || null;
 }
 
+/**
+ * Curated display order for the first-run login flow + `/provider` /
+ * `/login` pickers. Headline / popular providers float to the top so
+ * brand-new users see them first; regional + parameter-variant entries
+ * (Z.AI China, MiniMax variants) trail. Any provider id not in this
+ * list is appended afterward in object-declaration order, so adding a
+ * new provider to PROVIDERS without touching this list still shows up.
+ */
+const DISPLAY_ORDER: string[] = [
+  'anthropic',
+  'openai',
+  'openrouter',   // 100+ models, one key — surfaced high on purpose for 2.0.0.
+  'z.ai',
+  'z.ai-api',
+  'deepseek',
+  'google',
+  'minimax',
+  'minimax-api',
+  'ollama',
+  'z.ai-cn',
+  'z.ai-cn-api',
+  'minimax-cn',
+];
+
 export function getProviderList(): { id: string; name: string; description: string; subscribeUrl?: string; noApiKey?: boolean }[] {
-  return Object.entries(PROVIDERS).map(([id, config]) => ({
+  const all = Object.entries(PROVIDERS);
+  const byId = new Map(all);
+  const ordered: typeof all = [];
+  // 1) Curated order first.
+  for (const id of DISPLAY_ORDER) {
+    const cfg = byId.get(id);
+    if (cfg) { ordered.push([id, cfg]); byId.delete(id); }
+  }
+  // 2) Anything else, in declaration order.
+  for (const entry of all) {
+    if (byId.has(entry[0])) ordered.push(entry);
+  }
+  return ordered.map(([id, config]) => ({
     id,
     name: config.name,
     description: config.description,

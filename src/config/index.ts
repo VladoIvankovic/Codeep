@@ -75,6 +75,14 @@ interface ConfigSchema {
   githubUsername: string;
   syncToken: string;
   deviceId: string;
+  /** OpenRouter provider-routing preferences (see utils/openrouterPrefs.ts). */
+  openrouterPreferences?: {
+    order?: string[];
+    allow_fallbacks?: boolean;
+    ignore?: string[];
+    data_collection?: 'allow' | 'deny';
+    require_parameters?: boolean;
+  };
 }
 
 export type { AgentMode };
@@ -592,6 +600,63 @@ export function getModelsForCurrentProvider(): Record<string, string> {
     models[model.id] = `${model.name} - ${model.description}`;
   }
   return models;
+}
+
+/**
+ * Fetch the full OpenRouter model catalog (100+ entries) including pricing.
+ * Cached for 5 minutes per process — the catalog changes daily-ish, not
+ * per-keystroke. Returns null on network / parse failure so callers fall
+ * back to the hardcoded shortlist in `providers.ts`.
+ */
+interface OpenRouterModelEntry {
+  id: string;
+  name?: string;
+  description?: string;
+  pricing?: { prompt?: string; completion?: string };
+  context_length?: number;
+}
+let openRouterCache: { fetchedAt: number; models: { id: string; name: string; description: string }[] } | null = null;
+const OPENROUTER_CACHE_TTL_MS = 5 * 60 * 1000;
+
+export async function fetchOpenRouterModels(apiKey?: string): Promise<{ id: string; name: string; description: string }[] | null> {
+  if (openRouterCache && Date.now() - openRouterCache.fetchedAt < OPENROUTER_CACHE_TTL_MS) {
+    return openRouterCache.models;
+  }
+  try {
+    const headers: Record<string, string> = { 'Accept': 'application/json' };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    const res = await fetch('https://openrouter.ai/api/v1/models', {
+      headers,
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { data?: OpenRouterModelEntry[] };
+    if (!Array.isArray(data.data)) return null;
+
+    // Format pricing for the dropdown description so users can pick cheap
+    // models without leaving the picker. OpenRouter returns USD-per-token
+    // as strings like "0.000003" — multiply by 1M for the per-1M figure
+    // most users think in.
+    const models = data.data
+      .filter(m => typeof m.id === 'string')
+      .map(m => {
+        const inPrice = m.pricing?.prompt ? Number(m.pricing.prompt) * 1_000_000 : null;
+        const outPrice = m.pricing?.completion ? Number(m.pricing.completion) * 1_000_000 : null;
+        const priceStr = inPrice !== null && outPrice !== null
+          ? ` · $${inPrice.toFixed(2)} in / $${outPrice.toFixed(2)} out per 1M`
+          : '';
+        const ctxStr = m.context_length ? ` · ${Math.round(m.context_length / 1000)}K ctx` : '';
+        return {
+          id: m.id,
+          name: m.name ?? m.id,
+          description: (m.description?.slice(0, 80) ?? 'OpenRouter model') + priceStr + ctxStr,
+        };
+      });
+    openRouterCache = { fetchedAt: Date.now(), models };
+    return models;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchOllamaModels(baseUrl?: string): Promise<{ id: string; name: string; description: string }[] | null> {

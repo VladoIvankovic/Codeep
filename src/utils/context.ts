@@ -144,6 +144,88 @@ export function getAllContexts(): ConversationContext[] {
 }
 
 /**
+ * AI-powered compaction of a conversation history.
+ *
+ * Used by the `/compact` slash command. Sends the older portion of the
+ * conversation to the active provider with a summarization prompt, then
+ * replaces those messages with a single system message containing the
+ * summary. Keeps the last `keepRecent` messages verbatim so the
+ * conversation can continue without losing the most recent context.
+ *
+ * Returns the same `history` (untouched) if there isn't enough to
+ * meaningfully compact.
+ */
+export async function compactHistory(
+  history: Message[],
+  options: {
+    keepRecent?: number;
+    projectContext?: import('./project').ProjectContext | null;
+    /** Cap on how long the summarization API call can take, in ms. Defaults to 60s. */
+    timeoutMs?: number;
+    /** External abort signal (e.g. user pressed /stop). Combined with the timeout. */
+    abortSignal?: AbortSignal;
+  } = {}
+): Promise<{ compacted: Message[]; replaced: number; summary: string }> {
+  const keepRecent = options.keepRecent ?? 4;
+  const timeoutMs = options.timeoutMs ?? 60_000;
+  // Need at least one full exchange to compact (user + assistant) plus the
+  // recent tail — otherwise compaction is just overhead.
+  if (history.length <= keepRecent + 2) {
+    return { compacted: history, replaced: 0, summary: '' };
+  }
+
+  const toCompact = history.slice(0, history.length - keepRecent);
+  const recent = history.slice(history.length - keepRecent);
+
+  const transcript = toCompact
+    .map(m => `[${m.role.toUpperCase()}]\n${m.content}`)
+    .join('\n\n---\n\n');
+
+  const prompt =
+    'Summarize the following conversation between a user and a coding assistant.' +
+    ' Capture concisely: (1) what the user was trying to accomplish, (2) key decisions and rationale,' +
+    ' (3) files or components touched, (4) outstanding questions or unfinished work.' +
+    ' The summary will replace these messages in the agent\'s context, so include anything needed' +
+    ' to continue the work without re-reading the originals.\n\nConversation:\n\n' +
+    transcript;
+
+  // Cap how long we'll wait. /compact otherwise blocks the whole session
+  // with no way to interrupt (the regular /stop targets the agent loop,
+  // not arbitrary chat calls). If the user passed their own AbortSignal,
+  // combine it with our timer so either can cancel.
+  const timeoutController = new AbortController();
+  const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
+  const onExternalAbort = () => timeoutController.abort();
+  options.abortSignal?.addEventListener('abort', onExternalAbort);
+
+  try {
+    const { chat } = await import('../api/index.js');
+    const summary = await chat(
+      prompt,
+      [],
+      undefined,
+      undefined,
+      options.projectContext ?? undefined,
+      timeoutController.signal,
+    );
+
+    const summaryMessage: Message = {
+      role: 'system',
+      content: `[Conversation compacted — ${toCompact.length} earlier message${toCompact.length === 1 ? '' : 's'} summarized below]\n\n${summary}`,
+    };
+
+    return {
+      compacted: [summaryMessage, ...recent],
+      replaced: toCompact.length,
+      summary,
+    };
+  } finally {
+    clearTimeout(timer);
+    options.abortSignal?.removeEventListener('abort', onExternalAbort);
+  }
+}
+
+/**
  * Summarize messages for context persistence
  * Keeps recent messages and summarizes older ones
  */

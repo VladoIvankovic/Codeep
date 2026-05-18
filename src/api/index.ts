@@ -8,6 +8,19 @@ import { logApiRequest, logApiResponse, logAppError } from '../utils/logger';
 import { loadProjectIntelligence, generateContextFromIntelligence, ProjectIntelligence } from '../utils/projectIntelligence';
 import { loadProjectRules } from '../utils/agent';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from '../utils/tokenTracker';
+
+/**
+ * OpenRouter returns the authoritative per-call USD in `usage.cost` when
+ * the request opts in via `usage: { include: true }`. Pull it here so
+ * every chat() / streamChat() / etc. path records the real cost instead
+ * of our local pricing estimate. Returns undefined for non-OpenRouter
+ * providers or when the field is missing (older OpenRouter API responses).
+ */
+function openRouterReportedCost(providerId: string, data: unknown): number | undefined {
+  if (providerId !== 'openrouter') return undefined;
+  const cost = (data as { usage?: { cost?: unknown } } | null)?.usage?.cost;
+  return typeof cost === 'number' && Number.isFinite(cost) ? cost : undefined;
+}
 import { getTaskContextPrompt } from '../utils/taskContext';
 
 // Error messages by language
@@ -389,6 +402,23 @@ async function chatOpenAI(
   } else {
     headers['x-api-key'] = apiKey;
   }
+  // OpenRouter: branding headers + opt in to `usage.cost` so the
+  // chat path reports authoritative per-call cost just like agentChat
+  // does. Kept identical to the agentChat block so the two paths stay
+  // in lockstep.
+  if (providerId === 'openrouter') {
+    headers['HTTP-Referer'] = 'https://codeep.dev';
+    headers['X-Title'] = 'Codeep';
+  }
+
+  // Lazy-loaded preferences object — only attached for openrouter so we
+  // never send the field to providers that don't understand it.
+  let openRouterProvider: unknown = undefined;
+  if (providerId === 'openrouter') {
+    const { readOpenRouterPreferences } = await import('../utils/openrouterPrefs');
+    openRouterProvider = readOpenRouterPreferences() ?? undefined;
+  }
+
   const requestBody = JSON.stringify({
     model,
     messages,
@@ -396,6 +426,8 @@ async function chatOpenAI(
     ...(stream ? { stream_options: { include_usage: true } } : {}),
     ...(omitTemperature ? {} : { temperature }),
     ...(useCompletionTokens ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }),
+    ...(providerId === 'openrouter' ? { usage: { include: true } } : {}),
+    ...(openRouterProvider ? { provider: openRouterProvider } : {}),
   });
 
   try {
@@ -415,7 +447,7 @@ async function chatOpenAI(
         });
         const parsed = JSON.parse(text) as OpenAIResponse;
         const usage = extractOpenAIUsage(parsed);
-        if (usage) recordTokenUsage(usage, model, providerId);
+        if (usage) recordTokenUsage(usage, model, providerId, openRouterReportedCost(providerId, parsed));
         return stripThinkTags(parsed.choices[0]?.message?.content || '');
       }
     }
@@ -433,11 +465,11 @@ async function chatOpenAI(
     }
 
     if (stream && response.body) {
-      return handleOpenAIStream(response.body, onChunk!);
+      return handleOpenAIStream(response.body, onChunk!, providerId, model);
     } else {
       const data = await response.json() as OpenAIResponse;
       const usage = extractOpenAIUsage(data);
-      if (usage) recordTokenUsage(usage, model, config.get('provider'));
+      if (usage) recordTokenUsage(usage, model, providerId, openRouterReportedCost(providerId, data));
       const content = data.choices[0]?.message?.content || '';
       return stripThinkTags(content);
     }
@@ -508,7 +540,8 @@ async function handleNodeStream(
           if (content) { chunks.push(content); onChunk(content); }
           if (parsed.usage) {
             const usage = extractOpenAIUsage(parsed);
-            if (usage) recordTokenUsage(usage, parsed.model || model, config.get('provider'));
+            const provider = config.get('provider');
+            if (usage) recordTokenUsage(usage, parsed.model || model, provider, openRouterReportedCost(provider, parsed));
           }
         } catch { /* ignore parse errors */ }
       }
@@ -523,7 +556,9 @@ async function handleNodeStream(
 
 async function handleOpenAIStream(
   body: ReadableStream<Uint8Array>,
-  onChunk: (chunk: string) => void
+  onChunk: (chunk: string) => void,
+  providerId?: string,
+  modelOverride?: string,
 ): Promise<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -554,7 +589,9 @@ async function handleOpenAIStream(
             // Capture usage from final chunk (stream_options: include_usage)
             if (parsed.usage) {
               const usage = extractOpenAIUsage(parsed);
-              if (usage) recordTokenUsage(usage, parsed.model || 'unknown', config.get('provider'));
+              const provider = providerId ?? config.get('provider');
+              const m = parsed.model || modelOverride || 'unknown';
+              if (usage) recordTokenUsage(usage, m, provider, openRouterReportedCost(provider, parsed));
             }
           } catch {
             // Ignore parse errors

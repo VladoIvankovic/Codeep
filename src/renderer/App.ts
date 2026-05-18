@@ -198,7 +198,11 @@ export class App {
   // Inline menu state (renders below input/status)
   private menuOpen = false;
   private menuTitle = '';
+  /** Filtered view shown to the user; derived from `menuItemsAll` + `menuFilter`. */
   private menuItems: SelectItem[] = [];
+  /** Full unfiltered list captured on `showSelect`. */
+  private menuItemsAll: SelectItem[] = [];
+  private menuFilter = '';
   private menuIndex = 0;
   private menuCurrentValue = '';
   private menuCallback: ((item: SelectItem) => void) | null = null;
@@ -252,7 +256,7 @@ export class App {
   // Inline login state
   private loginOpen = false;
   private loginStep: 'provider' | 'apikey' = 'provider';
-  private loginProviders: Array<{ id: string; name: string; subscribeUrl?: string; noApiKey?: boolean }> = [];
+  private loginProviders: Array<{ id: string; name: string; description?: string; subscribeUrl?: string; noApiKey?: boolean }> = [];
   private loginProviderIndex = 0;
   private loginApiKey = '';
   private loginError = '';
@@ -842,7 +846,7 @@ export class App {
    * Show inline login dialog
    */
   showLogin(
-    providers: Array<{ id: string; name: string; subscribeUrl?: string }>,
+    providers: Array<{ id: string; name: string; description?: string; subscribeUrl?: string }>,
     callback: (result: { providerId: string; apiKey: string } | null) => void
   ): void {
     this.loginProviders = providers;
@@ -870,21 +874,46 @@ export class App {
    * Show inline menu (renders below status bar)
    */
   showSelect(
-    title: string, 
-    items: SelectItem[], 
+    title: string,
+    items: SelectItem[],
     currentValue: string,
     callback: (item: SelectItem) => void
   ): void {
     this.menuTitle = title;
+    this.menuItemsAll = items;
     this.menuItems = items;
+    this.menuFilter = '';
     this.menuCurrentValue = currentValue;
     this.menuCallback = callback;
     this.menuOpen = true;
-    
+
     // Find current value index
     const currentIndex = items.findIndex(item => item.key === currentValue);
     this.menuIndex = currentIndex >= 0 ? currentIndex : 0;
-    
+
+    this.scheduleRender();
+  }
+
+  /**
+   * Recompute the visible menu list from the current filter string.
+   * Matches across key/label/description, case-insensitive. Keeps the
+   * current value highlighted if it survives the filter; otherwise
+   * cursor returns to the top.
+   */
+  private applyMenuFilter(next: string): void {
+    this.menuFilter = next;
+    if (!next) {
+      this.menuItems = this.menuItemsAll;
+    } else {
+      const f = next.toLowerCase();
+      this.menuItems = this.menuItemsAll.filter((item) =>
+        item.key.toLowerCase().includes(f) ||
+        item.label.toLowerCase().includes(f) ||
+        (item.description?.toLowerCase().includes(f) ?? false)
+      );
+    }
+    const surviving = this.menuItems.findIndex((item) => item.key === this.menuCurrentValue);
+    this.menuIndex = surviving >= 0 ? surviving : 0;
     this.scheduleRender();
   }
   
@@ -1363,9 +1392,13 @@ export class App {
         const callback = this.menuCallback;
         this.menuOpen = false;
         this.menuCallback = null;
+        this.menuFilter = '';
+        this.menuItemsAll = [];
         if (selected && callback) callback(selected);
       },
       render: () => this.scheduleRender(),
+      filter: this.menuFilter,
+      setFilter: (v) => this.applyMenuFilter(v),
     });
   }
   
@@ -1760,7 +1793,10 @@ export class App {
     // Menu open (provider, model, lang, etc.)
     if (this.menuOpen) {
       this.screen.write(0, y, '> ', fg.gray);
-      this.screen.write(2, y, 'Select an option below...', fg.yellow);
+      const hint = this.menuItemsAll.length > 10
+        ? 'Type to filter, ↑↓ to navigate, Enter to pick…'
+        : 'Select an option below…';
+      this.screen.write(2, y, hint, fg.yellow);
       this.screen.showCursor(false);
       return;
     }
@@ -1916,46 +1952,60 @@ export class App {
    */
   private renderInlineMenu(startY: number, width: number): void {
     const items = this.menuItems;
-    const maxVisible = Math.min(items.length, 10);
-    
+    const maxVisible = Math.min(Math.max(items.length, 1), 10);
+
     // Calculate visible range with scroll
     let visibleStart = 0;
     if (items.length > maxVisible) {
       visibleStart = Math.max(0, Math.min(this.menuIndex - Math.floor(maxVisible / 2), items.length - maxVisible));
     }
     const visibleItems = items.slice(visibleStart, visibleStart + maxVisible);
-    
+
     let y = startY;
-    
+
     // Separator line
     this.screen.horizontalLine(y++, '─', PRIMARY_COLOR);
-    
+
     // Title
     this.screen.writeLine(y++, this.menuTitle, PRIMARY_COLOR + style.bold);
-    
+
+    // Filter line — only rendered while filtering, so the menu looks
+    // identical to the pre-filter UI by default.
+    if (this.menuFilter) {
+      const matchInfo = items.length === 0
+        ? ' (no matches)'
+        : ` (${items.length}/${this.menuItemsAll.length})`;
+      this.screen.writeLine(y++, `Filter: ${this.menuFilter}█${matchInfo}`, fg.cyan);
+    }
+
+    if (items.length === 0) {
+      this.screen.writeLine(y++, '  No items match. Backspace to edit, Esc to clear.', fg.gray);
+    }
+
     // Items
     for (let i = 0; i < visibleItems.length; i++) {
       const item = visibleItems[i];
       const actualIndex = visibleStart + i;
       const isSelected = actualIndex === this.menuIndex;
       const isCurrent = item.key === this.menuCurrentValue;
-      
+
       const prefix = isSelected ? '► ' : '  ';
       const suffix = isCurrent ? ' ✓' : '';
-      
+
       let itemStyle = fg.white;
       if (isSelected) {
         itemStyle = PRIMARY_COLOR + style.bold;
       } else if (isCurrent) {
         itemStyle = fg.green;
       }
-      
+
       this.screen.writeLine(y++, prefix + item.label + suffix, itemStyle);
     }
-    
+
     // Footer with navigation hints
     const scrollInfo = items.length > maxVisible ? ` (${visibleStart + 1}-${visibleStart + visibleItems.length}/${items.length})` : '';
-    this.screen.writeLine(y, `↑↓ navigate • Enter select • Esc cancel${scrollInfo}`, fg.gray);
+    const escHint = this.menuFilter ? 'Esc clear · Esc Esc cancel' : 'Esc cancel';
+    this.screen.writeLine(y, `↑↓ navigate • Enter select • type to filter • ${escHint}${scrollInfo}`, fg.gray);
   }
   
   /**
@@ -2783,6 +2833,21 @@ export class App {
         }
       }
 
+      // Strikethrough: ~~text~~ — using the SGR strikethrough escape (\x1b[9m).
+      // Widely supported in modern terminals (iTerm2, Kitty, WezTerm, Alacritty,
+      // gnome-terminal, Windows Terminal). Falls back gracefully to the dim
+      // text colour on terminals that don't render the SGR.
+      if (text.slice(i, i + 2) === '~~') {
+        const end = text.indexOf('~~', i + 2);
+        if (end !== -1) {
+          const inner = text.slice(i + 2, end);
+          result += '\x1b[9m' + fg.rgb(140, 140, 140) + inner + '\x1b[0m';
+          hasFormatting = true;
+          i = end + 2;
+          continue;
+        }
+      }
+
       result += text[i];
       i++;
     }
@@ -2822,6 +2887,26 @@ export class App {
         const ruleWidth = Math.min(maxWidth - 4, 40);
         lines.push({
           text: prefix + fg.gray + '─'.repeat(ruleWidth) + '\x1b[0m',
+          style: prefixStyle,
+          raw: true,
+        });
+        continue;
+      }
+
+      // Blockquote: `> text` — render with a left accent bar (PRIMARY_COLOR)
+      // and the body in a dimmer grey so it visually sits behind regular text.
+      // Strips one level of `> ` so nested quotes render with their own bar.
+      const quoteMatch = line.match(/^(\s*)>\s?(.*)$/);
+      if (quoteMatch) {
+        const indent = quoteMatch[1];
+        const quoteText = quoteMatch[2];
+        const { formatted, hasFormatting } = this.applyInlineMarkdown(quoteText);
+        const body = hasFormatting ? formatted : quoteText;
+        // Vertical bar + space, then dim grey body. Skip if the body is
+        // empty so an isolated `>` renders cleanly.
+        const barred = PRIMARY_COLOR + '│' + '\x1b[0m' + (body ? ' ' + fg.rgb(160, 160, 160) + body + '\x1b[0m' : '');
+        lines.push({
+          text: prefix + indent + barred,
           style: prefixStyle,
           raw: true,
         });
@@ -2981,17 +3066,31 @@ export class App {
       // Provider selection
       this.screen.writeLine(y++, 'Select Provider', fg.cyan + style.bold);
       y++;
-      
+
+      // Name column width — pad so descriptions align in a column.
+      // Description is clipped to remaining terminal width with an ellipsis;
+      // on narrow panes the user still sees the name and a hint of the
+      // description rather than a silent overrun past the right edge.
+      const longestName = this.loginProviders.reduce((m, p) => Math.max(m, p.name.length), 0);
+      const descStartX = 2 + longestName + 2;
+      const descBudget = Math.max(0, width - descStartX - 1);
+
       for (let i = 0; i < this.loginProviders.length; i++) {
         const provider = this.loginProviders[i];
         const isSelected = i === this.loginProviderIndex;
         const prefix = isSelected ? '→ ' : '  ';
-        
+
         this.screen.write(0, y, prefix, isSelected ? fg.green : '');
-        this.screen.write(2, y, provider.name, isSelected ? fg.green + style.bold : fg.white);
+        this.screen.write(2, y, provider.name.padEnd(longestName + 2), isSelected ? fg.green + style.bold : fg.white);
+        if (provider.description && descBudget > 0) {
+          const desc = provider.description.length > descBudget
+            ? provider.description.slice(0, Math.max(1, descBudget - 1)) + '…'
+            : provider.description;
+          this.screen.write(descStartX, y, desc, isSelected ? fg.white : fg.gray);
+        }
         y++;
       }
-      
+
       y++;
       this.screen.writeLine(y, '↑↓ Navigate • Enter Select • Esc Cancel', fg.gray);
     } else {

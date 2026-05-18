@@ -24,9 +24,14 @@ interface TokenRecord {
   totalTokens: number;
   model: string;
   provider: string;
+  /** Authoritative per-call USD from the provider (OpenRouter), if available. */
+  actualCostUsd?: number;
 }
 
-// Context window sizes per model (in tokens)
+// Context window sizes per model (in tokens).
+// Keep this table in lockstep with `providers.ts` — entries for models that
+// aren't in the provider catalogue only show up if a user types an id by hand
+// and produce phantom estimates against the wrong context size.
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Z.AI / ZhipuAI
   'glm-5.1':              131_072,
@@ -37,18 +42,10 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gpt-5.4':              1_050_000,
   'gpt-5.4-mini':         400_000,
   'gpt-5.4-nano':         400_000,
-  'gpt-4.1':              1_000_000,
-  'gpt-4.1-mini':         1_000_000,
-  'gpt-4.1-nano':         1_000_000,
-  'o3':                   200_000,
-  'o4-mini':              200_000,
-  'gpt-4o':               128_000,
   // Anthropic
-  'claude-mythos-preview':        1_000_000,
   'claude-opus-4-7':              1_000_000,
   'claude-opus-4-6':              1_000_000,
   'claude-sonnet-4-6':            1_000_000,
-  'claude-sonnet-4-5-20250929':   200_000,
   'claude-haiku-4-5-20251001':    200_000,
   // DeepSeek
   'deepseek-v4-pro':      1_000_000,
@@ -56,17 +53,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Google
   'gemini-3.1-pro-preview':        1_048_576,
   'gemini-3-flash-preview':        1_000_000,
-  'gemini-3.1-flash-lite-preview': 1_000_000,
-  'gemini-2.5-pro':                1_000_000,
-  'gemini-2.5-flash':              1_000_000,
-  'gemini-2.5-flash-lite':         1_000_000,
   // MiniMax
   'MiniMax-M2.7':           204_800,
-  'MiniMax-M2.5':           196_608,
-  'MiniMax-M2.5-highspeed': 196_608,
-  'MiniMax-M2.1':           196_608,
-  'MiniMax-M2.1-highspeed': 196_608,
-  'MiniMax-M2':             196_608,
 };
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -78,7 +66,9 @@ export function getModelContextWindow(model: string): number {
   return MODEL_CONTEXT_WINDOWS[model] ?? DEFAULT_CONTEXT_WINDOW;
 }
 
-// Pricing table — USD per 1M tokens
+// Pricing table — USD per 1M tokens. Same rule as MODEL_CONTEXT_WINDOWS:
+// only list model ids that exist in `providers.ts`, otherwise typing an id
+// by hand can produce phantom cost estimates against stale rates.
 const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }> = {
   // Z.AI / ZhipuAI
   'glm-5.1':           { inputPer1M: 1.00,  outputPer1M: 3.20 },
@@ -89,18 +79,10 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'gpt-5.4':      { inputPer1M: 2.50,  outputPer1M: 15.00 },
   'gpt-5.4-mini': { inputPer1M: 0.75,  outputPer1M: 4.50 },
   'gpt-5.4-nano': { inputPer1M: 0.20,  outputPer1M: 1.25 },
-  'gpt-4.1':      { inputPer1M: 2.00,  outputPer1M: 8.00 },
-  'gpt-4.1-mini': { inputPer1M: 0.40,  outputPer1M: 1.60 },
-  'gpt-4.1-nano': { inputPer1M: 0.10,  outputPer1M: 0.40 },
-  'o3':           { inputPer1M: 2.00,  outputPer1M: 8.00 },
-  'o4-mini':      { inputPer1M: 0.55,  outputPer1M: 2.20 },
-  'gpt-4o':       { inputPer1M: 2.50,  outputPer1M: 10.00 },
   // Anthropic
-  'claude-mythos-preview':        { inputPer1M: 6.00,  outputPer1M: 30.00 },
   'claude-opus-4-7':              { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-opus-4-6':              { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-sonnet-4-6':            { inputPer1M: 3.00,  outputPer1M: 15.00 },
-  'claude-sonnet-4-5-20250929':   { inputPer1M: 3.00,  outputPer1M: 15.00 },
   'claude-haiku-4-5-20251001':    { inputPer1M: 1.00,  outputPer1M: 5.00 },
   // DeepSeek (cache-miss input pricing)
   'deepseek-v4-pro':   { inputPer1M: 1.74,  outputPer1M: 3.48 },
@@ -108,17 +90,8 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // Google
   'gemini-3.1-pro-preview':        { inputPer1M: 2.00, outputPer1M: 12.00 },
   'gemini-3-flash-preview':        { inputPer1M: 0.50, outputPer1M: 3.00 },
-  'gemini-3.1-flash-lite-preview': { inputPer1M: 0.25, outputPer1M: 1.50 },
-  'gemini-2.5-pro':                { inputPer1M: 1.00, outputPer1M: 10.00 },
-  'gemini-2.5-flash':              { inputPer1M: 0.30, outputPer1M: 2.50 },
-  'gemini-2.5-flash-lite':         { inputPer1M: 0.10, outputPer1M: 0.40 },
   // MiniMax
   'MiniMax-M2.7':           { inputPer1M: 0.30,  outputPer1M: 1.20 },
-  'MiniMax-M2.5':           { inputPer1M: 0.118, outputPer1M: 0.99 },
-  'MiniMax-M2.5-highspeed': { inputPer1M: 0.30,  outputPer1M: 2.40 },
-  'MiniMax-M2.1':           { inputPer1M: 0.27,  outputPer1M: 0.95 },
-  'MiniMax-M2.1-highspeed': { inputPer1M: 0.27,  outputPer1M: 0.95 },
-  'MiniMax-M2':             { inputPer1M: 0.30,  outputPer1M: 1.20 },
 };
 
 export function getPricingTable(): { model: string; inputPer1M: number; outputPer1M: number }[] {
@@ -129,12 +102,17 @@ export function getPricingTable(): { model: string; inputPer1M: number; outputPe
 const records: TokenRecord[] = [];
 
 /**
- * Record token usage from an API response
+ * Record token usage from an API response. The optional `actualCostUsd`
+ * argument lets aggregator providers (OpenRouter) pass through the
+ * authoritative per-call cost they returned in `usage.cost`, instead of
+ * forcing us to look it up in `MODEL_PRICING` (which we don't maintain
+ * for every OpenRouter-listed model — there are 100+).
  */
 export function recordTokenUsage(
   usage: TokenUsage,
   model: string,
-  provider: string
+  provider: string,
+  actualCostUsd?: number,
 ): void {
   records.push({
     timestamp: Date.now(),
@@ -143,6 +121,7 @@ export function recordTokenUsage(
     totalTokens: usage.totalTokens,
     model,
     provider,
+    actualCostUsd,
   });
 }
 
@@ -190,11 +169,20 @@ export function getCostBreakdown(): ProviderCostBreakdown[] {
   for (const record of records) {
     const key = `${record.provider}/${record.model}`;
     const existing = grouped.get(key) ?? { provider: record.provider, model: record.model, promptTokens: 0, completionTokens: 0, estimatedCost: 0 };
-    const pricing = MODEL_PRICING[record.model];
     existing.promptTokens += record.promptTokens;
     existing.completionTokens += record.completionTokens;
-    if (pricing) {
-      existing.estimatedCost += (record.promptTokens / 1_000_000) * pricing.inputPer1M + (record.completionTokens / 1_000_000) * pricing.outputPer1M;
+
+    // Cost source priority:
+    //   1. Provider-reported USD (OpenRouter, MaxiCloud, etc.) — most accurate.
+    //   2. Our MODEL_PRICING table — for built-in providers we maintain rates for.
+    //   3. Zero — model isn't in our table; flag in formatCostReport.
+    if (typeof record.actualCostUsd === 'number' && Number.isFinite(record.actualCostUsd)) {
+      existing.estimatedCost += record.actualCostUsd;
+    } else {
+      const pricing = MODEL_PRICING[record.model];
+      if (pricing) {
+        existing.estimatedCost += (record.promptTokens / 1_000_000) * pricing.inputPer1M + (record.completionTokens / 1_000_000) * pricing.outputPer1M;
+      }
     }
     grouped.set(key, existing);
   }
@@ -247,4 +235,42 @@ export function formatTokenCount(tokens: number): string {
  */
 export function resetTokenTracking(): void {
   records.length = 0;
+}
+
+/**
+ * Format a session cost report as a Markdown block. Used by `/cost` in both
+ * the TUI and ACP command handlers. Returns a "no usage yet" message if the
+ * session hasn't made any API calls.
+ */
+export function formatCostReport(): string {
+  const stats = getSessionStats();
+  if (stats.requestCount === 0) {
+    return '_No API requests in this session yet._';
+  }
+
+  const breakdown = getCostBreakdown();
+  const lines: string[] = [
+    '## Session Cost',
+    '',
+    `**Requests:** ${stats.requestCount}  ·  **Input:** ${formatTokenCount(stats.totalPromptTokens)}  ·  **Output:** ${formatTokenCount(stats.totalCompletionTokens)}  ·  **Total:** ${formatTokenCount(stats.totalTokens)}`,
+    `**Estimated cost:** $${stats.estimatedCost.toFixed(4)}`,
+    '',
+  ];
+
+  if (breakdown.length > 1 || (breakdown.length === 1 && breakdown[0].estimatedCost > 0)) {
+    lines.push('| Provider / Model | Input | Output | Cost |');
+    lines.push('|---|---:|---:|---:|');
+    for (const b of breakdown) {
+      lines.push(`| \`${b.provider}\` / \`${b.model}\` | ${formatTokenCount(b.promptTokens)} | ${formatTokenCount(b.completionTokens)} | $${b.estimatedCost.toFixed(4)} |`);
+    }
+  }
+
+  // Models with no pricing entry don't contribute to cost — flag so users
+  // aren't surprised the total looks low.
+  const untracked = breakdown.filter(b => b.estimatedCost === 0 && (b.promptTokens + b.completionTokens) > 0);
+  if (untracked.length > 0) {
+    lines.push('', `_Note: ${untracked.length} model${untracked.length === 1 ? '' : 's'} (${untracked.map(u => `\`${u.model}\``).join(', ')}) have no pricing entry — token counts are tracked but not priced._`);
+  }
+
+  return lines.join('\n');
 }

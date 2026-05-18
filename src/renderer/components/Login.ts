@@ -225,28 +225,30 @@ function openUrl(url: string): void {
  */
 export function renderProviderSelect(
   screen: Screen,
-  providers: Array<{ id: string; name: string }>,
+  providers: Array<{ id: string; name: string; description?: string }>,
   selectedIndex: number
 ): void {
   const { width, height } = screen.getSize();
-  
+
   screen.clear();
-  
+
   // Title
-  const title = '═══ Codeep Setup ═══';
+  const title = '═══ Welcome to Codeep ═══';
   const titleX = Math.floor((width - title.length) / 2);
   screen.write(titleX, 1, title, PRIMARY_COLOR + style.bold);
-  
+
   // Subtitle
-  const subtitle = 'Select your AI provider';
+  const subtitle = 'Pick an AI provider — you can switch later with /provider';
   const subtitleX = Math.floor((width - subtitle.length) / 2);
   screen.write(subtitleX, 3, subtitle, fg.white);
-  
-  // Box
-  const boxWidth = Math.min(40, width - 4);
+
+  // Box — wider so we can show name + description on a single row.
+  const longestName = providers.reduce((m, p) => Math.max(m, p.name.length), 0);
+  const longestDesc = providers.reduce((m, p) => Math.max(m, (p.description ?? '').length), 0);
+  const boxWidth = Math.min(width - 4, Math.max(60, 6 + longestName + 3 + longestDesc));
   const boxHeight = providers.length + 4;
   const { x: boxX, y: boxY } = centerBox(width, height, boxWidth, boxHeight);
-  
+
   const boxLines = createBox({
     x: boxX,
     y: boxY,
@@ -255,28 +257,41 @@ export function renderProviderSelect(
     style: 'rounded',
     borderColor: PRIMARY_COLOR,
   });
-  
+
   for (const line of boxLines) {
     screen.writeLine(line.y, line.text, line.style);
   }
-  
-  // Provider list
+
+  // Provider list — name in white/bold-on-selected, dim description beside it.
+  // Description is clipped to the room remaining inside the box so it never
+  // overwrites the right border on narrow terminals (80-col laptop splits).
   const contentX = boxX + 3;
-  let contentY = boxY + 2;
-  
+  const contentY = boxY + 2;
+  const nameColWidth = longestName + 2;
+  const descStartX = contentX + 2 + nameColWidth;
+  const boxInnerRight = boxX + boxWidth - 2;
+  const descBudget = Math.max(0, boxInnerRight - descStartX);
+
   for (let i = 0; i < providers.length; i++) {
     const provider = providers[i];
     const isSelected = i === selectedIndex;
     const prefix = isSelected ? '► ' : '  ';
-    const itemStyle = isSelected ? PRIMARY_BRIGHT + style.bold : fg.white;
-    
-    screen.write(contentX, contentY + i, prefix + provider.name, itemStyle);
+    const nameStyle = isSelected ? PRIMARY_BRIGHT + style.bold : fg.white;
+    const descStyle = isSelected ? fg.white : fg.gray;
+
+    screen.write(contentX, contentY + i, prefix + provider.name.padEnd(nameColWidth), nameStyle);
+    if (provider.description && descBudget > 0) {
+      const desc = provider.description.length > descBudget
+        ? provider.description.slice(0, Math.max(1, descBudget - 1)) + '…'
+        : provider.description;
+      screen.write(descStartX, contentY + i, desc, descStyle);
+    }
   }
-  
+
   // Footer
   const footerY = height - 2;
-  screen.write(2, footerY, '↑↓ Navigate | Enter Select', fg.gray);
-  
+  screen.write(2, footerY, '↑↓ Navigate · Enter Select · Esc skip (provider chosen later)', fg.gray);
+
   screen.showCursor(false);
   screen.fullRender();
 }

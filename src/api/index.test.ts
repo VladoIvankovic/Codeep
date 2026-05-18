@@ -193,7 +193,8 @@ describe('chat() — OpenAI protocol', () => {
     expect(mockRecordTokenUsage).toHaveBeenCalledWith(
       { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
       'gpt-4',
-      'openai'
+      'openai',
+      undefined,    // actualCostUsd — only set for OpenRouter responses
     );
   });
 

@@ -599,11 +599,83 @@ Commands (in chat):
   welcomeLines.push(githubId
     ? `  Account  codeep.dev linked`
     : `  Account  not linked  ·  run: codeep account`);
+  // Warn before first use if this workspace defines project-scoped custom
+  // slash commands. They run as user prompts — a hostile or unfamiliar repo
+  // could ship `.codeep/commands/refactor.md` whose body silently sends
+  // something the user didn't intend. The banner is informed-consent;
+  // `/commands` shows the full bodies.
+  if (projectPath) {
+    try {
+      const { loadCustomCommands } = await import('../utils/customCommands');
+      const projectCustom = loadCustomCommands(projectPath).filter(c => c.scope === 'project');
+      if (projectCustom.length > 0) {
+        const list = projectCustom.slice(0, 6).map(c => `/${c.name}`).join(', ');
+        const more = projectCustom.length > 6 ? ` (+${projectCustom.length - 6} more)` : '';
+        welcomeLines.push('');
+        welcomeLines.push(`  ⚠  This workspace defines ${projectCustom.length} custom slash command${projectCustom.length === 1 ? '' : 's'}: ${list}${more}`);
+        welcomeLines.push('     Type /commands to review before invoking');
+      }
+    } catch {
+      // Loading must never block the welcome banner.
+    }
+
+    // Same flag for lifecycle hooks — they're arbitrary shell that fires on
+    // tool calls. A surprise post_edit / pre_tool_call from a freshly cloned
+    // repo is exactly the kind of thing a user should be told up front.
+    try {
+      const { summarizeHooks } = await import('../utils/hooks');
+      const summary = summarizeHooks(projectPath);
+      if (summary) {
+        welcomeLines.push('');
+        welcomeLines.push(`  ⚠  ${summary} — shell hooks run automatically. Type /hooks to inspect.`);
+      }
+    } catch {
+      // Don't block on hook discovery failure.
+    }
+
+    // Skill bundles — less dangerous than hooks but worth surfacing
+    // because the agent will invoke them autonomously.
+    try {
+      const { summarizeBundles } = await import('../utils/skillBundles');
+      const summary = summarizeBundles(projectPath);
+      if (summary) {
+        welcomeLines.push('');
+        welcomeLines.push(`  ℹ  This workspace ships ${summary}. Type /skills bundles to inspect.`);
+      }
+    } catch {
+      // Don't block on skill discovery failure.
+    }
+  }
+
   welcomeLines.push('');
   welcomeLines.push('  /help  ·  Ctrl+L clear  ·  Esc cancel');
   app.addMessage({ role: 'welcome', content: welcomeLines.join('\n') });
 
   app.start();
+
+  // Spawn MCP servers in the background. They register against the fixed
+  // session id `codeep-tui` that runAgentTask passes into runAgent's
+  // `mcpSessionId` — so the agent picks up `.codeep/mcp_servers.json`
+  // entries (project + global) the same way an ACP client would.
+  if (projectPath) {
+    (async () => {
+      try {
+        const { loadMcpServerConfig } = await import('../utils/mcpConfig');
+        const { registerSessionServers } = await import('../utils/mcpRegistry');
+        const servers = loadMcpServerConfig(projectPath);
+        if (servers.length === 0) return;
+        const { registered, errors } = await registerSessionServers('codeep-tui', servers, { workspaceRoot: projectPath });
+        if (registered.length > 0) {
+          app.notify(`MCP: ${registered.length} tool(s) from ${servers.length} server(s) ready. Type /mcp.`);
+        }
+        for (const e of errors) {
+          app.notifyWarn(`MCP server "${e.server}" failed: ${e.error}`);
+        }
+      } catch {
+        // Loading MCP must never block the TUI.
+      }
+    })();
+  }
 
   // Check for updates in background — show notify if new version available
   checkForUpdates().then(info => {

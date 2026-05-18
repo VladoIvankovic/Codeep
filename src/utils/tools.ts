@@ -209,9 +209,24 @@ function getFilteredToolEntries(): [string, typeof AGENT_TOOLS[keyof typeof AGEN
 }
 
 /**
- * Format tool definitions for system prompt (text-based fallback)
+ * Shape of additional (non-built-in) tools merged into the agent's catalog.
+ * Used by MCP integration — the registered tool's prefixed name and the raw
+ * MCP `tools/list` schema are both passed through.
  */
-export function formatToolDefinitions(): string {
+export interface AdditionalToolDef {
+  /** Name the agent must use to invoke this tool (e.g. `fs__read_file`). */
+  name: string;
+  description?: string;
+  /** JSON-schema-like `input_schema` from the MCP server's tools/list reply. */
+  inputSchema?: Record<string, unknown>;
+}
+
+/**
+ * Format tool definitions for system prompt (text-based fallback).
+ * Optionally appends an "Additional tools" section listing tools from
+ * sources outside the built-in catalog (currently MCP servers).
+ */
+export function formatToolDefinitions(additionalTools?: AdditionalToolDef[]): string {
   const lines: string[] = [];
 
   for (const [name, tool] of getFilteredToolEntries()) {
@@ -225,14 +240,61 @@ export function formatToolDefinitions(): string {
     lines.push('');
   }
 
+  if (additionalTools?.length) {
+    // Token budget caps. MCP servers can return tools with absurdly verbose
+    // JSON Schema definitions (multi-KB per tool). Without caps a 30-tool
+    // server eats ~10K tokens of every prompt. Per-tool 2KB + total 16KB
+    // is enough for the model to learn parameter shapes without breaking
+    // the bank.
+    const PER_TOOL_CAP = 2048;
+    const TOTAL_CAP = 16_384;
+    let budget = TOTAL_CAP;
+    let skipped = 0;
+
+    lines.push('## Additional tools (from MCP servers)');
+    lines.push('');
+    for (const tool of additionalTools) {
+      if (budget <= 0) { skipped++; continue; }
+      const headerLines = [`### ${tool.name}`];
+      if (tool.description) headerLines.push(tool.description);
+      let schemaBlock = '';
+      if (tool.inputSchema) {
+        let schemaJson = JSON.stringify(tool.inputSchema, null, 2);
+        if (schemaJson.length > PER_TOOL_CAP) {
+          schemaJson = schemaJson.slice(0, PER_TOOL_CAP) + `\n… (truncated, ${schemaJson.length - PER_TOOL_CAP} more chars)`;
+        }
+        schemaBlock = `Parameters (JSON Schema):\n\`\`\`json\n${schemaJson}\n\`\`\``;
+      }
+      const entry = [...headerLines, schemaBlock, ''].filter(Boolean).join('\n');
+      if (entry.length > budget) { skipped++; continue; }
+      lines.push(entry);
+      budget -= entry.length;
+    }
+    if (skipped > 0) {
+      lines.push(`_(${skipped} more MCP tool${skipped === 1 ? '' : 's'} omitted — total catalog exceeded ${TOTAL_CAP}-char budget.)_`);
+    }
+  }
+
   return lines.join('\n');
 }
 
+/** Build a generic JSON-schema parameters object from an additional-tool spec.
+ * Falls back to a permissive `additionalProperties: true` schema if the MCP
+ * server didn't supply one — that lets the model still attempt the call. */
+function additionalToolSchema(tool: AdditionalToolDef): Record<string, unknown> {
+  if (tool.inputSchema && typeof tool.inputSchema === 'object') {
+    // Most MCP servers already return a JSON-schema-shaped object.
+    return tool.inputSchema;
+  }
+  return { type: 'object', properties: {}, additionalProperties: true };
+}
+
 /**
- * Get tools in OpenAI Function Calling format
+ * Get tools in OpenAI Function Calling format.
+ * Additional tools (e.g. MCP) are appended with their JSON-schema as-is.
  */
-export function getOpenAITools(): OpenAITool[] {
-  return getFilteredToolEntries().map(([name, tool]) => {
+export function getOpenAITools(additionalTools?: AdditionalToolDef[]): OpenAITool[] {
+  const builtin: OpenAITool[] = getFilteredToolEntries().map(([name, tool]) => {
     const properties: Record<string, { type: string; description: string; items?: { type: string } }> = {};
     const required: string[] = [];
 
@@ -255,13 +317,27 @@ export function getOpenAITools(): OpenAITool[] {
       },
     };
   });
+
+  if (!additionalTools?.length) return builtin;
+  const extra: OpenAITool[] = additionalTools.map(t => ({
+    type: 'function' as const,
+    function: {
+      name: t.name,
+      description: t.description ?? `External tool: ${t.name}`,
+      // Cast — OpenAITool.function.parameters is statically typed for
+      // built-ins, but MCP schemas vary. The runtime API doesn't care.
+      parameters: additionalToolSchema(t) as { type: 'object'; properties: Record<string, { type: string; description: string }>; required: string[] },
+    },
+  }));
+  return [...builtin, ...extra];
 }
 
 /**
- * Get tools in Anthropic Tool Use format
+ * Get tools in Anthropic Tool Use format.
+ * Additional tools (e.g. MCP) are appended with their JSON-schema as-is.
  */
-export function getAnthropicTools(): AnthropicTool[] {
-  return getFilteredToolEntries().map(([name, tool]) => {
+export function getAnthropicTools(additionalTools?: AdditionalToolDef[]): AnthropicTool[] {
+  const builtin: AnthropicTool[] = getFilteredToolEntries().map(([name, tool]) => {
     const properties: Record<string, { type: string; description: string; items?: { type: string } }> = {};
     const required: string[] = [];
 
@@ -281,6 +357,14 @@ export function getAnthropicTools(): AnthropicTool[] {
       input_schema: { type: 'object' as const, properties, required },
     };
   });
+
+  if (!additionalTools?.length) return builtin;
+  const extra: AnthropicTool[] = additionalTools.map(t => ({
+    name: t.name,
+    description: t.description ?? `External tool: ${t.name}`,
+    input_schema: additionalToolSchema(t) as { type: 'object'; properties: Record<string, { type: string; description: string }>; required: string[] },
+  }));
+  return [...builtin, ...extra];
 }
 
 // Re-export from sub-modules so existing imports don't break

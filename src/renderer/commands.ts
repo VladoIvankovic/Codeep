@@ -137,6 +137,30 @@ export async function handleCommand(
       const providerId = config.get('provider');
       const { isDynamicModelsProvider, isNoApiKeyProvider: _noKey } = await import('../config/providers');
       if (isDynamicModelsProvider(providerId)) {
+        if (providerId === 'openrouter') {
+          ctx.app.notify('Fetching OpenRouter catalog…');
+          const { fetchOpenRouterModels } = await import('../config/index');
+          const apiKey = (await import('../config/index')).getApiKey('openrouter');
+          const models = await fetchOpenRouterModels(apiKey || undefined);
+          if (!models || models.length === 0) {
+            ctx.app.notify('Could not fetch OpenRouter models (network? key?). Using built-in shortlist.');
+            const fallback = getModelsForCurrentProvider();
+            const currentModel = config.get('model');
+            const modelItems = Object.keys(fallback).map(id => ({ key: id, label: fallback[id], description: '' }));
+            ctx.app.showSelect('Select OpenRouter Model', modelItems, currentModel, (item) => {
+              config.set('model', item.key);
+              ctx.app.notify(`Model: ${item.key}`);
+            });
+            break;
+          }
+          const modelItems = models.map(m => ({ key: m.id, label: m.id, description: m.description }));
+          const currentModel = config.get('model');
+          ctx.app.showSelect(`Select OpenRouter Model (${models.length})`, modelItems, currentModel, (item) => {
+            config.set('model', item.key);
+            ctx.app.notify(`Model: ${item.key}`);
+          });
+          break;
+        }
         const { fetchOllamaModels } = await import('../config/index');
         ctx.app.notify('Fetching models from Ollama...');
         const ollamaModels = await fetchOllamaModels();
@@ -524,7 +548,7 @@ Format: use headers per category, only include categories where you found issues
 
     case 'login': {
       const providers = getProviderList();
-      ctx.app.showLogin(providers.map(p => ({ id: p.id, name: p.name, subscribeUrl: p.subscribeUrl, noApiKey: p.noApiKey })), async (result) => {
+      ctx.app.showLogin(providers.map(p => ({ id: p.id, name: p.name, description: p.description, subscribeUrl: p.subscribeUrl, noApiKey: p.noApiKey })), async (result) => {
         if (result) {
           setProvider(result.providerId);
           await setApiKey(result.apiKey);
@@ -785,6 +809,159 @@ Format: use headers per category, only include categories where you found issues
       break;
     }
 
+    case 'cost': {
+      const { formatCostReport } = await import('../utils/tokenTracker');
+      ctx.app.addMessage({ role: 'system', content: formatCostReport() });
+      break;
+    }
+
+    case 'compact': {
+      const messages = ctx.app.getMessages();
+      const keepRecent = args[0] ? Math.max(2, parseInt(args[0], 10) || 4) : 4;
+      if (messages.length <= keepRecent + 2) {
+        ctx.app.notify(`Nothing to compact — only ${messages.length} message(s) in this session.`);
+        break;
+      }
+      ctx.app.notify(`Compacting ${messages.length - keepRecent} older message(s)…`);
+      const { compactHistory } = await import('../utils/context');
+      try {
+        const result = await compactHistory(messages, { keepRecent, projectContext: ctx.projectContext });
+        if (result.replaced === 0) {
+          ctx.app.notify('Nothing to compact');
+          break;
+        }
+        ctx.app.setMessages(result.compacted);
+        // Persist so the compacted history survives a restart.
+        saveSession(ctx.sessionId, result.compacted, ctx.projectPath);
+        ctx.app.addMessage({
+          role: 'system',
+          content: `# Conversation Compacted\n\nReplaced ${result.replaced} earlier message${result.replaced === 1 ? '' : 's'} with a summary. Kept the last ${keepRecent} message${keepRecent === 1 ? '' : 's'} verbatim.\n\n**Summary:**\n\n${result.summary}`,
+        });
+      } catch (err) {
+        ctx.app.notify(`Compaction failed: ${(err as Error).message}`);
+      }
+      break;
+    }
+
+    case 'checkpoint': {
+      const sub = args[0]?.toLowerCase();
+      const { createCheckpoint, deleteCheckpoint, listCheckpoints, formatCheckpointList } = await import('../utils/checkpoints');
+      const { getCurrentSessionActions } = await import('../utils/agent');
+
+      if (sub === 'delete') {
+        const id = args[1];
+        if (!id) { ctx.app.notify('Usage: /checkpoint delete <id>'); break; }
+        ctx.app.notify(deleteCheckpoint(ctx.projectPath, id) ? `Deleted checkpoint ${id}` : `Checkpoint not found: ${id}`);
+        break;
+      }
+      if (sub === 'list') {
+        ctx.app.addMessage({ role: 'system', content: formatCheckpointList(listCheckpoints(ctx.projectPath)) });
+        break;
+      }
+
+      const name = args.join(' ').trim() || undefined;
+      const provider = getCurrentProvider();
+      const filesTouched = Array.from(new Set(
+        getCurrentSessionActions()
+          .filter(a => a.target && (a.type === 'write' || a.type === 'edit' || a.type === 'delete' || a.type === 'mkdir'))
+          .map(a => a.target),
+      ));
+      const cp = createCheckpoint({
+        workspaceRoot: ctx.projectPath,
+        sessionId: ctx.sessionId,
+        provider: provider.id,
+        model: config.get('model') as string,
+        messages: ctx.app.getMessages(),
+        filesTouched,
+        name,
+      });
+      ctx.app.addMessage({
+        role: 'system',
+        content: `# Checkpoint created\n\n\`${cp.id}\`${cp.name ? ` — **${cp.name}**` : ''}\n\nCaptured ${cp.messages.length} message${cp.messages.length === 1 ? '' : 's'}, ${cp.filesTouched.length} file${cp.filesTouched.length === 1 ? '' : 's'} touched${cp.gitHead ? `, git \`${cp.gitHead}\`` : ''}.\n\nUse \`/rewind ${cp.id}\` to restore.`,
+      });
+      break;
+    }
+
+    case 'checkpoints': {
+      const { listCheckpoints, formatCheckpointList } = await import('../utils/checkpoints');
+      ctx.app.addMessage({ role: 'system', content: formatCheckpointList(listCheckpoints(ctx.projectPath)) });
+      break;
+    }
+
+    case 'openrouter': {
+      const { readOpenRouterPreferences, writeOpenRouterPreferences, formatOpenRouterPreferences } = await import('../utils/openrouterPrefs');
+      const sub = args[0]?.toLowerCase();
+      const current = readOpenRouterPreferences();
+
+      if (!sub || sub === 'show') {
+        ctx.app.addMessage({ role: 'system', content: formatOpenRouterPreferences(current) });
+        break;
+      }
+      if (sub === 'clear') {
+        writeOpenRouterPreferences(null);
+        ctx.app.notify('OpenRouter preferences cleared');
+        break;
+      }
+      if (sub === 'prefer') {
+        const list = args.slice(1).join(' ').split(',').map(s => s.trim()).filter(Boolean);
+        if (list.length === 0) { ctx.app.notify('Usage: /openrouter prefer <p1>[,<p2>...]'); break; }
+        writeOpenRouterPreferences({ ...current, order: list });
+        ctx.app.notify(`OpenRouter preference: ${list.join(' → ')}`);
+        break;
+      }
+      if (sub === 'ignore') {
+        const list = args.slice(1).join(' ').split(',').map(s => s.trim()).filter(Boolean);
+        if (list.length === 0) { ctx.app.notify('Usage: /openrouter ignore <p1>[,<p2>...]'); break; }
+        writeOpenRouterPreferences({ ...current, ignore: list });
+        ctx.app.notify(`OpenRouter ignoring: ${list.join(', ')}`);
+        break;
+      }
+      if (sub === 'fallbacks') {
+        const val = args[1]?.toLowerCase();
+        if (val !== 'on' && val !== 'off') { ctx.app.notify('Usage: /openrouter fallbacks on|off'); break; }
+        writeOpenRouterPreferences({ ...current, allow_fallbacks: val === 'on' });
+        ctx.app.notify(`Fallbacks ${val}`);
+        break;
+      }
+      if (sub === 'privacy') {
+        const val = args[1]?.toLowerCase();
+        if (val !== 'strict' && val !== 'allow') { ctx.app.notify('Usage: /openrouter privacy strict|allow'); break; }
+        writeOpenRouterPreferences({ ...current, data_collection: val === 'strict' ? 'deny' : 'allow' });
+        ctx.app.notify(`Privacy: ${val}`);
+        break;
+      }
+      ctx.app.notify(`Unknown subcommand: ${sub}`);
+      break;
+    }
+
+    case 'hooks': {
+      const { listInstalledHooks, formatHookList } = await import('../utils/hooks');
+      ctx.app.addMessage({ role: 'system', content: formatHookList(listInstalledHooks(ctx.projectPath)) });
+      break;
+    }
+
+    case 'rewind': {
+      const id = args[0];
+      if (!id) { ctx.app.notify('Usage: /rewind <id> — run /checkpoints to see ids'); break; }
+      const { loadCheckpoint, buildRewindGitHint } = await import('../utils/checkpoints');
+      const cp = loadCheckpoint(ctx.projectPath, id);
+      if (!cp) { ctx.app.notify(`Checkpoint not found: ${id}`); break; }
+
+      const replacedCount = ctx.app.getMessages().length;
+      ctx.app.setMessages(cp.messages);
+      saveSession(ctx.sessionId, cp.messages, ctx.projectPath);
+
+      // Switch provider/model back to checkpoint state if different.
+      if (cp.provider && cp.provider !== getCurrentProvider().id) setProvider(cp.provider);
+      if (cp.model && cp.model !== (config.get('model') as string)) config.set('model', cp.model);
+
+      ctx.app.addMessage({
+        role: 'system',
+        content: `# Rewound to ${cp.name ? `**${cp.name}**` : `\`${cp.id}\``}\n\nRestored ${cp.messages.length} message${cp.messages.length === 1 ? '' : 's'} (was ${replacedCount}). Provider: \`${cp.provider}\` · Model: \`${cp.model}\`\n\n${buildRewindGitHint(cp)}`,
+      });
+      break;
+    }
+
     case 'context-save': {
       const messages = ctx.app.getMessages();
       if (saveSession(`context-${ctx.sessionId}`, messages, ctx.projectPath)) {
@@ -898,6 +1075,128 @@ Format: use headers per category, only include categories where you found issues
     }
 
     case 'skills': {
+      const sub = args[0]?.toLowerCase();
+
+      // Structured skill bundles (separate from the JSON skills in skills.ts).
+      if (sub === 'bundles' || sub === 'list-bundles') {
+        const { loadSkillBundles, formatBundleList } = await import('../utils/skillBundles');
+        ctx.app.addMessage({ role: 'system', content: formatBundleList(loadSkillBundles(ctx.projectPath)) });
+        break;
+      }
+
+      if (sub === 'create-bundle') {
+        const name = (args[1] ?? '').toLowerCase();
+        if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+          ctx.app.notify('Usage: /skills create-bundle <name> — lowercase letters/digits/hyphens');
+          break;
+        }
+        const { mkdirSync, writeFileSync, existsSync } = await import('fs');
+        const { join } = await import('path');
+        const dir = join(ctx.projectPath, '.codeep', 'skills', name);
+        if (existsSync(dir)) {
+          ctx.app.notify(`Skill ${name} already exists`);
+          break;
+        }
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'SKILL.md'), `---
+name: ${name}
+description: One-sentence summary shown in the agent's catalog.
+triggers:
+  - keyword
+  - phrase
+---
+
+# ${name}
+
+Describe what this skill does. The agent reads this body verbatim when it invokes the skill.
+
+## Steps
+
+1. First step
+2. Second step
+3. …
+`);
+        ctx.app.addMessage({
+          role: 'system',
+          content: `Created skill bundle at \`.codeep/skills/${name}/SKILL.md\`. Edit it, then \`/skills bundles\` to confirm.`,
+        });
+        break;
+      }
+
+      if (sub === 'show' || sub === 'detail') {
+        const name = args[1];
+        if (!name) { ctx.app.notify('Usage: /skills show <name>'); break; }
+        const { findSkillBundle } = await import('../utils/skillBundles');
+        const bundle = findSkillBundle(name, ctx.projectPath);
+        if (!bundle) { ctx.app.notify(`Skill ${name} not found`); break; }
+        ctx.app.addMessage({
+          role: 'system',
+          content: `# ${bundle.name}\n_${bundle.description}_\n\n**Source:** ${bundle.source}\n\n---\n\n${bundle.body}`,
+        });
+        break;
+      }
+
+      // Marketplace operations against codeep.dev.
+      if (sub === 'publish') {
+        const slug = args[1];
+        if (!slug) { ctx.app.notify('Usage: /skills publish <slug> [--public]'); break; }
+        const isPublic = args.includes('--public');
+        ctx.app.notify(`Publishing ${slug} to codeep.dev…`);
+        const { publishBundle } = await import('../utils/skillBundlesCloud');
+        const result = await publishBundle(ctx.projectPath, slug, { isPublic });
+        if (!result.ok) { ctx.app.notify(`Publish failed: ${result.error}`); break; }
+        ctx.app.addMessage({
+          role: 'system',
+          content: `Published \`${slug}\` (${isPublic ? 'public' : 'private'}) to codeep.dev. Install elsewhere with \`/skills install ${result.skill?.owner_username ?? '<you>'}/${slug}\`.`,
+        });
+        break;
+      }
+
+      if (sub === 'install') {
+        const target = args[1];
+        if (!target) { ctx.app.notify('Usage: /skills install <owner>/<slug>'); break; }
+        const { installBundle } = await import('../utils/skillBundlesCloud');
+        ctx.app.notify(`Fetching ${target}…`);
+        const result = await installBundle(ctx.projectPath, target);
+        if (!result.ok) { ctx.app.notify(`Install failed: ${result.error}`); break; }
+        ctx.app.notify(`Installed ${result.name} to .codeep/skills/${result.name}/`);
+        break;
+      }
+
+      if (sub === 'browse') {
+        const query = args.slice(1).join(' ').trim();
+        const { browseSkills } = await import('../utils/skillBundlesCloud');
+        ctx.app.notify('Fetching marketplace…');
+        const result = await browseSkills({ query });
+        if (!result.ok) { ctx.app.notify(`Browse failed: ${result.error}`); break; }
+        const skills = result.skills ?? [];
+        if (skills.length === 0) {
+          ctx.app.addMessage({ role: 'system', content: query ? `_No public skills matching "${query}"._` : '_No public skills published yet._' });
+          break;
+        }
+        const lines = [`# ${query ? `Skills matching "${query}"` : 'Public skills'}`, ''];
+        for (const s of skills.slice(0, 30)) {
+          const owner = s.owner_username ?? s.github_id;
+          const ver = s.version ? ` v${s.version}` : '';
+          lines.push(`- **${s.name}** \`${owner}/${s.slug}\`${ver} — ${s.description} _(${s.install_count} installs)_`);
+        }
+        if (skills.length > 30) lines.push('', `_(showing first 30 of ${skills.length})_`);
+        lines.push('', 'Install with `/skills install <owner>/<slug>`.');
+        ctx.app.addMessage({ role: 'system', content: lines.join('\n') });
+        break;
+      }
+
+      if (sub === 'unpublish') {
+        const target = args[1];
+        if (!target) { ctx.app.notify('Usage: /skills unpublish <owner>/<slug>'); break; }
+        const { unpublishBundle } = await import('../utils/skillBundlesCloud');
+        const result = await unpublishBundle(target);
+        if (!result.ok) { ctx.app.notify(`Unpublish failed: ${result.error}`); break; }
+        ctx.app.notify(`Unpublished ${target} from codeep.dev`);
+        break;
+      }
+
+      // Default: built-in JSON skills (legacy behaviour).
       import('../utils/skills').then(({ getAllSkills, searchSkills, formatSkillsList, getSkillStats }) => {
         const query = args.join(' ').toLowerCase();
         if (query === 'stats') {
@@ -1293,9 +1592,28 @@ Format: use headers per category, only include categories where you found issues
       break;
     }
 
-    default:
+    case 'commands': {
+      const { loadCustomCommands, formatCommandList } = await import('../utils/customCommands');
+      ctx.app.addMessage({ role: 'system', content: formatCommandList(loadCustomCommands(ctx.projectPath)) });
+      break;
+    }
+
+    default: {
+      // 1. Try custom user command (project + global Markdown templates).
+      const { findCustomCommand, expandCommand } = await import('../utils/customCommands');
+      const custom = findCustomCommand(command, ctx.projectPath);
+      if (custom) {
+        const expandedPrompt = expandCommand(custom, args);
+        ctx.app.notify(`Running custom command /${command} (${custom.scope})`);
+        ctx.app.addMessage({ role: 'user', content: expandedPrompt });
+        const { runAgentTask } = await import('./agentExecution');
+        runAgentTask(expandedPrompt, false, ctx, () => null, () => {});
+        break;
+      }
+      // 2. Fall through to skill registry.
       runSkill(command, args, ctx).then(handled => {
         if (!handled) ctx.app.notify(`Unknown command: /${command}`);
       });
+    }
   }
 }

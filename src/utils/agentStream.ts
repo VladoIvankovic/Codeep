@@ -146,7 +146,12 @@ export async function handleOpenAIAgentStream(
 
   if (usageData) {
     const usage = extractOpenAIUsage(usageData);
-    if (usage) recordTokenUsage(usage, model, providerId);
+    if (usage) {
+      const reportedCost = providerId === 'openrouter' && typeof (usageData as { usage?: { cost?: number } })?.usage?.cost === 'number'
+        ? (usageData as { usage: { cost: number } }).usage.cost
+        : undefined;
+      recordTokenUsage(usage, model, providerId, reportedCost);
+    }
   }
 
   const rawToolCalls = Array.from(toolCallMap.values()).map(tc => ({

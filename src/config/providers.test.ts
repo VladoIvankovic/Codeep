@@ -101,6 +101,16 @@ describe('providers', () => {
       expect(ids).toContain('anthropic');
       expect(ids).toContain('google');
     });
+
+    // Lock in DISPLAY_ORDER so OpenRouter (a 2.0.0 headline feature) doesn't
+    // silently drift down the list during a future refactor.
+    it('should put the headline providers at the top in display order', () => {
+      const ids = getProviderList().map(p => p.id);
+      expect(ids[0]).toBe('anthropic');
+      expect(ids[1]).toBe('openai');
+      expect(ids[2]).toBe('openrouter');
+      expect(ids[3]).toBe('z.ai');
+    });
   });
 
   describe('getProviderModels', () => {
