@@ -248,6 +248,40 @@ export async function handleCommand(
       break;
     }
 
+    case 'docs': {
+      // Open per-command web docs in the system browser. Lets the inline
+      // /help stay terse (single-line entries) while users who want the
+      // long story get one keystroke away from a real page.
+      const cmd = (args[0] ?? '').toLowerCase().replace(/^\//, '');
+      const KNOWN: Record<string, string> = {
+        personality: 'https://codeep.dev/docs/agent#personalities',
+        personalities: 'https://codeep.dev/docs/agent#personalities',
+        insights: 'https://codeep.dev/docs/agent#insights',
+        plan: 'https://codeep.dev/docs/agent#plan-mode',
+        go: 'https://codeep.dev/docs/agent#plan-mode',
+        mcp: 'https://codeep.dev/docs/mcp',
+        skills: 'https://codeep.dev/docs/skills',
+        checkpoint: 'https://codeep.dev/docs/commands#checkpoints',
+        rewind: 'https://codeep.dev/docs/commands#checkpoints',
+        hooks: 'https://codeep.dev/docs/commands#hooks',
+        commands: 'https://codeep.dev/docs/commands#custom-commands',
+        openrouter: 'https://codeep.dev/docs/providers#openrouter',
+        memory: 'https://codeep.dev/docs/commands#intelligence',
+        profile: 'https://codeep.dev/docs/commands#settings',
+        compact: 'https://codeep.dev/docs/commands#session',
+        cost: 'https://codeep.dev/docs/dashboard',
+      };
+      const url = cmd ? (KNOWN[cmd] ?? `https://codeep.dev/docs/commands?q=${encodeURIComponent(cmd)}`) : 'https://codeep.dev/docs';
+      try {
+        const { default: open } = await import('open');
+        await open(url);
+        ctx.app.notify(`Opening ${url}`);
+      } catch {
+        ctx.app.notify(`Couldn't open browser. Visit: ${url}`);
+      }
+      break;
+    }
+
     case 'insights': {
       const { formatInsights } = await import('../utils/insights');
       // Parse `--days N` (default 7). Accept both `--days 30` and `--days=30`.

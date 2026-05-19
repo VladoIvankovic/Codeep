@@ -2175,7 +2175,8 @@ export class App {
     
     // Footer
     const scrollInfo = allItems.length > maxVisible ? ` (${this.helpScrollIndex + 1}-${Math.min(this.helpScrollIndex + maxVisible, allItems.length)}/${allItems.length})` : '';
-    this.screen.writeLine(y, `↑↓ scroll • PgUp/PgDn fast scroll • Esc close${scrollInfo}`, fg.gray);
+    this.screen.writeLine(y++, `↑↓ scroll • PgUp/PgDn fast scroll • Esc close${scrollInfo}`, fg.gray);
+    this.screen.writeLine(y, 'Full guides → codeep.dev/docs    ·    /docs <command>  (e.g. /docs personality)', fg.cyan);
   }
   
   /**
