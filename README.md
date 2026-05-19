@@ -526,6 +526,64 @@ Then call it as `/sec-review src/api/login.ts` (or `/sec` via the alias).
 **Discovery:** `/commands` lists all available templates. Project files shadow
 global files with the same name. Aliases also work for autocomplete.
 
+### Personalities (`/personality`, new in 2.0.3)
+
+Swap how the agent talks and what it prioritises mid-conversation:
+
+```
+/personality                  # list available
+/personality concise          # short answers, no preamble
+/personality security         # treat every input as hostile
+/personality senior-reviewer  # push back on shortcuts, name things well
+/personality ship-it          # pick first reasonable approach
+/personality off              # back to default tone
+```
+
+Six built-in presets: `concise`, `verbose`, `security`, `senior-reviewer`,
+`junior-mentor`, `ship-it`. The active one persists across sessions
+(stored in `~/.codeep/config.json` as `activePersonality`).
+
+**Custom personalities** — drop a Markdown file in
+`.codeep/personalities/<name>.md` (project) or
+`~/.codeep/personalities/<name>.md` (global):
+
+```markdown
+# Personality: PR Reviewer
+
+You are reviewing a PR from a junior engineer:
+- Cite line numbers for every concern.
+- Suggest an alternative, don't just flag the problem.
+- Keep tone collaborative, not pedantic.
+- End with one thing the author did well.
+```
+
+First `# Personality:` line is the display name; the rest is appended
+to the agent's system prompt verbatim when active. Project shadows
+global shadows built-in (by name).
+
+### Activity Insights (`/insights`, new in 2.0.3)
+
+Summarise what the agent has actually done for you over a window — runs,
+tool actions, projects touched, most-edited files — sourced from
+`~/.codeep/history/<id>.json` (one file per agent run, automatic).
+
+```
+/insights                 # last 7 days (default)
+/insights --days 30       # last month
+/insights --days 1        # today only
+```
+
+Surfaces (markdown rendered in chat):
+
+- Headline tally: runs · actions · active time · active-days density · avg actions/run
+- **By project** sorted by active time
+- **Top tools** (read_file × 340, write_file × 80, …)
+- **Most-touched files** (with `~` prefix for readability)
+- **Recent runs** — 10 most recent with project, duration, and the user prompt that started them
+
+Cost / token usage isn't in `/insights` (it lives in `/cost` per-session
+since the token tracker is in-memory). Insights is history-only.
+
 ### Project Intelligence (`/init`, `/scan`)
 
 Initialize a project and scan it once to cache deep analysis for faster AI responses:

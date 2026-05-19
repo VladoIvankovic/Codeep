@@ -107,6 +107,8 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'openrouter': 'Tune OpenRouter routing (preferred / ignore providers, fallbacks, privacy)',
   'plan': 'Generate a numbered plan for a task — review before /go executes it',
   'go': 'Execute the pending plan from /plan',
+  'personality': 'Switch agent tone: concise / verbose / security / senior-reviewer / etc',
+  'insights': 'Activity summary over the last N days (default 7): runs, files, tools, projects',
 };
 
 import { helpCategories, keyboardShortcuts } from './components/Help';
@@ -301,6 +303,8 @@ export class App {
     'hooks', 'mcp', 'openrouter',
     // 2.0.2 — plan mode.
     'plan', 'go',
+    // 2.0.3 — personalities + insights.
+    'personality', 'insights',
     'c', 't', 'd', 'r', 'f', 'e', 'o', 'b', 'p',
   ];
   

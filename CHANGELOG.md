@@ -11,6 +11,53 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.0.3] — 2026-05-19
+
+> Two Hermes-inspired additions: `/personality <name>` switches agent tone mid-conversation (concise, security-paranoid, senior-reviewer, junior-mentor, ship-it, verbose, or your own from `.codeep/personalities/*.md`), and `/insights [--days N]` summarises what you've been working on — runs, files, tools, projects.
+
+### Added — `/personality` slash command
+
+- **Six built-in personalities** that swap the agent's tone and
+  priorities by appending a system-prompt addendum:
+  - `concise` — no preamble, no filler, bullet-heavy
+  - `verbose` — explains rationale + alternatives + caveats
+  - `security` — treats every input as hostile, enumerates attack surface
+  - `senior-reviewer` — pushes back on shortcuts, names things well
+  - `junior-mentor` — explains as it goes, links to canonical docs
+  - `ship-it` — picks first reasonable approach, defers cleanup
+- **Custom personalities** via `.codeep/personalities/<name>.md`
+  (project) or `~/.codeep/personalities/<name>.md` (global). First
+  `# Personality: Name` line becomes the display name; rest of the
+  Markdown body is the prompt addendum. Capped at 64 KB per file.
+- **Persistence**: active personality lives in `config.activePersonality`
+  so it survives session restarts. Clear with `/personality off`.
+- Usable from CLI TUI, Zed, and the VS Code extension via ACP.
+
+### Added — `/insights [--days N]`
+
+- **Activity summary** over a configurable window (default 7 days,
+  capped at 365). Reads `~/.codeep/history/<id>.json` files written by
+  every agent run, so output reflects actual tool actions rather than
+  chat-message proxies.
+- Headline metrics: total runs, total tool actions, total active time,
+  active-days density, average actions per run.
+- **By-project breakdown** sorted by active time — see which repo soaked
+  up your week.
+- **Top tools** (read_file × 340, write_file × 80, …) and
+  **most-touched files** (with `~` prefix for readability).
+- **Recent runs** list — 10 most recent with project, duration, and the
+  user prompt that started them.
+- Per-session cost still lives in `/cost`; `/insights` is a deliberately
+  history-only view (the in-memory token tracker doesn't survive a
+  restart, so historical cost would be misleading).
+
+### Surfaced
+
+- Both commands appear in `/help`, `/` autocomplete, `Codeep-web`
+  `/docs/commands`, VS Code Settings → Commands chips, and ACP
+  `availableCommands`. Spot-check parity: typing `/per` or `/insi` in
+  any client autocompletes to the right command.
+
 ## [2.0.2] — 2026-05-19
 
 > Two big quality-of-life additions: Anthropic prompt caching is on by default (60–90% cheaper on cache-eligible input), and `/plan` lets you preview an agent's full plan before any file gets touched. Run `/go` to execute, or `/plan <revised task>` to refine.

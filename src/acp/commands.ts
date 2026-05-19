@@ -680,6 +680,45 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
 
     // ─── Export ────────────────────────────────────────────────────────────────
 
+    // ─── Personalities + insights (2.0.3) ─────────────────────────────────────
+
+    case 'personality': {
+      const { formatPersonalityList, findPersonality } = await import('../utils/personalities.js');
+      const sub = args[0]?.toLowerCase();
+      if (!sub) {
+        return { handled: true, response: formatPersonalityList(session.workspaceRoot) };
+      }
+      if (sub === 'off' || sub === 'none' || sub === 'clear') {
+        config.set('activePersonality', null);
+        return { handled: true, response: 'Personality cleared — agent uses default tone.' };
+      }
+      const p = findPersonality(sub, session.workspaceRoot);
+      if (!p) {
+        return { handled: true, response: `No personality named \`${sub}\`. Run \`/personality\` to see available.` };
+      }
+      config.set('activePersonality', p.name);
+      return {
+        handled: true,
+        response: `Active personality: **${p.displayName}** (\`${p.name}\`, ${p.scope})\n\n_${p.description}_\n\nClear with \`/personality off\`.`,
+      };
+    }
+
+    case 'insights': {
+      const { formatInsights } = await import('../utils/insights.js');
+      let days = 7;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--days' && args[i + 1]) {
+          const n = parseInt(args[i + 1], 10);
+          if (Number.isFinite(n)) days = n;
+        } else if (a.startsWith('--days=')) {
+          const n = parseInt(a.slice('--days='.length), 10);
+          if (Number.isFinite(n)) days = n;
+        }
+      }
+      return { handled: true, response: formatInsights({ days }) };
+    }
+
     // ─── Plan mode (2.0.2) ────────────────────────────────────────────────────
 
     case 'plan': {

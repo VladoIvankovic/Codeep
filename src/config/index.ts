@@ -83,6 +83,13 @@ interface ConfigSchema {
     data_collection?: 'allow' | 'deny';
     require_parameters?: boolean;
   };
+  /**
+   * Active personality preset (`concise`, `senior-reviewer`, custom user
+   * personalities from .codeep/personalities/*.md, …). When set, the
+   * loader text is appended to every agent system prompt. See
+   * utils/personalities.ts.
+   */
+  activePersonality?: string | null;
 }
 
 export type { AgentMode };

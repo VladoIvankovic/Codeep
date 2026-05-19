@@ -358,7 +358,20 @@ export async function runAgent(
   if (skillCatalogBlock) {
     systemPrompt += '\n\n' + skillCatalogBlock;
   }
-  
+
+  // Active personality goes LAST — appended after skills / project rules /
+  // smart context so its tone overrides earlier conventions. Set via
+  // `/personality <name>`; empty when no personality is active.
+  try {
+    const { getActivePersonalityPrompt } = await import('./personalities.js');
+    const personalityPrompt = getActivePersonalityPrompt(projectContext.root);
+    if (personalityPrompt) {
+      systemPrompt += personalityPrompt;
+    }
+  } catch {
+    // Personality loading must never block an agent run.
+  }
+
   // Initial user message with optional task plan
   let initialPrompt = prompt;
   if (taskPlan) {

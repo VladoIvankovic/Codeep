@@ -248,6 +248,50 @@ export async function handleCommand(
       break;
     }
 
+    case 'insights': {
+      const { formatInsights } = await import('../utils/insights');
+      // Parse `--days N` (default 7). Accept both `--days 30` and `--days=30`.
+      let days = 7;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--days' && args[i + 1]) {
+          const n = parseInt(args[i + 1], 10);
+          if (Number.isFinite(n)) days = n;
+        } else if (a.startsWith('--days=')) {
+          const n = parseInt(a.slice('--days='.length), 10);
+          if (Number.isFinite(n)) days = n;
+        }
+      }
+      ctx.app.addMessage({ role: 'system', content: formatInsights({ days }) });
+      break;
+    }
+
+    case 'personality': {
+      const { formatPersonalityList, findPersonality } = await import('../utils/personalities');
+      const sub = args[0]?.toLowerCase();
+
+      if (!sub) {
+        ctx.app.addMessage({ role: 'system', content: formatPersonalityList(ctx.projectPath) });
+        break;
+      }
+      if (sub === 'off' || sub === 'none' || sub === 'clear') {
+        config.set('activePersonality', null);
+        ctx.app.notify('Personality cleared — agent uses default tone.');
+        break;
+      }
+      const personality = findPersonality(sub, ctx.projectPath);
+      if (!personality) {
+        ctx.app.notify(`No personality named "${sub}". Run /personality to see available.`);
+        break;
+      }
+      config.set('activePersonality', personality.name);
+      ctx.app.addMessage({
+        role: 'system',
+        content: `Active personality: **${personality.displayName}** (\`${personality.name}\`, ${personality.scope})\n\n_${personality.description}_\n\nClear with \`/personality off\`.`,
+      });
+      break;
+    }
+
     case 'plan': {
       // Plan mode: ask the model for a plan, surface it, hold as pending.
       // The user runs /go to execute or /plan <revised> to revise. See

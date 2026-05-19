@@ -77,6 +77,9 @@ const AVAILABLE_COMMANDS = [
   // Plan mode (2.0.2)
   { name: 'plan',      description: 'Generate a numbered plan for a task — review before /go executes', input: { hint: '<task>' } },
   { name: 'go',        description: 'Execute the pending plan from /plan' },
+  // Personalities + insights (2.0.3)
+  { name: 'personality', description: 'List or switch agent tone preset', input: { hint: '[name | off]' } },
+  { name: 'insights',  description: 'Activity summary over the last N days (default 7)', input: { hint: '[--days N]' } },
   // Project intelligence
   { name: 'scan',      description: 'Scan project structure and generate summary' },
   { name: 'review',    description: 'Run code review on project or specific files', input: { hint: '[file…]' } },

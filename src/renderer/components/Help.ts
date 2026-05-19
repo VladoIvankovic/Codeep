@@ -133,6 +133,9 @@ export const helpCategories: HelpCategory[] = [
       { key: '/profile save <name>', description: 'Save current provider+model as profile' },
       { key: '/profile list', description: 'List saved profiles' },
       { key: '/openrouter', description: 'OpenRouter routing prefs (prefer/ignore providers, fallbacks, privacy)' },
+      { key: '/personality', description: 'List or switch agent tone (concise / verbose / security / senior-reviewer / …)' },
+      { key: '/personality <name>', description: 'Activate a personality. /personality off to clear.' },
+      { key: '/insights [--days N]', description: 'Activity summary — runs, files, tools, projects over the last N days (default 7)' },
     ],
   },
   {
