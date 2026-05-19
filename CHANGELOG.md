@@ -11,6 +11,66 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.0.2] — 2026-05-19
+
+> Two big quality-of-life additions: Anthropic prompt caching is on by default (60–90% cheaper on cache-eligible input), and `/plan` lets you preview an agent's full plan before any file gets touched. Run `/go` to execute, or `/plan <revised task>` to refine.
+
+### Added — Anthropic prompt caching, automatic
+
+- **Two cache breakpoints per request**: the system prompt (and embedded
+  skills catalog / project intelligence) and the tools array. Cache hits
+  bill at 0.1× the input rate; cache writes at 1.25×. Net win after the
+  second same-shape request, which is every iteration in an agent loop.
+  Below 1024 input tokens Anthropic silently skips caching — no error
+  path. Applies to the agent chat path, the agent fallback path, and
+  the chat() path used by `/agent` and inline replies. Also propagates
+  through OpenRouter → Anthropic routes (caching headers honoured
+  upstream).
+- **`TokenUsage.cacheCreationTokens` + `cacheReadTokens`** fields
+  surfaced on every record. `getCacheStats()` aggregates per-session
+  cache hits, misses, and estimated USD savings vs running without
+  caching. `/cost` (and `/stats`) renders a new "Prompt caching"
+  section when at least one cached call landed.
+
+### Added — Plan mode (`/plan` + `/go`)
+
+- **`/plan <task>`** — generates a numbered plan for the task (no tool
+  calls, no file changes), surfaces it as a Markdown message so you can
+  review what the agent would do, which files it would touch, what
+  commands it would run, and the risk level it self-assesses. Holds
+  the (task, plan) pair as the *pending* plan, scoped to the current
+  process. Re-running `/plan <revised task>` replaces the pending plan
+  with a new one (you pay one extra LLM call but get readable revision
+  history in the chat).
+- **`/go`** — executes the pending plan: hands the task + approved plan
+  as a single prompt to the regular agent loop, so all MCP tools,
+  lifecycle hooks, verification, permissions, and skill bundles apply
+  unchanged. Includes an explicit anti-improvisation clause in the
+  injected prompt — if any step turns out to be wrong mid-execution
+  the agent must stop and report rather than silently rewriting the
+  plan.
+- Available in **both the TUI and ACP clients** (Zed, VS Code). ACP
+  `/plan` streams the plan back via `session/update`; ACP `/go` runs
+  the agent inline and streams iterations through onChunk.
+- Surfaced in `/help` ("Agent Mode" section) and `/` autocomplete.
+
+### Fixed
+
+- **Anthropic streaming usage extraction missed cache fields.** Both
+  the agent stream handler (`utils/agentStream.ts`) and the chat
+  stream handler (`api/index.ts`) now pick up
+  `cache_creation_input_tokens` and `cache_read_input_tokens` from the
+  `message_start` event, so cached requests no longer undercount
+  prompt tokens or display $0 savings.
+
+### Notes
+
+- OpenAI-format providers (OpenAI direct, Z.AI, DeepSeek, MiniMax,
+  Ollama) don't expose explicit cache markers — those providers
+  generally apply automatic prefix caching server-side. No code change
+  on our end needed; cost reports stay accurate via standard
+  `prompt_tokens` accounting.
+
 ## [2.0.1] — 2026-05-18
 
 > Patch: `/mcp` now works in the CLI TUI (was only wired into the ACP path

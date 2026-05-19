@@ -56,6 +56,8 @@ export const helpCategories: HelpCategory[] = [
     items: [
       { key: '/agent <task>', description: 'Run agent with task' },
       { key: '/agent-dry <task>', description: 'Dry run (no changes)' },
+      { key: '/plan <task>', description: 'Generate a plan first — review before /go executes' },
+      { key: '/go', description: 'Execute the pending plan from /plan' },
       { key: '/stop', description: 'Stop running agent' },
       { key: '/undo', description: 'Undo last agent action' },
       { key: '/undo-all', description: 'Undo all agent actions' },

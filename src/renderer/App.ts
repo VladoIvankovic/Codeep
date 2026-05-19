@@ -105,6 +105,8 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'hooks': 'List installed lifecycle hooks (.codeep/hooks/<event>.sh)',
   'mcp': 'Manage MCP servers (browse, install, add, remove, resources, prompts)',
   'openrouter': 'Tune OpenRouter routing (preferred / ignore providers, fallbacks, privacy)',
+  'plan': 'Generate a numbered plan for a task — review before /go executes it',
+  'go': 'Execute the pending plan from /plan',
 };
 
 import { helpCategories, keyboardShortcuts } from './components/Help';
@@ -297,6 +299,8 @@ export class App {
     // Keep in lockstep with COMMAND_DESCRIPTIONS below and helpCategories.
     'compact', 'commands', 'checkpoint', 'checkpoints', 'rewind',
     'hooks', 'mcp', 'openrouter',
+    // 2.0.2 — plan mode.
+    'plan', 'go',
     'c', 't', 'd', 'r', 'f', 'e', 'o', 'b', 'p',
   ];
   

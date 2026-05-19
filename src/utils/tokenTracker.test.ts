@@ -38,11 +38,36 @@ describe('extractOpenAIUsage', () => {
 describe('extractAnthropicUsage', () => {
   it('maps Anthropic input/output_tokens', () => {
     expect(extractAnthropicUsage({ usage: { input_tokens: 100, output_tokens: 50 } }))
-      .toEqual({ promptTokens: 100, completionTokens: 50, totalTokens: 150 });
+      .toMatchObject({ promptTokens: 100, completionTokens: 50, totalTokens: 150 });
   });
 
   it('returns null when usage block is missing', () => {
     expect(extractAnthropicUsage({})).toBeNull();
+  });
+
+  it('rolls cache_creation + cache_read into promptTokens and surfaces them separately', () => {
+    const usage = extractAnthropicUsage({
+      usage: {
+        input_tokens: 100,
+        output_tokens: 50,
+        cache_creation_input_tokens: 200,
+        cache_read_input_tokens: 800,
+      },
+    });
+    // Anthropic reports input_tokens EXCLUSIVE of cache fields — sum for total.
+    expect(usage?.promptTokens).toBe(1100);
+    expect(usage?.completionTokens).toBe(50);
+    expect(usage?.totalTokens).toBe(1150);
+    expect(usage?.cacheCreationTokens).toBe(200);
+    expect(usage?.cacheReadTokens).toBe(800);
+  });
+
+  it('omits cache fields when they are zero', () => {
+    const usage = extractAnthropicUsage({
+      usage: { input_tokens: 50, output_tokens: 25, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    });
+    expect(usage?.cacheCreationTokens).toBeUndefined();
+    expect(usage?.cacheReadTokens).toBeUndefined();
   });
 });
 
@@ -147,6 +172,27 @@ describe('getCostBreakdown', () => {
     const breakdown = getCostBreakdown();
     // glm-5.1 pricing: 1.00 USD per 1M input tokens.
     expect(breakdown[0].estimatedCost).toBeCloseTo(1.0, 6);
+  });
+
+  it('applies Anthropic cache pricing (read 0.1×, write 1.25×)', () => {
+    // Claude Opus 4.7 input rate is $5/1M. Verify the multipliers land.
+    recordTokenUsage(
+      {
+        promptTokens: 11_000,                  // input + cache_create + cache_read
+        completionTokens: 0,
+        totalTokens: 11_000,
+        cacheCreationTokens: 1_000,
+        cacheReadTokens: 9_000,
+      },
+      'claude-opus-4-7',
+      'anthropic',
+    );
+    const breakdown = getCostBreakdown();
+    // Uncached prompt = 11000 - 1000 - 9000 = 1000 tokens at 1.0× ($5/1M = 0.005)
+    // Cache write = 1000 at 1.25× = (1000/1M) * 5 * 1.25 = 0.00625
+    // Cache read  = 9000 at 0.1×  = (9000/1M) * 5 * 0.1  = 0.0045
+    // Total ≈ 0.005 + 0.00625 + 0.0045 = 0.01575
+    expect(breakdown[0].estimatedCost).toBeCloseTo(0.01575, 6);
   });
 
   it('mixes reported + computed costs in the same session', () => {

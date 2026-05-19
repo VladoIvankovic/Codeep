@@ -338,9 +338,25 @@ export async function agentChat(
       };
     } else {
       endpoint = `${baseUrl}/v1/messages`;
+      // Anthropic prompt caching. Two cache breakpoints:
+      //   1. `system` (largest stable block — system prompt + skills catalog)
+      //   2. last tool in `tools` (Anthropic caches everything up to and
+      //      including the marker, so this caches the entire tools array)
+      // Cache hits cost 0.1× input. Misses ("cache creation") cost 1.25×.
+      // Net win after the 2nd same-shape request. Below 1024 input tokens
+      // Anthropic silently skips caching — no error path to handle.
+      const anthropicTools = getAnthropicTools(additionalTools);
+      const cachedTools = anthropicTools.length > 0
+        ? [
+            ...anthropicTools.slice(0, -1),
+            { ...anthropicTools[anthropicTools.length - 1], cache_control: { type: 'ephemeral' as const } },
+          ]
+        : anthropicTools;
       body = {
-        model, system: systemPrompt, messages,
-        tools: getAnthropicTools(additionalTools), stream: useStreaming,
+        model,
+        system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' as const } }],
+        messages,
+        tools: cachedTools, stream: useStreaming,
         ...tempParam, max_tokens: getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384)),
       };
     }
@@ -477,10 +493,15 @@ export async function agentChatFallback(
       };
     } else {
       endpoint = `${baseUrl}/v1/messages`;
+      // Fallback path injects system+tools as the first user message
+      // (no native tool API). Cache that block — it's large and stable.
       body = {
         model,
         messages: [
-          { role: 'user', content: fallbackPrompt },
+          {
+            role: 'user',
+            content: [{ type: 'text', text: fallbackPrompt, cache_control: { type: 'ephemeral' as const } }],
+          },
           { role: 'assistant', content: 'Understood. I will use the tools as specified.' },
           ...messages,
         ],

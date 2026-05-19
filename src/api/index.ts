@@ -669,6 +669,13 @@ async function chatAnthropic(
   }
 
   try {
+    // Anthropic prompt caching: wrap system as an array with a
+    // `cache_control` marker so the static system prompt (typically large
+    // and stable across a session) is cached. Below 1024 input tokens
+    // Anthropic silently skips caching — no error.
+    const cachedSystem = useNativeSystem
+      ? { system: [{ type: 'text' as const, text: systemPrompt, cache_control: { type: 'ephemeral' as const } }] }
+      : {};
     const response = await fetch(`${baseUrl}/v1/messages`, {
       method: 'POST',
       headers,
@@ -678,7 +685,7 @@ async function chatAnthropic(
         max_tokens: maxTokens,
         temperature,
         stream,
-        ...(useNativeSystem ? { system: systemPrompt } : {}),
+        ...cachedSystem,
       }),
       signal: controller.signal,
     });
@@ -727,6 +734,8 @@ async function handleAnthropicStream(
   let buffer = '';
   let inputTokens = 0;
   let outputTokens = 0;
+  let cacheCreationTokens = 0;
+  let cacheReadTokens = 0;
   let streamModel = '';
 
   while (true) {
@@ -740,7 +749,7 @@ async function handleAnthropicStream(
     for (const line of lines) {
       if (line.startsWith('data: ')) {
         const data = line.slice(6);
-        
+
         try {
           const parsed = JSON.parse(data);
           if (parsed.type === 'content_block_delta') {
@@ -750,9 +759,13 @@ async function handleAnthropicStream(
               onChunk(text);
             }
           }
-          // message_start contains input_tokens
+          // message_start contains input_tokens (and cache create/read
+          // when prompt caching is in play).
           if (parsed.type === 'message_start' && parsed.message?.usage) {
-            inputTokens = parsed.message.usage.input_tokens || 0;
+            const u = parsed.message.usage;
+            inputTokens = u.input_tokens || 0;
+            cacheCreationTokens = u.cache_creation_input_tokens || 0;
+            cacheReadTokens = u.cache_read_input_tokens || 0;
             streamModel = parsed.message.model || '';
           }
           // message_delta contains output_tokens
@@ -767,9 +780,16 @@ async function handleAnthropicStream(
   }
 
   // Record token usage
-  if (inputTokens > 0 || outputTokens > 0) {
+  if (inputTokens > 0 || outputTokens > 0 || cacheReadTokens > 0 || cacheCreationTokens > 0) {
+    const totalPrompt = inputTokens + cacheCreationTokens + cacheReadTokens;
     recordTokenUsage(
-      { promptTokens: inputTokens, completionTokens: outputTokens, totalTokens: inputTokens + outputTokens },
+      {
+        promptTokens: totalPrompt,
+        completionTokens: outputTokens,
+        totalTokens: totalPrompt + outputTokens,
+        cacheCreationTokens: cacheCreationTokens || undefined,
+        cacheReadTokens: cacheReadTokens || undefined,
+      },
       streamModel || 'unknown',
       config.get('provider')
     );

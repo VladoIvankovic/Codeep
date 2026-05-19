@@ -74,6 +74,9 @@ const AVAILABLE_COMMANDS = [
   { name: 'mcp',       description: 'Manage MCP servers, marketplace, resources, prompts', input: { hint: '[browse | install <id> | add | remove | reload | resources | read <uri> | prompts | prompt <server> <name>]' } },
   { name: 'openrouter', description: 'OpenRouter routing preferences (prefer/ignore/fallbacks/privacy/clear)', input: { hint: '[show | prefer <p,...> | ignore <p,...> | fallbacks on|off | privacy strict|allow | clear]' } },
   { name: 'export',    description: 'Export conversation', input: { hint: 'json | md | txt' } },
+  // Plan mode (2.0.2)
+  { name: 'plan',      description: 'Generate a numbered plan for a task — review before /go executes', input: { hint: '<task>' } },
+  { name: 'go',        description: 'Execute the pending plan from /plan' },
   // Project intelligence
   { name: 'scan',      description: 'Scan project structure and generate summary' },
   { name: 'review',    description: 'Run code review on project or specific files', input: { hint: '[file…]' } },

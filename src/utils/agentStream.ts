@@ -210,12 +210,29 @@ export async function handleAnthropicAgentStream(
       try {
         const parsed = JSON.parse(data);
 
-        // message_start has input tokens; message_delta has output tokens — merge both
+        // message_start has input tokens (incl. cache create/read fields if
+        // prompt caching is in use); message_delta has output tokens —
+        // merge both so extractAnthropicUsage sees the full picture.
         if (parsed.type === 'message_start' && parsed.message?.usage) {
-          usageData = { usage: { input_tokens: parsed.message.usage.input_tokens || 0, output_tokens: 0 } };
+          const u = parsed.message.usage;
+          usageData = {
+            usage: {
+              input_tokens: u.input_tokens || 0,
+              output_tokens: 0,
+              cache_creation_input_tokens: u.cache_creation_input_tokens || 0,
+              cache_read_input_tokens: u.cache_read_input_tokens || 0,
+            },
+          };
         } else if (parsed.type === 'message_delta' && parsed.usage) {
-          const inputTokens: number = (usageData as any)?.usage?.input_tokens || 0;
-          usageData = { usage: { input_tokens: inputTokens, output_tokens: parsed.usage.output_tokens || 0 } };
+          const prev: Record<string, number> = (usageData as { usage?: Record<string, number> } | null)?.usage ?? {};
+          usageData = {
+            usage: {
+              input_tokens: prev.input_tokens || 0,
+              output_tokens: parsed.usage.output_tokens || 0,
+              cache_creation_input_tokens: prev.cache_creation_input_tokens || 0,
+              cache_read_input_tokens: prev.cache_read_input_tokens || 0,
+            },
+          };
         }
 
         if (parsed.type === 'content_block_start') {

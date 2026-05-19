@@ -248,6 +248,59 @@ export async function handleCommand(
       break;
     }
 
+    case 'plan': {
+      // Plan mode: ask the model for a plan, surface it, hold as pending.
+      // The user runs /go to execute or /plan <revised> to revise. See
+      // src/utils/planMode.ts for the rationale + system prompt.
+      if (!args.length) {
+        const { getPendingPlan } = await import('../utils/planMode');
+        const cur = getPendingPlan();
+        if (cur) {
+          ctx.app.addMessage({
+            role: 'system',
+            content: `**Pending plan for:** _${cur.task}_\n\n${cur.plan}\n\n---\nRun \`/go\` to execute, or \`/plan <revised task>\` to revise.`,
+          });
+        } else {
+          ctx.app.notify('Usage: /plan <task> — generates a plan you can review, then /go to execute.');
+        }
+        return;
+      }
+      if (ctx.isAgentRunning()) { ctx.app.notify('Agent already running. Use /stop first.'); return; }
+      const task = args.join(' ');
+      ctx.app.addMessage({ role: 'user', content: `/plan ${task}` });
+      ctx.app.notify('Generating plan…');
+      try {
+        const { generatePlan } = await import('../utils/planMode');
+        const plan = await generatePlan(task);
+        ctx.app.addMessage({
+          role: 'assistant',
+          content: `${plan}\n\n---\nRun \`/go\` to execute this plan, or \`/plan <revised task>\` to refine it.`,
+        });
+      } catch (err) {
+        ctx.app.notify(`Plan generation failed: ${(err as Error).message}`);
+      }
+      break;
+    }
+
+    case 'go': {
+      // Execute the pending plan from /plan. The agent loop sees the
+      // task + plan as a single prompt, so MCP tools, hooks, permissions,
+      // and verification all apply unchanged.
+      const { getPendingPlan, composeExecutionPrompt, clearPendingPlan } = await import('../utils/planMode');
+      const cur = getPendingPlan();
+      if (!cur) {
+        ctx.app.notify('No pending plan. Run `/plan <task>` first.');
+        return;
+      }
+      if (ctx.isAgentRunning()) { ctx.app.notify('Agent already running. Use /stop first.'); return; }
+      const prompt = composeExecutionPrompt(cur);
+      clearPendingPlan();
+      ctx.app.notify(`Executing plan for: ${cur.task.slice(0, 80)}${cur.task.length > 80 ? '…' : ''}`);
+      const { runAgentTask } = await import('./agentExecution');
+      runAgentTask(prompt, false, ctx, () => null, () => {});
+      break;
+    }
+
     case 'stop': {
       if (ctx.isAgentRunning() && ctx.abortController) {
         ctx.abortController.abort();

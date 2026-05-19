@@ -6,6 +6,13 @@ export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** Anthropic prompt caching: tokens written to the cache on this call
+   *  (billed at ~1.25× input rate). Undefined for providers that don't
+   *  support caching or for calls below the cache size threshold. */
+  cacheCreationTokens?: number;
+  /** Anthropic prompt caching: tokens read from cache on this call
+   *  (billed at ~0.1× input rate — the big savings live here). */
+  cacheReadTokens?: number;
 }
 
 export interface SessionTokenStats {
@@ -22,6 +29,9 @@ interface TokenRecord {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** Anthropic prompt caching breakdown — see TokenUsage. */
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
   model: string;
   provider: string;
   /** Authoritative per-call USD from the provider (OpenRouter), if available. */
@@ -119,6 +129,8 @@ export function recordTokenUsage(
     promptTokens: usage.promptTokens,
     completionTokens: usage.completionTokens,
     totalTokens: usage.totalTokens,
+    cacheCreationTokens: usage.cacheCreationTokens,
+    cacheReadTokens: usage.cacheReadTokens,
     model,
     provider,
     actualCostUsd,
@@ -144,10 +156,19 @@ export function extractOpenAIUsage(data: any): TokenUsage | null {
  */
 export function extractAnthropicUsage(data: any): TokenUsage | null {
   if (data?.usage) {
+    const inputTokens = data.usage.input_tokens || 0;
+    const outputTokens = data.usage.output_tokens || 0;
+    const cacheCreation = data.usage.cache_creation_input_tokens || 0;
+    const cacheRead = data.usage.cache_read_input_tokens || 0;
+    // Anthropic returns input_tokens EXCLUSIVE of cache creation and cache
+    // read tokens — they're reported separately. Total prompt = sum of all
+    // three so our context window math doesn't undercount.
     return {
-      promptTokens: data.usage.input_tokens || 0,
-      completionTokens: data.usage.output_tokens || 0,
-      totalTokens: (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0),
+      promptTokens: inputTokens + cacheCreation + cacheRead,
+      completionTokens: outputTokens,
+      totalTokens: inputTokens + cacheCreation + cacheRead + outputTokens,
+      cacheCreationTokens: cacheCreation || undefined,
+      cacheReadTokens: cacheRead || undefined,
     };
   }
   return null;
@@ -181,12 +202,55 @@ export function getCostBreakdown(): ProviderCostBreakdown[] {
     } else {
       const pricing = MODEL_PRICING[record.model];
       if (pricing) {
-        existing.estimatedCost += (record.promptTokens / 1_000_000) * pricing.inputPer1M + (record.completionTokens / 1_000_000) * pricing.outputPer1M;
+        // Anthropic prompt caching: cache_creation_input is billed at 1.25×
+        // the base input rate, cache_read_input at 0.1×. The remaining
+        // (uncached) prompt tokens bill at the standard 1.0× rate.
+        const cacheCreate = record.cacheCreationTokens ?? 0;
+        const cacheRead = record.cacheReadTokens ?? 0;
+        const uncachedPrompt = Math.max(0, record.promptTokens - cacheCreate - cacheRead);
+        existing.estimatedCost +=
+          (uncachedPrompt / 1_000_000) * pricing.inputPer1M
+          + (cacheCreate / 1_000_000) * pricing.inputPer1M * 1.25
+          + (cacheRead / 1_000_000) * pricing.inputPer1M * 0.1
+          + (record.completionTokens / 1_000_000) * pricing.outputPer1M;
       }
     }
     grouped.set(key, existing);
   }
   return Array.from(grouped.values());
+}
+
+/**
+ * Aggregate Anthropic prompt-caching stats for the current session.
+ * Returns the breakdown plus an estimate of what the input billing would
+ * have been *without* caching, so we can surface "you saved $X" to the
+ * user.
+ */
+export interface CacheStats {
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  /** Sum of estimatedSavings across all Anthropic-priced records. */
+  estimatedSavingsUsd: number;
+}
+
+export function getCacheStats(): CacheStats {
+  let cacheCreate = 0;
+  let cacheRead = 0;
+  let savings = 0;
+  for (const record of records) {
+    cacheCreate += record.cacheCreationTokens ?? 0;
+    cacheRead += record.cacheReadTokens ?? 0;
+    // Savings = what cache-read tokens would have cost at full input rate,
+    // minus what they actually cost at 0.1×. (Cache creation is a slight
+    // *penalty* of 0.25× — netted in for honest reporting.)
+    const pricing = MODEL_PRICING[record.model];
+    if (pricing) {
+      const cReadSaved = ((record.cacheReadTokens ?? 0) / 1_000_000) * pricing.inputPer1M * 0.9;
+      const cCreateCost = ((record.cacheCreationTokens ?? 0) / 1_000_000) * pricing.inputPer1M * 0.25;
+      savings += cReadSaved - cCreateCost;
+    }
+  }
+  return { cacheCreationTokens: cacheCreate, cacheReadTokens: cacheRead, estimatedSavingsUsd: Math.max(0, savings) };
 }
 
 /**
@@ -262,6 +326,19 @@ export function formatCostReport(): string {
     lines.push('|---|---:|---:|---:|');
     for (const b of breakdown) {
       lines.push(`| \`${b.provider}\` / \`${b.model}\` | ${formatTokenCount(b.promptTokens)} | ${formatTokenCount(b.completionTokens)} | $${b.estimatedCost.toFixed(4)} |`);
+    }
+  }
+
+  // Prompt caching summary — only shown if at least one cached call landed.
+  const cache = getCacheStats();
+  if (cache.cacheReadTokens > 0 || cache.cacheCreationTokens > 0) {
+    lines.push('', '### Prompt caching');
+    lines.push(`**Cache reads:** ${formatTokenCount(cache.cacheReadTokens)} tokens (billed at 0.1× input rate)`);
+    if (cache.cacheCreationTokens > 0) {
+      lines.push(`**Cache writes:** ${formatTokenCount(cache.cacheCreationTokens)} tokens (billed at 1.25× input rate)`);
+    }
+    if (cache.estimatedSavingsUsd > 0) {
+      lines.push(`**Estimated savings vs no caching:** $${cache.estimatedSavingsUsd.toFixed(4)}`);
     }
   }
 

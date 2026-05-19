@@ -680,6 +680,63 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
 
     // ─── Export ────────────────────────────────────────────────────────────────
 
+    // ─── Plan mode (2.0.2) ────────────────────────────────────────────────────
+
+    case 'plan': {
+      // Identical contract to TUI /plan: generate a pre-execution plan,
+      // surface it, hold as pending so /go can execute it without re-planning.
+      if (!args.length) {
+        const { getPendingPlan } = await import('../utils/planMode.js');
+        const cur = getPendingPlan();
+        return {
+          handled: true,
+          response: cur
+            ? `**Pending plan for:** _${cur.task}_\n\n${cur.plan}\n\n---\nRun \`/go\` to execute, or \`/plan <revised task>\` to revise.`
+            : 'Usage: `/plan <task>` — generates a plan you can review, then `/go` to execute.',
+        };
+      }
+      const task = args.join(' ');
+      onChunk(`_Generating plan for: ${task.slice(0, 80)}${task.length > 80 ? '…' : ''}_\n\n`);
+      try {
+        const { generatePlan } = await import('../utils/planMode.js');
+        const plan = await generatePlan(task);
+        return {
+          handled: true,
+          response: `${plan}\n\n---\nRun \`/go\` to execute this plan, or \`/plan <revised task>\` to refine it.`,
+          streaming: true,
+        };
+      } catch (err) {
+        return { handled: true, response: `Plan generation failed: ${(err as Error).message}`, streaming: true };
+      }
+    }
+
+    case 'go': {
+      const { getPendingPlan, composeExecutionPrompt, clearPendingPlan } = await import('../utils/planMode.js');
+      const cur = getPendingPlan();
+      if (!cur) {
+        return { handled: true, response: 'No pending plan. Run `/plan <task>` first.' };
+      }
+      const prompt = composeExecutionPrompt(cur);
+      clearPendingPlan();
+      onChunk(`_Executing approved plan…_\n\n`);
+      try {
+        const { buildProjectContext } = await import('./session.js');
+        const ctx = buildProjectContext(session.workspaceRoot);
+        const agentResult = await runAgent(prompt, ctx, {
+          abortSignal,
+          onIteration: (_i: number, msg: string) => { onChunk(msg + '\n'); },
+          onThinking: (text: string) => { onChunk(text); },
+        });
+        return {
+          handled: true,
+          response: agentResult.finalResponse || '_(plan executed; no final summary)_',
+          streaming: true,
+        };
+      } catch (err) {
+        return { handled: true, response: `Plan execution failed: ${(err as Error).message}`, streaming: true };
+      }
+    }
+
     case 'export': {
       if (!session.history.length) return { handled: true, response: 'No messages to export.' };
       const format = (args[0] || 'md').toLowerCase();
