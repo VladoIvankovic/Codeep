@@ -11,6 +11,43 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.0.4] — 2026-05-19
+
+> Discoverability patch: new `/docs <command>` jumps from any slash command to its full guide on codeep.dev, the `/help` footer now points at the same place, and `/personality` and `/insights` have proper docs pages instead of one-liners.
+
+### Added
+
+- **`/docs <command>`** — opens the per-command guide for any 2.0
+  feature in your default browser. Knows 17 commands directly
+  (`personality`, `insights`, `plan`, `go`, `mcp`, `skills`,
+  `checkpoint`, `rewind`, `hooks`, `commands`, `openrouter`, `memory`,
+  `profile`, `compact`, `cost`, …); falls back to a marketplace search
+  on `/docs/commands?q=<cmd>` for unknown ones. Plain `/docs` opens
+  the docs index. Closes the gap between brief slash-command
+  autocomplete and the actual reference material.
+- **`/help` footer hint.** Below the scroll line: `Full guides →
+  codeep.dev/docs · /docs <command>`. Users skimming the inline help
+  now know there's a deeper layer one keystroke away.
+
+### Improved — web docs
+
+- **`/personality` guide** went from a 2-row table to a full reference:
+  3-column "when to use / what it changes" table for all 6 presets,
+  basic-flow terminal demo, end-to-end "combo with plan mode" example
+  (security-paranoid OAuth callback), custom personalities section
+  with full Acme Corp template, scope override rules, where-it-works
+  matrix, and a warning callout about chat() path behaviour.
+- **`/insights` guide** got similar treatment: source-of-truth JSON
+  shape from `~/.codeep/history/<id>.json`, what-you-see breakdown
+  per section, flags table, realistic terminal demo, and a tip
+  pointing at the dashboard for historical cost.
+
+### Notes
+
+- No agent behaviour or API changes — this is purely discoverability
+  and documentation. Safe to skip if you already know the surface area,
+  worthwhile if you've been wondering "what else is in here".
+
 ## [2.0.3] — 2026-05-19
 
 > Two Hermes-inspired additions: `/personality <name>` switches agent tone mid-conversation (concise, security-paranoid, senior-reviewer, junior-mentor, ship-it, verbose, or your own from `.codeep/personalities/*.md`), and `/insights [--days N]` summarises what you've been working on — runs, files, tools, projects.
