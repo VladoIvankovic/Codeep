@@ -161,6 +161,23 @@ export async function handleCommand(
           });
           break;
         }
+        if (providerId === 'custom') {
+          const base = config.get('customBaseUrl') || 'http://localhost:8000/v1';
+          ctx.app.notify(`Fetching models from ${base}…`);
+          const { fetchOpenAiCompatibleModels, getApiKey: _getKey } = await import('../config/index');
+          const models = await fetchOpenAiCompatibleModels(base, _getKey('custom') || undefined);
+          if (!models || models.length === 0) {
+            ctx.app.notify(`Could not list models from ${base}. Set the base URL in /settings, or set the model directly (config key "model").`);
+            break;
+          }
+          const modelItems = models.map(m => ({ key: m.id, label: m.name, description: '' }));
+          const currentModel = config.get('model');
+          ctx.app.showSelect(`Select Model (${models.length})`, modelItems, currentModel, (item) => {
+            config.set('model', item.key);
+            ctx.app.notify(`Model: ${item.key}`);
+          });
+          break;
+        }
         const { fetchOllamaModels } = await import('../config/index');
         ctx.app.notify('Fetching models from Ollama...');
         const ollamaModels = await fetchOllamaModels();

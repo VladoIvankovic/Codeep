@@ -34,7 +34,11 @@ describe('providers', () => {
         expect(provider.protocols).toBeDefined();
         expect(provider.models).toBeDefined();
         expect(Array.isArray(provider.models)).toBe(true);
-        expect(provider.models.length).toBeGreaterThan(0);
+        // Dynamic providers (e.g. Custom OpenAI-compatible) fetch their
+        // catalog at runtime and may ship no static models.
+        if (!(provider.dynamicModels && provider.models.length === 0)) {
+          expect(provider.models.length).toBeGreaterThan(0);
+        }
         expect(provider.defaultModel).toBeDefined();
         expect(provider.defaultProtocol).toBeDefined();
         expect(['openai', 'anthropic']).toContain(provider.defaultProtocol);
@@ -56,6 +60,9 @@ describe('providers', () => {
 
     it('should have default model in models list', () => {
       for (const provider of Object.values(PROVIDERS)) {
+        // Dynamic providers with no static catalog (Custom OpenAI-compatible)
+        // resolve the model at runtime, so an empty list + blank default is valid.
+        if (provider.dynamicModels && provider.models.length === 0) continue;
         const modelIds = provider.models.map(m => m.id);
         expect(modelIds).toContain(provider.defaultModel);
       }

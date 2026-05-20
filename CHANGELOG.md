@@ -11,6 +11,35 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.1.1] — 2026-05-20
+
+> Codeep now works with any OpenAI-compatible endpoint — vLLM, LiteLLM, LM Studio, text-generation-webui. New "Custom (OpenAI-compatible)" provider with a configurable base URL, plus support for the standard OPENAI_BASE_URL env var. Fixes #1.
+
+### Added
+
+- **Custom (OpenAI-compatible) provider.** Point Codeep at any self-hosted
+  or proxied OpenAI-compatible server (vLLM, LiteLLM, LM Studio,
+  text-generation-webui). Pick **Custom (OpenAI-compatible)** in the welcome
+  flow or `/provider`, set the endpoint under `/settings` → **Custom Base URL**
+  (config key `customBaseUrl`, e.g. `http://host:8000/v1`), then choose your
+  model with `/model` (fetched live from the server's `/models` endpoint).
+  No API key required; set one only if your endpoint enforces it.
+- **`OPENAI_BASE_URL` env var.** The `openai` provider now honors
+  `OPENAI_BASE_URL` (OpenAI-SDK convention), so an OpenAI-compatible proxy
+  serving `gpt-*` model names works with zero config changes.
+
+### Fixed
+
+- Custom base URLs were silently ignored for every provider except Ollama —
+  requests always went to `api.openai.com`, and an unknown model fell back to
+  the default. Base-URL resolution is now centralized (`resolveBaseUrl`) and
+  applied consistently across every path — chat, agent (TUI + ACP/editor),
+  `/plan` task planning, and API-key validation. (#1)
+- Welcome flow no longer forces an API-key prompt for keyless providers
+  (Ollama, Custom) — selecting one proceeds straight into the app.
+- Test isolation: `customCommands` tests now run against an isolated HOME so a
+  developer's global `~/.codeep/commands` can't make the suite non-deterministic.
+
 ## [2.1.0] — 2026-05-19
 
 > Session memory: `/recall <query>` searches across **all** your saved sessions, `--resume` jumps straight back into the best match, `--summarize` asks the LLM what you accomplished, and sessions now get readable AI-generated titles instead of truncated first messages.

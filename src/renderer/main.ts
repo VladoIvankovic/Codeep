@@ -306,6 +306,14 @@ async function showLoginFlow(): Promise<string | null> {
         } else if (event.key === 'enter') {
           selectedProvider = providers[selectedProviderIndex];
           setProvider(selectedProvider.id);
+          // Providers that don't need a key (Ollama, Custom OpenAI-compatible)
+          // skip the API-key prompt entirely. Configure their endpoint in
+          // /settings (Ollama URL / Custom Base URL) once inside the app.
+          if (selectedProvider.noApiKey) {
+            cleanup();
+            resolve('ollama'); // non-null sentinel so the caller proceeds
+            return;
+          }
           currentStep = 'apikey';
           loginScreen = new LoginScreen(screen, input, {
             providerName: selectedProvider.name,

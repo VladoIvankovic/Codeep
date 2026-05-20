@@ -147,6 +147,12 @@ export const SETTINGS: SettingItem[] = [
     type: 'text',
   },
   {
+    key: 'customBaseUrl',
+    label: 'Custom Base URL',
+    getValue: () => config.get('customBaseUrl') || '',
+    type: 'text',
+  },
+  {
     key: 'agentApiTimeout',
     label: 'Agent API Timeout (ms)',
     getValue: () => config.get('agentApiTimeout'),

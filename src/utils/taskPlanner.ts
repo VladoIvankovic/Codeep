@@ -2,8 +2,8 @@
  * Task Planning - breaks down complex tasks into subtasks
  */
 
-import { config, getApiKey, Message } from '../config/index';
-import { getProviderBaseUrl, getProviderAuthHeader, requiresDefaultTemperature } from '../config/providers';
+import { config, getApiKey, Message, resolveBaseUrl } from '../config/index';
+import { getProviderAuthHeader, requiresDefaultTemperature } from '../config/providers';
 
 export interface SubTask {
   id: number;
@@ -63,7 +63,7 @@ Break this down into subtasks. Each task = one file or one logical unit. Respond
     const protocol = config.get('protocol') as 'openai' | 'anthropic';
     const provider = config.get('provider');
     const model = config.get('model');
-    const baseUrl = getProviderBaseUrl(provider, protocol);
+    const baseUrl = resolveBaseUrl(provider, protocol);
     const authHeaderType = getProviderAuthHeader(provider, protocol);
 
     const messages: Message[] = [

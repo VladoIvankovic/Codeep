@@ -56,6 +56,7 @@ custom slash commands, lifecycle hooks, checkpoints, `/cost`,
 - **MiniMax** — MiniMax M2.7, M2.5, M2.1, M2 — Coding Plan & pay-per-use API (international & China)
 - **Ollama** — Run any model locally or on a remote server, no API key required. Models are fetched dynamically from your Ollama instance.
 - **OpenRouter** — One key, 100+ models from Anthropic, OpenAI, Google, Meta, Mistral, DeepSeek, Qwen, xAI and more. Per-call cost reported directly by OpenRouter (matches their dashboard exactly). Use `openrouter/auto` to let OpenRouter pick the best model. Tune routing with `/openrouter prefer|ignore|fallbacks|privacy`.
+- **Custom (OpenAI-compatible)** — Point Codeep at any self-hosted or proxied OpenAI-compatible endpoint (vLLM, LiteLLM, LM Studio, text-generation-webui). Set the base URL in `/settings` → **Custom Base URL** (config key `customBaseUrl`, e.g. `http://host:8000/v1`), then pick your model with `/model` (fetched from the server's `/models`). No API key required unless your endpoint enforces one. The `openai` provider also honors the `OPENAI_BASE_URL` env var for proxies that serve `gpt-*` model names.
 - Switch between providers with `/provider`
 - Configure different API keys per provider
 - Both OpenAI-compatible and Anthropic API protocols supported

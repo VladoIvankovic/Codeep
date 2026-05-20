@@ -15,10 +15,10 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { ProjectContext } from './project';
-import { config, getApiKey, Message } from '../config/index';
+import { config, getApiKey, Message, resolveBaseUrl } from '../config/index';
 import { loadProjectIntelligence, generateContextFromIntelligence } from './projectIntelligence';
 import { syncProgress, generateProjectId } from './codeepCloud';
-import { getProviderBaseUrl, getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, isNoApiKeyProvider } from '../config/providers';
+import { getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, isNoApiKeyProvider } from '../config/providers';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { formatToolDefinitions, getOpenAITools, getAnthropicTools, AdditionalToolDef } from './tools';
@@ -272,11 +272,7 @@ export async function agentChat(
   const providerId = config.get('provider');
   const apiKey = getApiKey() || (isNoApiKeyProvider(providerId) ? 'ollama' : null);
 
-  let baseUrl = getProviderBaseUrl(providerId, protocol);
-  if (providerId === 'ollama' && protocol === 'openai') {
-    const ollamaUrl = (config.get('ollamaUrl') || 'http://localhost:11434').replace(/\/$/, '');
-    baseUrl = `${ollamaUrl}/v1`;
-  }
+  let baseUrl = resolveBaseUrl(providerId, protocol);
   const authHeader = getProviderAuthHeader(providerId, protocol);
 
   if (!baseUrl) throw new Error(`Provider ${providerId} does not support ${protocol} protocol`);
@@ -452,11 +448,7 @@ export async function agentChatFallback(
   const providerId = config.get('provider');
   const apiKey = getApiKey() || (isNoApiKeyProvider(providerId) ? 'ollama' : null);
 
-  let baseUrl = getProviderBaseUrl(providerId, protocol);
-  if (providerId === 'ollama' && protocol === 'openai') {
-    const ollamaUrl = (config.get('ollamaUrl') || 'http://localhost:11434').replace(/\/$/, '');
-    baseUrl = `${ollamaUrl}/v1`;
-  }
+  let baseUrl = resolveBaseUrl(providerId, protocol);
   const authHeader = getProviderAuthHeader(providerId, protocol);
 
   if (!baseUrl) throw new Error(`Provider ${providerId} does not support ${protocol} protocol`);

@@ -18,6 +18,9 @@ vi.mock('../config/index', () => ({
     }),
   },
   getApiKey: vi.fn(() => 'test-api-key'),
+  // chatOpenAI now resolves the base URL via config (handles Ollama/Custom/
+  // OPENAI_BASE_URL overrides). Mock it to the same host the assertions expect.
+  resolveBaseUrl: vi.fn((_id: string, _proto: string) => 'https://api.example.com'),
   Message: undefined,
 }));
 
@@ -64,7 +67,7 @@ vi.mock('../utils/tokenTracker', () => ({
 
 // ─── Import after mocks ───────────────────────────────────────────────────────
 import { chat, validateApiKey, setProjectContext } from './index';
-import { config, getApiKey } from '../config/index';
+import { config, getApiKey, resolveBaseUrl } from '../config/index';
 import { getProviderBaseUrl, getProviderAuthHeader, getProvider } from '../config/providers';
 import { withRetry } from '../utils/retry';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from '../utils/tokenTracker';
@@ -72,6 +75,7 @@ import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from '../
 const mockConfig = config as unknown as { get: ReturnType<typeof vi.fn> };
 const mockGetApiKey = getApiKey as ReturnType<typeof vi.fn>;
 const mockGetProviderBaseUrl = getProviderBaseUrl as ReturnType<typeof vi.fn>;
+const mockResolveBaseUrl = resolveBaseUrl as ReturnType<typeof vi.fn>;
 const mockGetProviderAuthHeader = getProviderAuthHeader as ReturnType<typeof vi.fn>;
 const mockGetProvider = getProvider as ReturnType<typeof vi.fn>;
 const mockWithRetry = withRetry as ReturnType<typeof vi.fn>;
@@ -407,7 +411,8 @@ describe('validateApiKey()', () => {
   });
 
   it('returns valid:false when baseUrl is missing', async () => {
-    mockGetProviderBaseUrl.mockReturnValue(null);
+    // validateApiKey resolves the endpoint via resolveBaseUrl now.
+    mockResolveBaseUrl.mockReturnValueOnce(null);
 
     const result = await validateApiKey('any-key');
     expect(result.valid).toBe(false);

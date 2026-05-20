@@ -14,6 +14,7 @@ vi.mock('fs', async (importOriginal) => {
 vi.mock('../config/index', () => ({
   config: { get: vi.fn((k: string) => ({ language: 'en', apiTimeout: 30000, temperature: 0.7, maxTokens: 4096, provider: 'openai', model: 'gpt-4', protocol: 'openai' }[k])) },
   getApiKey: vi.fn(() => 'sk-test'),
+  resolveBaseUrl: vi.fn(() => 'https://api.example.com'),
   Message: {},
 }));
 vi.mock('../config/providers', () => ({

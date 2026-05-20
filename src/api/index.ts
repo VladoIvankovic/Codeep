@@ -1,6 +1,6 @@
 import * as http from 'node:http';
 import * as https from 'node:https';
-import { Message, config, getApiKey } from '../config/index';
+import { Message, config, getApiKey, resolveBaseUrl } from '../config/index';
 import { withRetry, isNetworkError, isTimeoutError } from '../utils/retry';
 import { ProjectContext } from '../utils/project';
 import { getProvider, getProviderBaseUrl, getProviderAuthHeader, usesMaxCompletionTokens, requiresDefaultTemperature } from '../config/providers';
@@ -393,14 +393,11 @@ async function chatOpenAI(
   const temperature = config.get('temperature');
   const maxTokens = config.get('maxTokens');
 
-  // Get provider-specific URL and auth
+  // Get provider-specific URL and auth. resolveBaseUrl applies user
+  // overrides: Ollama (ollamaUrl), Custom (customBaseUrl), and OpenAI
+  // (OPENAI_BASE_URL env) — so self-hosted / OpenAI-compatible endpoints work.
   const providerId = config.get('provider');
-  let baseUrl = getProviderBaseUrl(providerId, 'openai');
-  // For Ollama, use the configured URL (can't use lazy require in ESM providers.ts)
-  if (providerId === 'ollama') {
-    const ollamaUrl = (config.get('ollamaUrl') || 'http://localhost:11434').replace(/\/$/, '');
-    baseUrl = `${ollamaUrl}/v1`;
-  }
+  let baseUrl = resolveBaseUrl(providerId, 'openai');
   const authHeader = getProviderAuthHeader(providerId, 'openai');
   const useCompletionTokens = usesMaxCompletionTokens(providerId);
   const omitTemperature = requiresDefaultTemperature(providerId);
@@ -838,11 +835,7 @@ export async function validateApiKey(apiKey: string, providerId?: string): Promi
 
   // Determine which protocol to use for validation
   const protocol = providerConfig.defaultProtocol;
-  let baseUrl = getProviderBaseUrl(provider, protocol);
-  if (provider === 'ollama' && protocol === 'openai') {
-    const ollamaUrl = (config.get('ollamaUrl') || 'http://localhost:11434').replace(/\/$/, '');
-    baseUrl = `${ollamaUrl}/v1`;
-  }
+  const baseUrl = resolveBaseUrl(provider, protocol);
   const authHeader = getProviderAuthHeader(provider, protocol);
   const model = providerConfig.defaultModel;
 

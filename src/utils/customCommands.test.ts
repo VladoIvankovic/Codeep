@@ -6,8 +6,20 @@ import { loadCustomCommands, findCustomCommand, expandCommand, formatCommandList
 
 let tmpRoot: string;
 let cmdDir: string;
+let homeRoot: string;
+let origHome: string | undefined;
+let origUserProfile: string | undefined;
 
 beforeEach(() => {
+  // Isolate the GLOBAL ~/.codeep/commands dir (loadCustomCommands always reads
+  // homedir()) onto a throwaway HOME, so the suite doesn't pick up the
+  // developer's own global commands and become non-deterministic.
+  homeRoot = mkdtempSync(join(tmpdir(), 'codeep-home-'));
+  origHome = process.env.HOME;
+  origUserProfile = process.env.USERPROFILE;
+  process.env.HOME = homeRoot;
+  process.env.USERPROFILE = homeRoot;
+
   tmpRoot = mkdtempSync(join(tmpdir(), 'codeep-custom-cmds-'));
   cmdDir = join(tmpRoot, '.codeep', 'commands');
   mkdirSync(cmdDir, { recursive: true });
@@ -15,6 +27,9 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
+  rmSync(homeRoot, { recursive: true, force: true });
+  if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+  if (origUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = origUserProfile;
 });
 
 describe('loadCustomCommands', () => {

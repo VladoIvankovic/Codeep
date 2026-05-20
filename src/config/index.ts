@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlink
 import { join, dirname } from 'path';
 import { randomUUID } from 'crypto';
 
-import { PROVIDERS, getProvider } from './providers';
+import { PROVIDERS, getProvider, getProviderBaseUrl } from './providers';
 import { logSession } from '../utils/logger';
 import { createSecureStorage, type SecureStorage } from '../utils/keychain';
 
@@ -64,6 +64,7 @@ interface ConfigSchema {
   rateLimitCommands: number; // Commands per minute
   agentMode: AgentMode; // on = always use agent, manual = use /agent command
   ollamaUrl: string; // Ollama base URL (default: http://localhost:11434)
+  customBaseUrl: string; // Base URL for the "custom" OpenAI-compatible provider (e.g. vLLM/LiteLLM: http://host:8000/v1)
   agentConfirmation: 'always' | 'dangerous' | 'never'; // Confirmation mode for agent actions
   agentConfirmDeleteFile: boolean; // Confirm before delete_file in dangerous mode
   agentConfirmExecuteCommand: boolean; // Confirm before execute_command in dangerous mode
@@ -253,6 +254,7 @@ function createConfig(): Conf<ConfigSchema> {
     model: 'glm-5.1',
     agentMode: 'on',
     ollamaUrl: 'http://localhost:11434',
+    customBaseUrl: '',
     agentConfirmation: 'dangerous',
     agentConfirmDeleteFile: true,
     agentConfirmExecuteCommand: true,
@@ -689,6 +691,54 @@ export async function fetchOllamaModels(baseUrl?: string): Promise<{ id: string;
   } catch {
     return null;
   }
+}
+
+/**
+ * Fetch the model list from an OpenAI-compatible server's `/models`
+ * endpoint (vLLM, LiteLLM, LM Studio, etc.). `baseUrl` is the full base
+ * (e.g. http://host:8000/v1). Returns null on error.
+ */
+export async function fetchOpenAiCompatibleModels(baseUrl: string, apiKey?: string): Promise<{ id: string; name: string; description: string }[] | null> {
+  const base = (baseUrl || '').trim().replace(/\/+$/, '');
+  if (!base) return null;
+  try {
+    const headers: Record<string, string> = {};
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    const res = await fetch(`${base}/models`, { headers, signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const data = await res.json() as { data?: { id: string }[] };
+    if (!Array.isArray(data.data)) return null;
+    return data.data.map(m => ({ id: m.id, name: m.id, description: '' }));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the effective OpenAI-protocol base URL for a provider, honoring
+ * user overrides the static provider table can't express:
+ *   - ollama  → configured `ollamaUrl` + /v1
+ *   - custom  → configured `customBaseUrl` (full base, e.g. http://host:8000/v1)
+ *   - openai  → the OPENAI_BASE_URL env var, if set (OpenAI-SDK convention)
+ * Falls back to the provider's hardcoded base URL. Only the `openai`
+ * protocol takes overrides; the anthropic protocol uses the static table.
+ */
+export function resolveBaseUrl(providerId: string, protocol: 'openai' | 'anthropic'): string | null {
+  const fallback = getProviderBaseUrl(providerId, protocol);
+  if (protocol !== 'openai') return fallback;
+  if (providerId === 'ollama') {
+    const u = (config.get('ollamaUrl') || 'http://localhost:11434').replace(/\/+$/, '');
+    return `${u}/v1`;
+  }
+  if (providerId === 'custom') {
+    const u = (config.get('customBaseUrl') || '').trim().replace(/\/+$/, '');
+    return u || fallback;
+  }
+  if (providerId === 'openai') {
+    const env = (process.env.OPENAI_BASE_URL || '').trim().replace(/\/+$/, '');
+    if (env) return env;
+  }
+  return fallback;
 }
 
 // Re-export PROVIDERS for convenience

@@ -373,6 +373,24 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     groupLabel: 'Ollama (local)',
     hint: 'Runs locally — no API key or account needed.',
   },
+  'custom': {
+    name: 'Custom (OpenAI-compatible)',
+    description: 'Any OpenAI-compatible endpoint — vLLM, LiteLLM, LM Studio',
+    protocols: {
+      openai: {
+        baseUrl: 'http://localhost:8000/v1',
+        authHeader: 'Bearer',
+        supportsNativeTools: true,
+      },
+    },
+    models: [],
+    defaultModel: '',
+    defaultProtocol: 'openai',
+    noApiKey: true,        // key optional — sent as Bearer only if you set one
+    dynamicModels: true,
+    groupLabel: 'Custom',
+    hint: 'Point at any OpenAI-compatible server. Set the URL in /settings (Custom Base URL) or the OPENAI_BASE_URL env var, then pick your model with /model.',
+  },
 };
 
 export type ProviderId = keyof typeof PROVIDERS;
@@ -400,6 +418,7 @@ const DISPLAY_ORDER: string[] = [
   'minimax',
   'minimax-api',
   'ollama',
+  'custom',
   'z.ai-cn',
   'z.ai-cn-api',
   'minimax-cn',
