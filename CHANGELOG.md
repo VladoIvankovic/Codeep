@@ -11,6 +11,82 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.1.0] — 2026-05-19
+
+> Session memory: `/recall <query>` searches across **all** your saved sessions, `--resume` jumps straight back into the best match, `--summarize` asks the LLM what you accomplished, and sessions now get readable AI-generated titles instead of truncated first messages.
+
+### Added — `/recall` cross-session search
+
+- **`/recall <query>`** scans every saved session in the active scope
+  (project `.codeep/sessions/` when in a project, else global
+  `~/.codeep/sessions/`), matches with AND semantics (every query term
+  must appear), and ranks results by term-hit count plus a recency
+  boost. Each result shows a context snippet and the session name.
+- **`/recall <query> --resume`** loads the top-matching session
+  directly into the current conversation — skips the list + `/sessions`
+  picker dance. (TUI only; ACP shows results since it can't swap the
+  client's conversation in place.)
+- **`/recall <query> --summarize`** reads the matching sessions and
+  returns a short LLM recap of what you actually accomplished across
+  them — "ask your history a question". Works in TUI + ACP.
+- No new dependency: in-memory JSON scan, fast for the realistic
+  tens-to-hundreds-of-sessions case.
+
+### Added — portable personal config sync
+
+- **Personalities and custom commands now sync across your machines**
+  via `codeep account sync` (pull) and `codeep account push`. Global
+  ones (`~/.codeep/personalities/*.md`, `~/.codeep/commands/*.md`)
+  travel with your account alongside API keys and profiles — set up a
+  `senior-reviewer` personality or a `/deploy` command once, get it
+  everywhere. New endpoints `/api/personalities` + `/api/commands`,
+  new DB tables `user_personalities` + `user_commands`.
+- **Additive merge, never destructive**: pull only writes files that
+  don't already exist locally, so a sync can't clobber edits you
+  haven't pushed. Last-write-wins on the server via upsert.
+- **Dashboard sections** to view + delete synced personalities and
+  commands at codeep.dev/dashboard (read + prune; editing stays in the
+  CLI).
+- **Deliberately not synced**: lifecycle hooks (arbitrary shell —
+  syncing + auto-running on another machine is a security risk) and
+  MCP server configs (contain tokens). Those stay local by design.
+
+### Added — AI-generated session titles
+
+- Sessions now get a concise LLM-generated title ("OAuth2 migration
+  for auth module") instead of the first user message truncated to 60
+  chars ("help me with the…"). Generated once per session in the
+  background after it has ≥3 messages — fire-and-forget on autosave,
+  never blocks a save, never regenerates once set. Makes both
+  `/sessions` and `/recall` dramatically more readable.
+- Title priority: AI title > stored title > first-message fallback >
+  session name. Stored under `aiTitle` in the session JSON.
+- **Opt-out: `autoSessionTitle` setting** (default on). This is the
+  only feature that makes a background API call you didn't explicitly
+  request, so it's toggleable in `/settings` for privacy/cost-conscious
+  users. Off → sessions keep the first-message title, zero background
+  calls.
+
+### Changed
+
+- **`/search` description clarified** to "search the current session"
+  (vs `/recall` for cross-session) — the two were easy to confuse when
+  both said "search history".
+
+### Fixed
+
+- **`/sessions` picker showed raw session ids** (`session-2026-05-20-757cbda5`)
+  instead of readable titles. Now shows the title (AI-generated > stored
+  > first-message) with a short date + message count, so the list is
+  scannable.
+- **Models hallucinating their identity in chat mode.** Asked "which
+  model are you", GLM (and others) would claim to be Claude because the
+  chat system prompt never stated the actual identity. Both the chat
+  and agent system prompts now inject the real `model` + `provider`
+  from config, so the answer is truthful. (Agent mode already said
+  "never call yourself Claude" but didn't state the real model; now it
+  does.)
+
 ## [2.0.4] — 2026-05-19
 
 > Discoverability patch: new `/docs <command>` jumps from any slash command to its full guide on codeep.dev, the `/help` footer now points at the same place, and `/personality` and `/insights` have proper docs pages instead of one-liners.

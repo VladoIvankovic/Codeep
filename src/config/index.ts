@@ -10,6 +10,9 @@ import { createSecureStorage, type SecureStorage } from '../utils/keychain';
 interface Session {
   name: string;
   title?: string;
+  /** LLM-generated one-liner (utils/sessionTitles.ts). Preferred over
+   *  `title` when present — see listSessionsWithInfo. */
+  aiTitle?: string;
   history: Message[];
   createdAt: string;
 }
@@ -49,6 +52,10 @@ interface ConfigSchema {
   plan: 'lite' | 'pro' | 'max';
   language: LanguageCode;
   autoSave: boolean;
+  /** Auto-generate an LLM one-liner title for sessions on save. Makes a
+   *  small background API call (uses the active model) once per session.
+   *  Default true; set false to avoid any unsolicited API calls. */
+  autoSessionTitle: boolean;
   currentSessionId: string;
   temperature: number;
   maxTokens: number;
@@ -267,6 +274,7 @@ function createConfig(): Conf<ConfigSchema> {
     plan: 'lite',
     language: 'en',
     autoSave: true,
+    autoSessionTitle: true,
     currentSessionId: '',
     temperature: 0.7,
     maxTokens: 32768,
@@ -763,20 +771,81 @@ export function saveSession(name: string, history: Message[], projectPath?: stri
     const title = firstUserMsg
       ? firstUserMsg.content.replace(/\n/g, ' ').trim().slice(0, 60)
       : name;
+    const sessionsDir = getSessionsDir(projectPath);
+    const filePath = join(sessionsDir, `${name}.json`);
+    // Preserve an existing aiTitle across re-saves so we don't regenerate.
+    let existingAiTitle: string | undefined;
+    if (existsSync(filePath)) {
+      try {
+        const prev = JSON.parse(readFileSync(filePath, 'utf-8')) as Session;
+        existingAiTitle = prev.aiTitle;
+      } catch { /* ignore corrupt prior file */ }
+    }
     const session: Session = {
       name,
       title,
+      aiTitle: existingAiTitle,
       history,
       createdAt: new Date().toISOString(),
     };
-    const sessionsDir = getSessionsDir(projectPath);
-    const filePath = join(sessionsDir, `${name}.json`);
     writeFileSync(filePath, JSON.stringify(session, null, 2));
     logSession('save', name, true);
+
+    // Fire-and-forget: generate an AI title once the session has enough
+    // content. The orchestrator early-returns if one already exists, so
+    // this is a no-op on every save after the first successful generation.
+    // Gated by autoSessionTitle so privacy/cost-conscious users can opt out
+    // of the (small, background) API call entirely.
+    if (config.get('autoSessionTitle') !== false
+        && !existingAiTitle
+        && history.filter(m => m.role !== 'system').length >= 3) {
+      void maybeGenerateSessionTitle(name, projectPath).catch(() => {});
+    }
     return true;
   } catch (error) {
     logSession('save', name, false);
     return false;
+  }
+}
+
+// Guard against concurrent title generation for the same session during
+// the 5s autosave cadence — only one in-flight call per session name.
+const titlesInFlight = new Set<string>();
+
+/**
+ * Generate and persist an AI title for a session, if it doesn't have
+ * one yet. Safe to call repeatedly — early-returns when aiTitle exists
+ * or a generation is already in flight.
+ */
+export async function maybeGenerateSessionTitle(name: string, projectPath?: string): Promise<void> {
+  if (titlesInFlight.has(name)) return;
+  const sessionsDir = getSessionsDir(projectPath);
+  const filePath = join(sessionsDir, `${name}.json`);
+  if (!existsSync(filePath)) return;
+
+  let data: Session;
+  try {
+    data = JSON.parse(readFileSync(filePath, 'utf-8')) as Session;
+  } catch {
+    return;
+  }
+  if (data.aiTitle) return;
+
+  titlesInFlight.add(name);
+  try {
+    const { generateSessionTitle } = await import('../utils/sessionTitles.js');
+    const aiTitle = await generateSessionTitle(data.history);
+    if (aiTitle) {
+      // Re-read in case the session was re-saved while we were generating,
+      // so we don't clobber newer history with our stale copy.
+      try {
+        const fresh = JSON.parse(readFileSync(filePath, 'utf-8')) as Session;
+        fresh.aiTitle = aiTitle;
+        writeFileSync(filePath, JSON.stringify(fresh, null, 2));
+      } catch { /* ignore */ }
+    }
+  } finally {
+    titlesInFlight.delete(name);
   }
 }
 
@@ -902,9 +971,12 @@ export function listSessionsWithInfo(projectPath?: string): SessionInfo[] {
         const stat = statSync(filePath);
         const data = JSON.parse(readFileSync(filePath, 'utf-8')) as Session;
         const sessionName = data.name || file.replace('.json', '');
-        // Derive title: use stored title, else first user message, else session name
+        // Title priority: AI-generated one-liner > stored title > first
+        // user message > session name. aiTitle reads far better in
+        // /sessions + /recall ("OAuth2 migration" vs "help me with the…").
         const firstUserMsg = data.history?.find(m => m.role === 'user');
-        const title = data.title
+        const title = data.aiTitle
+          || data.title
           || (firstUserMsg ? firstUserMsg.content.replace(/\n/g, ' ').trim().slice(0, 60) : null)
           || sessionName;
         sessions.push({

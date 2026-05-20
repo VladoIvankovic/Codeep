@@ -251,6 +251,91 @@ export async function pushKeys(keys: Record<string, string>): Promise<boolean> {
   return res?.ok ?? false;
 }
 
+// ─── Portable personal config sync (personalities + commands) ──────────────────
+//
+// Both are name → raw-.md-body bundles stored in a global dir
+// (~/.codeep/personalities, ~/.codeep/commands). The sync is bidirectional
+// and merge-based: pull writes any remote file not present locally; push
+// sends every local file. Last-write-wins on the server via upsert. We
+// never delete locally on pull — additive only, so a sync can't nuke
+// work you haven't pushed.
+
+import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
+
+function globalDir(kind: 'personalities' | 'commands'): string {
+  return join(homedir(), '.codeep', kind);
+}
+
+/** Read every <name>.md in a global config dir into a { name → body } map. */
+function readFileBundle(kind: 'personalities' | 'commands'): Record<string, string> {
+  const dir = globalDir(kind);
+  if (!existsSync(dir)) return {};
+  const out: Record<string, string> = {};
+  try {
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.md')) continue;
+      const name = f.slice(0, -3).toLowerCase();
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(name) || name.length > 64) continue;
+      try {
+        const body = readFileSync(join(dir, f), 'utf8');
+        if (body.length <= 64 * 1024) out[name] = body;
+      } catch { /* skip unreadable */ }
+    }
+  } catch { /* dir read failed */ }
+  return out;
+}
+
+/** Write a { name → body } map into a global config dir as <name>.md
+ *  files. Only writes files that don't already exist (additive merge —
+ *  never clobber local edits). Returns the count of newly written files. */
+function writeFileBundle(kind: 'personalities' | 'commands', items: Record<string, string>): number {
+  const dir = globalDir(kind);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  let written = 0;
+  for (const [name, body] of Object.entries(items)) {
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name) || name.length > 64 || typeof body !== 'string' || !body) continue;
+    const filePath = join(dir, `${name}.md`);
+    if (existsSync(filePath)) continue; // don't clobber local
+    try { writeFileSync(filePath, body); written++; } catch { /* skip */ }
+  }
+  return written;
+}
+
+async function pullBundle(kind: 'personalities' | 'commands'): Promise<number | null> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return null;
+  const res = await fetchWithRetry(`${API_BASE}/api/${kind}`, { headers: { 'x-sync-token': syncToken } });
+  if (!res?.ok) return null;
+  try {
+    const data = await res.json() as { ok: boolean; items: Record<string, string> };
+    if (!data.ok) return null;
+    return writeFileBundle(kind, data.items ?? {});
+  } catch {
+    return null;
+  }
+}
+
+async function pushBundle(kind: 'personalities' | 'commands'): Promise<number | null> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return null;
+  const items = readFileBundle(kind);
+  const count = Object.keys(items).length;
+  if (count === 0) return 0;
+  const res = await fetchWithRetry(`${API_BASE}/api/${kind}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+    body: JSON.stringify({ items }),
+  });
+  return res?.ok ? count : null;
+}
+
+export const pullPersonalities = () => pullBundle('personalities');
+export const pushPersonalities = () => pushBundle('personalities');
+export const pullCommands = () => pullBundle('commands');
+export const pushCommands = () => pushBundle('commands');
+
 // ─── Session history sync ─────────────────────────────────────────────────────
 
 /**

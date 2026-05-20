@@ -271,15 +271,44 @@ const LANGUAGE_NAMES: Record<string, string> = {
   'hr': 'Croatian (Hrvatski)',
 };
 
+/**
+ * Build the agent's identity sentence from the active provider + model.
+ * Codeep is the product; the model underneath varies. Stating it
+ * explicitly stops models from guessing their own identity (GLM and
+ * others often claim to be Claude because their training data includes
+ * Claude transcripts).
+ */
+function buildIdentityLine(): string {
+  const model = String(config.get('model') || '');
+  const providerId = String(config.get('provider') || '');
+  const known: Record<string, string> = {
+    'z.ai': 'Z.AI', 'z.ai-api': 'Z.AI', 'z.ai-cn': 'Z.AI', 'z.ai-cn-api': 'Z.AI',
+    openai: 'OpenAI', anthropic: 'Anthropic', deepseek: 'DeepSeek', google: 'Google',
+    minimax: 'MiniMax', 'minimax-api': 'MiniMax', 'minimax-cn': 'MiniMax',
+    openrouter: 'OpenRouter', ollama: 'Ollama (local)',
+  };
+  const providerName = known[providerId] || providerId || 'your configured provider';
+  if (model) {
+    return `You are Codeep, an AI coding assistant. You are running on the \`${model}\` model via ${providerName}. If asked which model or provider you are, answer truthfully with these details — do not claim to be a different model.`;
+  }
+  return `You are Codeep, an AI coding assistant.`;
+}
+
 function getSystemPrompt(): string {
   const language = config.get('language');
-  
+
+  // Identity line so the model doesn't hallucinate its name when asked
+  // "what model are you" — without it, models guess from their training
+  // data (e.g. GLM claiming to be Claude). State the truth: the product
+  // is Codeep, the underlying model + provider come from config.
+  const identity = buildIdentityLine();
+
   let basePrompt: string;
   if (language === 'auto') {
-    basePrompt = `You are a helpful AI coding assistant. Always respond in the same language as the user's message. Detect the language of the user's input and reply in that same language.`;
+    basePrompt = `${identity} Always respond in the same language as the user's message. Detect the language of the user's input and reply in that same language.`;
   } else {
     const langName = LANGUAGE_NAMES[language] || 'English';
-    basePrompt = `You are a helpful AI coding assistant. Always respond in ${langName}, regardless of what language the user writes in.`;
+    basePrompt = `${identity} Always respond in ${langName}, regardless of what language the user writes in.`;
   }
   
   // Important: This is CHAT mode, not agent mode

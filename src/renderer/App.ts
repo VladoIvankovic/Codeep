@@ -109,6 +109,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'go': 'Execute the pending plan from /plan',
   'personality': 'Switch agent tone: concise / verbose / security / senior-reviewer / etc',
   'insights': 'Activity summary over the last N days (default 7): runs, files, tools, projects',
+  'recall': 'Search across ALL saved sessions (cross-session; /search is current-session only)',
 };
 
 import { helpCategories, keyboardShortcuts } from './components/Help';
@@ -305,6 +306,8 @@ export class App {
     'plan', 'go',
     // 2.0.3 — personalities + insights.
     'personality', 'insights',
+    // 2.1.0 — cross-session recall.
+    'recall',
     'c', 't', 'd', 'r', 'f', 'e', 'o', 'b', 'p',
   ];
   

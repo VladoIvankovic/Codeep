@@ -73,7 +73,9 @@ When started in a project directory, Codeep automatically:
 - **Session picker** - Choose which session to continue on startup
 - **Per-project sessions** - Sessions stored in `.codeep/sessions/`
 - **Rename sessions** - Give meaningful names with `/rename`
-- **Search history** - Find past conversations with `/search`
+- **AI session titles** - Sessions auto-title themselves with an LLM one-liner ("OAuth2 migration for auth module") instead of a truncated first message. This makes one small background API call per session; turn it off with the `autoSessionTitle` setting (`/settings`) if you prefer zero unsolicited calls
+- **Search current session** - Find text in the open conversation with `/search`
+- **Cross-session recall** - `/recall <query>` searches across **all** saved sessions, ranked by relevance + recency. Add `--resume` to load the top match, or `--summarize` for an LLM recap of what you accomplished across matches
 - **Export** - Save to Markdown, JSON, or plain text
 - `/cost` - Per-session token usage and estimated cost (per provider/model)
 - `/compact [keepN]` - AI-summarize older messages to free up context (keeps last N, default 4)
@@ -709,6 +711,7 @@ codeep account   # Opens browser → sign in with GitHub → CLI is linked
 - **Project archiving** — hide projects from the list with one click
 - **Tasks** — create/complete bug, feature, and task items from the web or directly from the CLI with `/tasks add` and `/tasks done`
 - **API key sync** — store provider keys securely on codeep.dev, sync to any machine in one command
+- **Personal config sync** — personalities and custom slash commands sync across machines; view and prune them on the dashboard
 - **Connected devices** — see all machines linked to your account (hostname, last seen), revoke access per device
 
 ### API key sync
@@ -716,11 +719,31 @@ codeep account   # Opens browser → sign in with GitHub → CLI is linked
 Add keys once on the dashboard, then sync them to any machine:
 
 ```bash
-codeep account sync   # Pull keys from codeep.dev → local config
-codeep account push   # Push local keys → codeep.dev
+codeep account sync   # Pull keys + config from codeep.dev → local
+codeep account push   # Push local keys + config → codeep.dev
 ```
 
 Keys are encrypted at rest using AES-256-GCM.
+
+### Personal config sync
+
+`account sync` / `account push` also carry your **personalities** and **custom
+slash commands** between machines — the Markdown files in
+`~/.codeep/personalities/` and `~/.codeep/commands/`:
+
+```bash
+codeep account push   # Upload local personalities + commands to codeep.dev
+codeep account sync   # Download them onto a new machine
+```
+
+Merging is **additive** — `sync` only writes files that don't already exist
+locally, so it never clobbers a personality or command you've edited on this
+machine. View what's synced (and prune stale entries) under **Personalities**
+and **Custom commands** on the [dashboard](https://codeep.dev/dashboard).
+
+Hooks and MCP server configs are deliberately **not** synced: hooks run
+arbitrary shell, and MCP configs often embed tokens, so both stay local to each
+machine.
 
 ### Tasks
 
@@ -973,8 +996,8 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 | Command | Description |
 |---------|-------------|
 | `codeep account` | Link CLI to codeep.dev (GitHub OAuth) |
-| `codeep account sync` | Pull API keys from codeep.dev → local config |
-| `codeep account push` | Push local API keys → codeep.dev |
+| `codeep account sync` | Pull API keys + personalities + commands from codeep.dev → local |
+| `codeep account push` | Push local API keys + personalities + commands → codeep.dev |
 
 ### Authentication
 

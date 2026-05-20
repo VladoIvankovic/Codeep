@@ -680,6 +680,31 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
 
     // ─── Export ────────────────────────────────────────────────────────────────
 
+    // ─── Cross-session recall (2.1.0) ─────────────────────────────────────────
+
+    case 'recall': {
+      const wantSummarize = args.includes('--summarize');
+      // --resume is TUI-only (ACP can't swap the client's conversation
+      // in place); ignore the flag here and just show results.
+      const query = args.filter(a => a !== '--resume' && a !== '--summarize').join(' ');
+      if (!query) {
+        return { handled: true, response: 'Usage: `/recall <query> [--summarize]` — searches across all saved sessions (vs `/search`, current-session only).' };
+      }
+      const { recallSessions, formatRecall, summarizeRecall } = await import('../utils/recall.js');
+      const matches = recallSessions(query, session.workspaceRoot);
+      const header = formatRecall(query, matches);
+      if (wantSummarize && matches.length > 0) {
+        onChunk('_Summarizing matching sessions…_\n\n');
+        const summary = await summarizeRecall(query, matches, session.workspaceRoot);
+        return {
+          handled: true,
+          response: summary ? `${header}\n\n---\n\n### Summary\n\n${summary}` : header,
+          streaming: true,
+        };
+      }
+      return { handled: true, response: header };
+    }
+
     // ─── Personalities + insights (2.0.3) ─────────────────────────────────────
 
     case 'personality': {

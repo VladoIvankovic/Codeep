@@ -203,7 +203,14 @@ export function formatChatHistoryForAgent(
 
 export function getAgentSystemPrompt(projectContext: ProjectContext): string {
   const root = projectContext.root || process.cwd();
-  return `You are Codeep, an autonomous AI coding agent operating inside this project. Never refer to yourself as Claude or any other AI.
+  // State the real underlying model/provider so "which model are you"
+  // gets a truthful answer instead of a hallucinated one.
+  const model = String(config.get('model') || '');
+  const providerId = String(config.get('provider') || '');
+  const identity = model
+    ? `You are Codeep, an autonomous AI coding agent operating inside this project. The underlying model is \`${model}\` (via ${providerId}). If asked which model or provider you are, answer truthfully with these details. Never claim to be Claude or any other model unless that is genuinely the configured model.`
+    : `You are Codeep, an autonomous AI coding agent operating inside this project. Never refer to yourself as Claude or any other AI unless that is genuinely the configured model.`;
+  return `${identity}
 
 ## Tools
 - read_file / write_file / edit_file / delete_file — file ops (prefer edit_file for modifications to keep surrounding content intact)

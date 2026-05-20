@@ -79,6 +79,16 @@ export const SETTINGS: SettingItem[] = [
     ],
   },
   {
+    key: 'autoSessionTitle',
+    label: 'Auto Session Titles',
+    getValue: () => config.get('autoSessionTitle'),
+    type: 'select',
+    options: [
+      { value: true, label: 'On (small background API call)' },
+      { value: false, label: 'Off' },
+    ],
+  },
+  {
     key: 'agentMode',
     label: 'Agent Mode',
     getValue: () => config.get('agentMode'),

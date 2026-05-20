@@ -392,13 +392,21 @@ export async function handleCommand(
     case 'sessions': {
       const sessions = listSessionsWithInfo(ctx.projectPath);
       if (sessions.length === 0) { ctx.app.notify('No saved sessions'); return; }
-      ctx.app.showList('Load Session', sessions.map(s => s.name), (index) => {
+      // Show the readable title (AI-generated > stored > first-message >
+      // name) with a short date for disambiguation, instead of the raw
+      // session id. Loading still keys off the index → session mapping.
+      const labels = sessions.map(s => {
+        const date = new Date(s.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const title = s.title && s.title !== s.name ? s.title : s.name;
+        return `${title}  ·  ${date} · ${s.messageCount} msg`;
+      });
+      ctx.app.showList('Load Session', labels, (index) => {
         const selected = sessions[index];
         const loaded = loadSession(selected.name, ctx.projectPath);
         if (loaded) {
           ctx.app.setMessages(loaded as Message[]);
           ctx.setSessionId(selected.name);
-          ctx.app.notify(`Loaded: ${selected.name}`);
+          ctx.app.notify(`Loaded: ${selected.title || selected.name}`);
         } else {
           ctx.app.notify('Failed to load session');
         }
@@ -613,6 +621,53 @@ Format: use headers per category, only include categories where you found issues
       } else {
         ctx.app.showSearch(searchTerm, searchResults, (messageIndex) => ctx.app.scrollToMessage(messageIndex));
       }
+      break;
+    }
+
+    case 'recall': {
+      // Cross-session search (vs /search which is current-session only).
+      // Flags: --resume (load top match), --summarize (LLM recap).
+      const wantResume = args.includes('--resume');
+      const wantSummarize = args.includes('--summarize');
+      const query = args.filter(a => a !== '--resume' && a !== '--summarize').join(' ');
+      if (!query) {
+        ctx.app.notify('Usage: /recall <query> [--resume | --summarize]');
+        return;
+      }
+      const { recallSessions, formatRecall, summarizeRecall } = await import('../utils/recall');
+      const matches = recallSessions(query, ctx.projectPath);
+
+      if (matches.length === 0) {
+        ctx.app.addMessage({ role: 'system', content: formatRecall(query, matches) });
+        break;
+      }
+
+      if (wantResume) {
+        // Load the top match directly — skip the list + /sessions dance.
+        const top = matches[0];
+        const loaded = loadSession(top.session.name, ctx.projectPath);
+        if (loaded) {
+          ctx.app.setMessages(loaded as Message[]);
+          ctx.setSessionId(top.session.name);
+          ctx.app.notify(`Resumed: ${top.session.title} (${top.session.name})`);
+        } else {
+          ctx.app.notify(`Couldn't load ${top.session.name}.`);
+        }
+        break;
+      }
+
+      if (wantSummarize) {
+        ctx.app.notify('Summarizing matching sessions…');
+        const summary = await summarizeRecall(query, matches, ctx.projectPath);
+        const header = formatRecall(query, matches);
+        const block = summary
+          ? `${header}\n\n---\n\n### Summary\n\n${summary}`
+          : header;
+        ctx.app.addMessage({ role: 'system', content: block });
+        break;
+      }
+
+      ctx.app.addMessage({ role: 'system', content: formatRecall(query, matches) });
       break;
     }
 

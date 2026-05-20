@@ -57,6 +57,7 @@ const AVAILABLE_COMMANDS = [
   // Sessions
   { name: 'session',   description: 'List sessions, or: new / load <name>', input: { hint: 'new | load <name>' } },
   { name: 'save',      description: 'Save current session', input: { hint: '[name]' } },
+  { name: 'recall',    description: 'Search across ALL saved sessions (cross-session)', input: { hint: '<query> [--summarize]' } },
   // Context
   { name: 'add',       description: 'Add files to agent context', input: { hint: '<file> [file2…]' } },
   { name: 'drop',      description: 'Remove files from context (no args = clear all)', input: { hint: '[file…]' } },
