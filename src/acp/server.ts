@@ -796,6 +796,16 @@ export function startAcpServer(): Promise<void> {
       } else {
         config.set('model', value);
       }
+    } else if (configId === 'provider' && typeof value === 'string') {
+      // Switch provider without specifying a model — picks the provider's
+      // default model + protocol. Used by editor clients that pin a provider
+      // in their settings (e.g. the VS Code `codeep.provider` setting).
+      setProvider(value);
+    } else if (configId === 'customBaseUrl' && typeof value === 'string') {
+      // Base URL for the `custom` (OpenAI-compatible) provider — lets editor
+      // clients point Codeep at a self-hosted endpoint (vLLM/LiteLLM/LM Studio)
+      // without hand-editing ~/.codeep/config.json.
+      config.set('customBaseUrl', value);
     } else if (configId === 'language' && typeof value === 'string') {
       config.set('language', value as LanguageCode);
     } else if (
@@ -889,6 +899,14 @@ export function startAcpServer(): Promise<void> {
       hint: p.hint ?? p.description,
       requiresKey: !p.noApiKey,
       subscribeUrl: p.subscribeUrl,
+      // Model metadata so ACP clients (e.g. the VS Code model picker) can
+      // offer a provider → model selector without hardcoding a catalog.
+      // `dynamicModels` flags providers whose model list is open-ended
+      // (OpenRouter, Ollama, custom endpoints) — clients should let the
+      // user type a model id rather than only pick from `models`.
+      models: p.models.map((m) => ({ id: m.id, name: m.name })),
+      defaultModel: p.defaultModel,
+      dynamicModels: p.dynamicModels ?? false,
     }));
     transport.respond(msg.id, { providers });
   }

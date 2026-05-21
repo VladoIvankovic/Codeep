@@ -11,6 +11,28 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.1.2] — 2026-05-21
+
+> ACP server enhancements that power the new Codeep VS Code 2.2 features — editor clients can now list models per provider and pin a provider, model, or custom endpoint over the protocol.
+
+### Added
+
+- **`session/list_providers` now returns model metadata** — each provider
+  carries its `models` (id + name), `defaultModel`, and a `dynamicModels`
+  flag. Lets ACP clients (the VS Code model picker, Zed) build a provider →
+  model selector without hardcoding a catalog. Backward-compatible: older
+  clients ignore the extra fields.
+- **New `session/set_config_option` ids: `provider` and `customBaseUrl`.**
+  `provider` switches the active provider (and picks its default model +
+  protocol); `customBaseUrl` sets the base URL for the `custom`
+  (OpenAI-compatible) provider. These let editor settings drive provider /
+  model / endpoint without hand-editing `~/.codeep/config.json`.
+
+### Notes
+
+- Pure additive ACP surface — no behavior change for the TUI or existing
+  clients. The Codeep VS Code extension 2.2.0 builds on these.
+
 ## [2.1.1] — 2026-05-20
 
 > Codeep now works with any OpenAI-compatible endpoint — vLLM, LiteLLM, LM Studio, text-generation-webui. New "Custom (OpenAI-compatible)" provider with a configurable base URL, plus support for the standard OPENAI_BASE_URL env var. Fixes #1.

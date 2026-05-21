@@ -1296,3 +1296,25 @@ The chat sidebar now surfaces two extra ACP signals that previously only the TUI
 - **Diff preview on permission prompts** — manual-mode permission cards now show a `-` / `+` diff for `edit_file`, a content preview for `write_file`, and the full `$ command` + `cwd` for `execute_command`, so users can verify before clicking *Allow*. Payload is truncated (~4 KB per field, 200 lines per file) with a visible marker. Other ACP clients (Zed, etc.) ignore the extra fields silently.
 - **`@file` mentions** — type `@` in the chat input to open a workspace-wide file picker. Pick with arrow keys + Enter; the file's content is inlined into the prompt as an `[Attached files]` preamble. Files over 200 KB are skipped with a marker. Multiple mentions in one message are deduplicated.
 - **Auto-reconnect** — if the CLI process exits unexpectedly (crash, OOM kill, parent restart), the extension reconnects on its own with exponential backoff (1s → 2s → 4s → 8s → 16s → 30s, capped at 6 attempts). The status bar shows the countdown. Configurable idle-watchdog timeout (`codeep.requestTimeoutMinutes`, default 5 min) replaces the old fixed cap so slow reasoning models don't get killed mid-thought.
+
+### Editor-native actions (new in 2.2)
+
+- **Code Actions (lightbulb)** — select code and press `Ctrl+.` for **Explain**, **Improve / refactor**, **Add tests**, and **Add doc comment**. On a line with an error/warning, a **Fix this problem** quick-fix sends the diagnostic plus the code to Codeep. Everything routes through the chat, so the full agent (file edits via the diff preview, MCP tools) is available.
+- **Model picker in the status bar** — click `Codeep · <model>` (or run **Codeep: Select Provider & Model**) to switch provider + model from a quick-pick. Providers with open-ended catalogs (OpenRouter, Ollama, custom endpoints) let you type a model id.
+- **Self-hosted endpoints from settings** — point the extension at vLLM / LiteLLM / LM Studio / text-generation-webui with `codeep.baseUrl` (e.g. `http://localhost:8000/v1`), plus `codeep.provider` (`custom` or `openai`) and `codeep.model`. The `codeep.provider` / `codeep.model` settings are applied on every connect, so they stay authoritative.
+- **Get Started walkthrough** — a native VS Code walkthrough (Help → Get Started) covering CLI install, opening the chat, editor actions, and choosing a model.
+
+> The 2.2 model picker and `custom`-provider settings need CLI **2.1.2+**; they degrade gracefully on older CLIs (free-text model input, and `codeep.baseUrl` still works for the `openai` provider via `OPENAI_BASE_URL`).
+
+### Native chat & agent integration (new in 2.3)
+
+- **`@codeep` chat participant** — invoke Codeep from VS Code's built-in Chat view: type `@codeep` and ask, or `@codeep /explain` / `@codeep /review` with a selection. Answers come from your configured Codeep provider/model via the CLI (not VS Code's model picker), on an independent session.
+- **`#codeepSkills` language-model tool** — exposes your workspace's Codeep skill bundles (`.codeep/skills/*/SKILL.md`) to VS Code agent mode and `#`-references, so the native agent can follow your project's own workflows.
+- Requires VS Code **1.95+** (for the stable Chat Participant + Language Model Tools APIs).
+
+### Source control & sidebar (new in 2.3)
+
+- **Generate Commit Message** — a sparkle button in the Source Control panel (and `Codeep: Generate Commit Message` in the palette) reads your staged diff and writes a Conventional Commits message into the commit box. Falls back to the working-tree diff if nothing is staged; asks before replacing a message you've already typed.
+- **Sessions tree view** — a native **Sessions** view in the Codeep sidebar lists saved conversations (title + age). Click to load into the chat, inline-delete, or start a New Session from the title bar.
+- **MCP config validation** — `.codeep/mcp_servers.json` (project and global) gets JSON schema validation + autocomplete, so a mistyped `command` / `args` / `env` is caught before a session starts.
+- **Workspace Trust** — declares limited support for untrusted workspaces, with a reminder to review permission prompts carefully (Codeep runs a local agent that can edit files and run commands).
