@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  AI-powered coding assistant built for the terminal. Multiple LLM providers, project-aware context, and a seamless development workflow.
+  Autonomous AI coding agent that reads your project, runs commands, and writes &amp; verifies code — deeper than autocomplete. Any model (Claude, Gemini, DeepSeek, GLM, OpenAI, or your own local/custom), in the terminal and your editor.
 </p>
 
 <p align="center">
