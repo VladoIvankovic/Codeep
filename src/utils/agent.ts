@@ -24,6 +24,7 @@ import {
   loadProgressLog,
   writeProgressLog,
   formatChatHistoryForAgent,
+  summarizeEarlierHistory,
 } from './agentChat';
 import { ApiError } from '../api/index';
 import type { AgentChatResponse } from './agentChat';
@@ -346,7 +347,13 @@ export async function runAgent(
     systemPrompt += taskCtx;
   }
 
-  // Inject prior chat session context
+  // Inject prior chat session context. When the history overflows the budget,
+  // prepend an LLM recap of the dropped (oldest) messages so long sessions
+  // keep early decisions/constraints, then the recent messages verbatim.
+  const earlierSummary = await summarizeEarlierHistory(opts.chatHistory);
+  if (earlierSummary) {
+    systemPrompt += earlierSummary;
+  }
   const chatHistoryStr = formatChatHistoryForAgent(opts.chatHistory);
   if (chatHistoryStr) {
     systemPrompt += chatHistoryStr;

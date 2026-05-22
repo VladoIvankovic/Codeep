@@ -32,7 +32,23 @@ vi.mock('./agentStream', () => ({
   AgentChatResponse: {},
 }));
 
-import { loadProjectRules, formatChatHistoryForAgent, TimeoutError } from './agentChat';
+import { loadProjectRules, formatChatHistoryForAgent, summarizeEarlierHistory, TimeoutError } from './agentChat';
+
+describe('summarizeEarlierHistory', () => {
+  it('returns empty for missing/empty history', async () => {
+    expect(await summarizeEarlierHistory()).toBe('');
+    expect(await summarizeEarlierHistory([])).toBe('');
+  });
+
+  it('returns empty when nothing overflows the budget (no LLM call)', async () => {
+    const history: Array<{ role: 'user' | 'assistant'; content: string }> = [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+    ];
+    // Everything fits → no dropped messages → returns '' without calling chat().
+    expect(await summarizeEarlierHistory(history, 16000)).toBe('');
+  });
+});
 
 describe('loadProjectRules', () => {
   beforeEach(() => {

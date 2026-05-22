@@ -61,6 +61,25 @@ describe('validateCommand', () => {
     expect(validateCommand('node', ['index.js']).valid).toBe(true);
   });
 
+  it('blocks inline code execution (interpreter eval flags)', () => {
+    expect(validateCommand('node', ['-e', 'process.exit(1)']).valid).toBe(false);
+    expect(validateCommand('node', ['--eval', 'x']).valid).toBe(false);
+    expect(validateCommand('node', ['-p', 'x']).valid).toBe(false);
+    expect(validateCommand('node', ['-pe', 'x']).valid).toBe(false); // combined short cluster
+    expect(validateCommand('python', ['-c', 'import os']).valid).toBe(false);
+    expect(validateCommand('python3', ['-c', 'x']).valid).toBe(false);
+    expect(validateCommand('php', ['-r', 'x']).valid).toBe(false);
+    expect(validateCommand('deno', ['eval', 'x']).valid).toBe(false); // bare subcommand
+  });
+
+  it('still allows interpreters running a file (not inline eval)', () => {
+    expect(validateCommand('node', ['app.js', '--port', '3000']).valid).toBe(true);
+    expect(validateCommand('python', ['script.py']).valid).toBe(true);
+    expect(validateCommand('deno', ['run', 'main.ts']).valid).toBe(true);
+    // -e on a NON-interpreter command is unaffected (not in the eval map).
+    expect(validateCommand('npx', ['some-tool', '-e', 'config']).valid).toBe(true);
+  });
+
   it('blocks rm -rf / pattern', () => {
     const result = validateCommand('rm', ['-rf', '/']);
     expect(result.valid).toBe(false);

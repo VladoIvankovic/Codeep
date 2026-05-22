@@ -181,7 +181,7 @@ Codeep works as a **full AI coding agent** that autonomously:
 ### Context Persistence
 - **Save conversations** - Continue where you left off
 - **Per-project context** - Each project maintains its own history
-- **Automatic summarization** - Old messages are summarized to save space
+- **Automatic summarization** - When prior history overflows the agent's context budget, the dropped (oldest) messages are condensed into a short recap (decisions, constraints, unfinished threads) instead of being silently truncated — so long sessions don't forget how they started. One cheap LLM call, made only on overflow and cached per session; opt out with `autoSummarizeHistory: false` (`/settings`)
 
 ### Web & MCP Tools
 - Agent can fetch documentation and web content

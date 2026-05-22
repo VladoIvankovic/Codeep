@@ -106,6 +106,34 @@ const ALLOWED_COMMANDS = new Set([
   'http', 'https',
 ]);
 
+// Interpreter flags that execute inline code straight from the command line.
+// Without this check, a whitelisted runtime (`node`, `python`, …) becomes
+// arbitrary code execution — `node -e "<anything>"`, `python -c "<anything>"` —
+// bypassing the command whitelist entirely. File execution (`node app.js`)
+// stays allowed; only the eval flags are blocked.
+const INLINE_EVAL_SHORT: Record<string, string[]> = {
+  node: ['e', 'p'], bun: ['e'], python: ['c'], python3: ['c'], php: ['r'], ruby: ['e'], perl: ['e', 'E'],
+};
+const INLINE_EVAL_LONG: Record<string, string[]> = {
+  node: ['--eval', '--print'], deno: ['eval'], bun: ['--eval'],
+};
+
+function hasInlineEval(command: string, args: string[]): boolean {
+  const short = INLINE_EVAL_SHORT[command] ?? [];
+  const long = INLINE_EVAL_LONG[command] ?? [];
+  if (short.length === 0 && long.length === 0) return false;
+  for (const arg of args) {
+    if (arg.startsWith('--')) {
+      if (long.includes(arg.split('=')[0])) return true;            // --eval / --print(=...)
+    } else if (arg.length > 1 && arg.startsWith('-')) {
+      if (arg.slice(1).split('').some((l) => short.includes(l))) return true; // -e, -c, -pe …
+    } else if (long.includes(arg)) {
+      return true;                                                   // bare subcommand, e.g. `deno eval`
+    }
+  }
+  return false;
+}
+
 /**
  * Validate if a command is safe to execute
  */
@@ -123,7 +151,13 @@ export function validateCommand(
   if (!ALLOWED_COMMANDS.has(command)) {
     return { valid: false, reason: `Command '${command}' is not in the allowed list` };
   }
-  
+
+  // Block inline-code execution that would turn a whitelisted interpreter into
+  // arbitrary code execution (the whitelist alone doesn't stop `node -e "…"`).
+  if (hasInlineEval(command, args)) {
+    return { valid: false, reason: `Inline code execution via '${command}' (e.g. -e/-c/--eval) is not allowed in agent mode — put the code in a file and run that, or run it yourself.` };
+  }
+
   // Check full command string against dangerous patterns
   const fullCommand = `${command} ${args.join(' ')}`;
   for (const pattern of BLOCKED_PATTERNS) {

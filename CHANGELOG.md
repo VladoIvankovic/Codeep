@@ -11,6 +11,30 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.1.4] — 2026-05-22
+
+> Long agent runs no longer silently forget how they started — when prior chat history overflows the context budget, the dropped older messages are summarized instead of just truncated. Plus a command-whitelist hardening.
+
+### Security
+
+- **Inline code execution is blocked in agent mode.** The command whitelist
+  allowed interpreters like `node`/`python`/`php`, but their eval flags
+  (`node -e`, `python -c`, `php -r`, `deno eval`, …) turned a whitelisted
+  runtime into arbitrary code execution. Those flags are now rejected (including
+  combined short clusters like `-pe`). Running a *file* (`node app.js`,
+  `python script.py`) is unaffected. Defense-in-depth — the manual-mode
+  permission prompt is still the primary gate.
+
+### Added
+
+- **Auto-summarized history.** When the prior conversation exceeds the agent's
+  context budget, Codeep now condenses the dropped (oldest) messages into a
+  short recap — preserving early decisions, constraints, and unfinished threads
+  — and injects it before the recent verbatim history. Previously those older
+  messages were silently truncated. The recap is one cheap LLM call, made only
+  on overflow and cached per session. Opt out with
+  `autoSummarizeHistory: false` (falls back to plain truncation, no extra call).
+
 ## [2.1.3] — 2026-05-22
 
 > Security hardening: project hooks now require trust before they run, the web-fetch tool blocks internal/metadata addresses, and usage stats are sent with your sync token.

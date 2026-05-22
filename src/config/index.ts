@@ -56,6 +56,11 @@ interface ConfigSchema {
    *  small background API call (uses the active model) once per session.
    *  Default true; set false to avoid any unsolicited API calls. */
   autoSessionTitle: boolean;
+  /** When prior chat history overflows the agent's context budget, summarize
+   *  the dropped (oldest) messages via one LLM call instead of silently
+   *  discarding them — so long sessions keep early decisions/constraints.
+   *  Default true; set false to fall back to plain truncation (no extra call). */
+  autoSummarizeHistory: boolean;
   /** Absolute workspace roots whose project-local `.codeep/hooks/*` the user
    *  has approved to run. Untrusted projects' hooks are skipped (a cloned repo
    *  can't execute shell on first tool call). Granted via `/hooks trust`. */
@@ -281,6 +286,7 @@ function createConfig(): Conf<ConfigSchema> {
     language: 'en',
     autoSave: true,
     autoSessionTitle: true,
+    autoSummarizeHistory: true,
     trustedHookProjects: [],
     currentSessionId: '',
     temperature: 0.7,

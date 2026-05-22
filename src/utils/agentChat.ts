@@ -14,6 +14,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { createHash } from 'crypto';
 import { ProjectContext } from './project';
 import { config, getApiKey, Message, resolveBaseUrl } from '../config/index';
 import { loadProjectIntelligence, generateContextFromIntelligence } from './projectIntelligence';
@@ -199,6 +200,83 @@ export function formatChatHistoryForAgent(
   ).join('\n\n');
 
   return `\n\n## Prior Conversation Context\nThe following is the recent chat history from this session. Use it as background context to understand the user's intent, but focus on completing the current task.\n\n${lines}`;
+}
+
+// Same noise filter formatChatHistoryForAgent uses — kept in sync so the two
+// functions agree on which messages are "real" conversation.
+function filterAgentHistory<T extends { role: string; content: string }>(history: T[]): T[] {
+  return history.filter(m => {
+    const content = m.content.trimStart();
+    if (content.startsWith('[AGENT]') || content.startsWith('[DRY RUN]')) return false;
+    if (content.startsWith('Agent completed') || content.startsWith('Agent failed') || content.startsWith('Agent stopped')) return false;
+    return true;
+  });
+}
+
+// Cache summaries by a hash of the dropped messages, so re-running the agent in
+// the same session (same overflow) doesn't re-summarize on every task.
+const earlierSummaryCache = new Map<string, string>();
+
+/**
+ * Summarize the OVERFLOW that `formatChatHistoryForAgent` drops. When prior
+ * history exceeds `maxChars`, that function keeps only the most recent messages
+ * and silently discards the older ones — losing early decisions/constraints on
+ * long sessions. This condenses those dropped messages into a short recap that
+ * the caller prepends *before* the recent verbatim history.
+ *
+ * Returns '' when: opted out (`autoSummarizeHistory === false`), nothing
+ * overflows, or the summarization call fails (graceful fallback — the recent
+ * history still goes in, we just don't add a recap).
+ */
+export async function summarizeEarlierHistory(
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>,
+  maxChars: number = 16000,
+): Promise<string> {
+  if (config.get('autoSummarizeHistory') === false) return '';
+  if (!history || history.length === 0) return '';
+
+  const filtered = filterAgentHistory(history);
+  if (filtered.length === 0) return '';
+
+  // Mirror formatChatHistoryForAgent's newest→oldest budget walk to find which
+  // messages it KEEPS; everything older than the oldest kept message is dropped.
+  let totalChars = 0;
+  let firstKept = filtered.length;
+  for (let i = filtered.length - 1; i >= 0; i--) {
+    const entry = `${filtered[i].role === 'user' ? 'User' : 'Assistant'}: ${filtered[i].content}`;
+    if (totalChars + entry.length > maxChars && firstKept < filtered.length) break;
+    if (entry.length > maxChars) { firstKept = i; break; }
+    firstKept = i;
+    totalChars += entry.length;
+  }
+  const dropped = filtered.slice(0, firstKept);
+  if (dropped.length === 0) return '';
+
+  const key = createHash('sha256')
+    .update(dropped.map(m => `${m.role}:${m.content}`).join(' '))
+    .digest('hex');
+  const cached = earlierSummaryCache.get(key);
+  if (cached) return cached;
+
+  // Compact transcript of the dropped messages, capped so the summarization
+  // prompt stays cheap even when a lot has overflowed.
+  const transcript = dropped
+    .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.replace(/\s+/g, ' ').slice(0, 600)}`)
+    .join('\n')
+    .slice(0, 24000);
+
+  const system = 'You are condensing the EARLIER part of an ongoing coding session that no longer fits the context window. Summarize what happened in 3-6 sentences: concrete decisions made, constraints/requirements stated, files or APIs involved, and anything still unfinished. Past tense, no preamble, no bullet headers — just the recap.';
+
+  try {
+    const { chat } = await import('../api/index.js');
+    const summary = (await chat(transcript, [{ role: 'system', content: system }])).trim();
+    if (!summary) return '';
+    const block = `\n\n## Earlier Conversation (summarized)\nThe earlier part of this session was condensed to fit context. Treat it as established background:\n\n${summary}`;
+    earlierSummaryCache.set(key, block);
+    return block;
+  } catch {
+    return ''; // graceful — recent verbatim history still gets injected
+  }
 }
 
 export function getAgentSystemPrompt(projectContext: ProjectContext): string {
