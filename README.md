@@ -449,9 +449,14 @@ Example — auto-format on edit (`.codeep/hooks/post_edit.sh`):
 prettier --write "$CODEEP_HOOK_FILE" 2>/dev/null
 ```
 
-Run `/hooks` to see which hooks are installed in the current workspace. Hooks
-trigger a security banner on session start since they're arbitrary shell that
-runs whenever an agent tool fires.
+Run `/hooks` to see which hooks are installed in the current workspace.
+
+**Trust required (security).** Because hooks run arbitrary shell, a freshly
+cloned repo's hooks are **not** run until you approve the workspace. Run
+`/hooks trust` to enable them for the current project (revoke with
+`/hooks untrust`); `/hooks` and the welcome banner show the trust state. Your
+own projects just need a one-time `/hooks trust`. Global `~/.codeep/hooks/` are
+never run for the same reason.
 
 ### Skill Bundles (new in 2.0)
 Beyond the built-in skills and custom slash commands, Codeep now supports

@@ -4,14 +4,19 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { executeTool, FsCallbacks } from './toolExecution';
 import { ToolCall } from './tools';
+import { trustWorkspaceHooks, untrustWorkspaceHooks } from './hooks';
 
 let tmpRoot: string;
 
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'codeep-toolexec-'));
+  // Project hooks only run in trusted workspaces; the integration tests below
+  // exercise the hook path, so trust the temp workspace.
+  trustWorkspaceHooks(tmpRoot);
 });
 
 afterEach(() => {
+  untrustWorkspaceHooks(tmpRoot);
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 

@@ -1138,8 +1138,21 @@ Format: use headers per category, only include categories where you found issues
     }
 
     case 'hooks': {
-      const { listInstalledHooks, formatHookList } = await import('../utils/hooks');
-      ctx.app.addMessage({ role: 'system', content: formatHookList(listInstalledHooks(ctx.projectPath)) });
+      const { listInstalledHooks, formatHookList, formatHookTrust, trustWorkspaceHooks, untrustWorkspaceHooks } = await import('../utils/hooks');
+      const sub = (args[0] || '').toLowerCase();
+      if (sub === 'trust') {
+        trustWorkspaceHooks(ctx.projectPath);
+        ctx.app.notify('Hooks trusted for this workspace — they will now run.');
+        break;
+      }
+      if (sub === 'untrust') {
+        untrustWorkspaceHooks(ctx.projectPath);
+        ctx.app.notify('Hooks untrusted — they will be skipped until you trust again.');
+        break;
+      }
+      const trust = formatHookTrust(ctx.projectPath);
+      const body = formatHookList(listInstalledHooks(ctx.projectPath)) + (trust ? `\n\n${trust}` : '');
+      ctx.app.addMessage({ role: 'system', content: body });
       break;
     }
 

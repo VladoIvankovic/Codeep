@@ -56,6 +56,10 @@ interface ConfigSchema {
    *  small background API call (uses the active model) once per session.
    *  Default true; set false to avoid any unsolicited API calls. */
   autoSessionTitle: boolean;
+  /** Absolute workspace roots whose project-local `.codeep/hooks/*` the user
+   *  has approved to run. Untrusted projects' hooks are skipped (a cloned repo
+   *  can't execute shell on first tool call). Granted via `/hooks trust`. */
+  trustedHookProjects: string[];
   currentSessionId: string;
   temperature: number;
   maxTokens: number;
@@ -277,6 +281,7 @@ function createConfig(): Conf<ConfigSchema> {
     language: 'en',
     autoSave: true,
     autoSessionTitle: true,
+    trustedHookProjects: [],
     currentSessionId: '',
     temperature: 0.7,
     maxTokens: 32768,

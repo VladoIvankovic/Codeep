@@ -7,6 +7,8 @@ import {
   listInstalledHooks,
   formatHookList,
   summarizeHooks,
+  trustWorkspaceHooks,
+  untrustWorkspaceHooks,
   HookEvent,
 } from './hooks';
 
@@ -17,9 +19,13 @@ beforeEach(() => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'codeep-hooks-'));
   hooksDir = join(workspaceRoot, '.codeep', 'hooks');
   mkdirSync(hooksDir, { recursive: true });
+  // Hooks are skipped in untrusted workspaces (trust-on-first-use). These tests
+  // exercise the run path, so trust the temp workspace up front.
+  trustWorkspaceHooks(workspaceRoot);
 });
 
 afterEach(() => {
+  untrustWorkspaceHooks(workspaceRoot);
   rmSync(workspaceRoot, { recursive: true, force: true });
 });
 
@@ -47,6 +53,35 @@ describe('runHook — no script present', () => {
     writeHook('post_edit', 'echo hi', { executable: false });
     const result = runHook({ event: 'post_edit', workspaceRoot });
     expect(result.executed).toBe(false);
+  });
+});
+
+describe('runHook — trust gate', () => {
+  it('skips an existing hook when the workspace is not trusted', () => {
+    writeHook('post_edit', 'echo "should not run"');
+    untrustWorkspaceHooks(workspaceRoot);
+    const result = runHook({ event: 'post_edit', workspaceRoot });
+    expect(result.executed).toBe(false);
+    expect(result.untrusted).toBe(true);
+    expect(result.stdout).toBe('');
+  });
+
+  it('does not block a tool call when an untrusted blocking hook is skipped', () => {
+    writeHook('pre_tool_call', 'exit 1'); // would block if it ran
+    untrustWorkspaceHooks(workspaceRoot);
+    const result = runHook({ event: 'pre_tool_call', workspaceRoot });
+    expect(result.executed).toBe(false);
+    expect(result.blocked).toBe(false);
+  });
+
+  it('runs the hook again once the workspace is re-trusted', () => {
+    writeHook('post_edit', 'echo "trusted run"');
+    untrustWorkspaceHooks(workspaceRoot);
+    expect(runHook({ event: 'post_edit', workspaceRoot }).executed).toBe(false);
+    trustWorkspaceHooks(workspaceRoot);
+    const result = runHook({ event: 'post_edit', workspaceRoot });
+    expect(result.executed).toBe(true);
+    expect(result.stdout).toMatch(/trusted run/);
   });
 });
 

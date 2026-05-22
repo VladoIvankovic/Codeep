@@ -11,6 +11,33 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.1.3] — 2026-05-22
+
+> Security hardening: project hooks now require trust before they run, the web-fetch tool blocks internal/metadata addresses, and usage stats are sent with your sync token.
+
+### Security
+
+- **Hooks now require trust-on-first-use.** Project-local `.codeep/hooks/*` run
+  arbitrary shell, so a freshly-cloned repo could previously execute its scripts
+  on your first tool call. Hooks in an unapproved workspace are now **skipped**
+  until you run `/hooks trust` (revoke with `/hooks untrust`). `/hooks` and the
+  welcome banner show the trust state. Your own already-set-up projects just need
+  a one-time `/hooks trust`.
+- **SSRF guard on the `fetch_url` web tool.** The agent can no longer be steered
+  (e.g. via prompt injection) into fetching `localhost`, private/RFC1918, or
+  link-local addresses — including the cloud metadata endpoint
+  `169.254.169.254`. Only `http`/`https` are allowed, on the initial request and
+  redirects. Your configured provider endpoints (Ollama, custom vLLM/Tailscale)
+  are unaffected — they don't go through this tool.
+
+### Changed
+
+- **Stats reporting now sends the `x-sync-token` header.** The dashboard derives
+  your GitHub id from the token instead of trusting the `githubId` in the request
+  body, closing a spoofing gap where anyone could forge usage events (or unarchive
+  projects) for another user. Stats keep working on older CLIs — they're just
+  recorded anonymously until you upgrade. No behavior change for you locally.
+
 ## [2.1.2] — 2026-05-21
 
 > ACP server enhancements that power the new Codeep VS Code 2.2 features — editor clients can now list models per provider and pin a provider, model, or custom endpoint over the protocol.

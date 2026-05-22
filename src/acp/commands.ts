@@ -983,8 +983,18 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
     }
 
     case 'hooks': {
-      const { listInstalledHooks, formatHookList } = await import('../utils/hooks.js');
-      return { handled: true, response: formatHookList(listInstalledHooks(session.workspaceRoot)) };
+      const { listInstalledHooks, formatHookList, formatHookTrust, trustWorkspaceHooks, untrustWorkspaceHooks } = await import('../utils/hooks.js');
+      const sub = (args[0] || '').toLowerCase();
+      if (sub === 'trust') {
+        trustWorkspaceHooks(session.workspaceRoot);
+        return { handled: true, response: 'Hooks trusted for this workspace — they will now run.' };
+      }
+      if (sub === 'untrust') {
+        untrustWorkspaceHooks(session.workspaceRoot);
+        return { handled: true, response: 'Hooks untrusted — they will be skipped until you trust again.' };
+      }
+      const trust = formatHookTrust(session.workspaceRoot);
+      return { handled: true, response: formatHookList(listInstalledHooks(session.workspaceRoot)) + (trust ? `\n\n${trust}` : '') };
     }
 
     case 'mcp': {

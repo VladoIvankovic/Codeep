@@ -140,9 +140,13 @@ export function reportStats(payload: StatsPayload): void {
   const githubId = getGithubId();
   if (!githubId) return; // not linked, skip silently
 
+  // Send the sync token so the server can attribute the event to us. The
+  // server derives github_id from the token and ignores the body value (the
+  // body githubId is kept only for backward-compat with older servers).
+  const syncToken = getSyncToken();
   fetchWithRetry(`${API_BASE}/api/stats`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(syncToken ? { 'x-sync-token': syncToken } : {}) },
     body: JSON.stringify({ ...payload, githubId, isGit: payload.isGit ?? false }),
   }).catch(() => {});
 }
@@ -151,9 +155,10 @@ export async function reportStatsAsync(payload: StatsPayload): Promise<void> {
   const githubId = getGithubId();
   if (!githubId) return;
 
+  const syncToken = getSyncToken();
   await fetchWithRetry(`${API_BASE}/api/stats`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(syncToken ? { 'x-sync-token': syncToken } : {}) },
     body: JSON.stringify({ ...payload, githubId, isGit: payload.isGit ?? false }),
   });
 }

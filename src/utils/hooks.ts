@@ -49,6 +49,33 @@
 import { existsSync, readdirSync, statSync, accessSync, constants } from 'fs';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
+import { config } from '../config/index.js';
+
+// ─── Trust-on-first-use ──────────────────────────────────────────────────────
+// Project-local hooks run arbitrary shell, so a freshly-cloned hostile repo
+// must NOT execute its scripts on the first tool call. A workspace's hooks run
+// only after the user explicitly trusts it (`/hooks trust`); the approval is
+// stored per-workspace-root in config. Mirrors VS Code Workspace Trust /
+// `direnv allow`.
+
+export function isHooksTrusted(workspaceRoot: string): boolean {
+  try {
+    const trusted = config.get('trustedHookProjects') as string[] | undefined;
+    return Array.isArray(trusted) && trusted.includes(workspaceRoot);
+  } catch {
+    return false;
+  }
+}
+
+export function trustWorkspaceHooks(workspaceRoot: string): void {
+  const cur = (config.get('trustedHookProjects') as string[] | undefined) ?? [];
+  if (!cur.includes(workspaceRoot)) config.set('trustedHookProjects', [...cur, workspaceRoot]);
+}
+
+export function untrustWorkspaceHooks(workspaceRoot: string): void {
+  const cur = (config.get('trustedHookProjects') as string[] | undefined) ?? [];
+  config.set('trustedHookProjects', cur.filter((p) => p !== workspaceRoot));
+}
 
 export type HookEvent = 'pre_tool_call' | 'post_edit' | 'on_error' | 'pre_commit';
 export const HOOK_EVENTS: readonly HookEvent[] = ['pre_tool_call', 'post_edit', 'on_error', 'pre_commit'];
@@ -79,6 +106,9 @@ export interface HookResult {
   blocked: boolean;
   /** Path that was executed (useful for error messages). */
   scriptPath?: string;
+  /** True when a hook script exists but the workspace isn't trusted, so it was
+   *  skipped (not run). Lets callers surface "run /hooks trust to enable". */
+  untrusted?: boolean;
 }
 
 const NOT_EXECUTED: HookResult = { executed: false, exitCode: 0, stdout: '', stderr: '', blocked: false };
@@ -117,6 +147,13 @@ function findHookScript(workspaceRoot: string, event: HookEvent): string | null 
 export function runHook(ctx: HookContext, opts: { timeoutMs?: number } = {}): HookResult {
   const script = findHookScript(ctx.workspaceRoot, ctx.event);
   if (!script) return NOT_EXECUTED;
+
+  // Trust gate: never run a project's hooks until the user has approved this
+  // workspace. A non-blocking skip — the agent proceeds without the hook
+  // rather than being held hostage by an untrusted (or hostile) script.
+  if (!isHooksTrusted(ctx.workspaceRoot)) {
+    return { executed: false, exitCode: 0, stdout: '', stderr: '', blocked: false, untrusted: true, scriptPath: script };
+  }
 
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,
@@ -236,11 +273,31 @@ export function formatHookList(hooks: ReturnType<typeof listInstalledHooks>): st
 }
 
 /**
+ * Build the trust banner for `/hooks` and the welcome screen. `workspaceRoot`
+ * is needed to read trust state; returns '' if no hooks are installed.
+ */
+export function formatHookTrust(workspaceRoot: string): string {
+  const hooks = listInstalledHooks(workspaceRoot);
+  if (hooks.length === 0) return '';
+  if (isHooksTrusted(workspaceRoot)) {
+    return '✓ This workspace is **trusted** — its hooks will run. Use `/hooks untrust` to revoke.';
+  }
+  return [
+    '⚠️ This workspace is **not trusted**, so its hooks are **skipped** (they run arbitrary shell).',
+    'If you wrote these hooks (or trust this repo), run `/hooks trust` to enable them.',
+  ].join('\n');
+}
+
+/**
  * Short one-line summary used in the welcome banner when hooks are present.
  * Returns empty string if no hooks installed.
  */
 export function summarizeHooks(workspaceRoot: string): string {
   const hooks = listInstalledHooks(workspaceRoot);
   if (hooks.length === 0) return '';
-  return `${hooks.length} hook${hooks.length === 1 ? '' : 's'} active (${hooks.map(h => h.event).join(', ')})`;
+  const list = hooks.map(h => h.event).join(', ');
+  if (!isHooksTrusted(workspaceRoot)) {
+    return `${hooks.length} hook${hooks.length === 1 ? '' : 's'} present but NOT trusted — run /hooks trust to enable (${list})`;
+  }
+  return `${hooks.length} hook${hooks.length === 1 ? '' : 's'} active (${list})`;
 }
