@@ -242,6 +242,50 @@ Agent learns your coding preferences:
 - Preferred libraries
 - Custom rules you define
 
+### User Profile (`/me`)
+A durable, human-readable description of **you** that Codeep injects into the agent's context on every run — so it adapts to how you work (reply language, response style, default stack, "always / never" rules). It flows to every surface (terminal, VS Code, Zed) since they share the same files.
+
+Two layers:
+- **`~/.codeep/profile.md`** — global: who you are across all projects
+- **`.codeep/profile.md`** — project: your role, goals, and constraints for this repo
+
+Commands:
+- `/me` — view your profile + status
+- `/me init [project]` — scaffold a template to fill in
+- `/me on` / `/me off` — toggle injection
+- `/me learn [on|off]` — opt-in auto-learn: Codeep extracts durable preferences from sessions and merges them into `profile.learned.md` (kept separate from your hand-written file). Off by default.
+- `/me learn project` — one-off learn scoped to this repo
+- `/me forget` — clear the auto-learned profile(s)
+
+Sync your global profile across machines (and edit it on the web) from the [dashboard](https://codeep.dev/dashboard) with `codeep account sync`. In VS Code: **Codeep: Edit Profile** and **Codeep: Toggle Profile Auto-Learn**.
+
+### Sub-agents (delegation)
+The agent can delegate a self-contained sub-task to a specialist **sub-agent** that runs in its own fresh context window and returns only a summary — keeping the main context small and letting each sub-task run with a tuned persona and scoped tools.
+
+Built-ins:
+- **`planner`** — read-only; investigates, then returns a step-by-step implementation plan
+- **`researcher`** — read-only; explores the codebase/web and returns a tight, cited summary
+- **`reviewer`** — read-only; senior review for correctness, security, and design
+- **`tester`** — writes and runs tests, iterates to green
+
+Run `/agents` to list them. The agent invokes them itself via the `delegate` tool (you'll see `⤷ <agent>: …` lines). Add your own with a frontmatter `.md` in `.codeep/agents/<name>.md` (project) or `~/.codeep/agents/<name>.md` (global):
+
+```markdown
+---
+name: migrator
+description: Writes and runs database migrations
+tools: [read_file, write_file, edit_file, execute_command]   # allowlist; omit = all
+model: glm-5.1            # optional override
+personality: senior-reviewer   # optional preset
+maxIterations: 12         # optional budget
+---
+You write safe, reversible DB migrations…
+```
+
+`tools` is an allowlist enforced at dispatch (a `researcher` literally can't write files). Sub-agents inherit your profile + project rules, and their changes are covered by `/undo`.
+
+**Guaranteed review:** enable **Agent Auto-Review** in `/settings` (`agentAutoReview`) and after any run that changes files, Codeep automatically delegates to the `reviewer` and appends its findings — a review stage that always happens. Off by default.
+
 ### Project Rules
 Define project-specific instructions that the AI always follows. Create a rules file in your project root:
 

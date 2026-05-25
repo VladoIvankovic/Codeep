@@ -284,6 +284,9 @@ export async function handleCommand(
         commands: 'https://codeep.dev/docs/commands#custom-commands',
         openrouter: 'https://codeep.dev/docs/providers#openrouter',
         memory: 'https://codeep.dev/docs/commands#intelligence',
+        me: 'https://codeep.dev/docs/agent#user-profile',
+        agents: 'https://codeep.dev/docs/agent#sub-agents',
+        delegate: 'https://codeep.dev/docs/agent#sub-agents',
         profile: 'https://codeep.dev/docs/commands#settings',
         compact: 'https://codeep.dev/docs/commands#session',
         cost: 'https://codeep.dev/docs/dashboard',
@@ -340,6 +343,90 @@ export async function handleCommand(
         role: 'system',
         content: `Active personality: **${personality.displayName}** (\`${personality.name}\`, ${personality.scope})\n\n_${personality.description}_\n\nClear with \`/personality off\`.`,
       });
+      break;
+    }
+
+    case 'agents': {
+      // List sub-agents the agent can `delegate` to (built-in + .codeep/agents/).
+      const { formatAgentList } = await import('../utils/agents');
+      ctx.app.addMessage({ role: 'system', content: formatAgentList(ctx.projectPath) });
+      break;
+    }
+
+    case 'me': {
+      // User profile (global ~/.codeep/profile.md + project .codeep/profile.md)
+      // injected into the agent's context. NOT the provider-profile feature
+      // (that's `/profile`). See src/utils/userProfile.ts.
+      const { formatProfileView, scaffoldProfile, updateLearnedProfile, clearLearnedProfile } = await import('../utils/userProfile');
+      const sub = args[0]?.toLowerCase();
+
+      if (sub === 'on' || sub === 'off') {
+        config.set('userProfile', sub === 'on');
+        ctx.app.notify(sub === 'on'
+          ? "Profile injection on — your profile is added to the agent's context."
+          : 'Profile injection off — profile is saved but not used.');
+        break;
+      }
+      if (sub === 'learn') {
+        const arg = args[1]?.toLowerCase();
+        if (arg === 'on' || arg === 'off') {
+          config.set('autoLearnProfile', arg === 'on');
+          ctx.app.notify(arg === 'on'
+            ? 'Auto-learn on — Codeep quietly updates your learned profile (global + project) from sessions.'
+            : 'Auto-learn off — Codeep stops updating the learned profile.');
+          break;
+        }
+        // Manual one-off. `/me learn project` targets this repo; otherwise global.
+        const scope = arg === 'project' ? 'project' : 'global';
+        if (scope === 'project' && !ctx.projectPath) {
+          ctx.app.notify('No project detected here — open a project, or run /me learn for your global profile.');
+          break;
+        }
+        const { loadSession } = await import('../config/index');
+        const history = loadSession(ctx.sessionId, ctx.projectPath) || [];
+        if (history.filter((m: Message) => m.role !== 'system').length < 2) {
+          ctx.app.notify('Not enough conversation yet to learn from — chat a bit, then run /me learn.');
+          break;
+        }
+        ctx.app.notify(`Learning ${scope} preferences from this session…`);
+        const res = await updateLearnedProfile(history, scope, ctx.projectPath);
+        if (!res) {
+          ctx.app.notify('Nothing durable to learn right now (or the model call failed).');
+          break;
+        }
+        const file = scope === 'global' ? '~/.codeep/profile.learned.md' : '.codeep/profile.learned.md';
+        ctx.app.addMessage({
+          role: 'system',
+          content: res.updated
+            ? `Updated your ${scope} learned profile (\`${file}\`):\n\n${res.facts}\n\nClear it anytime with \`/me forget\`.`
+            : `No changes — your ${scope} learned profile already covers this:\n\n${res.facts}`,
+        });
+        break;
+      }
+      if (sub === 'forget') {
+        ctx.app.notify(clearLearnedProfile(ctx.projectPath)
+          ? 'Cleared the auto-learned profile(s).'
+          : 'No learned profile to clear.');
+        break;
+      }
+      if (sub === 'init') {
+        const scope = args[1]?.toLowerCase() === 'project' ? 'project' : 'global';
+        if (scope === 'project' && !ctx.projectPath) {
+          ctx.app.notify('No project detected here. Use /me init for a global profile, or open a project first.');
+          break;
+        }
+        const res = scaffoldProfile(scope, ctx.projectPath);
+        if (!res) { ctx.app.notify('Could not create the profile file.'); break; }
+        ctx.app.addMessage({
+          role: 'system',
+          content: res.created
+            ? `Created ${scope} profile: \`${res.path}\`\n\nEdit it in your editor — Codeep uses it automatically. View anytime with \`/me\`.`
+            : `${scope === 'global' ? 'Global' : 'Project'} profile already exists: \`${res.path}\`\n\nEdit it directly, or view it with \`/me\`.`,
+        });
+        break;
+      }
+      // Default: show the profile view.
+      ctx.app.addMessage({ role: 'system', content: formatProfileView(ctx.projectPath) });
       break;
     }
 
@@ -1699,6 +1786,14 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
           }
           if (pulled > 0) results.push(`✓ ${pulled} new profile(s) pulled`);
         }
+      }
+
+      // Sync the hand-written user profile (~/.codeep/profile.md). Push sends
+      // the local file; pull is additive (writes only if no local profile).
+      if (subCmd === 'all' || subCmd === 'profile') {
+        const { pushUserProfile, pullUserProfile } = await import('../utils/codeepCloud');
+        if (await pushUserProfile()) results.push('✓ Your profile (about you) pushed');
+        if ((await pullUserProfile()) === 1) results.push('✓ Your profile pulled to this machine');
       }
 
       ctx.app.addMessage({

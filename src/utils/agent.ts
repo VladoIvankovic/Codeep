@@ -28,6 +28,7 @@ import {
 } from './agentChat';
 import { ApiError } from '../api/index';
 import type { AgentChatResponse } from './agentChat';
+import { loadUserProfilePrompt } from './userProfile';
 export { loadProjectRules, loadProgressLog, writeProgressLog, formatChatHistoryForAgent };
 export type { AgentChatResponse };
 
@@ -179,6 +180,20 @@ export interface AgentOptions {
   maxFixAttempts?: number;
   usePlanning?: boolean; // Enable task planning for complex tasks
   chatHistory?: Array<{ role: 'user' | 'assistant'; content: string }>; // Prior chat session context
+  /** Delegated sub-agent run. Skips the undo/history session + progress log so
+   *  it doesn't clobber the parent's (history.ts uses a module-level
+   *  `currentSession` singleton — a nested startSession would reset it). The
+   *  sub-agent's tool actions still record into the parent's session, so undo
+   *  spans delegation. */
+  nested?: boolean;
+  /** Delegation depth. 0 = top-level orchestrator (gets the `delegate` tool);
+   *  sub-agents run at depth 1 and cannot delegate further (v1). */
+  depth?: number;
+  /** Tool allowlist for a scoped sub-agent. Undefined = all tools. Enforced at
+   *  dispatch — a disallowed tool call returns an error result. */
+  allowedTools?: string[];
+  /** Role system-prompt addendum injected for a delegated sub-agent. */
+  roleAddendum?: string;
 }
 
 export interface AgentResult {
@@ -223,8 +238,10 @@ export async function runAgent(
   const actions: ActionLog[] = [];
   const messages: Message[] = [];
   
-  // Start history session for undo support
-  const sessionId = startSession(prompt, projectContext.root || process.cwd());
+  // Start history session for undo support. Skipped for nested (delegated)
+  // runs so we don't reset the parent's currentSession singleton — the
+  // sub-agent's actions still record into the parent's open session.
+  const sessionId = opts.nested ? '' : startSession(prompt, projectContext.root || process.cwd());
   
   // Task planning phase (if enabled)
   // Use planning for complex keywords or multi-word prompts
@@ -321,11 +338,56 @@ export async function runAgent(
     // Skill loading failure shouldn't fail the whole agent run.
   }
 
+  // Sub-agents — the `delegate` tool lets the top-level agent hand a
+  // self-contained sub-task to a specialist that runs in its own context and
+  // returns a summary. Only advertised at depth 0, so sub-agents can't recurse
+  // (delegation depth is capped at 1 for v1).
+  let agentsCatalogBlock = '';
+  if ((opts.depth ?? 0) === 0) {
+    try {
+      const { loadAgents, formatAgentsForSysprompt } = await import('./agents.js');
+      const agents = loadAgents(projectContext.root);
+      if (agents.length > 0) {
+        mcpToolDefs.push({
+          name: 'delegate',
+          description: 'Delegate a self-contained sub-task to a specialist sub-agent that runs in its own fresh context and returns a summary. Use it to keep your own context focused.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              agent: { type: 'string', description: 'Sub-agent name from the catalog (e.g. "researcher"). Omit for a general-purpose sub-agent.' },
+              task: { type: 'string', description: 'A clear, self-contained instruction for the sub-agent.' },
+            },
+            required: ['task'],
+          },
+        });
+        agentsCatalogBlock = formatAgentsForSysprompt(agents);
+      }
+    } catch {
+      // Agent loading must never block the run.
+    }
+  }
+
   // Build system prompt - use fallback format if native tools not supported
   let systemPrompt = useNativeTools
     ? getAgentSystemPrompt(projectContext)
     : getFallbackSystemPrompt(projectContext, mcpToolDefs);
-  
+
+  // Delegated sub-agent role — its defining instruction. Injected right after
+  // the base prompt so it frames everything that follows. Empty for normal runs.
+  if (opts.roleAddendum) {
+    systemPrompt += '\n\n## Your role (delegated sub-agent)\n' + opts.roleAddendum;
+  }
+
+  // Inject the user profile (global ~/.codeep/profile.md + project
+  // .codeep/profile.md) so the agent adapts to who it's working with —
+  // reply language, style, stack, hard preferences. User-authored and gated
+  // by config.userProfile. Lives here (not in the base prompt) so every
+  // surface — CLI, ACP, VS Code, Zed — inherits it via this single path.
+  const userProfileBlock = loadUserProfilePrompt(projectContext.root);
+  if (userProfileBlock) {
+    systemPrompt += userProfileBlock;
+  }
+
   // Inject project rules (from .codeep/rules.md or CODEEP.md)
   const projectRules = loadProjectRules(projectContext.root);
   if (projectRules) {
@@ -364,6 +426,11 @@ export async function runAgent(
   // intent. Empty string when there are none.
   if (skillCatalogBlock) {
     systemPrompt += '\n\n' + skillCatalogBlock;
+  }
+
+  // Sub-agent catalog (delegate) — only present at depth 0.
+  if (agentsCatalogBlock) {
+    systemPrompt += agentsCatalogBlock;
   }
 
   // Active personality goes LAST — appended after skills / project rules /
@@ -405,6 +472,90 @@ export async function runAgent(
     ...(config.get('agentConfirmExecuteCommand') !== false ? ['execute_command'] : []),
     ...(config.get('agentConfirmWriteFile') === true ? ['write_file', 'edit_file'] : []),
   ]);
+
+  // Delegation handler: run a named (or generic) sub-agent in its own fresh
+  // context and return its summary as the tool result. Reachable only when the
+  // `delegate` tool was advertised (depth 0). The sub-agent runs nested (no own
+  // undo session) at depth 1 and never gets `delegate`, so depth is capped at 1.
+  const runDelegate = async (toolCall: ToolCall): Promise<ToolResult> => {
+    const params = (toolCall.parameters || {}) as { agent?: string; task?: string };
+    const task = String(params.task || '').trim();
+    const fail = (error: string): ToolResult => ({ success: false, output: '', error, tool: 'delegate', parameters: toolCall.parameters });
+    if (!task) return fail('delegate requires a non-empty "task".');
+
+    let def: import('./agents.js').AgentDef | null = null;
+    try {
+      const { findAgent } = await import('./agents.js');
+      def = params.agent ? findAgent(params.agent, projectContext.root) : null;
+      if (params.agent && !def) return fail(`No sub-agent named "${params.agent}". Run /agents to see available agents.`);
+    } catch { /* fall back to a generic sub-agent */ }
+
+    let roleAddendum = def?.prompt
+      || 'You are a general-purpose sub-agent. Complete the task in your own context and return a concise, self-contained summary of what you did and the outcome.';
+    if (def?.tools) roleAddendum += `\n\nYou may use ONLY these tools: ${def.tools.join(', ')}.`;
+    if (def?.personality) {
+      try {
+        const { findPersonality } = await import('./personalities.js');
+        const p = findPersonality(def.personality, projectContext.root);
+        if (p) roleAddendum += '\n' + p.prompt;
+      } catch { /* ignore */ }
+    }
+
+    const label = def?.name || 'agent';
+    opts.onIteration?.(iteration, `⤷ delegating to ${label}…`);
+    const tag = (text: string) => `⤷ ${label}: ${text}`;
+
+    // Model override — swap config for the nested run, restore in finally.
+    const prevModel = config.get('model');
+    const prevProvider = config.get('provider');
+    let swapped = false;
+    if (def?.model) {
+      try {
+        const m = String(def.model);
+        if (m.includes('/')) {
+          const { setProvider } = await import('../config/index');
+          setProvider(m.slice(0, m.indexOf('/')));
+          config.set('model', m.slice(m.indexOf('/') + 1));
+        } else {
+          config.set('model', m);
+        }
+        swapped = true;
+      } catch { /* keep parent's model */ }
+    }
+
+    try {
+      const sub = await runAgent(task, projectContext, {
+        ...DEFAULT_OPTIONS,
+        nested: true,
+        depth: (opts.depth ?? 0) + 1,
+        allowedTools: def?.tools,
+        roleAddendum,
+        maxIterations: def?.maxIterations ?? Math.min(15, opts.maxIterations),
+        maxDuration: opts.maxDuration,
+        abortSignal: opts.abortSignal,
+        onRequestPermission: opts.onRequestPermission,
+        onExecuteCommand: opts.onExecuteCommand,
+        fs: opts.fs,
+        mcpSessionId: opts.mcpSessionId,
+        autoVerify: false,
+        onIteration: (_i, msg) => opts.onIteration?.(iteration, tag(msg)),
+        onThinking: (t) => opts.onThinking?.(tag(t)),
+        // No chatHistory → the sub-agent gets a fresh context window.
+      });
+      const summary = sub.finalResponse?.trim() || '(sub-agent finished without a summary)';
+      return { success: sub.success, output: `[${label}] ${summary}`, tool: 'delegate', parameters: toolCall.parameters };
+    } catch (err) {
+      return fail(`Sub-agent "${label}" failed: ${(err as Error).message}`);
+    } finally {
+      if (swapped) {
+        try {
+          const { setProvider } = await import('../config/index');
+          setProvider(String(prevProvider));
+          config.set('model', prevModel as string);
+        } catch { /* ignore restore failure */ }
+      }
+    }
+  };
   const maxTimeoutRetries = 3;
   const maxConsecutiveTimeouts = 30; // Allow more consecutive timeouts before giving up
   const maxConsecutiveRateLimits = 5; // Stop after 5 consecutive rate-limited iterations
@@ -439,7 +590,7 @@ export async function runAgent(
           finalResponse: partialLines.join('\n'),
           error: `Exceeded maximum duration of ${durationMin} min`,
         };
-        writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
+        if (!opts.nested) writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
         return result;
       }
       
@@ -733,6 +884,22 @@ export async function runAgent(
       for (const toolCall of toolCalls) {
         opts.onToolCall?.(toolCall);
 
+        // Tool scoping for delegated sub-agents: reject any tool outside the
+        // agent's allowlist up front — no permission prompt, no execution.
+        if (opts.allowedTools && !opts.allowedTools.includes(toolCall.tool)) {
+          const denied: ToolResult = {
+            success: false,
+            output: '',
+            error: `Tool "${toolCall.tool}" is not available to this sub-agent.`,
+            tool: toolCall.tool,
+            parameters: toolCall.parameters,
+          };
+          opts.onToolResult?.(denied, toolCall);
+          actions.push(createActionLog(toolCall, denied));
+          toolResults.push(`Tool ${toolCall.tool} is not allowed for this sub-agent. Use only: ${opts.allowedTools.join(', ')}.`);
+          continue;
+        }
+
         // Permission check for dangerous tools (only when callback is provided, e.g. ACP/Zed)
         if (opts.onRequestPermission && dangerousTools.has(toolCall.tool) && !alwaysAllowedTools.has(toolCall.tool)) {
           const rejectResult = () => {
@@ -770,7 +937,9 @@ export async function runAgent(
 
         let toolResult: ToolResult;
 
-        if (opts.dryRun) {
+        if (toolCall.tool === 'delegate') {
+          toolResult = await runDelegate(toolCall);
+        } else if (opts.dryRun) {
           toolResult = {
             success: true,
             output: `[DRY RUN] Would execute: ${toolCall.tool}`,
@@ -889,7 +1058,7 @@ export async function runAgent(
         finalResponse: partialLines.join('\n'),
         error: `Exceeded maximum of ${opts.maxIterations} iterations`,
       };
-      writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
+      if (!opts.nested) writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
       return result;
     }
     
@@ -1047,15 +1216,39 @@ export async function runAgent(
       }
     }
     
+    // Pipeline (Phase 2): optional automatic review pass. After a top-level run
+    // that changed files, delegate to the `reviewer` sub-agent and append its
+    // findings — guaranteeing a review stage without relying on the model to
+    // self-delegate one. Opt-in (agentAutoReview); depth-0 only; never fatal.
+    if (!opts.nested
+        && (opts.depth ?? 0) === 0
+        && !opts.dryRun
+        && config.get('agentAutoReview') === true
+        && !opts.abortSignal?.aborted
+        && actions.some(a => a.type === 'write' || a.type === 'edit' || a.type === 'delete')) {
+      try {
+        const reviewTask = `Review the changes just made for this task:\n\n${prompt}\n\nInspect the current state of the changed files (and the git diff). Report concrete issues by severity — correctness/bugs, security, then design — with file:line and a one-line fix each. If it's solid, say so briefly.`;
+        const review = await runDelegate({
+          id: 'auto-review',
+          tool: 'delegate',
+          parameters: { agent: 'reviewer', task: reviewTask },
+        } as ToolCall);
+        const body = (review.output || '').replace(/^\[reviewer\]\s*/, '').trim();
+        if (body) finalResponse += `\n\n---\n### Auto-review (reviewer)\n${body}`;
+      } catch {
+        // A failed review must never fail the run.
+      }
+    }
+
     result = {
       success: true,
       iterations: iteration,
       actions,
       finalResponse,
     };
-    writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
+    if (!opts.nested) writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
     return result;
-    
+
   } catch (error) {
     const err = error as Error;
     result = {
@@ -1067,8 +1260,9 @@ export async function runAgent(
     };
     return result;
   } finally {
-    // End session and save history
-    endSession();
+    // End session and save history. Skipped for nested runs so we don't write
+    // a separate session file or null out the parent's open session.
+    if (!opts.nested) endSession();
   }
 }
 

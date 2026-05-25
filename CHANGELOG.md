@@ -11,6 +11,60 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.3.0] — 2026-05-25
+
+> Codeep gets personal and gains a team: a **user profile** (`/me`) makes it adapt to you across every surface, and **multi-agent delegation** lets it hand self-contained sub-tasks to specialist sub-agents that run in their own context.
+
+### Added — Personalization
+
+- **User profile (`/me`).** A durable, human-readable description of you, injected
+  into the agent's system prompt on every run so it adapts to how you work
+  without you repeating yourself. Two scopes: global `~/.codeep/profile.md`
+  (reply language, response style, default stack, universal "always / never")
+  and project `.codeep/profile.md` (your role, goals, constraints for this repo).
+  Manage with `/me`, `/me init [project]`, and `/me on` / `/me off`. Flows to
+  every surface because they share the same files.
+- **Opt-in profile auto-learn.** `/me learn on` lets Codeep quietly extract your
+  durable preferences from sessions — one cheap, throttled LLM pass at session
+  save — and merge them into a separate `profile.learned.md` (global + project),
+  kept apart from your hand-written file so it's never clobbered. `/me learn`
+  runs it once on demand, `/me learn project` scopes to this repo, `/me forget`
+  clears it. Off by default; gated by `autoLearnProfile`.
+- **Profile sync.** `codeep account sync` pushes your global `profile.md` to the
+  codeep.dev dashboard (where it's editable) and pulls it to new machines. Pull
+  is additive — a web edit never overwrites an existing local profile.
+- **`/me` in ACP.** Zed, VS Code, and any ACP client can view and manage the
+  profile, not just the terminal.
+
+### Added — Multi-agent delegation
+
+- **Sub-agents + the `delegate` tool.** The agent can delegate a self-contained
+  sub-task to a specialist that runs in its OWN fresh context window and returns
+  only a summary — so the main context stays small and each sub-task runs with a
+  tuned persona and a scoped toolset. Four built-ins: `planner` (read-only
+  planning), `researcher` (read-only explorer), `reviewer` (read-only senior
+  review), `tester` (writes + runs tests). Run `/agents` to list them.
+- **Custom sub-agents.** Define your own with a frontmatter `.md` in
+  `.codeep/agents/<name>.md` (project) or `~/.codeep/agents/` (global): name,
+  description, a `tools` allowlist, optional `model` override, `personality`
+  preset, and `maxIterations` budget. Mirrors the personalities/skills pattern.
+- **Auto-review pipeline.** Enable **Agent Auto-Review** (`agentAutoReview`, off
+  by default) and after any run that changes files, Codeep automatically
+  delegates to the `reviewer` and appends its findings — a review stage that
+  always happens, without relying on the model to self-delegate one.
+- **`/agents`** surfaced in the TUI and ACP (Zed / VS Code).
+
+### Notes
+
+- Profile is local-first and opt-in: injection is gated by `userProfile` (default
+  on), auto-learn by `autoLearnProfile` (default off). Nothing reaches the
+  dashboard unless you run `codeep account sync`.
+- Sub-agent tool scoping is enforced at dispatch — a `researcher` can't write
+  files even if it tries. Sub-agents inherit your profile, project rules, and
+  permission prompts, and their file changes are covered by `/undo` (they record
+  into the parent's session). Delegation depth is capped at 1; model overrides
+  are sequential-safe.
+
 ## [2.1.4] — 2026-05-22
 
 > Long agent runs no longer silently forget how they started — when prior chat history overflows the context budget, the dropped older messages are summarized instead of just truncated. Plus a command-whitelist hardening.

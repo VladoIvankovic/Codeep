@@ -61,6 +61,16 @@ interface ConfigSchema {
    *  discarding them — so long sessions keep early decisions/constraints.
    *  Default true; set false to fall back to plain truncation (no extra call). */
   autoSummarizeHistory: boolean;
+  /** Inject the user profile (`~/.codeep/profile.md` + project
+   *  `.codeep/profile.md`) into the agent's system prompt so it adapts to the
+   *  user (reply language, style, stack, preferences). Default true; set false
+   *  to keep the profile files but stop injecting them. Managed via `/me`. */
+  userProfile: boolean;
+  /** Auto-learn: at session save, run one LLM pass to extract durable facts /
+   *  preferences about the user and merge them into `~/.codeep/profile.learned.md`
+   *  (injected alongside the hand-written profile). OFF by default — opt in via
+   *  `/me learn on`. Throttled + single-flight so it doesn't spam API calls. */
+  autoLearnProfile: boolean;
   /** Absolute workspace roots whose project-local `.codeep/hooks/*` the user
    *  has approved to run. Untrusted projects' hooks are skipped (a cloned repo
    *  can't execute shell on first tool call). Granted via `/hooks trust`. */
@@ -81,6 +91,10 @@ interface ConfigSchema {
   agentAutoCommit: boolean; // Auto-commit after agent completes
   agentAutoCommitBranch: boolean; // Create new branch for commits
   agentAutoVerify: 'off' | 'build' | 'typecheck' | 'test' | 'all'; // Auto-run verification after changes
+  /** After a top-level agent run that changed files, delegate to the `reviewer`
+   *  sub-agent and append its findings — a guaranteed review stage. Default
+   *  false (opt-in); one extra nested LLM pass when on. */
+  agentAutoReview: boolean;
   agentMaxFixAttempts: number; // Max attempts to fix errors (default: 1)
   agentMaxIterations: number; // Max agent iterations (default: 50)
   agentMaxDuration: number; // Max agent duration in minutes (default: 20)
@@ -271,6 +285,7 @@ function createConfig(): Conf<ConfigSchema> {
     agentAutoCommit: false,
     agentAutoCommitBranch: false,
     agentAutoVerify: 'off',
+    agentAutoReview: false,
     // One fix attempt is enough for modern models — if verification fails twice
     // with the same approach, the agent usually needs human input, not more loops.
     agentMaxFixAttempts: 1,
@@ -287,6 +302,8 @@ function createConfig(): Conf<ConfigSchema> {
     autoSave: true,
     autoSessionTitle: true,
     autoSummarizeHistory: true,
+    userProfile: true,
+    autoLearnProfile: false,
     trustedHookProjects: [],
     currentSessionId: '',
     temperature: 0.7,
@@ -301,6 +318,19 @@ function createConfig(): Conf<ConfigSchema> {
     syncToken: '',
     deviceId: '',
   };
+
+  // Test/CI isolation: when CODEEP_CONFIG_DIR is set, keep config in that
+  // directory (one per test worker) so parallel workers don't race on a shared
+  // on-disk config file (e.g. clobbering trustedHookProjects). Never set in
+  // normal use, so the production resolution below is unchanged.
+  const overrideDir = process.env.CODEEP_CONFIG_DIR;
+  if (overrideDir) {
+    try {
+      return new Conf<ConfigSchema>({ projectName: 'codeep', cwd: overrideDir, defaults });
+    } catch {
+      // fall through to standard resolution
+    }
+  }
 
   // First try standard location
   try {
@@ -861,6 +891,17 @@ export function saveSession(name: string, history: Message[], projectPath?: stri
         && !existingAiTitle
         && history.filter(m => m.role !== 'system').length >= 3) {
       void maybeGenerateSessionTitle(name, projectPath).catch(() => {});
+    }
+
+    // Fire-and-forget: when the user opted into profile learning, observe the
+    // session and merge durable facts into ~/.codeep/profile.learned.md.
+    // Throttled + single-flight inside maybeLearnUserProfile, so the 5s
+    // autosave cadence doesn't spawn an LLM call every tick. Default off.
+    if (config.get('autoLearnProfile') === true
+        && history.filter(m => m.role !== 'system').length >= 4) {
+      void import('../utils/userProfile.js')
+        .then(({ maybeLearnUserProfile }) => maybeLearnUserProfile(name, history, projectPath))
+        .catch(() => {});
     }
     return true;
   } catch (error) {

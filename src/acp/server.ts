@@ -80,6 +80,8 @@ const AVAILABLE_COMMANDS = [
   { name: 'go',        description: 'Execute the pending plan from /plan' },
   // Personalities + insights (2.0.3)
   { name: 'personality', description: 'List or switch agent tone preset', input: { hint: '[name | off]' } },
+  { name: 'me',        description: 'Your user profile — adapts the agent to you (reply language, style, stack)', input: { hint: '[init [project] | on | off | learn [on|off|project] | forget]' } },
+  { name: 'agents',    description: 'List sub-agents the agent can delegate self-contained tasks to' },
   { name: 'insights',  description: 'Activity summary over the last N days (default 7)', input: { hint: '[--days N]' } },
   // Project intelligence
   { name: 'scan',      description: 'Scan project structure and generate summary' },
@@ -811,7 +813,9 @@ export function startAcpServer(): Promise<void> {
     } else if (
       configId === 'agentConfirmDeleteFile' ||
       configId === 'agentConfirmExecuteCommand' ||
-      configId === 'agentConfirmWriteFile'
+      configId === 'agentConfirmWriteFile' ||
+      configId === 'userProfile' ||
+      configId === 'autoLearnProfile'
     ) {
       // Accept boolean or "true"/"false" string from Zed/VSCode
       const bool = value === true || value === 'true';

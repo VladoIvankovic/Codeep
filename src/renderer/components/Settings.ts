@@ -195,6 +195,16 @@ export const SETTINGS: SettingItem[] = [
     ],
   },
   {
+    key: 'agentAutoReview',
+    label: 'Agent Auto-Review',
+    getValue: () => config.get('agentAutoReview'),
+    type: 'select',
+    options: [
+      { value: true, label: 'On (reviewer pass after changes)' },
+      { value: false, label: 'Off' },
+    ],
+  },
+  {
     key: 'agentAutoCommit',
     label: 'Agent Auto-Commit',
     getValue: () => config.get('agentAutoCommit'),

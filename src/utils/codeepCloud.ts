@@ -474,6 +474,54 @@ export async function pullProfiles(): Promise<Record<string, object> | null> {
   }
 }
 
+// ─── User profile sync (~/.codeep/profile.md) ──────────────────────────────────
+//
+// The hand-written global "About me" profile. One blob per user. Pull is
+// additive — it writes only when no local profile.md exists, so a web edit can
+// never clobber local work (same philosophy as the personalities/commands sync).
+
+function userProfilePath(): string {
+  return join(homedir(), '.codeep', 'profile.md');
+}
+
+/** Push the local global profile.md to the dashboard. */
+export async function pushUserProfile(): Promise<boolean> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return false;
+  const path = userProfilePath();
+  if (!existsSync(path)) return false;
+  let content = '';
+  try { content = readFileSync(path, 'utf8'); } catch { return false; }
+  if (content.length > 32 * 1024) content = content.slice(0, 32 * 1024);
+  const res = await fetchWithRetry(`${API_BASE}/api/sync/user-profile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+    body: JSON.stringify({ content }),
+  });
+  return res?.ok ?? false;
+}
+
+/** Pull the dashboard profile.md — additive: writes only when no local profile
+ *  exists. Returns 1 if written, 0 if skipped, null on error / not linked. */
+export async function pullUserProfile(): Promise<number | null> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return null;
+  const res = await fetchWithRetry(`${API_BASE}/api/sync/user-profile`, { headers: { 'x-sync-token': syncToken } });
+  if (!res?.ok) return null;
+  try {
+    const data = await res.json() as { ok: boolean; content: string | null };
+    if (!data.ok || !data.content) return 0;
+    const path = userProfilePath();
+    if (existsSync(path)) return 0; // never clobber local
+    const dir = join(homedir(), '.codeep');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(path, data.content);
+    return 1;
+  } catch {
+    return null;
+  }
+}
+
 export async function syncMemoryNotes(projectName: string, notes: string[]): Promise<void> {
   const syncToken = getSyncToken();
   if (!syncToken) return;

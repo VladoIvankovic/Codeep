@@ -728,6 +728,64 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       };
     }
 
+    case 'agents': {
+      const { formatAgentList } = await import('../utils/agents.js');
+      return { handled: true, response: formatAgentList(session.workspaceRoot) };
+    }
+
+    case 'me': {
+      const {
+        formatProfileView, scaffoldProfile, updateLearnedProfile, clearLearnedProfile,
+      } = await import('../utils/userProfile.js');
+      const sub = args[0]?.toLowerCase();
+
+      if (sub === 'on' || sub === 'off') {
+        config.set('userProfile', sub === 'on');
+        return { handled: true, response: sub === 'on'
+          ? "Profile injection on — your profile is added to the agent's context."
+          : 'Profile injection off — profile is saved but not used.', configOptionsChanged: true };
+      }
+      if (sub === 'init') {
+        const scope = args[1]?.toLowerCase() === 'project' ? 'project' : 'global';
+        if (scope === 'project' && !session.workspaceRoot) {
+          return { handled: true, response: 'No project here — use `/me init` for a global profile.' };
+        }
+        const res = scaffoldProfile(scope, session.workspaceRoot);
+        if (!res) return { handled: true, response: 'Could not create the profile file.' };
+        return { handled: true, response: res.created
+          ? `Created ${scope} profile: \`${res.path}\` — edit it and Codeep uses it automatically.`
+          : `${scope === 'global' ? 'Global' : 'Project'} profile already exists: \`${res.path}\`.` };
+      }
+      if (sub === 'learn') {
+        const arg = args[1]?.toLowerCase();
+        if (arg === 'on' || arg === 'off') {
+          config.set('autoLearnProfile', arg === 'on');
+          return { handled: true, response: arg === 'on'
+            ? 'Auto-learn on — Codeep updates your learned profile (global + project) from sessions.'
+            : 'Auto-learn off — Codeep stops updating the learned profile.', configOptionsChanged: true };
+        }
+        const scope = arg === 'project' ? 'project' : 'global';
+        if (scope === 'project' && !session.workspaceRoot) {
+          return { handled: true, response: 'No project here — run `/me learn` for your global profile.' };
+        }
+        if (session.history.filter((m) => m.role !== 'system').length < 2) {
+          return { handled: true, response: 'Not enough conversation yet to learn from.' };
+        }
+        const res = await updateLearnedProfile(session.history, scope, session.workspaceRoot);
+        if (!res) return { handled: true, response: 'Nothing durable to learn right now (or the model call failed).' };
+        const file = scope === 'global' ? '~/.codeep/profile.learned.md' : '.codeep/profile.learned.md';
+        return { handled: true, response: res.updated
+          ? `Updated your ${scope} learned profile (\`${file}\`):\n\n${res.facts}`
+          : `No changes — your ${scope} learned profile already covers this:\n\n${res.facts}` };
+      }
+      if (sub === 'forget') {
+        return { handled: true, response: clearLearnedProfile(session.workspaceRoot)
+          ? 'Cleared the auto-learned profile(s).'
+          : 'No learned profile to clear.' };
+      }
+      return { handled: true, response: formatProfileView(session.workspaceRoot) };
+    }
+
     case 'insights': {
       const { formatInsights } = await import('../utils/insights.js');
       let days = 7;
@@ -1505,6 +1563,8 @@ function buildHelp(): string {
     '| Command | Description |',
     '|---------|-------------|',
     '| `/memory <note>` | Add a project note (or `list` / `remove <n>` / `clear`) |',
+    '| `/me` | Your user profile — reply language, style, stack (`init [project]`, `learn [on\\|off\\|project]`, `forget`, `on`/`off`) |',
+    '| `/agents` | List sub-agents the agent can delegate self-contained tasks to |',
     '| `/profile save <name>` | Save current provider/model/settings (or `load` / `delete` / `list`) |',
     '| `/hooks` | List installed lifecycle hooks (`.codeep/hooks/<event>.sh`) |',
     '',
