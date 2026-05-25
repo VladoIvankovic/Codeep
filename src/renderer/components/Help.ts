@@ -141,6 +141,7 @@ export const helpCategories: HelpCategory[] = [
       { key: '/me', description: 'Your user profile (reply language, style, stack) — adapts the agent to you' },
       { key: '/me init [project]', description: 'Scaffold a profile template (global, or for this project). /me off to disable' },
       { key: '/me learn [on|off]', description: 'Learn durable prefs from this session now; on/off toggles auto-learn. /me forget clears it' },
+      { key: '/me sync', description: 'Push your profile to the codeep.dev dashboard (and pull on a fresh machine)' },
       { key: '/agents', description: 'List sub-agents the agent can delegate to (researcher / reviewer / tester / your own)' },
       { key: '/insights [--days N]', description: 'Activity summary — runs, files, tools, projects over the last N days (default 7)' },
     ],

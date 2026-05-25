@@ -80,7 +80,7 @@ const AVAILABLE_COMMANDS = [
   { name: 'go',        description: 'Execute the pending plan from /plan' },
   // Personalities + insights (2.0.3)
   { name: 'personality', description: 'List or switch agent tone preset', input: { hint: '[name | off]' } },
-  { name: 'me',        description: 'Your user profile — adapts the agent to you (reply language, style, stack)', input: { hint: '[init [project] | on | off | learn [on|off|project] | forget]' } },
+  { name: 'me',        description: 'Your user profile — adapts the agent to you (reply language, style, stack)', input: { hint: '[init [project] | on | off | learn [on|off|project] | forget | sync]' } },
   { name: 'agents',    description: 'List sub-agents the agent can delegate self-contained tasks to' },
   { name: 'insights',  description: 'Activity summary over the last N days (default 7)', input: { hint: '[--days N]' } },
   // Project intelligence

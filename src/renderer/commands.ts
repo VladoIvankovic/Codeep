@@ -409,6 +409,20 @@ export async function handleCommand(
           : 'No learned profile to clear.');
         break;
       }
+      if (sub === 'sync') {
+        const { getSyncToken } = await import('../config/index');
+        if (!getSyncToken()) { ctx.app.notify('Not linked to codeep.dev. Run: codeep account'); break; }
+        const { pushUserProfile, pullUserProfile } = await import('../utils/codeepCloud');
+        ctx.app.notify('Syncing your profile with codeep.dev…');
+        const pushed = await pushUserProfile();
+        const pulled = await pullUserProfile();
+        const lines: string[] = [];
+        if (pushed) lines.push('✓ Profile pushed to the dashboard');
+        if (pulled === 1) lines.push('✓ Profile pulled to this machine');
+        if (lines.length === 0) lines.push('Nothing to sync yet — run `/me init` and fill in your profile first.');
+        ctx.app.addMessage({ role: 'system', content: `## Profile sync\n\n${lines.join('\n')}` });
+        break;
+      }
       if (sub === 'init') {
         const scope = args[1]?.toLowerCase() === 'project' ? 'project' : 'global';
         if (scope === 'project' && !ctx.projectPath) {

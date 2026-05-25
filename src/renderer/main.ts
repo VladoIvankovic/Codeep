@@ -441,8 +441,8 @@ Codeep - AI-powered coding assistant TUI
 Usage:
   codeep              Start interactive chat
   codeep account        Link CLI to your codeep.dev dashboard
-  codeep account sync   Pull keys + personalities + commands from codeep.dev
-  codeep account push   Push local keys + personalities + commands to codeep.dev
+  codeep account sync   Pull keys + personalities + commands + profile from codeep.dev
+  codeep account push   Push local keys + personalities + commands + profile to codeep.dev
   codeep acp          Start ACP server (for Zed editor integration)
   codeep --version    Show version
   codeep --help       Show this help
@@ -484,9 +484,9 @@ Commands (in chat):
         console.log(` synced ${count} key${count !== 1 ? 's' : ''}.`);
       }
 
-      // Also pull portable personal config — personalities + custom
-      // commands. Additive merge (never clobbers local files).
-      const { pullPersonalities, pullCommands } = await import('../utils/codeepCloud.js');
+      // Also pull portable personal config — personalities + custom commands +
+      // the user profile. Additive merge (never clobbers local files).
+      const { pullPersonalities, pullCommands, pullUserProfile } = await import('../utils/codeepCloud.js');
       const pCount = await pullPersonalities();
       if (typeof pCount === 'number' && pCount > 0) {
         console.log(`  Pulled ${pCount} personalit${pCount === 1 ? 'y' : 'ies'}.`);
@@ -494,6 +494,10 @@ Commands (in chat):
       const cCount = await pullCommands();
       if (typeof cCount === 'number' && cCount > 0) {
         console.log(`  Pulled ${cCount} custom command${cCount === 1 ? '' : 's'}.`);
+      }
+      const profPulled = await pullUserProfile();
+      if (profPulled === 1) {
+        console.log('  Pulled your profile (about you).');
       }
       console.log('');
       process.exit(0);
@@ -523,8 +527,8 @@ Commands (in chat):
       const ok = await pushKeys(keys);
       console.log(ok ? ' done.' : ' failed.');
 
-      // Also push portable personal config.
-      const { pushPersonalities, pushCommands } = await import('../utils/codeepCloud.js');
+      // Also push portable personal config — personalities + commands + profile.
+      const { pushPersonalities, pushCommands, pushUserProfile } = await import('../utils/codeepCloud.js');
       const pCount = await pushPersonalities();
       if (typeof pCount === 'number' && pCount > 0) {
         console.log(`  Pushed ${pCount} personalit${pCount === 1 ? 'y' : 'ies'}.`);
@@ -532,6 +536,9 @@ Commands (in chat):
       const cCount = await pushCommands();
       if (typeof cCount === 'number' && cCount > 0) {
         console.log(`  Pushed ${cCount} custom command${cCount === 1 ? '' : 's'}.`);
+      }
+      if (await pushUserProfile()) {
+        console.log('  Pushed your profile (about you).');
       }
       console.log('');
       process.exit(ok ? 0 : 1);

@@ -783,6 +783,18 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
           ? 'Cleared the auto-learned profile(s).'
           : 'No learned profile to clear.' };
       }
+      if (sub === 'sync') {
+        const { getSyncToken } = await import('../config/index.js');
+        if (!getSyncToken()) return { handled: true, response: 'Not linked to codeep.dev. Run `codeep account` in a terminal first.' };
+        const { pushUserProfile, pullUserProfile } = await import('../utils/codeepCloud.js');
+        const pushed = await pushUserProfile();
+        const pulled = await pullUserProfile();
+        const lines: string[] = [];
+        if (pushed) lines.push('✓ Profile pushed to the dashboard');
+        if (pulled === 1) lines.push('✓ Profile pulled to this machine');
+        if (lines.length === 0) lines.push('Nothing to sync yet — run `/me init` and fill in your profile first.');
+        return { handled: true, response: lines.join('\n') };
+      }
       return { handled: true, response: formatProfileView(session.workspaceRoot) };
     }
 

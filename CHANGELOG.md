@@ -11,6 +11,22 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.3.1] — 2026-05-25
+
+> Profile sync everywhere: `codeep account sync`/`push` now carry your user profile too, and a new `/me sync` pushes it from any surface.
+
+### Fixed
+
+- **`codeep account sync` / `account push` now include your user profile.** They
+  synced keys + personalities + commands but skipped `~/.codeep/profile.md`;
+  now the profile rides along (additive pull — never clobbers a local profile).
+
+### Added
+
+- **`/me sync`** — push your profile to the dashboard (and additive-pull) right
+  from the profile command, reachable on every surface (TUI, ACP/Zed, and the
+  VS Code chat).
+
 ## [2.3.0] — 2026-05-25
 
 > Codeep gets personal and gains a team: a **user profile** (`/me`) makes it adapt to you across every surface, and **multi-agent delegation** lets it hand self-contained sub-tasks to specialist sub-agents that run in their own context.

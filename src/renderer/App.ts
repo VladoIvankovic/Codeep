@@ -108,7 +108,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'plan': 'Generate a numbered plan for a task — review before /go executes it',
   'go': 'Execute the pending plan from /plan',
   'personality': 'Switch agent tone: concise / verbose / security / senior-reviewer / etc',
-  'me': 'Your user profile (reply language, style, stack) — adapts the agent to you. /me init, /me learn',
+  'me': 'Your user profile (reply language, style, stack) — adapts the agent to you. /me init, /me learn, /me sync',
   'agents': 'List sub-agents the agent can delegate self-contained tasks to (researcher / reviewer / tester / custom)',
   'insights': 'Activity summary over the last N days (default 7): runs, files, tools, projects',
   'recall': 'Search across ALL saved sessions (cross-session; /search is current-session only)',

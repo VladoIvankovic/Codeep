@@ -257,7 +257,7 @@ Commands:
 - `/me learn project` — one-off learn scoped to this repo
 - `/me forget` — clear the auto-learned profile(s)
 
-Sync your global profile across machines (and edit it on the web) from the [dashboard](https://codeep.dev/dashboard) with `codeep account sync`. In VS Code: **Codeep: Edit Profile** and **Codeep: Toggle Profile Auto-Learn**.
+Sync your global profile across machines (and edit it on the web) from the [dashboard](https://codeep.dev/dashboard): `/me sync` (or `codeep account sync`, which now carries the profile too). In VS Code: **Codeep: Edit Profile**, **Codeep: Toggle Profile Auto-Learn**, **Codeep: Sync Profile to Dashboard**.
 
 ### Sub-agents (delegation)
 The agent can delegate a self-contained sub-task to a specialist **sub-agent** that runs in its own fresh context window and returns only a summary — keeping the main context small and letting each sub-task run with a tuned persona and scoped tools.
