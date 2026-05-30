@@ -83,6 +83,19 @@ interface ConfigSchema {
   rateLimitCommands: number; // Commands per minute
   agentMode: AgentMode; // on = always use agent, manual = use /agent command
   ollamaUrl: string; // Ollama base URL (default: http://localhost:11434)
+  /** Route Ollama through its NATIVE /api/chat endpoint instead of the
+   *  OpenAI-compatible /v1 shim. The native endpoint honors num_ctx + keep_alive
+   *  and exposes the model's real context window. OFF by default — opt-in until
+   *  verified against a live Ollama; when off, the existing /v1 path is used
+   *  unchanged so current behavior is preserved. */
+  ollamaNativeApi: boolean;
+  /** How long Ollama keeps the model loaded in memory between requests (e.g.
+   *  "30m", "1h", "-1" for forever). Avoids reload latency every turn. Sent on
+   *  native /api/chat requests (only when ollamaNativeApi is on). Default "30m". */
+  ollamaKeepAlive: string;
+  /** Override num_ctx (context window) for Ollama. 0 = auto-detect the model's
+   *  real max via /api/show. Set a specific number to cap VRAM use. Default 0. */
+  ollamaNumCtx: number;
   customBaseUrl: string; // Base URL for the "custom" OpenAI-compatible provider (e.g. vLLM/LiteLLM: http://host:8000/v1)
   agentConfirmation: 'always' | 'dangerous' | 'never'; // Confirmation mode for agent actions
   agentConfirmDeleteFile: boolean; // Confirm before delete_file in dangerous mode
@@ -277,6 +290,9 @@ function createConfig(): Conf<ConfigSchema> {
     model: 'glm-5.1',
     agentMode: 'on',
     ollamaUrl: 'http://localhost:11434',
+    ollamaNativeApi: false,
+    ollamaKeepAlive: '30m',
+    ollamaNumCtx: 0,
     customBaseUrl: '',
     agentConfirmation: 'dangerous',
     agentConfirmDeleteFile: true,

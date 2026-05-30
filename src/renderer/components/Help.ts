@@ -181,6 +181,8 @@ export const helpCategories: HelpCategory[] = [
       { key: '/settings > Ollama URL', description: 'Set URL (default: http://localhost:11434)' },
       { key: '/model', description: 'Pick installed Ollama model dynamically' },
       { key: '/model pull <model>', description: 'Pull an Ollama model (local Ollama only)' },
+      { key: '/model browse', description: 'Browse recommended local coding models and pull one' },
+      { key: '/model rm <model>', description: 'Remove a locally-installed Ollama model (local only)' },
       { key: 'OLLAMA_HOST=0.0.0.0', description: 'Required env var for remote Ollama access' },
     ],
   },

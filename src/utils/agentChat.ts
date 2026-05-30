@@ -410,6 +410,41 @@ export async function agentChat(
         if (prefs) openRouterExtras.provider = prefs;
       }
 
+      // Opt-in native Ollama transport for AGENT mode. When `ollamaNativeApi`
+      // is on, route through /api/chat (honors num_ctx + keep_alive + the real
+      // context window) and parse native tool_calls. OFF by default → the /v1
+      // path below runs unchanged. Returns the agent response directly.
+      if (providerId === 'ollama' && config.get('ollamaNativeApi') === true) {
+        const { streamOllamaNativeChat, getOllamaContextLength } = await import('../api/ollamaNative.js');
+        const ollamaUrl = (config.get('ollamaUrl') as string) || 'http://localhost:11434';
+        const cfgCtx = Number(config.get('ollamaNumCtx')) || 0;
+        const numCtx = cfgCtx > 0 ? cfgCtx : ((await getOllamaContextLength(model, ollamaUrl)) ?? undefined);
+        const res = await streamOllamaNativeChat({
+          baseUrl: ollamaUrl,
+          model,
+          messages: [],
+          rawMessages: [{ role: 'system', content: systemPrompt }, ...messages] as unknown[],
+          tools: getOpenAITools(additionalTools) as unknown[],
+          numCtx,
+          keepAlive: (config.get('ollamaKeepAlive') as string) || undefined,
+          temperature: requiresDefaultTemperature(providerId) ? undefined : Number(config.get('temperature')),
+          timeoutMs,
+          onChunk: useStreaming ? onChunk : undefined,
+        });
+        if (res.promptTokens != null && res.completionTokens != null) {
+          recordTokenUsage(
+            { promptTokens: res.promptTokens, completionTokens: res.completionTokens, totalTokens: res.promptTokens + res.completionTokens },
+            model, providerId,
+          );
+        }
+        const toolCalls = res.toolCalls.map((tc) => ({ tool: tc.name, parameters: tc.arguments }));
+        if (toolCalls.length === 0 && res.text) {
+          const textCalls = parseToolCalls(res.text);
+          if (textCalls.length > 0) return { content: res.text, toolCalls: textCalls, usedNativeTools: false };
+        }
+        return { content: res.text, toolCalls, usedNativeTools: true };
+      }
+
       body = {
         model, messages: [{ role: 'system', content: systemPrompt }, ...messages],
         tools: getOpenAITools(additionalTools), tool_choice: 'auto', stream: useStreaming,

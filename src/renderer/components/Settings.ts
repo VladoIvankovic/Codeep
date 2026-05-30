@@ -147,6 +147,28 @@ export const SETTINGS: SettingItem[] = [
     type: 'text',
   },
   {
+    key: 'ollamaNativeApi',
+    label: 'Ollama Native API (beta)',
+    getValue: () => config.get('ollamaNativeApi'),
+    type: 'select',
+    options: [
+      { value: false, label: 'Off (OpenAI-compatible /v1)' },
+      { value: true, label: 'On — beta: native /api/chat (num_ctx + keep_alive)' },
+    ],
+  },
+  {
+    key: 'ollamaKeepAlive',
+    label: 'Ollama Keep-Alive',
+    getValue: () => String(config.get('ollamaKeepAlive') ?? '30m'),
+    type: 'text',
+  },
+  {
+    key: 'ollamaNumCtx',
+    label: 'Ollama Context (num_ctx, 0=auto)',
+    getValue: () => String(config.get('ollamaNumCtx') ?? 0),
+    type: 'text',
+  },
+  {
     key: 'customBaseUrl',
     label: 'Custom Base URL',
     getValue: () => config.get('customBaseUrl') || '',

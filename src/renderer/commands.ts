@@ -134,6 +134,51 @@ export async function handleCommand(
         break;
       }
 
+      // /model browse — curated catalog of recommended local coding models.
+      if (args[0] === 'browse') {
+        const ollamaUrl = (config.get('ollamaUrl') || 'http://localhost:11434').toLowerCase();
+        const isLocal = ollamaUrl.includes('localhost') || ollamaUrl.includes('127.0.0.1') || ollamaUrl.includes('[::1]');
+        const { OLLAMA_CODING_MODELS, catalogAgentHint } = await import('../utils/ollamaCatalog');
+        const items = OLLAMA_CODING_MODELS.map(m => ({
+          key: m.pull,
+          label: m.name,
+          description: `${m.pull} · ${m.vram} · ${catalogAgentHint(m.params)} — ${m.description}`,
+        }));
+        ctx.app.showSelect('Recommended coding models (pull)', items, '', (item) => {
+          if (!isLocal) {
+            ctx.app.notify(`Ollama is on a remote server. SSH in and run: ollama pull ${item.key}`);
+            return;
+          }
+          ctx.app.notify(`Pulling ${item.key}... (this may take a while)`);
+          import('child_process').then(({ execFile }) => {
+            execFile('ollama', ['pull', item.key], { timeout: 1_200_000 }, (err) => {
+              if (err) ctx.app.notify(`Pull failed: ${err.message}`);
+              else ctx.app.notify(`✓ ${item.key} ready — use /model to select it`);
+            });
+          });
+        });
+        break;
+      }
+
+      // /model rm <name> — delete a locally-installed Ollama model.
+      if (args[0] === 'rm' || args[0] === 'remove' || args[0] === 'delete') {
+        const modelName = args[1];
+        if (!modelName) { ctx.app.notify('Usage: /model rm <model-name>'); break; }
+        const ollamaUrl = (config.get('ollamaUrl') || 'http://localhost:11434').toLowerCase();
+        const isLocal = ollamaUrl.includes('localhost') || ollamaUrl.includes('127.0.0.1') || ollamaUrl.includes('[::1]');
+        if (!isLocal) {
+          ctx.app.notify(`Ollama is on a remote server. SSH in and run: ollama rm ${modelName}`);
+          break;
+        }
+        ctx.app.notify(`Removing ${modelName}…`);
+        const { execFile } = await import('child_process');
+        execFile('ollama', ['rm', modelName], { timeout: 60_000 }, (err) => {
+          if (err) ctx.app.notify(`Remove failed: ${err.message}`);
+          else ctx.app.notify(`✓ Removed ${modelName}`);
+        });
+        break;
+      }
+
       const providerId = config.get('provider');
       const { isDynamicModelsProvider, isNoApiKeyProvider: _noKey } = await import('../config/providers');
       if (isDynamicModelsProvider(providerId)) {

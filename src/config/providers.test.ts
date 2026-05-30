@@ -212,11 +212,11 @@ describe('providers', () => {
   });
 
   describe('anthropic provider', () => {
-    it('should include Claude Opus 4.7 as default model', () => {
-      expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-4-7');
+    it('should include Claude Opus 4.8 as default model', () => {
+      expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-4-8');
       const modelIds = PROVIDERS['anthropic'].models.map(m => m.id);
-      expect(modelIds).toContain('claude-opus-4-7');
-      expect(modelIds).toContain('claude-opus-4-6'); // kept as previous-gen option
+      expect(modelIds).toContain('claude-opus-4-8');
+      expect(modelIds).toContain('claude-opus-4-7'); // kept as previous-gen option
       expect(modelIds).toContain('claude-sonnet-4-6');
       expect(modelIds).toContain('claude-haiku-4-5-20251001');
     });
@@ -288,7 +288,7 @@ describe('providers', () => {
       expect(provider!.subscribeUrl).toBe('https://aistudio.google.com/apikey');
       const modelIds = provider!.models.map(m => m.id);
       expect(modelIds).toContain('gemini-3.1-pro-preview');
-      expect(modelIds).toContain('gemini-3-flash-preview');
+      expect(modelIds).toContain('gemini-3.5-flash');
     });
   });
 });

@@ -11,6 +11,45 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.4.0] — 2026-05-30
+
+> New models (Claude Opus 4.8, Gemini 3.5 Flash) plus a better local-model experience: browse a curated catalog of coding models, remove models, and see on-disk sizes — all from `/model`.
+
+### Added
+
+- **Claude Opus 4.8** — added to the Anthropic provider and set as the new
+  default model. Pricing: $5 / $25 per 1M tokens (input / output), 1M context.
+- **Gemini 3.5 Flash** (`gemini-3.5-flash`) — replaces the preview Flash in the
+  Google provider list. Pricing: $1.50 / $9.00 per 1M tokens, 1M context.
+- **`/model browse` (Ollama)** — a curated catalog of recommended local coding
+  models (Qwen2.5 Coder, DeepSeek Coder V2, Llama 3.1, DeepSeek R1, …) with
+  parameter sizes, rough VRAM, and an agent-mode suitability hint. Pick one to
+  pull it. Mirrors the MCP/skills catalog pattern.
+- **`/model rm <name>` (Ollama)** — remove a locally-installed model to reclaim
+  disk, without leaving Codeep. Remote-server guard like `/model pull`.
+- **On-disk size in `/model` picker** — the Ollama model list now shows each
+  model's size on disk alongside the agent-mode hint.
+- **Native Ollama API (beta, opt-in)** — set **Ollama Native API (beta) → On**
+  in `/settings` to route Ollama through its native `/api/chat` endpoint instead
+  of the OpenAI-compatible `/v1` shim. Honors **`num_ctx`** (the model uses its
+  full context window instead of Ollama's small default) and **`keep_alive`**
+  (keeps the model resident, avoiding reload latency every turn). Tunable via
+  `ollamaKeepAlive` (default `30m`) and `ollamaNumCtx` (`0` = auto-detect via
+  `/api/show`). **Off by default** — existing transport unchanged unless you opt
+  in. Verified against Ollama 0.24 (chat, streaming, usage, native tool calls);
+  marked **beta** while it gets coverage across more models and longer sessions.
+  **Please report issues** at https://github.com/VladoIvankovic/Codeep/issues —
+  feedback decides when it becomes the default.
+
+### Notes
+
+- Pricing tables (`/cost`, dashboard) updated so the new models bill at the
+  right rates. Previous models (Opus 4.7 / 4.6, Flash preview) stay listed for
+  back-compat. VS Code/Zed inherit the new catalog automatically over ACP; the
+  native macOS / iOS apps get the same update via the shared CodeepCore catalog.
+- `/model browse` and `/model rm` shell out to the local `ollama` binary, so
+  they only run when Ollama is local (remote servers get an SSH hint instead).
+
 ## [2.3.1] — 2026-05-25
 
 > Profile sync everywhere: `codeep account sync`/`push` now carry your user profile too, and a new `/me sync` pushes it from any surface.

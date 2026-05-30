@@ -1016,6 +1016,8 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 | `/memory remove <n>` | Remove note by index |
 | `/memory clear` | Clear all notes |
 | `/model pull <name>` | Pull an Ollama model (local Ollama only) |
+| `/model browse` | Browse a curated catalog of local coding models and pull one (Ollama) |
+| `/model rm <name>` | Remove a locally-installed Ollama model (local only) |
 
 ### Skills
 

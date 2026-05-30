@@ -457,6 +457,34 @@ async function chatOpenAI(
   });
 
   try {
+    // Opt-in native Ollama transport (plain chat). When `ollamaNativeApi` is on,
+    // route through /api/chat so num_ctx + keep_alive apply and the real context
+    // window is used. OFF by default → falls through to the /v1 shim below
+    // unchanged. Plain chat sends no tools, so the native call is simple here.
+    if (providerId === 'ollama' && config.get('ollamaNativeApi') === true) {
+      const { streamOllamaNativeChat, getOllamaContextLength } = await import('./ollamaNative.js');
+      const ollamaUrl = (config.get('ollamaUrl') as string) || 'http://localhost:11434';
+      const cfgCtx = Number(config.get('ollamaNumCtx')) || 0;
+      const numCtx = cfgCtx > 0 ? cfgCtx : ((await getOllamaContextLength(model, ollamaUrl)) ?? undefined);
+      const result = await streamOllamaNativeChat({
+        baseUrl: ollamaUrl,
+        model,
+        messages,
+        numCtx,
+        keepAlive: (config.get('ollamaKeepAlive') as string) || undefined,
+        temperature: omitTemperature ? undefined : temperature,
+        timeoutMs: timeout,
+        onChunk: stream ? onChunk : undefined,
+      });
+      if (result.promptTokens != null && result.completionTokens != null) {
+        recordTokenUsage(
+          { promptTokens: result.promptTokens, completionTokens: result.completionTokens, totalTokens: result.promptTokens + result.completionTokens },
+          model, providerId,
+        );
+      }
+      return stripThinkTags(result.text);
+    }
+
     // Use node:http for Ollama — bypasses undici connection pooling (AggregateError in Node v24)
     if (providerId === 'ollama') {
       const nodeStream = await httpRequest(`${baseUrl}/chat/completions`, {
