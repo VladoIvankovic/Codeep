@@ -66,7 +66,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gemini-3.5-flash':              1_000_000,
   'gemini-3-flash-preview':        1_000_000,
   // MiniMax
-  'MiniMax-M2.7':           204_800,
+  'MiniMax-M3':             524_288,
 };
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -105,7 +105,7 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'gemini-3.5-flash':              { inputPer1M: 1.50, outputPer1M: 9.00 },
   'gemini-3-flash-preview':        { inputPer1M: 0.50, outputPer1M: 3.00 },
   // MiniMax
-  'MiniMax-M2.7':           { inputPer1M: 0.30,  outputPer1M: 1.20 },
+  'MiniMax-M3':             { inputPer1M: 0.60,  outputPer1M: 2.40 },
 };
 
 export function getPricingTable(): { model: string; inputPer1M: number; outputPer1M: number }[] {

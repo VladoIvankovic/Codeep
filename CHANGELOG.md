@@ -11,6 +11,20 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.4.1] — 2026-06-01
+
+> MiniMax M3: the new MiniMax flagship replaces M2.7 across all three MiniMax providers (subscription, pay-per-use, China), with updated pricing and context window so cost tracking stays accurate.
+
+### Changed
+
+- **MiniMax M3** (`MiniMax-M3`) replaces `MiniMax-M2.7` as the model + default for
+  the `minimax`, `minimax-api`, and `minimax-cn` providers. Pricing updated to the
+  standard rate **$0.60 / $2.40** per 1M tokens (input / output) and context window
+  to **512K**, so `/cost` and the dashboard bill it correctly. The native macOS / iOS
+  apps get the same update via the shared CodeepCore catalog.
+- **README provider list** is now generic (model families, not pinned versions) —
+  it no longer needs editing every time a provider ships a new model.
+
 ## [2.4.0] — 2026-05-30
 
 > New models (Claude Opus 4.8, Gemini 3.5 Flash) plus a better local-model experience: browse a curated catalog of coding models, remove models, and see on-disk sizes — all from `/model`.
