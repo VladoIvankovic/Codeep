@@ -878,6 +878,33 @@ async function gracefulShutdown() {
   ]);
 }
 
+// ─── Last-resort crash handlers ───────────────────────────────────────────────
+// Without these, a stray throw or rejected promise (deep in the agent loop or a
+// background cloud sync) crashes Node with the terminal still in raw mode +
+// alternate screen — leaving the user's shell garbled — or vanishes silently.
+
+process.on('uncaughtException', (error) => {
+  logAppError(error instanceof Error ? error : new Error(String(error)), 'uncaughtException');
+  // After an uncaught exception the process state is undefined; Node's guidance
+  // is to clean up synchronously and exit rather than limp on. Restore the
+  // terminal and best-effort save the conversation so the crash doesn't lose it.
+  try { if (app) app.stop(); } catch { /* ignore */ }
+  try { process.stdout.write('\x1b[2J\x1b[3J\x1b[H'); } catch { /* ignore */ }
+  console.error('Fatal error:', error);
+  try { if (app) autoSaveSession(app.getMessages(), projectPath); } catch { /* ignore */ }
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logAppError(reason instanceof Error ? reason : new Error(String(reason)), 'unhandledRejection');
+  // A rejected promise is usually recoverable (failed background sync, network
+  // blip), so surface it and keep the TUI alive instead of tearing it down.
+  // Fall back to stderr if the app isn't up yet.
+  const message = reason instanceof Error ? reason.message : String(reason);
+  if (app) app.notifyWarn(`Background error: ${message}`);
+  else console.error('Unhandled rejection:', reason);
+});
+
 process.on('SIGINT', () => {
   gracefulShutdown().finally(() => process.exit(0));
 });

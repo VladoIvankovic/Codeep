@@ -79,9 +79,13 @@ export async function runAccountFlow(): Promise<void> {
 
       const data = await res.json() as { status: string; github_id?: string; username?: string; sync_token?: string };
 
-      if (data.status === 'authorized' && data.github_id) {
+      // Require the sync token, not just github_id: the server can briefly
+      // report authorized after claiming the code but before the token is
+      // issued. Linking without it leaves `account sync` broken ("Not linked"),
+      // so keep polling until the token is present.
+      if (data.status === 'authorized' && data.github_id && data.sync_token) {
         setGithubAccount(data.github_id, data.username ?? '');
-        if (data.sync_token) setSyncToken(data.sync_token);
+        setSyncToken(data.sync_token);
         // Register device info
         try {
           await fetch(`${API_BASE}/api/auth/cli/device`, {

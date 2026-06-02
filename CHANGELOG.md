@@ -11,6 +11,25 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.4.2] — 2026-06-02
+
+> Stability: an unexpected error no longer crashes Codeep to a garbled terminal — it's logged, your conversation is saved, and recoverable background errors keep the session alive. Also fixes `codeep account` occasionally linking without storing the sync token.
+
+### Fixed
+
+- **Crash resilience** — added global `uncaughtException` / `unhandledRejection`
+  handlers. A stray throw deep in the agent loop used to kill the process with the
+  terminal still in raw mode + alternate screen (leaving your shell garbled), or
+  vanish silently. Now an uncaught exception restores the terminal, logs the cause,
+  and best-effort saves the conversation before exiting; an unhandled promise
+  rejection (e.g. a failed background sync) surfaces as a warning and keeps the TUI
+  running instead of tearing it down.
+- **`codeep account` sync token** — account linking now waits for the sync token
+  before completing. The server could briefly report the login authorized before
+  the token was issued, so the CLI linked the account but stored no token, leaving
+  `codeep account sync` failing with "Not linked to codeep.dev". Pairs with the
+  matching codeep.dev fix.
+
 ## [2.4.1] — 2026-06-01
 
 > MiniMax M3: the new MiniMax flagship replaces M2.7 across all three MiniMax providers (subscription, pay-per-use, China), with updated pricing and context window so cost tracking stays accurate.
