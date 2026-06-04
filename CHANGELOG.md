@@ -13,7 +13,7 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 
 ## [2.5.0] — 2026-06-04
 
-> New: `codeep review` (offline, CI-friendly code review) and Continue (a paused-at-the-limit run resumes when you say "continue" instead of dead-ending). Plus a fix where file edits or skill params containing `$` ($&, ${…}) could be written corrupted.
+> New: `codeep review` (offline, CI-friendly code review) and Continue (a paused-at-the-limit run resumes when you say "continue" instead of dead-ending). Plus a fix where file edits or skill params containing a `$` could be written corrupted.
 
 ### Added
 
