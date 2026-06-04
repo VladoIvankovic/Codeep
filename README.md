@@ -1050,6 +1050,7 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 | `codeep account` | Link CLI to codeep.dev (GitHub OAuth) |
 | `codeep account sync` | Pull API keys + personalities + commands from codeep.dev → local |
 | `codeep account push` | Push local API keys + personalities + commands → codeep.dev |
+| `codeep review [files…]` | Offline, deterministic code review for CI — markdown or `--json`, `--fail-on <error\|warning\|info\|none>` sets the exit code. No API key needed. |
 
 ### Authentication
 

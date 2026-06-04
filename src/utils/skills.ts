@@ -832,11 +832,15 @@ function sanitizeForShell(text: string): string {
  */
 export function interpolateParams(content: string, params: Record<string, string>): string {
   let result = content;
-  
+
   for (const [key, value] of Object.entries(params)) {
-    result = result.replace(new RegExp(`\\$\\{${key}\\}`, 'g'), value);
+    // Literal find/replace-all via split+join. Avoids two bugs of the old
+    // regex form: a regex-meta char in `key` (e.g. `.`, `(`) breaking the match
+    // or throwing, and `$`-sequences in `value` ($&, $$, $1) being interpreted
+    // as replacement patterns and corrupting the output.
+    result = result.split('${' + key + '}').join(value);
   }
-  
+
   return result;
 }
 

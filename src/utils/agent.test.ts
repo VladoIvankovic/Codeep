@@ -13,11 +13,47 @@ vi.mock('fs', async (importOriginal) => {
 
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { loadProjectRules, formatAgentResult, formatChatHistoryForAgent, AgentResult } from './agent';
+import { loadProjectRules, formatAgentResult, formatChatHistoryForAgent, buildPausedResult, AgentResult } from './agent';
 
 // Cast mocked functions for convenience
 const mockExistsSync = existsSync as ReturnType<typeof vi.fn>;
 const mockReadFileSync = readFileSync as ReturnType<typeof vi.fn>;
+
+describe('buildPausedResult', () => {
+  const actions = [
+    { type: 'edit', target: 'src/a.ts' },
+    { type: 'read', target: 'src/b.ts' },
+    { type: 'write', target: 'src/c.ts' },
+  ];
+
+  it('marks an iteration-limit pause as interrupted (resumable, not an error)', () => {
+    const r = buildPausedResult('iteration_limit', { iterations: 25, actions: actions as never, maxIterations: 25 });
+    expect(r.interrupted).toBe('iteration_limit');
+    expect(r.success).toBe(false);
+    expect(r.iterations).toBe(25);
+    expect(r.finalResponse).toContain('Paused after 25 tool steps');
+    expect(r.finalResponse).toContain('say **continue**');
+  });
+
+  it('marks a time-limit pause as interrupted', () => {
+    const r = buildPausedResult('time_limit', { iterations: 12, actions: actions as never, durationMin: 20 });
+    expect(r.interrupted).toBe('time_limit');
+    expect(r.finalResponse).toContain('20-minute time limit');
+    expect(r.finalResponse).toContain('say **continue**');
+  });
+
+  it('lists written/edited files once and omits reads', () => {
+    const r = buildPausedResult('iteration_limit', { iterations: 5, actions: actions as never, maxIterations: 5 });
+    expect(r.finalResponse).toContain('src/a.ts');
+    expect(r.finalResponse).toContain('src/c.ts');
+    expect(r.finalResponse).not.toContain('src/b.ts'); // a read isn't "progress"
+  });
+
+  it('skips the progress section when nothing was written', () => {
+    const r = buildPausedResult('iteration_limit', { iterations: 5, actions: [], maxIterations: 5 });
+    expect(r.finalResponse).not.toContain('Progress so far');
+  });
+});
 
 describe('loadProjectRules', () => {
   beforeEach(() => {

@@ -367,7 +367,9 @@ export function createEditDiff(
       return null;
     }
     
-    const newContent = content.replace(oldText, newText);
+    // Literal replacement ($-safe): a plain-string replace would interpret
+    // $&, $1, $$ in newText and mis-render the diff.
+    const newContent = content.replace(oldText, () => newText);
     const hunks = generateDiff(content, newContent);
     
     return {

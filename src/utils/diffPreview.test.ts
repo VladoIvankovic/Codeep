@@ -192,6 +192,13 @@ describe('createEditDiff', () => {
     expect(allLines.some(l => l.type === 'remove' && l.content === 'OLD')).toBe(true);
     expect(allLines.some(l => l.type === 'add' && l.content === 'NEW')).toBe(true);
   });
+
+  it('inserts newText literally — $ sequences are not interpreted', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue('value = MARK');
+    const diff = createEditDiff('f.ts', 'MARK', '$& and $$ and ${x}', '/root');
+    expect(diff!.newContent).toBe('value = $& and $$ and ${x}');
+  });
 });
 
 // ─── createDeleteDiff ─────────────────────────────────────────────────────────

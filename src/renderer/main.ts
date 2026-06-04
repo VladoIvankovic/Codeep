@@ -430,6 +430,14 @@ function showSessionPickerInline(): void {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
+  // Headless, deterministic code review for CI (no API key, no TUI). Handled
+  // before the global --help/--version checks so `codeep review --help` shows
+  // the review usage rather than the top-level help.
+  if (args[0] === 'review') {
+    const { runHeadlessReview } = await import('../utils/headlessReview.js');
+    process.exit(runHeadlessReview(args.slice(1)));
+  }
+
   if (args.includes('--version') || args.includes('-v')) {
     console.log(`Codeep v${getCurrentVersion()}`);
     process.exit(0);
@@ -444,6 +452,7 @@ Usage:
   codeep account sync   Pull keys + personalities + commands + profile from codeep.dev
   codeep account push   Push local keys + personalities + commands + profile to codeep.dev
   codeep acp          Start ACP server (for Zed editor integration)
+  codeep review       Offline code review for CI (--json, --fail-on <level>)
   codeep --version    Show version
   codeep --help       Show this help
 

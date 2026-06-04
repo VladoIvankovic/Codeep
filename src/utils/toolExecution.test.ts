@@ -211,6 +211,19 @@ describe('edit_file — disk path', () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/text not found/i);
   });
+
+  it('inserts new_text literally — $ sequences must not be interpreted', async () => {
+    // Regression: String.replace(str, str) reads $&, $$, $1 in the replacement,
+    // which would silently corrupt any edit whose new_text contains `$`
+    // (template literals, shell vars, regex) — and this path writes the file.
+    writeFileSync(join(tmpRoot, 'g.txt'), 'value = MARK');
+    const result = await executeTool(
+      makeCall('edit_file', { path: 'g.txt', old_text: 'MARK', new_text: '$& and $$ and ${x}' }),
+      tmpRoot,
+    );
+    expect(result.success).toBe(true);
+    expect(readFileSync(join(tmpRoot, 'g.txt'), 'utf-8')).toBe('value = $& and $$ and ${x}');
+  });
 });
 
 describe('edit_file — client delegation', () => {

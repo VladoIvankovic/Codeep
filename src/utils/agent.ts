@@ -196,6 +196,9 @@ export interface AgentOptions {
   roleAddendum?: string;
 }
 
+/** Why a run stopped early at a safety limit — both are resumable, not errors. */
+export type InterruptKind = 'iteration_limit' | 'time_limit';
+
 export interface AgentResult {
   success: boolean;
   iterations: number;
@@ -203,6 +206,41 @@ export interface AgentResult {
   finalResponse: string;
   error?: string;
   aborted?: boolean;
+  /** Set when the run paused at a step/time safety limit. The caller can offer
+   *  a "continue" affordance instead of treating it as a failure. */
+  interrupted?: InterruptKind;
+}
+
+/**
+ * Build the result for a run that paused at a safety limit. Pausing is a normal,
+ * resumable state — not an error — so the summary tells the user how to resume.
+ * Shared by both limit checks in the loop so the wording + `interrupted` signal
+ * stay in sync.
+ */
+export function buildPausedResult(
+  kind: InterruptKind,
+  ctx: { iterations: number; actions: ActionLog[]; maxIterations?: number; durationMin?: number },
+): AgentResult {
+  const editedFiles = [...new Set(
+    ctx.actions.filter(a => a.type === 'write' || a.type === 'edit').map(a => a.target),
+  )];
+  const head = kind === 'time_limit'
+    ? `⏸ Paused after the ${ctx.durationMin}-minute time limit.`
+    : `⏸ Paused after ${ctx.maxIterations} tool steps (the safety limit).`;
+  const lines = [head, '', 'This is a safety limit, not an error — say **continue** to pick up where it left off.'];
+  if (editedFiles.length > 0) {
+    lines.push('', '**Progress so far — files written/edited:**', ...editedFiles.map(f => `  ✓ \`${f}\``));
+  }
+  return {
+    success: false,
+    iterations: ctx.iterations,
+    actions: ctx.actions,
+    finalResponse: lines.join('\n'),
+    error: kind === 'time_limit'
+      ? `Exceeded maximum duration of ${ctx.durationMin} min`
+      : `Exceeded maximum of ${ctx.maxIterations} iterations`,
+    interrupted: kind,
+  };
 }
 
 const DEFAULT_OPTIONS: AgentOptions = {
@@ -575,21 +613,8 @@ export async function runAgent(
     while (iteration < opts.maxIterations) {
       // Check timeout
       if (Date.now() - startTime > opts.maxDuration) {
-        const filesDone = actions.filter(a => a.type === 'write' || a.type === 'edit').map(a => a.target);
         const durationMin = Math.round(opts.maxDuration / 60000);
-        const partialLines = [`Agent reached the time limit (${durationMin} min).`];
-        if (filesDone.length > 0) {
-          partialLines.push(`\n**Partial progress — files written/edited:**`);
-          [...new Set(filesDone)].forEach(f => partialLines.push(`  ✓ \`${f}\``));
-          partialLines.push(`\nYou can continue by running the agent again.`);
-        }
-        result = {
-          success: false,
-          iterations: iteration,
-          actions,
-          finalResponse: partialLines.join('\n'),
-          error: `Exceeded maximum duration of ${durationMin} min`,
-        };
+        result = buildPausedResult('time_limit', { iterations: iteration, actions, durationMin });
         if (!opts.nested) writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
         return result;
       }
@@ -1044,20 +1069,7 @@ export async function runAgent(
     
     // Check if we hit max iterations — build partial summary from actions log
     if (iteration >= opts.maxIterations && !finalResponse) {
-      const filesDone = actions.filter(a => a.type === 'write' || a.type === 'edit').map(a => a.target);
-      const partialLines = [`Agent reached the iteration limit (${opts.maxIterations} steps).`];
-      if (filesDone.length > 0) {
-        partialLines.push(`\n**Partial progress — files written/edited:**`);
-        [...new Set(filesDone)].forEach(f => partialLines.push(`  ✓ \`${f}\``));
-        partialLines.push(`\nThe task may be incomplete. You can continue by running the agent again.`);
-      }
-      result = {
-        success: false,
-        iterations: iteration,
-        actions,
-        finalResponse: partialLines.join('\n'),
-        error: `Exceeded maximum of ${opts.maxIterations} iterations`,
-      };
+      result = buildPausedResult('iteration_limit', { iterations: iteration, actions, maxIterations: opts.maxIterations });
       if (!opts.nested) writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
       return result;
     }

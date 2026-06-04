@@ -495,7 +495,10 @@ async function dispatchTool(
         }
 
         recordEdit(validation.absolutePath);
-        const updated = content.replace(oldText, newText);
+        // Function replacer so newText is written literally — a plain-string
+        // replacement interprets $&, $1, $$ etc., which silently corrupts any
+        // edit whose new_text contains `$` (shell vars, template literals, regex).
+        const updated = content.replace(oldText, () => newText);
 
         if (fs?.writeTextFile) {
           try {

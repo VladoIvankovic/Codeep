@@ -405,6 +405,13 @@ export async function executeAgentTask(
       }
     } else if (result.aborted) {
       app.addMessage({ role: 'assistant', content: 'Agent stopped by user.' });
+    } else if (result.interrupted) {
+      // Paused at a step/time safety limit — resumable, not a failure. Show the
+      // agent's partial summary and nudge the user to resume.
+      if (result.finalResponse) {
+        app.addMessage({ role: 'assistant', content: result.finalResponse });
+      }
+      app.notify('Paused at the safety limit — say "continue" to keep going');
     } else {
       // Show the agent's summary if available, with error details below
       if (result.finalResponse) {

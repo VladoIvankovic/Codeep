@@ -184,7 +184,9 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
 
   // result.finalResponse is already emitted via onChunk streaming above;
   // only emit it here if nothing was streamed (e.g. non-streaming fallback path)
-  if (result.finalResponse && chunksEmitted === 0) {
+  // — except a paused/interrupted run, whose finalResponse is a fresh "say
+  // continue" notice that was never streamed and must always reach the client.
+  if (result.finalResponse && (chunksEmitted === 0 || result.interrupted)) {
     opts.onChunk(result.finalResponse);
   }
 

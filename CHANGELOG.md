@@ -11,6 +11,35 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.5.0] — 2026-06-04
+
+> New: `codeep review` (offline, CI-friendly code review) and Continue (a paused-at-the-limit run resumes when you say "continue" instead of dead-ending). Plus a fix where file edits or skill params containing `$` ($&, ${…}) could be written corrupted.
+
+### Added
+
+- **`codeep review`** — a headless, deterministic code review you can drop into
+  CI (no API key, no TUI). Reviews the files you pass (or your unstaged git
+  changes, falling back to a `src/` scan), prints a markdown report or `--json`,
+  and exits non-zero when an issue at or above `--fail-on <error|warning|info|none>`
+  is found (default `error`). Pairs with a GitHub Action to gate PRs.
+- **Continue after a safety limit.** When the agent reaches its step or time
+  limit it no longer dead-ends — the run pauses with a clear, resumable notice
+  (`⏸ Paused … say **continue** to pick up where it left off`) instead of looking
+  like a failure, and saying *continue* resumes it with full context. Works in
+  the TUI and in ACP clients (Zed, the VS Code extension).
+
+### Fixed
+
+- **Edits containing `$` are written literally.** `edit_file` (and the diff
+  preview) applied replacements with `String.replace(text, newText)`, which
+  interprets `$&`, `$$`, `$1` etc. in the replacement — so any edit whose new
+  text contained `$` (template literals, shell variables, regex) was silently
+  corrupted on write. Replacements are now inserted verbatim.
+- **Skill parameter expansion is `$`-safe and literal.** `${param}` substitution
+  had the same `$`-interpretation bug in the value, and interpolated the param
+  name into a regex unescaped (so a `.` over-matched and a `(` could throw).
+  Both are fixed.
+
 ## [2.4.2] — 2026-06-02
 
 > Stability: an unexpected error no longer crashes Codeep to a garbled terminal — it's logged, your conversation is saved, and recoverable background errors keep the session alive. Also fixes `codeep account` occasionally linking without storing the sync token.

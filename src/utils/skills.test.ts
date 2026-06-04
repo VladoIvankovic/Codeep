@@ -168,6 +168,18 @@ describe('interpolateParams', () => {
     const result = interpolateParams('no placeholders here', {});
     expect(result).toBe('no placeholders here');
   });
+
+  it('inserts the value literally — $ sequences are not treated as replacement patterns', () => {
+    // A param value can be any text (a command, a price, a regex). $&, $$, $1
+    // must survive verbatim rather than expanding against the match.
+    expect(interpolateParams('x = ${v}', { v: '$& and $$ and $1' })).toBe('x = $& and $$ and $1');
+  });
+
+  it('matches the placeholder literally — a regex-meta char in the key does not over-match', () => {
+    // `.` in the key must mean a literal dot, not "any char" (which would also
+    // have replaced `${aXb}`).
+    expect(interpolateParams('${a.b} ${aXb}', { 'a.b': 'Z' })).toBe('Z ${aXb}');
+  });
 });
 
 // ─── parseSkillDefinition ────────────────────────────────────────────────────
