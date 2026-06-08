@@ -218,6 +218,79 @@ export function saveProjectIntelligence(projectPath: string, intelligence: Proje
 }
 
 /**
+ * Complete default intelligence skeleton — every nested section is present so
+ * consumers (e.g. generateContextFromIntelligence) never dereference an
+ * undefined section. Used as the merge base when normalizing a loaded file.
+ */
+function createBaseIntelligence(projectPath: string): ProjectIntelligence {
+  return {
+    version: INTELLIGENCE_VERSION,
+    scannedAt: new Date().toISOString(),
+    projectPath,
+    name: basename(projectPath),
+    type: 'Unknown',
+    description: '',
+    structure: {
+      totalFiles: 0,
+      totalDirectories: 0,
+      languages: {},
+      topDirectories: [],
+    },
+    dependencies: {
+      runtime: [],
+      dev: [],
+      frameworks: [],
+    },
+    keyFiles: [],
+    entryPoints: [],
+    scripts: {},
+    architecture: {
+      patterns: [],
+      mainModules: [],
+      ciSystem: null,
+      containerization: [],
+      monorepoTool: null,
+    },
+    conventions: {
+      indentation: 'spaces',
+      quotes: 'single',
+      semicolons: true,
+      namingStyle: 'camelCase',
+    },
+    testing: {
+      framework: null,
+      testDirectory: null,
+      hasTests: false,
+    },
+    notes: [],
+  };
+}
+
+/**
+ * Merge a loaded (possibly partial or older-schema) intelligence object over
+ * the complete default skeleton so every nested section is guaranteed present.
+ * An interrupted scan or an older CLI can write a file that is missing whole
+ * sections (e.g. `conventions`); without this, reading `conventions.indentation`
+ * downstream throws "Cannot read properties of undefined". Nested objects are
+ * merged per-section so partial sub-objects are also backfilled.
+ */
+function normalizeIntelligence(
+  data: Partial<ProjectIntelligence>,
+  projectPath: string
+): ProjectIntelligence {
+  const base = createBaseIntelligence(projectPath);
+  return {
+    ...base,
+    ...data,
+    structure: { ...base.structure, ...data.structure },
+    dependencies: { ...base.dependencies, ...data.dependencies },
+    architecture: { ...base.architecture, ...data.architecture },
+    conventions: { ...base.conventions, ...data.conventions },
+    testing: { ...base.testing, ...data.testing },
+  };
+}
+
+/**
  * Load intelligence from .codeep/intelligence.json
  */
 export function loadProjectIntelligence(projectPath: string): ProjectIntelligence | null {
@@ -226,8 +299,11 @@ export function loadProjectIntelligence(projectPath: string): ProjectIntelligenc
     if (!existsSync(filePath)) return null;
 
     const data = JSON.parse(readFileSync(filePath, 'utf-8'));
+    if (!data || typeof data !== 'object') return null;
     if (data.version !== INTELLIGENCE_VERSION) return null;
-    return data as ProjectIntelligence;
+    // Backfill any missing sections so a partial/interrupted file can't crash
+    // downstream consumers that assume a complete shape.
+    return normalizeIntelligence(data as Partial<ProjectIntelligence>, projectPath);
   } catch {
     return null;
   }
@@ -251,8 +327,16 @@ export function isIntelligenceFresh(projectPath: string, maxAgeHours: number = 2
  * Generate AI-friendly context from intelligence
  */
 export function generateContextFromIntelligence(intelligence: ProjectIntelligence): string {
+  // Defensive: backfill any missing sections so a partial object (e.g. from an
+  // older/interrupted scan, or an external SDK caller) can't crash the
+  // formatter on a nested dereference like `conventions.indentation`.
+  intelligence = normalizeIntelligence(
+    (intelligence ?? {}) as Partial<ProjectIntelligence>,
+    intelligence?.projectPath ?? ''
+  );
+
   const lines: string[] = [];
-  
+
   lines.push(`# Project: ${intelligence.name}`);
   lines.push(`Type: ${intelligence.type}`);
   if (intelligence.description) {

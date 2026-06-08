@@ -11,6 +11,22 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.5.1] — 2026-06-08
+
+> Fix: chat could crash with "Cannot read properties of undefined (reading 'indentation')" when a project's `.codeep/intelligence.json` was missing sections (from an interrupted or older scan). The file is now backfilled on load, so partial intelligence can never crash a prompt — most visible in the VS Code/Zed (ACP) chat.
+
+### Fixed
+
+- **Partial `.codeep/intelligence.json` crash** — a project intelligence file
+  that was missing whole sections (e.g. `conventions`) — written by an
+  interrupted scan or an older CLI — caused `generateContextFromIntelligence`
+  to throw `Cannot read properties of undefined (reading 'indentation')` on the
+  next prompt. This surfaced in editor clients (VS Code / Zed via ACP) as a chat
+  error on every message. `loadProjectIntelligence` now merges loaded data over
+  a complete default skeleton (per-section), and the context formatter
+  defensively normalizes its input, so a partial or older-schema file is
+  backfilled instead of dereferenced blindly. No re-scan required.
+
 ## [2.5.0] — 2026-06-04
 
 > New: `codeep review` (offline, CI-friendly code review) and Continue (a paused-at-the-limit run resumes when you say "continue" instead of dead-ending). Plus a fix where file edits or skill params containing a `$` could be written corrupted.

@@ -84,6 +84,22 @@ describe('generateContextFromIntelligence', () => {
     expect(output).toContain('Type: TypeScript/Node.js');
   });
 
+  it('does not throw on a partial object missing whole sections', () => {
+    // Reproduces the VS Code "Cannot read properties of undefined (reading
+    // 'indentation')" crash: a partial intelligence object missing nested
+    // sections must be backfilled, not dereferenced blindly.
+    const partial = makeIntelligence();
+    delete (partial as Partial<ProjectIntelligence>).conventions;
+    delete (partial as Partial<ProjectIntelligence>).structure;
+    delete (partial as Partial<ProjectIntelligence>).architecture;
+    delete (partial as Partial<ProjectIntelligence>).dependencies;
+    delete (partial as Partial<ProjectIntelligence>).testing;
+    expect(() => generateContextFromIntelligence(partial)).not.toThrow();
+    const output = generateContextFromIntelligence(partial);
+    expect(output).toContain('## Code Conventions');
+    expect(output).toContain('Indentation: spaces');
+  });
+
   it('includes description when present', () => {
     const output = generateContextFromIntelligence(makeIntelligence({ description: 'Some desc' }));
     expect(output).toContain('Description: Some desc');
@@ -251,6 +267,26 @@ describe('loadProjectIntelligence', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue('not json');
     expect(loadProjectIntelligence('/project')).toBeNull();
+  });
+
+  it('backfills missing sections from a partial file (e.g. no conventions)', () => {
+    // An interrupted scan or an older CLI can write a current-version file that
+    // is missing whole sections. Loading must normalize it, not return a shape
+    // that crashes downstream on `conventions.indentation`.
+    mockExistsSync.mockReturnValue(true);
+    const partial = makeIntelligence();
+    delete (partial as Partial<ProjectIntelligence>).conventions;
+    delete (partial as Partial<ProjectIntelligence>).testing;
+    mockReadFileSync.mockReturnValue(JSON.stringify(partial));
+
+    const result = loadProjectIntelligence('/project');
+    expect(result).not.toBeNull();
+    expect(result!.conventions).toBeDefined();
+    expect(result!.conventions.indentation).toBe('spaces');
+    expect(result!.testing).toBeDefined();
+    expect(result!.testing.hasTests).toBe(false);
+    // Generating context from the normalized object must not throw.
+    expect(() => generateContextFromIntelligence(result!)).not.toThrow();
   });
 });
 
