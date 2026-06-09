@@ -8,7 +8,7 @@
 
 import { randomBytes, createHash } from 'crypto';
 import { spawn } from 'child_process';
-import { getGithubId, getSyncToken, setGithubAccount, setSyncToken, setApiKey, getDeviceId } from '../config/index.js';
+import { getGithubId, getSyncToken, setGithubAccount, setSyncToken, getDeviceId, isTelemetryEnabled } from '../config/index.js';
 import { hostname } from 'os';
 
 const API_BASE = 'https://codeep.dev';
@@ -141,6 +141,7 @@ export function generateProjectId(projectRoot: string): string {
  * Retries up to 2 times on network errors or 5xx responses.
  */
 export function reportStats(payload: StatsPayload): void {
+  if (!isTelemetryEnabled()) return; // user opted out of automatic uploads
   const githubId = getGithubId();
   if (!githubId) return; // not linked, skip silently
 
@@ -156,6 +157,7 @@ export function reportStats(payload: StatsPayload): void {
 }
 
 export async function reportStatsAsync(payload: StatsPayload): Promise<void> {
+  if (!isTelemetryEnabled()) return; // user opted out of automatic uploads
   const githubId = getGithubId();
   if (!githubId) return;
 
@@ -359,6 +361,7 @@ export function syncSession(payload: {
   projectId?: string;
   messages: { role: string; content: string }[];
 }): void {
+  if (!isTelemetryEnabled()) return; // user opted out of conversation/session upload
   const githubId = getGithubId();
   const syncToken = getSyncToken();
   if (!githubId || !syncToken) return;
@@ -381,6 +384,7 @@ export async function syncSessionAsync(payload: {
   projectId?: string;
   messages: { role: string; content: string }[];
 }): Promise<void> {
+  if (!isTelemetryEnabled()) return; // user opted out of conversation/session upload
   const githubId = getGithubId();
   const syncToken = getSyncToken();
   if (!githubId || !syncToken) return;
@@ -406,6 +410,7 @@ export function syncProgress(payload: {
   projectId: string;
   content: string;
 }): void {
+  if (!isTelemetryEnabled()) return; // user opted out of automatic uploads
   const githubId = getGithubId();
   const syncToken = getSyncToken();
   if (!githubId || !syncToken) return;
@@ -527,6 +532,7 @@ export async function pullUserProfile(): Promise<number | null> {
 }
 
 export async function syncMemoryNotes(projectName: string, notes: string[]): Promise<void> {
+  if (!isTelemetryEnabled()) return; // user opted out of automatic uploads
   const syncToken = getSyncToken();
   if (!syncToken) return;
   fetchWithRetry(`${API_BASE}/api/projects/notes`, {

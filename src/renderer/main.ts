@@ -332,7 +332,13 @@ async function showLoginFlow(): Promise<string | null> {
                 renderCurrentStep();
                 return;
               }
-              await setApiKey(key);
+              try {
+                await setApiKey(key);
+              } catch {
+                loginError = 'Could not save the API key (secure storage unavailable). Please try again.';
+                renderCurrentStep();
+                return;
+              }
               cleanup();
               resolve(key);
             },
@@ -472,11 +478,15 @@ Commands (in chat):
     if (sub === 'sync' || sub === 'pull') {
       // Pull API keys from codeep.dev and save to local config
       const { pullKeys } = await import('../utils/codeepCloud.js');
-      const { getSyncToken, setApiKey } = await import('../config/index.js');
+      const { getSyncToken, setApiKey, loadAllApiKeys: loadKeys } = await import('../config/index.js');
       if (!getSyncToken()) {
         console.log('\n  Not linked to codeep.dev. Run: codeep account\n');
         process.exit(1);
       }
+      // Run the one-time plaintext->keychain migration BEFORE storing any pulled
+      // key. Otherwise the first setApiKey flips keysSecured=true and any local
+      // legacy plaintext keys would never migrate (orphaned, invisible).
+      await loadKeys();
       process.stdout.write('  Pulling keys from codeep.dev...');
       const keys = await pullKeys();
       if (!keys) {
@@ -487,10 +497,16 @@ Commands (in chat):
       if (count === 0) {
         console.log(' no keys found.\n  Add keys at codeep.dev/dashboard');
       } else {
+        let synced = 0;
         for (const [provider, key] of Object.entries(keys)) {
-          setApiKey(key, provider);
+          try {
+            await setApiKey(key, provider);
+            synced++;
+          } catch {
+            console.log(`\n  Warning: could not securely store the key for ${provider}.`);
+          }
         }
-        console.log(` synced ${count} key${count !== 1 ? 's' : ''}.`);
+        console.log(` synced ${synced} key${synced !== 1 ? 's' : ''}.`);
       }
 
       // Also pull portable personal config — personalities + custom commands +

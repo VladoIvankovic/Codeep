@@ -13,7 +13,7 @@ vi.mock('fs', async (importOriginal) => {
 
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { loadProjectRules, formatAgentResult, formatChatHistoryForAgent, buildPausedResult, AgentResult } from './agent';
+import { loadProjectRules, formatAgentResult, formatChatHistoryForAgent, buildPausedResult, classifyPermissionOutcome, AgentResult } from './agent';
 
 // Cast mocked functions for convenience
 const mockExistsSync = existsSync as ReturnType<typeof vi.fn>;
@@ -688,5 +688,23 @@ describe('formatChatHistoryForAgent', () => {
 
     expect(result).toContain('[truncated]');
     expect(result.length).toBeLessThan(9000);
+  });
+});
+
+describe('classifyPermissionOutcome (fail-closed permission gate)', () => {
+  it('allows only on explicit allow outcomes', () => {
+    expect(classifyPermissionOutcome('allow_once')).toBe('allow-once');
+    expect(classifyPermissionOutcome('allow_always')).toBe('allow-always');
+  });
+
+  it('denies on explicit reject outcomes', () => {
+    expect(classifyPermissionOutcome('reject_once')).toBe('deny-once');
+    expect(classifyPermissionOutcome('reject_always')).toBe('deny-always');
+  });
+
+  it('fails CLOSED on unknown/malformed/empty outcomes (the bug this locks)', () => {
+    for (const bad of ['maybe', '', 'ALLOW', 'allow', 'yes', '0', undefined, null]) {
+      expect(classifyPermissionOutcome(bad as unknown as string)).toBe('deny-once');
+    }
   });
 });

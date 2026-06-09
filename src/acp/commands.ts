@@ -20,6 +20,8 @@ import {
   setProjectPermission,
   hasWritePermission,
   hasReadPermission,
+  isTelemetryEnabled,
+  telemetryForcedOffByEnv,
 } from '../config/index.js';
 import { getProviderList, getProvider } from '../config/providers.js';
 import { getProjectContext } from '../utils/project.js';
@@ -292,7 +294,35 @@ export async function handleCommand(
 
     case 'apikey': {
       if (!args.length) return { handled: true, response: showApiKey() };
-      return { handled: true, response: setApiKeyCmd(args[0]) };
+      return { handled: true, response: await setApiKeyCmd(args[0]) };
+    }
+
+    case 'telemetry': {
+      const sub = args[0]?.toLowerCase();
+      const envOff = telemetryForcedOffByEnv();
+      if (sub === 'on' || sub === 'off') {
+        if (envOff) {
+          return { handled: true, response: 'Telemetry is forced **off** by the `CODEEP_NO_TELEMETRY` / `DO_NOT_TRACK` env var — unset it to change this. The config flag can\'t override an env var.' };
+        }
+        config.set('telemetry', sub === 'on');
+        return {
+          handled: true,
+          response: sub === 'on'
+            ? 'Telemetry **on** — usage stats, session transcripts, progress and memory notes sync to codeep.dev.'
+            : 'Telemetry **off** — no automatic cloud uploads. Explicit `/account push` still works.',
+        };
+      }
+      if (sub && sub !== 'status') {
+        return { handled: true, response: 'Usage: `/telemetry` · `/telemetry on` · `/telemetry off`' };
+      }
+      const flag = config.get('telemetry') !== false;
+      const lines = [
+        `**Telemetry:** ${isTelemetryEnabled() ? 'on' : 'off'}`,
+        `- Config flag \`telemetry\`: ${flag}`,
+      ];
+      if (envOff) lines.push('- Forced **off** by `CODEEP_NO_TELEMETRY` / `DO_NOT_TRACK` (env overrides the flag).');
+      lines.push('', 'Toggle with `/telemetry on` | `/telemetry off`. Controls automatic uploads of usage stats, session transcripts, progress, and memory notes.');
+      return { handled: true, response: lines.join('\n') };
     }
 
     case 'login': {
@@ -300,7 +330,7 @@ export async function handleCommand(
       if (!providerId || !apiKey) {
         return { handled: true, response: 'Usage: `/login <providerId> <apiKey>`\n\n' + buildProviderList() };
       }
-      return { handled: true, response: loginCmd(providerId, apiKey) };
+      return { handled: true, response: await loginCmd(providerId, apiKey) };
     }
 
     case 'sessions':
@@ -1543,6 +1573,7 @@ function buildHelp(): string {
     '| `/model [id]` | List or switch model |',
     '| `/login <provider> <key>` | Set API key for a provider |',
     '| `/apikey [key]` | Show or set API key |',
+    '| `/telemetry [on\\|off]` | Show or toggle automatic cloud telemetry |',
     '| `/lang [code]` | Set response language (`en`, `hr`, `auto`…) |',
     '| `/grant` | Grant write access for workspace |',
     '',
@@ -1682,18 +1713,27 @@ const INLINE_KEY_WARNING =
   ' settings UI in the VS Code extension. Clear the line from history if' +
   ' the machine is shared.';
 
-function setApiKeyCmd(key: string): string {
+async function setApiKeyCmd(key: string): Promise<string> {
   const providerId = getCurrentProvider().id;
-  // setApiKey is async (keychain) — fire-and-forget, config cache updated synchronously
-  setApiKey(key, providerId);
+  // Await persistence so the confirmation is only returned once the key is
+  // actually stored (keychain write resolves before the process can exit).
+  try {
+    await setApiKey(key, providerId);
+  } catch {
+    return `Failed to save API key for \`${providerId}\` — secure storage was unavailable. Please try again.`;
+  }
   return `API key for \`${providerId}\` saved.${INLINE_KEY_WARNING}`;
 }
 
-function loginCmd(providerId: string, apiKey: string): string {
+async function loginCmd(providerId: string, apiKey: string): Promise<string> {
   const provider = getProvider(providerId);
   if (!provider) return `Provider \`${providerId}\` not found.\n\n${buildProviderList()}`;
   setProvider(providerId);
-  setApiKey(apiKey, providerId);
+  try {
+    await setApiKey(apiKey, providerId);
+  } catch {
+    return `Failed to save API key for \`${providerId}\` — secure storage was unavailable. Please try again.`;
+  }
   return `Logged in as **${provider.name}** (\`${providerId}\`). Model: \`${provider.defaultModel}\`.${INLINE_KEY_WARNING}`;
 }
 

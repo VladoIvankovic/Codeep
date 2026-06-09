@@ -114,7 +114,21 @@ interface ConfigSchema {
   agentApiTimeout: number; // Base API timeout for agent in ms (default: 90000, dynamically adjusted)
   agentInteractive: boolean; // Show interactive mode (default: true)
   projectPermissions: ProjectPermission[];
+  /** @deprecated Legacy PLAINTEXT key store. Kept only so the one-time
+   *  migration into secure storage can read it; emptied afterwards. New keys
+   *  go to the OS keychain via utils/keychain.ts — never written here. */
   providerApiKeys: ProviderApiKey[];
+  /** Non-secret index of provider IDs that have a key in secure storage, so we
+   *  can list/load configured providers without probing the keychain for all
+   *  providers. Secrets themselves never live here. */
+  configuredProviderIds: string[];
+  /** True once legacy plaintext keys (providerApiKeys / apiKey) have been
+   *  migrated into secure storage and wiped from the config file. */
+  keysSecured: boolean;
+  /** Master switch for automatic cloud uploads (usage stats, session
+   *  transcripts, progress, memory notes). Default true; set false to opt out.
+   *  The CODEEP_NO_TELEMETRY / DO_NOT_TRACK env vars also force it off. */
+  telemetry: boolean;
   githubId: string;
   githubUsername: string;
   syncToken: string;
@@ -329,6 +343,9 @@ function createConfig(): Conf<ConfigSchema> {
     rateLimitCommands: 10000,
     projectPermissions: [],
     providerApiKeys: [],
+    configuredProviderIds: [],
+    keysSecured: false,
+    telemetry: true,
     githubId: '',
     githubUsername: '',
     syncToken: '',
@@ -427,6 +444,82 @@ if (!existsSync(GLOBAL_SESSIONS_DIR)) {
 // In-memory cache for API keys (populated on first access)
 const apiKeyCache = new Map<string, string>();
 
+// ── Secure key storage (OS keychain, plaintext-config fallback) ──────────────
+// API keys persist in the OS keychain via utils/keychain.ts. The cache above is
+// the synchronous read path (getApiKey); the keychain is the async persistence
+// layer (set/load). A non-secret `configuredProviderIds` index in config tells
+// us which providers have a key without probing the keychain for every provider.
+let _secureKeyStore: SecureStorage | null = null;
+function secureKeyStore(): SecureStorage {
+  if (!_secureKeyStore) _secureKeyStore = createSecureStorage(config);
+  return _secureKeyStore;
+}
+
+function addConfiguredProviderId(providerId: string): void {
+  const ids = config.get('configuredProviderIds') || [];
+  if (!ids.includes(providerId)) {
+    config.set('configuredProviderIds', [...ids, providerId]);
+  }
+}
+
+function removeConfiguredProviderId(providerId: string): void {
+  const ids = config.get('configuredProviderIds') || [];
+  if (ids.includes(providerId)) {
+    config.set('configuredProviderIds', ids.filter(id => id !== providerId));
+  }
+}
+
+let _migrationPromise: Promise<void> | null = null;
+/**
+ * One-time migration of legacy PLAINTEXT keys (the `providerApiKeys` array and
+ * the very-old single `apiKey` field) into secure storage, then wipe the
+ * plaintext from the config file. Idempotent and guarded so concurrent callers
+ * share a single run. Each key's plaintext is wiped only after its write to
+ * secure storage actually succeeds; any key that fails to persist is retained
+ * and `keysSecured` stays false so the next startup retries — the last copy of
+ * a secret is never destroyed before a new copy is confirmed.
+ */
+async function migrateKeysToSecureStorage(): Promise<void> {
+  if (config.get('keysSecured')) return;
+  // Dedupe concurrent callers (loadApiKey + loadAllApiKeys at startup) onto a
+  // single run; cleared in finally so a later un-secured state can re-migrate.
+  if (!_migrationPromise) {
+    _migrationPromise = (async () => {
+      const store = secureKeyStore();
+      const legacyArray = config.get('providerApiKeys') || [];
+      // Only drain entries we actually persisted; keep failures so the next
+      // startup retries instead of destroying the last copy of a key.
+      const failed: ProviderApiKey[] = [];
+      for (const entry of legacyArray) {
+        if (!entry?.providerId || !entry?.apiKey) continue;
+        try {
+          await store.setApiKey(entry.providerId, entry.apiKey);
+          addConfiguredProviderId(entry.providerId);
+        } catch {
+          failed.push(entry);
+        }
+      }
+      const legacySingle = config.get('apiKey');
+      let legacySingleMigrated = false;
+      if (legacySingle) {
+        try {
+          await store.setApiKey('z.ai', legacySingle);
+          addConfiguredProviderId('z.ai');
+          legacySingleMigrated = true;
+        } catch { /* keep the legacy field for retry */ }
+      }
+      // Wipe only the plaintext that made it into secure storage.
+      config.set('providerApiKeys', failed);
+      if (legacySingle && legacySingleMigrated) config.set('apiKey', '');
+      // Mark secured only when everything migrated; a partial failure retries.
+      if (failed.length === 0 && (!legacySingle || legacySingleMigrated)) {
+        config.set('keysSecured', true);
+      }
+    })();
+  }
+  try { await _migrationPromise; } finally { _migrationPromise = null; }
+}
+
 export const LANGUAGES: Record<string, string> = {
   'auto': 'Auto-detect',
   'en': 'English',
@@ -476,24 +569,14 @@ export async function loadApiKey(providerId?: string): Promise<string> {
     }
   }
   
-  // Check config file
-  const providerKeys = config.get('providerApiKeys') || [];
-  
-  const stored = providerKeys.find(k => k.providerId === provider);
-  if (stored?.apiKey) {
-    apiKeyCache.set(provider, stored.apiKey);
-    return stored.apiKey;
+  // Secure storage (OS keychain). Migrate any legacy plaintext keys first.
+  await migrateKeysToSecureStorage();
+  const stored = await secureKeyStore().getApiKey(provider);
+  if (stored) {
+    apiKeyCache.set(provider, stored);
+    return stored;
   }
-  
-  // Fallback to legacy apiKey field (for z.ai)
-  if (provider === 'z.ai') {
-    const legacyKey = config.get('apiKey') || '';
-    if (legacyKey) {
-      apiKeyCache.set(provider, legacyKey);
-      return legacyKey;
-    }
-  }
-  
+
   return '';
 }
 
@@ -502,14 +585,15 @@ export async function loadApiKey(providerId?: string): Promise<string> {
  * Should be called at app startup
  */
 export async function loadAllApiKeys(): Promise<void> {
-  // Load keys for all configured providers from providerApiKeys
-  const providerKeys = config.get('providerApiKeys') || [];
-  for (const { providerId, apiKey } of providerKeys) {
-    if (apiKey) {
-      apiKeyCache.set(providerId, apiKey);
-    }
+  // Migrate any legacy plaintext keys, then load all from secure storage using
+  // the non-secret configuredProviderIds index (no need to probe every provider).
+  await migrateKeysToSecureStorage();
+  const store = secureKeyStore();
+  for (const providerId of (config.get('configuredProviderIds') || [])) {
+    const key = await store.getApiKey(providerId);
+    if (key) apiKeyCache.set(providerId, key);
   }
-  
+
   // Also check environment variables for each provider
   for (const [providerId, providerConfig] of Object.entries(PROVIDERS)) {
     if (providerConfig.envKey) {
@@ -520,18 +604,13 @@ export async function loadAllApiKeys(): Promise<void> {
     }
   }
   
-  // Legacy env vars for z.ai
+  // Legacy env vars for z.ai (the legacy `apiKey` config field is migrated into
+  // secure storage by migrateKeysToSecureStorage above).
   if (!apiKeyCache.get('z.ai')) {
     if (process.env.ZAI_API_KEY) {
       apiKeyCache.set('z.ai', process.env.ZAI_API_KEY);
     } else if (process.env.ZHIPUAI_API_KEY) {
       apiKeyCache.set('z.ai', process.env.ZHIPUAI_API_KEY);
-    } else {
-      // Fallback to legacy apiKey field
-      const legacyKey = config.get('apiKey') || '';
-      if (legacyKey) {
-        apiKeyCache.set('z.ai', legacyKey);
-      }
     }
   }
 }
@@ -545,30 +624,24 @@ export function getApiKey(providerId?: string): string {
 }
 
 /**
- * Set API key - stores in config file
+ * Set API key — persists to secure storage (OS keychain), never plaintext.
+ * Returns a promise, but updates the synchronous cache first so callers that
+ * fire-and-forget still see the key immediately via getApiKey().
  */
-export function setApiKey(key: string, providerId?: string): void {
+export async function setApiKey(key: string, providerId?: string): Promise<void> {
   const provider = providerId || config.get('provider');
-  
-  // Update cache immediately
+
+  // Update cache immediately so synchronous getApiKey() works right away.
   apiKeyCache.set(provider, key);
-  
-  // Store in config
-  const providerKeys = config.get('providerApiKeys') || [];
-  const existing = providerKeys.findIndex(k => k.providerId === provider);
-  
-  if (existing >= 0) {
-    providerKeys[existing].apiKey = key;
-  } else {
-    providerKeys.push({ providerId: provider, apiKey: key });
-  }
-  
-  config.set('providerApiKeys', providerKeys);
-  
-  // Also set legacy field for backwards compatibility (z.ai only)
-  if (provider === 'z.ai') {
-    config.set('apiKey', key);
-  }
+
+  // Persist to secure storage (keychain, or plaintext-config fallback if the
+  // keychain is unavailable — utils/keychain.ts warns in that case). Let a hard
+  // persistence failure propagate so callers can report it instead of claiming
+  // success; the index + secured flag are set only after a confirmed write.
+  await secureKeyStore().setApiKey(provider, key);
+  addConfiguredProviderId(provider);
+  // No plaintext key was written here, so the store is already "secured".
+  config.set('keysSecured', true);
 }
 
 export function getMaskedApiKey(providerId?: string): string {
@@ -583,38 +656,46 @@ export function getMaskedApiKey(providerId?: string): string {
  * Get list of providers that have API keys configured
  */
 export function getConfiguredProviders(): { id: string; name: string }[] {
-  const providerKeys = config.get('providerApiKeys') || [];
-  const configured: { id: string; name: string }[] = [];
-  
-  for (const pk of providerKeys) {
-    if (pk.apiKey && pk.apiKey.length > 0) {
-      const provider = getProvider(pk.providerId);
-      configured.push({
-        id: pk.providerId,
-        name: provider?.name || pk.providerId,
-      });
-    }
-  }
-  
-  return configured;
+  const ids = config.get('configuredProviderIds') || [];
+  return ids.map(id => ({ id, name: getProvider(id)?.name || id }));
+}
+
+/**
+ * Whether automatic cloud uploads are allowed (usage stats, session
+ * transcripts, progress, memory notes). Opt out via the `telemetry: false`
+ * config flag, the CODEEP_NO_TELEMETRY env var, or the cross-tool DO_NOT_TRACK
+ * convention. Explicit `codeep account push/sync` commands are user-initiated
+ * and are NOT gated by this.
+ */
+function envForcesTelemetryOff(): boolean {
+  const off = (v?: string) => !!v && !/^(0|false|no|off)$/i.test(v.trim());
+  return off(process.env.CODEEP_NO_TELEMETRY) || off(process.env.DO_NOT_TRACK);
+}
+
+export function isTelemetryEnabled(): boolean {
+  if (envForcesTelemetryOff()) return false;
+  return config.get('telemetry') !== false;
+}
+
+/**
+ * True when an env var (CODEEP_NO_TELEMETRY / DO_NOT_TRACK) is forcing telemetry
+ * off — in which case the `telemetry` config flag can't turn it back on. Lets
+ * the /telemetry command explain why a toggle had no effect.
+ */
+export function telemetryForcedOffByEnv(): boolean {
+  return envForcesTelemetryOff();
 }
 
 /**
  * Clear API key for a specific provider
  */
-export function clearApiKey(providerId: string): void {
+export async function clearApiKey(providerId: string): Promise<void> {
   // Clear from cache
   apiKeyCache.delete(providerId);
-  
-  // Clear from config
-  const providerKeys = config.get('providerApiKeys') || [];
-  const filtered = providerKeys.filter(k => k.providerId !== providerId);
-  config.set('providerApiKeys', filtered);
-  
-  // Clear legacy field if z.ai
-  if (providerId === 'z.ai') {
-    config.set('apiKey', '');
-  }
+
+  // Clear from secure storage + the non-secret index
+  try { await secureKeyStore().deleteApiKey(providerId); } catch { /* ignore */ }
+  removeConfiguredProviderId(providerId);
 }
 
 export async function isConfiguredAsync(providerId?: string): Promise<boolean> {

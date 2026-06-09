@@ -144,6 +144,22 @@ function compressMessages(messages: Message[], actions: ActionLog[]): Message[] 
 
 export type PermissionOutcome = 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always';
 
+export type PermissionDecision = 'allow-once' | 'allow-always' | 'deny-once' | 'deny-always';
+
+/**
+ * Map a permission outcome to a decision, FAILING CLOSED: a dangerous tool is
+ * allowed only on an explicit allow outcome. `reject_*` deny, and — critically —
+ * any unknown/malformed outcome from a buggy or hostile client also denies
+ * (deny-once) rather than slipping through to execution. Pure + exported so the
+ * invariant is unit-tested independently of the agent loop.
+ */
+export function classifyPermissionOutcome(outcome: string | undefined | null): PermissionDecision {
+  if (outcome === 'allow_always') return 'allow-always';
+  if (outcome === 'allow_once') return 'allow-once';
+  if (outcome === 'reject_always') return 'deny-always';
+  return 'deny-once'; // 'reject_once' OR anything unexpected → fail closed
+}
+
 export interface AgentOptions {
   maxIterations: number;
   maxDuration: number; // milliseconds
@@ -948,13 +964,15 @@ export async function runAgent(
           }
 
           const outcome = await opts.onRequestPermission(toolCall);
-          if (outcome === 'allow_always') {
+          // Fail CLOSED: allow ONLY on an explicit allow outcome; reject_* and
+          // any malformed/unknown outcome deny (see classifyPermissionOutcome).
+          const decision = classifyPermissionOutcome(outcome);
+          if (decision === 'allow-always') {
             alwaysAllowedTools.add(toolCall.tool);
-          } else if (outcome === 'reject_always') {
-            alwaysRejectedTools.add(toolCall.tool);
-            rejectResult();
-            continue;
-          } else if (outcome === 'reject_once') {
+          } else if (decision === 'allow-once') {
+            // proceed this once
+          } else {
+            if (decision === 'deny-always') alwaysRejectedTools.add(toolCall.tool);
             rejectResult();
             continue;
           }

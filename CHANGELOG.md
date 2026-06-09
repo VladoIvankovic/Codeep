@@ -11,6 +11,49 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.5.2] — 2026-06-08
+
+> Security: provider API keys are now stored in your OS keychain instead of plaintext in the config file, and there's a first-class telemetry opt-out (`CODEEP_NO_TELEMETRY` / `DO_NOT_TRACK` / `telemetry: false`). Existing plaintext keys migrate to the keychain automatically on first run.
+
+### Security
+
+- **API keys moved to the OS keychain.** Keys were written in plaintext to
+  `~/.codeep/config.json`. They now persist in the system keychain (macOS
+  Keychain / Linux Secret Service / Windows Credential Vault) via the secure
+  storage layer; a synchronous in-memory cache keeps key lookups fast. On first
+  run, any existing plaintext keys (and the legacy single-key field) are
+  migrated into the keychain and the plaintext is wiped — a key is only removed
+  from plaintext after its keychain write is confirmed, so an interrupted
+  migration never loses a key (it retries next start). When no keychain is
+  available (e.g. headless Linux without libsecret) Codeep falls back to config
+  storage and warns.
+- **Telemetry opt-out.** Once linked to codeep.dev, Codeep uploads usage stats,
+  session transcripts, `progress.md`, and project memory notes to power the
+  dashboard. Set `CODEEP_NO_TELEMETRY=1` (or the cross-tool `DO_NOT_TRACK=1`, or
+  `"telemetry": false` in config) to disable all automatic uploads. Explicit
+  `codeep account push` / `account sync` are user-initiated and never gated.
+- **`/telemetry` command.** New slash command (TUI + ACP) to show telemetry
+  status and toggle it: `/telemetry`, `/telemetry on`, `/telemetry off`. It
+  reports when an env var is forcing it off (the config flag can't override env).
+- **Confirmation gate fails closed.** The agent's permission gate now allows a
+  dangerous tool only on an explicit allow outcome — a malformed/unknown
+  permission response from an editor client now denies instead of letting the
+  tool run. The ACP mode switch no longer writes the global `agentConfirmation`
+  setting, so switching an editor session to auto-approve can't silently disarm
+  the confirmation gate in your terminal sessions.
+
+### Added
+
+- **`/telemetry`** — show or toggle automatic cloud telemetry from the CLI or
+  any ACP editor.
+
+### Notes
+
+- The keychain migration is **one-way**: after upgrading, plaintext keys are
+  removed from the config file. If you downgrade to an older Codeep that doesn't
+  read the keychain, re-enter your keys or run `codeep account sync`. Your keys
+  remain in the keychain and are picked up again when you re-upgrade.
+
 ## [2.5.1] — 2026-06-08
 
 > Fix: chat could crash with "Cannot read properties of undefined (reading 'indentation')" when a project's `.codeep/intelligence.json` was missing sections (from an interrupted or older scan). The file is now backfilled on load, so partial intelligence can never crash a prompt — most visible in the VS Code/Zed (ACP) chat.

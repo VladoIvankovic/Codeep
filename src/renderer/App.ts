@@ -96,6 +96,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'profile': 'Save/load settings profiles',
   'tasks': 'Show pending tasks from codeep.dev dashboard',
   'sync': 'Sync learning preferences and profiles to codeep.dev',
+  'telemetry': 'Show or toggle automatic cloud telemetry (on/off)',
   // 2.0 — surfaced for `/` autocomplete; documented in /help too.
   'compact': 'Summarize older messages to free up context',
   'commands': 'List custom slash commands in .codeep/commands/*.md',
@@ -299,7 +300,7 @@ export class App {
     'multiline', 'memory', 'init',
     'provider', 'model', 'protocol', 'lang', 'grant', 'login', 'logout',
     'context-save', 'context-load', 'context-clear', 'learn',
-    'cost', 'tasks', 'account', 'sync',
+    'cost', 'tasks', 'account', 'sync', 'telemetry',
     // 2.0 — extensions, checkpoints, MCP, custom commands, OpenRouter prefs.
     // Keep in lockstep with COMMAND_DESCRIPTIONS below and helpCategories.
     'compact', 'commands', 'checkpoint', 'checkpoints', 'rewind',

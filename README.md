@@ -795,6 +795,28 @@ Hooks and MCP server configs are deliberately **not** synced: hooks run
 arbitrary shell, and MCP configs often embed tokens, so both stay local to each
 machine.
 
+### Privacy & telemetry
+
+Once your CLI is linked, Codeep automatically uploads usage stats (model,
+provider, token counts, estimated cost), session transcripts, `progress.md`,
+and project memory notes to power your dashboard. To opt out of **all** of these
+automatic uploads:
+
+```bash
+export CODEEP_NO_TELEMETRY=1   # also honors the cross-tool DO_NOT_TRACK=1
+```
+
+…or set it permanently in `~/.codeep/config.json`:
+
+```json
+{ "telemetry": false }
+```
+
+With telemetry off, nothing is uploaded automatically — the agent still runs
+fully and talks to your LLM provider directly. Explicit `codeep account push` /
+`account sync` commands are always under your control and are never gated by
+this flag.
+
 ### Tasks
 
 Create, view, and complete tasks directly from the CLI — or manage them on the codeep.dev dashboard:

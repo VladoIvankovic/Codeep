@@ -17,6 +17,8 @@ import {
   setApiKey,
   clearApiKey,
   getApiKey,
+  isTelemetryEnabled,
+  telemetryForcedOffByEnv,
   saveSession,
   startNewSession,
   loadSession,
@@ -278,6 +280,35 @@ export async function handleCommand(
       lines.push(`**Account**    ${githubId ? `linked (${githubId})` : 'not linked — run: codeep account'}`);
       lines.push(`**Session**    ${ctx.sessionId}`);
       ctx.app.addMessage({ role: 'system', content: lines.join('\n') } as Message);
+      break;
+    }
+
+    case 'telemetry': {
+      const sub = args[0]?.toLowerCase();
+      const envOff = telemetryForcedOffByEnv();
+      if (sub === 'on' || sub === 'off') {
+        if (envOff) {
+          ctx.app.notify('Telemetry is forced OFF by CODEEP_NO_TELEMETRY / DO_NOT_TRACK — unset that env var to change it.');
+          break;
+        }
+        config.set('telemetry', sub === 'on');
+        ctx.app.notify(sub === 'on'
+          ? 'Telemetry on — usage stats, transcripts, progress & notes sync to codeep.dev.'
+          : 'Telemetry off — no automatic cloud uploads.');
+        break;
+      }
+      if (sub && sub !== 'status') {
+        ctx.app.notify('Usage: /telemetry · /telemetry on · /telemetry off');
+        break;
+      }
+      const flag = config.get('telemetry') !== false;
+      const tLines: string[] = ['## Telemetry', ''];
+      tLines.push(`**State**      ${isTelemetryEnabled() ? 'on' : 'off'}`);
+      tLines.push(`**Flag**       telemetry = ${flag}`);
+      if (envOff) tLines.push('**Env**        forced off by CODEEP_NO_TELEMETRY / DO_NOT_TRACK (overrides the flag)');
+      tLines.push('');
+      tLines.push('Toggle with `/telemetry on` or `/telemetry off`. Controls automatic uploads of usage stats, session transcripts, progress, and memory notes.');
+      ctx.app.addMessage({ role: 'system', content: tLines.join('\n') } as Message);
       break;
     }
 
@@ -900,8 +931,12 @@ Format: use headers per category, only include categories where you found issues
       ctx.app.showLogin(providers.map(p => ({ id: p.id, name: p.name, description: p.description, subscribeUrl: p.subscribeUrl, noApiKey: p.noApiKey })), async (result) => {
         if (result) {
           setProvider(result.providerId);
-          await setApiKey(result.apiKey);
-          ctx.app.notify('Logged in successfully');
+          try {
+            await setApiKey(result.apiKey);
+            ctx.app.notify('Logged in successfully');
+          } catch {
+            ctx.app.notify('Could not save the API key (secure storage unavailable).');
+          }
         }
       });
       break;
@@ -917,10 +952,10 @@ Format: use headers per category, only include categories where you found issues
       ctx.app.showLogoutPicker(configuredProviders, (result) => {
         if (result === null) return;
         if (result === 'all') {
-          for (const p of configuredProviders) clearApiKey(p.id);
+          for (const p of configuredProviders) void clearApiKey(p.id);
           ctx.app.notify('Logged out from all providers. Use /login to sign in.');
         } else {
-          clearApiKey(result);
+          void clearApiKey(result);
           const provider = configuredProviders.find(p => p.id === result);
           ctx.app.notify(`Logged out from ${provider?.name || result}`);
           if (result === currentProvider.id) {

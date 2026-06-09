@@ -32,7 +32,7 @@ import { executeCommandAsync } from '../utils/shell.js';
 import { PermissionOutcome } from '../utils/agent.js';
 import { ToolCall } from '../utils/tools.js';
 import { initWorkspace, loadWorkspace, handleCommand, AcpSession } from './commands.js';
-import { autoSaveSession, config, setProvider, setApiKey, listSessionsWithInfo, deleteSession as deleteSessionFile, type LanguageCode } from '../config/index.js';
+import { autoSaveSession, config, setProvider, setApiKey, getApiKey, getConfiguredProviders, listSessionsWithInfo, deleteSession as deleteSessionFile, type LanguageCode } from '../config/index.js';
 import { ApiError } from '../api/index.js';
 import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
@@ -260,14 +260,17 @@ async function collectEmbeddedContext(blocks: import('./protocol.js').ContentBlo
   return snippets.join('\n\n');
 }
 
-/** Check if a provider has an API key stored (reads config directly, no async) */
+/** Check if a provider has an API key stored (synchronous; relies on the cache
+ *  loaded at startup via loadAllApiKeys and the non-secret configuredProviderIds
+ *  index — never reads plaintext key material). */
 function providerHasKey(providerId: string): boolean {
   // Check environment variable first
   const envKey = PROVIDERS[providerId]?.envKey;
   if (envKey && process.env[envKey]) return true;
-  // Check stored providerApiKeys
-  const stored = (config.get('providerApiKeys') || []) as { providerId: string; apiKey: string }[];
-  return stored.some(k => k.providerId === providerId && !!k.apiKey);
+  // In-memory cache (populated from secure storage at startup)
+  if (getApiKey(providerId)) return true;
+  // Non-secret index of providers that have a key in secure storage
+  return getConfiguredProviders().some(p => p.id === providerId);
 }
 
 function buildConfigOptions(): SessionConfigOption[] {
@@ -762,8 +765,12 @@ export function startAcpServer(): Promise<void> {
     }
 
     session.currentModeId = modeId;
-    // Map ACP mode to Codeep agentConfirmation setting
-    config.set('agentConfirmation', modeId === 'manual' ? 'dangerous' : 'never');
+    // Do NOT persist the global `agentConfirmation` config here. The ACP
+    // permission gate is driven per-session by `session.currentModeId` (see the
+    // onRequestPermission wiring in handleSessionPrompt). Writing it globally
+    // would leak this session's mode into other processes — e.g. switching ACP
+    // to 'auto' would silently disarm the TUI's confirmation gate. Mode stays
+    // on the in-memory session object only.
 
     transport.respond(msg.id, {});
 
@@ -828,7 +835,11 @@ export function startAcpServer(): Promise<void> {
         const apiKey = value.slice(colonIdx + 1);
         if (providerId && apiKey) {
           setProvider(providerId);
-          setApiKey(apiKey, providerId);
+          // Cache is updated synchronously inside setApiKey; the keychain write
+          // resolves while the long-lived server runs. Swallow a persistence
+          // failure here (secondary path) so it can't become an unhandled
+          // rejection — the key still works for this session via the cache.
+          setApiKey(apiKey, providerId).catch(() => { /* persistence failed; cached for session */ });
         }
       }
     }
