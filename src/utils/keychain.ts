@@ -1,8 +1,20 @@
 import { logger } from './logger';
 
-// keytar is a native addon — load dynamically so compiled binaries fall back gracefully
-let keytar: typeof import('keytar') | null = null;
-try { keytar = (await import('keytar')).default as typeof import('keytar'); } catch { /* native addon unavailable */ }
+// keytar is a native addon — load it LAZILY (on first use), never at module
+// top level. A top-level `await import()` here gives the module a top-level
+// await, which makes `bun build --compile` reject any CommonJS require() that
+// transitively depends on this file (renderer/main.js → codeepCloud → config →
+// keychain). Lazy loading keeps the module side-effect-free at import time.
+let _keytar: typeof import('keytar') | null = null;
+let _keytarTried = false;
+async function loadKeytar(): Promise<typeof import('keytar') | null> {
+  if (!_keytarTried) {
+    _keytarTried = true;
+    try { _keytar = (await import('keytar')).default as typeof import('keytar'); }
+    catch { _keytar = null; /* native addon unavailable */ }
+  }
+  return _keytar;
+}
 
 const SERVICE_NAME = 'codeep';
 
@@ -27,9 +39,10 @@ class KeychainStorage implements SecureStorage {
 
   async getApiKey(providerId: string): Promise<string | null> {
     try {
+      const kt = await loadKeytar();
+      if (!kt) return null;
       const account = this.getAccountName(providerId);
-      const password = await keytar!.getPassword(SERVICE_NAME, account);
-      return password;
+      return await kt.getPassword(SERVICE_NAME, account);
     } catch (error) {
       logger.debug(`Failed to get API key from keychain: ${error}`);
       return null;
@@ -38,8 +51,10 @@ class KeychainStorage implements SecureStorage {
 
   async setApiKey(providerId: string, apiKey: string): Promise<void> {
     try {
+      const kt = await loadKeytar();
+      if (!kt) throw new Error('keytar unavailable');
       const account = this.getAccountName(providerId);
-      await keytar!.setPassword(SERVICE_NAME, account, apiKey);
+      await kt.setPassword(SERVICE_NAME, account, apiKey);
     } catch (error) {
       throw new Error(`Failed to store API key in keychain: ${error}`);
     }
@@ -47,8 +62,10 @@ class KeychainStorage implements SecureStorage {
 
   async deleteApiKey(providerId: string): Promise<void> {
     try {
+      const kt = await loadKeytar();
+      if (!kt) return;
       const account = this.getAccountName(providerId);
-      await keytar!.deletePassword(SERVICE_NAME, account);
+      await kt.deletePassword(SERVICE_NAME, account);
     } catch (error) {
       logger.debug(`Failed to delete API key from keychain: ${error}`);
     }
@@ -113,9 +130,10 @@ class SmartStorage implements SecureStorage {
 
     try {
       const testKey = '__codeep_test__';
-      if (!keytar) throw new Error('keytar unavailable');
-      await keytar.setPassword(SERVICE_NAME, testKey, 'test');
-      await keytar.deletePassword(SERVICE_NAME, testKey);
+      const kt = await loadKeytar();
+      if (!kt) throw new Error('keytar unavailable');
+      await kt.setPassword(SERVICE_NAME, testKey, 'test');
+      await kt.deletePassword(SERVICE_NAME, testKey);
       this.useKeychain = true;
     } catch {
       this.useKeychain = false;
