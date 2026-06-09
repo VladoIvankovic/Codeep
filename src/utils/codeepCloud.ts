@@ -262,6 +262,23 @@ export async function pushKeys(keys: Record<string, string>): Promise<boolean> {
   return res?.ok ?? false;
 }
 
+/**
+ * Purge ALL of the user's API keys stored on codeep.dev (cloud-only — local
+ * keychain keys are untouched). A clean exit for anyone who synced keys and
+ * later wants them off the server. Returns true on success.
+ */
+export async function purgeKeys(): Promise<boolean> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return false;
+
+  const res = await fetchWithRetry(`${API_BASE}/api/keys`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+    body: JSON.stringify({ all: true }),
+  });
+  return res?.ok ?? false;
+}
+
 // ─── Portable personal config sync (personalities + commands) ──────────────────
 //
 // Both are name → raw-.md-body bundles stored in a global dir

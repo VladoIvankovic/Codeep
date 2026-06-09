@@ -265,6 +265,16 @@ export const SETTINGS: SettingItem[] = [
       { value: false, label: 'Off' },
     ],
   },
+  {
+    key: 'syncKeysToCloud',
+    label: 'Sync API Keys to Cloud (server-readable)',
+    getValue: () => config.get('syncKeysToCloud') === true,
+    type: 'select',
+    options: [
+      { value: false, label: 'Off (keychain only)' },
+      { value: true, label: 'On (push/sync to codeep.dev)' },
+    ],
+  },
 ];
 
 export interface SettingsState {

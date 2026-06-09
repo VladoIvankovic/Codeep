@@ -19,6 +19,8 @@ import {
   getApiKey,
   isTelemetryEnabled,
   telemetryForcedOffByEnv,
+  isKeySyncEnabled,
+  keySyncForcedOffByEnv,
   saveSession,
   startNewSession,
   loadSession,
@@ -309,6 +311,35 @@ export async function handleCommand(
       tLines.push('');
       tLines.push('Toggle with `/telemetry on` or `/telemetry off`. Controls automatic uploads of usage stats, session transcripts, progress, and memory notes.');
       ctx.app.addMessage({ role: 'system', content: tLines.join('\n') } as Message);
+      break;
+    }
+
+    case 'keysync': {
+      const sub = args[0]?.toLowerCase();
+      const envOff = keySyncForcedOffByEnv();
+      if (sub === 'on' || sub === 'off') {
+        if (envOff) {
+          ctx.app.notify('Cloud key sync is forced OFF by CODEEP_NO_KEY_SYNC — unset that env var to change it.');
+          break;
+        }
+        config.set('syncKeysToCloud', sub === 'on');
+        ctx.app.notify(sub === 'on'
+          ? 'Cloud key sync on — `codeep account push/sync` will now upload/download API keys. Note: synced keys are stored server-readable on codeep.dev.'
+          : 'Cloud key sync off — API keys stay in your OS keychain only. (Run `codeep account purge-keys` to also wipe any keys already on the server.)');
+        break;
+      }
+      if (sub && sub !== 'status') {
+        ctx.app.notify('Usage: /keysync · /keysync on · /keysync off');
+        break;
+      }
+      const flag = config.get('syncKeysToCloud') === true;
+      const kLines: string[] = ['## Cloud key sync', ''];
+      kLines.push(`**State**      ${isKeySyncEnabled() ? 'on' : 'off'}`);
+      kLines.push(`**Flag**       syncKeysToCloud = ${flag}`);
+      if (envOff) kLines.push('**Env**        forced off by CODEEP_NO_KEY_SYNC (overrides the flag)');
+      kLines.push('');
+      kLines.push('OFF by default. API keys live only in your OS keychain unless you turn this on. When on, `codeep account push`/`sync` upload/download keys, which are stored **server-readable** on codeep.dev. Toggle with `/keysync on` or `/keysync off`; wipe server copies with `codeep account purge-keys`.');
+      ctx.app.addMessage({ role: 'system', content: kLines.join('\n') } as Message);
       break;
     }
 

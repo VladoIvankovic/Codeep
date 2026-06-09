@@ -11,6 +11,28 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.8.0] — 2026-06-09
+
+> API keys are now keychain-first and stay local by default — syncing them to codeep.dev is an explicit opt-in (`/keysync on`), and `codeep account purge-keys` wipes any keys already on the server.
+
+### Added
+
+- **`/keysync on|off|status`** — opt in (or out) of syncing API keys to
+  codeep.dev. **OFF by default**: your keys live only in the OS keychain unless
+  you enable this. When on, `codeep account push`/`sync` upload/download keys;
+  the command warns that synced keys are stored server-readable. Also available
+  in `/settings`, and forced off by the `CODEEP_NO_KEY_SYNC` env var (org policy).
+- **`codeep account purge-keys`** — delete every API key stored on codeep.dev in
+  one shot (cloud-only; your local OS keychain is untouched). A clean exit if you
+  synced keys before and want them off the server.
+
+### Changed
+
+- **`codeep account push` / `account sync` no longer move API keys unless cloud
+  key sync is enabled** (`/keysync on`). They still push/pull personalities,
+  custom commands, and your profile as before — only the secret half is gated.
+  Existing users who relied on key sync just run `/keysync on` once.
+
 ## [2.7.0] — 2026-06-09
 
 > A batch of review tooling: YAML review config, a `codeep hook install` pre-commit reviewer, `codeep review --rules` to list rule ids, and an opt-in `codeep review --ai` second opinion. Plus fixes: compiled binaries report the real version (no more "vunknown"), ACP editor sessions no longer mutate the global confirmation setting, and keychain-fallback keys get swept into the keychain once it's available.

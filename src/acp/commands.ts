@@ -1574,6 +1574,7 @@ function buildHelp(): string {
     '| `/login <provider> <key>` | Set API key for a provider |',
     '| `/apikey [key]` | Show or set API key |',
     '| `/telemetry [on\\|off]` | Show or toggle automatic cloud telemetry |',
+    '| `/keysync [on\\|off]` | Show or toggle syncing API keys to codeep.dev |',
     '| `/lang [code]` | Set response language (`en`, `hr`, `auto`…) |',
     '| `/grant` | Grant write access for workspace |',
     '',

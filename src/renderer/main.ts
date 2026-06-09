@@ -460,8 +460,9 @@ Codeep - AI-powered coding assistant TUI
 Usage:
   codeep              Start interactive chat
   codeep account        Link CLI to your codeep.dev dashboard
-  codeep account sync   Pull keys + personalities + commands + profile from codeep.dev
-  codeep account push   Push local keys + personalities + commands + profile to codeep.dev
+  codeep account sync   Pull personalities + commands + profile (+ keys if cloud key sync is on)
+  codeep account push   Push personalities + commands + profile (+ keys if cloud key sync is on)
+  codeep account purge-keys  Delete all your API keys stored on codeep.dev (cloud only; local keychain untouched)
   codeep acp          Start ACP server (for Zed editor integration)
   codeep review       Offline code review for CI (--json, --fail-on, --rules, --ai)
   codeep hook install   Install a git pre-commit hook running \`codeep review\`
@@ -483,9 +484,7 @@ Commands (in chat):
     const sub = args[1];
 
     if (sub === 'sync' || sub === 'pull') {
-      // Pull API keys from codeep.dev and save to local config
-      const { pullKeys } = await import('../utils/codeepCloud.js');
-      const { getSyncToken, setApiKey, loadAllApiKeys: loadKeys } = await import('../config/index.js');
+      const { getSyncToken, setApiKey, loadAllApiKeys: loadKeys, isKeySyncEnabled } = await import('../config/index.js');
       if (!getSyncToken()) {
         console.log('\n  Not linked to codeep.dev. Run: codeep account\n');
         process.exit(1);
@@ -494,26 +493,34 @@ Commands (in chat):
       // key. Otherwise the first setApiKey flips keysSecured=true and any local
       // legacy plaintext keys would never migrate (orphaned, invisible).
       await loadKeys();
-      process.stdout.write('  Pulling keys from codeep.dev...');
-      const keys = await pullKeys();
-      if (!keys) {
-        console.log(' failed.\n  Check your connection or re-link with: codeep account\n');
-        process.exit(1);
-      }
-      const count = Object.keys(keys).length;
-      if (count === 0) {
-        console.log(' no keys found.\n  Add keys at codeep.dev/dashboard');
-      } else {
-        let synced = 0;
-        for (const [provider, key] of Object.entries(keys)) {
-          try {
-            await setApiKey(key, provider);
-            synced++;
-          } catch {
-            console.log(`\n  Warning: could not securely store the key for ${provider}.`);
-          }
+
+      // API keys are opt-in (default OFF). Pull them only when cloud key sync is
+      // enabled; the personal config below always syncs (no secrets).
+      if (isKeySyncEnabled()) {
+        const { pullKeys } = await import('../utils/codeepCloud.js');
+        process.stdout.write('  Pulling keys from codeep.dev...');
+        const keys = await pullKeys();
+        if (!keys) {
+          console.log(' failed.\n  Check your connection or re-link with: codeep account\n');
+          process.exit(1);
         }
-        console.log(` synced ${synced} key${synced !== 1 ? 's' : ''}.`);
+        const count = Object.keys(keys).length;
+        if (count === 0) {
+          console.log(' no keys found.\n  Add keys at codeep.dev/dashboard');
+        } else {
+          let synced = 0;
+          for (const [provider, key] of Object.entries(keys)) {
+            try {
+              await setApiKey(key, provider);
+              synced++;
+            } catch {
+              console.log(`\n  Warning: could not securely store the key for ${provider}.`);
+            }
+          }
+          console.log(` synced ${synced} key${synced !== 1 ? 's' : ''}.`);
+        }
+      } else {
+        console.log('  Cloud key sync is off — skipping API keys. Enable with: /keysync on');
       }
 
       // Also pull portable personal config — personalities + custom commands +
@@ -536,28 +543,36 @@ Commands (in chat):
     }
 
     if (sub === 'push') {
-      // Push local API keys to codeep.dev
-      const { pushKeys } = await import('../utils/codeepCloud.js');
-      const { getSyncToken, getApiKey } = await import('../config/index.js');
-      const { PROVIDERS } = await import('../config/providers.js');
+      const { getSyncToken, getApiKey, isKeySyncEnabled } = await import('../config/index.js');
       if (!getSyncToken()) {
         console.log('\n  Not linked to codeep.dev. Run: codeep account\n');
         process.exit(1);
       }
-      await loadAllApiKeys();
-      const keys: Record<string, string> = {};
-      for (const providerId of Object.keys(PROVIDERS)) {
-        const key = getApiKey(providerId);
-        if (key) keys[providerId] = key;
+
+      // API keys are opt-in (default OFF). Push them only when cloud key sync is
+      // enabled; the personal config below always pushes (no secrets).
+      let keyPushFailed = false;
+      if (isKeySyncEnabled()) {
+        const { pushKeys } = await import('../utils/codeepCloud.js');
+        const { PROVIDERS } = await import('../config/providers.js');
+        await loadAllApiKeys();
+        const keys: Record<string, string> = {};
+        for (const providerId of Object.keys(PROVIDERS)) {
+          const key = getApiKey(providerId);
+          if (key) keys[providerId] = key;
+        }
+        const count = Object.keys(keys).length;
+        if (count === 0) {
+          console.log('  No local API keys to push.');
+        } else {
+          process.stdout.write(`  Pushing ${count} key${count !== 1 ? 's' : ''} to codeep.dev...`);
+          const ok = await pushKeys(keys);
+          console.log(ok ? ' done.' : ' failed.');
+          keyPushFailed = !ok;
+        }
+      } else {
+        console.log('  Cloud key sync is off — skipping API keys. Enable with: /keysync on');
       }
-      const count = Object.keys(keys).length;
-      if (count === 0) {
-        console.log('\n  No local API keys to push.\n');
-        process.exit(0);
-      }
-      process.stdout.write(`  Pushing ${count} key${count !== 1 ? 's' : ''} to codeep.dev...`);
-      const ok = await pushKeys(keys);
-      console.log(ok ? ' done.' : ' failed.');
 
       // Also push portable personal config — personalities + commands + profile.
       const { pushPersonalities, pushCommands, pushUserProfile } = await import('../utils/codeepCloud.js');
@@ -572,6 +587,20 @@ Commands (in chat):
       if (await pushUserProfile()) {
         console.log('  Pushed your profile (about you).');
       }
+      console.log('');
+      process.exit(keyPushFailed ? 1 : 0);
+    }
+
+    if (sub === 'purge-keys') {
+      const { getSyncToken } = await import('../config/index.js');
+      if (!getSyncToken()) {
+        console.log('\n  Not linked to codeep.dev. Run: codeep account\n');
+        process.exit(1);
+      }
+      const { purgeKeys } = await import('../utils/codeepCloud.js');
+      process.stdout.write('  Deleting all your API keys from codeep.dev...');
+      const ok = await purgeKeys();
+      console.log(ok ? ' done. (Local keychain keys are untouched.)' : ' failed.');
       console.log('');
       process.exit(ok ? 0 : 1);
     }

@@ -97,6 +97,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'tasks': 'Show pending tasks from codeep.dev dashboard',
   'sync': 'Sync learning preferences and profiles to codeep.dev',
   'telemetry': 'Show or toggle automatic cloud telemetry (on/off)',
+  'keysync': 'Show or toggle syncing API keys to codeep.dev (on/off)',
   // 2.0 — surfaced for `/` autocomplete; documented in /help too.
   'compact': 'Summarize older messages to free up context',
   'commands': 'List custom slash commands in .codeep/commands/*.md',

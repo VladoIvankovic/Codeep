@@ -133,6 +133,12 @@ interface ConfigSchema {
    *  transcripts, progress, memory notes). Default true; set false to opt out.
    *  The CODEEP_NO_TELEMETRY / DO_NOT_TRACK env vars also force it off. */
   telemetry: boolean;
+  /** Opt-in to syncing API keys to codeep.dev (`codeep account push`/`sync`).
+   *  OFF by default — keys live only in the OS keychain unless you enable this.
+   *  Synced keys are stored server-readable (AES from a server-held secret), so
+   *  this is an explicit consent switch. Enable via `/keysync on` or Settings;
+   *  the CODEEP_NO_KEY_SYNC env var forces it off (org-policy hard switch). */
+  syncKeysToCloud: boolean;
   githubId: string;
   githubUsername: string;
   syncToken: string;
@@ -351,6 +357,7 @@ function createConfig(): Conf<ConfigSchema> {
     keysSecured: false,
     apiKeys: {},
     telemetry: true,
+    syncKeysToCloud: false,
     githubId: '',
     githubUsername: '',
     syncToken: '',
@@ -722,6 +729,32 @@ export function isTelemetryEnabled(): boolean {
  */
 export function telemetryForcedOffByEnv(): boolean {
   return envForcesTelemetryOff();
+}
+
+/**
+ * Whether syncing API keys to the cloud is allowed. OFF by default (opt-in):
+ * unlike telemetry, this also gates the EXPLICIT `codeep account push` and the
+ * key-download half of `account sync`, because pushing a key stores it
+ * server-readable. The CODEEP_NO_KEY_SYNC env var forces it off as an
+ * org-policy hard switch the config flag can't override.
+ */
+function envForcesKeySyncOff(): boolean {
+  const off = (v?: string) => !!v && !/^(0|false|no|off)$/i.test(v.trim());
+  return off(process.env.CODEEP_NO_KEY_SYNC);
+}
+
+export function isKeySyncEnabled(): boolean {
+  if (envForcesKeySyncOff()) return false;
+  return config.get('syncKeysToCloud') === true; // default OFF — must be explicitly true
+}
+
+/**
+ * True when CODEEP_NO_KEY_SYNC is forcing key sync off — so the `syncKeysToCloud`
+ * flag can't turn it back on. Lets the /keysync command explain why a toggle had
+ * no effect.
+ */
+export function keySyncForcedOffByEnv(): boolean {
+  return envForcesKeySyncOff();
 }
 
 /**

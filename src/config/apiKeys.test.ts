@@ -27,6 +27,8 @@ import {
   getConfiguredProviders,
   isTelemetryEnabled,
   telemetryForcedOffByEnv,
+  isKeySyncEnabled,
+  keySyncForcedOffByEnv,
 } from './index';
 import { PROVIDERS } from './providers';
 
@@ -226,6 +228,53 @@ describe('telemetry opt-out (isTelemetryEnabled)', () => {
     it('is false for falsey env values', () => {
       process.env.DO_NOT_TRACK = '0';
       expect(telemetryForcedOffByEnv()).toBe(false);
+    });
+  });
+});
+
+describe('cloud key sync opt-in (isKeySyncEnabled)', () => {
+  const SAVED = process.env.CODEEP_NO_KEY_SYNC;
+  beforeEach(() => {
+    delete process.env.CODEEP_NO_KEY_SYNC;
+    config.set('syncKeysToCloud', false);
+  });
+  afterEach(() => {
+    if (SAVED === undefined) delete process.env.CODEEP_NO_KEY_SYNC; else process.env.CODEEP_NO_KEY_SYNC = SAVED;
+    config.set('syncKeysToCloud', false);
+  });
+
+  it('is OFF by default (opt-in)', () => {
+    expect(isKeySyncEnabled()).toBe(false);
+  });
+
+  it('is enabled only when the syncKeysToCloud flag is explicitly true', () => {
+    config.set('syncKeysToCloud', true);
+    expect(isKeySyncEnabled()).toBe(true);
+  });
+
+  it('is forced off by CODEEP_NO_KEY_SYNC even when the flag is true', () => {
+    config.set('syncKeysToCloud', true);
+    process.env.CODEEP_NO_KEY_SYNC = '1';
+    expect(isKeySyncEnabled()).toBe(false);
+  });
+
+  it('treats falsey env values ("0"/"false"/"off") as not forcing off', () => {
+    config.set('syncKeysToCloud', true);
+    for (const v of ['0', 'false', 'off', 'no']) {
+      process.env.CODEEP_NO_KEY_SYNC = v;
+      expect(isKeySyncEnabled()).toBe(true);
+    }
+  });
+
+  describe('keySyncForcedOffByEnv', () => {
+    it('is false by default and when the flag alone is off', () => {
+      expect(keySyncForcedOffByEnv()).toBe(false);
+      config.set('syncKeysToCloud', false);
+      expect(keySyncForcedOffByEnv()).toBe(false);
+    });
+    it('is true when CODEEP_NO_KEY_SYNC forces it off', () => {
+      process.env.CODEEP_NO_KEY_SYNC = '1';
+      expect(keySyncForcedOffByEnv()).toBe(true);
     });
   });
 });
