@@ -7,6 +7,7 @@ import {
   getProviderBaseUrl,
   getProviderAuthHeader,
   getProviderMcpEndpoints,
+  modelRejectsSamplingParams,
 } from './providers';
 
 describe('providers', () => {
@@ -215,10 +216,28 @@ describe('providers', () => {
     it('should include Claude Opus 4.8 as default model', () => {
       expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-4-8');
       const modelIds = PROVIDERS['anthropic'].models.map(m => m.id);
+      expect(modelIds).toContain('claude-fable-5');
       expect(modelIds).toContain('claude-opus-4-8');
-      expect(modelIds).toContain('claude-opus-4-7'); // kept as previous-gen option
       expect(modelIds).toContain('claude-sonnet-4-6');
       expect(modelIds).toContain('claude-haiku-4-5-20251001');
+      // De-listed with the Fable 5 launch (ids stay valid if set manually)
+      expect(modelIds).not.toContain('claude-opus-4-7');
+      expect(modelIds).not.toContain('claude-opus-4-6');
+    });
+
+    it('flags models that reject sampling params (Fable 5 / Opus 4.7+)', () => {
+      expect(modelRejectsSamplingParams('claude-fable-5')).toBe(true);
+      expect(modelRejectsSamplingParams('claude-opus-4-8')).toBe(true);
+      expect(modelRejectsSamplingParams('claude-opus-4-7')).toBe(true);
+      // Dated variants of a flagged family are covered too
+      expect(modelRejectsSamplingParams('claude-opus-4-8-20260601')).toBe(true);
+      // Older/other Claude models still accept temperature
+      expect(modelRejectsSamplingParams('claude-opus-4-6')).toBe(false);
+      expect(modelRejectsSamplingParams('claude-sonnet-4-6')).toBe(false);
+      expect(modelRejectsSamplingParams('claude-haiku-4-5-20251001')).toBe(false);
+      // Non-Anthropic ids never match
+      expect(modelRejectsSamplingParams('gpt-5.5')).toBe(false);
+      expect(modelRejectsSamplingParams('glm-5.1')).toBe(false);
     });
   });
 

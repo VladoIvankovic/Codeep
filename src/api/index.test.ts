@@ -33,6 +33,7 @@ vi.mock('../config/providers', () => ({
   getProviderAuthHeader: vi.fn(() => 'Bearer'),
   usesMaxCompletionTokens: vi.fn(() => false),
   requiresDefaultTemperature: vi.fn(() => false),
+  modelRejectsSamplingParams: vi.fn(() => false),
   // Added to match the real module — api/index.ts dynamically imports this
   // to decide whether to skip the API-key requirement (e.g. Ollama runs keyless).
   isNoApiKeyProvider: vi.fn((_id: string) => false),

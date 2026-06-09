@@ -19,7 +19,7 @@ import { ProjectContext } from './project';
 import { config, getApiKey, Message, resolveBaseUrl } from '../config/index';
 import { loadProjectIntelligence, generateContextFromIntelligence } from './projectIntelligence';
 import { syncProgress, generateProjectId } from './codeepCloud';
-import { getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, isNoApiKeyProvider } from '../config/providers';
+import { getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, isNoApiKeyProvider } from '../config/providers';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { formatToolDefinitions, getOpenAITools, getAnthropicTools, AdditionalToolDef } from './tools';
@@ -393,7 +393,9 @@ export async function agentChat(
     let body: Record<string, unknown>;
     const useStreaming = Boolean(onChunk);
 
-    const tempParam = requiresDefaultTemperature(providerId) ? {} : { temperature: config.get('temperature') };
+    // Provider-level guard (OpenAI GPT-5+) OR model-level guard — Anthropic's
+    // Fable 5 / Opus 4.7+ reject temperature with a 400; omission is safe.
+    const tempParam = (requiresDefaultTemperature(providerId) || modelRejectsSamplingParams(model)) ? {} : { temperature: config.get('temperature') };
     if (protocol === 'openai') {
       const maxTok = getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384));
       const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };
@@ -594,7 +596,9 @@ export async function agentChatFallback(
     let endpoint: string;
     let body: Record<string, unknown>;
 
-    const tempParam = requiresDefaultTemperature(providerId) ? {} : { temperature: config.get('temperature') };
+    // Provider-level guard (OpenAI GPT-5+) OR model-level guard — Anthropic's
+    // Fable 5 / Opus 4.7+ reject temperature with a 400; omission is safe.
+    const tempParam = (requiresDefaultTemperature(providerId) || modelRejectsSamplingParams(model)) ? {} : { temperature: config.get('temperature') };
     if (protocol === 'openai') {
       const maxTok = getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384));
       const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };

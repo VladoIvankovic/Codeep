@@ -3,7 +3,7 @@ import * as https from 'node:https';
 import { Message, config, getApiKey, resolveBaseUrl } from '../config/index';
 import { withRetry, isNetworkError, isTimeoutError } from '../utils/retry';
 import { ProjectContext } from '../utils/project';
-import { getProvider, getProviderBaseUrl, getProviderAuthHeader, usesMaxCompletionTokens, requiresDefaultTemperature } from '../config/providers';
+import { getProvider, getProviderBaseUrl, getProviderAuthHeader, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams } from '../config/providers';
 import { logApiRequest, logApiResponse, logAppError } from '../utils/logger';
 import { loadProjectIntelligence, generateContextFromIntelligence, ProjectIntelligence } from '../utils/projectIntelligence';
 import { loadProjectRules } from '../utils/agent';
@@ -737,7 +737,9 @@ async function chatAnthropic(
         model,
         messages,
         max_tokens: maxTokens,
-        temperature,
+        // Fable 5 / Opus 4.7+ reject temperature with a 400 — omit it there
+        // (omission means API default on every Claude model).
+        ...(modelRejectsSamplingParams(model) ? {} : { temperature }),
         stream,
         ...cachedSystem,
       }),

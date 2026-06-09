@@ -53,9 +53,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gpt-5.4-mini':         400_000,
   'gpt-5.4-nano':         400_000,
   // Anthropic
+  'claude-fable-5':               1_000_000,
   'claude-opus-4-8':              1_000_000,
-  'claude-opus-4-7':              1_000_000,
-  'claude-opus-4-6':              1_000_000,
   'claude-sonnet-4-6':            1_000_000,
   'claude-haiku-4-5-20251001':    200_000,
   // DeepSeek
@@ -92,9 +91,8 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'gpt-5.4-mini': { inputPer1M: 0.75,  outputPer1M: 4.50 },
   'gpt-5.4-nano': { inputPer1M: 0.20,  outputPer1M: 1.25 },
   // Anthropic
+  'claude-fable-5':               { inputPer1M: 10.00, outputPer1M: 50.00 },
   'claude-opus-4-8':              { inputPer1M: 5.00,  outputPer1M: 25.00 },
-  'claude-opus-4-7':              { inputPer1M: 5.00,  outputPer1M: 25.00 },
-  'claude-opus-4-6':              { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-sonnet-4-6':            { inputPer1M: 3.00,  outputPer1M: 15.00 },
   'claude-haiku-4-5-20251001':    { inputPer1M: 1.00,  outputPer1M: 5.00 },
   // DeepSeek (cache-miss input pricing)

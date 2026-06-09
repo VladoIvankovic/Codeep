@@ -11,6 +11,32 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.9.0] — 2026-06-09
+
+> Claude Fable 5 — Anthropic's most powerful model, a new tier above Opus — is now in the model picker ($10/$50 per MTok, 1M context). Opus 4.7 and 4.6 leave the picker (Opus 4.8 stays the default). Plus a real compatibility fix: temperature is no longer sent to models that reject it (Fable 5 / Opus 4.7+), which previously surfaced as an opaque 400.
+
+### Added
+
+- **Claude Fable 5** (`claude-fable-5`) in the Anthropic provider — the most
+  powerful Claude model, a new tier above Opus. $10 input / $50 output per
+  MTok, 1M context window. Pick it with `/model claude-fable-5`.
+
+### Changed
+
+- **Opus 4.7 and 4.6 removed from the model picker** now that Opus 4.8 and
+  Fable 5 cover both tiers. The ids remain valid — if your config still points
+  at one, it keeps working; it just isn't offered for new selection.
+
+### Fixed
+
+- **`temperature` is no longer sent to Anthropic models that reject it.**
+  Fable 5 and Opus 4.7+ return HTTP 400 when the request includes
+  `temperature` — and that 400 was previously masked by the tools-fallback
+  retry, surfacing as a generic "API error". A model-aware guard
+  (`modelRejectsSamplingParams`) now omits the parameter on those models
+  across all three Anthropic request paths (agent, fallback, plain chat);
+  omission means the API default, so behavior on other models is unchanged.
+
 ## [2.8.0] — 2026-06-09
 
 > API keys are now keychain-first and stay local by default — syncing them to codeep.dev is an explicit opt-in (`/keysync on`), and `codeep account purge-keys` wipes any keys already on the server.

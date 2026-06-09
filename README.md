@@ -50,7 +50,7 @@ custom slash commands, lifecycle hooks, checkpoints, `/cost`,
 ### Multi-Provider Support
 - **Z.AI (ZhipuAI)** — GLM models (Coding Plan & pay-per-use API, international & China)
 - **OpenAI** — GPT models (flagship, Mini, Nano)
-- **Anthropic** — Claude models (Opus, Sonnet, Haiku)
+- **Anthropic** — Claude models (Fable, Opus, Sonnet, Haiku)
 - **DeepSeek** — DeepSeek models (Pro, Flash)
 - **Google AI** — Gemini models (Pro, Flash)
 - **MiniMax** — MiniMax models (Coding Plan & pay-per-use API, international & China)

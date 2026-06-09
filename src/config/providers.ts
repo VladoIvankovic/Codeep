@@ -285,9 +285,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'claude-opus-4-8',           name: 'Claude Opus 4.8',       description: 'Most capable Claude model' },
-      { id: 'claude-opus-4-7',           name: 'Claude Opus 4.7',       description: 'Previous generation Opus' },
-      { id: 'claude-opus-4-6',           name: 'Claude Opus 4.6',       description: 'Older generation Opus' },
+      { id: 'claude-fable-5',            name: 'Claude Fable 5',        description: 'Most powerful — new tier above Opus' },
+      { id: 'claude-opus-4-8',           name: 'Claude Opus 4.8',       description: 'Most capable Opus model' },
       { id: 'claude-sonnet-4-6',         name: 'Claude Sonnet',         description: 'Best balance of speed and intelligence' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku',          description: 'Fastest and most affordable' },
     ],
@@ -496,6 +495,19 @@ export function usesMaxCompletionTokens(providerId: string): boolean {
  */
 export function requiresDefaultTemperature(providerId: string): boolean {
   return PROVIDERS[providerId]?.requiresDefaultTemperature ?? false;
+}
+
+/**
+ * Models that reject sampling parameters (temperature/top_p/top_k) with a 400.
+ * Anthropic removed them on Fable 5 and Opus 4.7+; older Claude models still
+ * accept them, so this must be a MODEL-level check, not a provider-level one
+ * (requiresDefaultTemperature can't express it). Omitting the field is always
+ * safe — the API treats omission as default.
+ */
+const SAMPLING_PARAMS_REJECTED = ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7'];
+
+export function modelRejectsSamplingParams(model: string): boolean {
+  return SAMPLING_PARAMS_REJECTED.some(id => model === id || model.startsWith(`${id}-`));
 }
 
 /**

@@ -74,7 +74,7 @@ describe('extractAnthropicUsage', () => {
 describe('getModelContextWindow', () => {
   it('returns a known window for a listed model', () => {
     expect(getModelContextWindow('glm-5.1')).toBe(131_072);
-    expect(getModelContextWindow('claude-opus-4-7')).toBe(1_000_000);
+    expect(getModelContextWindow('claude-opus-4-8')).toBe(1_000_000);
   });
 
   it('falls back to 128K for unknown models', () => {
@@ -126,7 +126,7 @@ describe('recordTokenUsage + getSessionStats', () => {
 describe('getCostBreakdown', () => {
   it('groups by provider/model', () => {
     recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.1', 'z.ai');
-    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-4-7', 'anthropic');
+    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-4-8', 'anthropic');
     const breakdown = getCostBreakdown();
     expect(breakdown).toHaveLength(2);
     const glm = breakdown.find(b => b.model === 'glm-5.1');
@@ -184,7 +184,7 @@ describe('getCostBreakdown', () => {
         cacheCreationTokens: 1_000,
         cacheReadTokens: 9_000,
       },
-      'claude-opus-4-7',
+      'claude-opus-4-8',
       'anthropic',
     );
     const breakdown = getCostBreakdown();
@@ -233,7 +233,8 @@ describe('getPricingTable', () => {
     const table = getPricingTable();
     const ids = table.map(e => e.model);
     expect(ids).toContain('glm-5.1');
-    expect(ids).toContain('claude-opus-4-7');
+    expect(ids).toContain('claude-opus-4-8');
+    expect(ids).toContain('claude-fable-5');
   });
 
   it('only contains models that also have context-window entries', () => {
@@ -262,11 +263,11 @@ describe('formatCostReport', () => {
 
   it('includes a per-model table when multiple providers/models are used', () => {
     recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.1', 'z.ai');
-    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-4-7', 'anthropic');
+    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-4-8', 'anthropic');
     const report = formatCostReport();
     expect(report).toMatch(/\| Provider \/ Model \| Input \| Output \| Cost \|/);
     expect(report).toMatch(/`z\.ai` \/ `glm-5\.1`/);
-    expect(report).toMatch(/`anthropic` \/ `claude-opus-4-7`/);
+    expect(report).toMatch(/`anthropic` \/ `claude-opus-4-8`/);
   });
 
   it('flags models that produced tokens but no priced cost', () => {
