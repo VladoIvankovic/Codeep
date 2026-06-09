@@ -217,6 +217,43 @@ AI-powered review of your git diff with `/review`:
 
 If there are no git changes, falls back to static analysis automatically.
 
+#### Custom rules (`.codeep/review.json`)
+
+The static reviewer (`codeep review` / `/review --static`) ships a set of
+built-in rules, but a project can tailor them — check a `.codeep/review.json`
+into the repo and the CLI **and** the [Codeep GitHub Action](https://github.com/VladoIvankovic/codeep-action)
+both pick it up automatically (zero LLM cost):
+
+```json
+{
+  "rules": [
+    {
+      "id": "no-internal-import",
+      "pattern": "from ['\"]@acme/internal",
+      "category": "best-practice",
+      "severity": "error",
+      "message": "Don't import from @acme/internal outside the platform team",
+      "suggestion": "Use the public @acme/sdk package",
+      "extensions": [".ts", ".tsx"]
+    }
+  ],
+  "disable": ["todo-comment", "anonymous-function"],
+  "include": ["src/**"],
+  "exclude": ["**/*.test.ts", "vendor/**"]
+}
+```
+
+- **`rules`** — your own checks. `id`, `pattern` (a regex string), and `message`
+  are required; `flags` (default `g`), `category`, `severity`
+  (`error|warning|info|suggestion`), `suggestion`, and `extensions` are optional.
+- **`disable`** — turn off built-in rules by id (e.g. `eval-usage`,
+  `hardcoded-password`, `todo-comment`, `any-type`, `console-statement`,
+  `long-file`, `long-function`, …).
+- **`include` / `exclude`** — glob scoping (`**`, `*`, `?`); `include` empty = all files.
+
+A missing, malformed, or partially-invalid config never breaks a review — bad
+entries are skipped and the run proceeds with whatever is valid.
+
 ### Interactive Mode
 Agent asks clarifying questions when tasks are ambiguous:
 ```

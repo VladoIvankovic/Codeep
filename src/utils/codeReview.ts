@@ -6,6 +6,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join, extname, relative } from 'path';
 import { ProjectContext } from './project';
 import { getGitDiff, getChangedFiles } from './git';
+import { loadReviewConfig, globToRegExp } from './reviewConfig';
 
 export interface ReviewIssue {
   file: string;
@@ -45,17 +46,27 @@ export interface ReviewSummary {
   bySeverity: Record<string, number>;
 }
 
-// Common code patterns that indicate issues
-const CODE_PATTERNS: Array<{
+/**
+ * A single deterministic review rule. Built-in rules and user rules from
+ * `.codeep/review.json` share this shape. `id` is stable so a project can
+ * disable a built-in rule by id (see utils/reviewConfig.ts).
+ */
+export interface RuleDef {
+  id: string;
   pattern: RegExp;
   category: ReviewCategory;
   severity: ReviewIssue['severity'];
   message: string;
   suggestion?: string;
   extensions?: string[];
-}> = [
+}
+
+// Built-in code patterns that indicate issues. Each has a stable `id` so it can
+// be turned off per-project via `.codeep/review.json` { "disable": ["..."] }.
+const CODE_PATTERNS: RuleDef[] = [
   // Security issues
   {
+    id: 'eval-usage',
     pattern: /eval\s*\(/g,
     category: 'security',
     severity: 'error',
@@ -64,6 +75,7 @@ const CODE_PATTERNS: Array<{
     extensions: ['.js', '.ts', '.jsx', '.tsx'],
   },
   {
+    id: 'inner-html',
     pattern: /innerHTML\s*=/g,
     category: 'security',
     severity: 'warning',
@@ -72,6 +84,7 @@ const CODE_PATTERNS: Array<{
     extensions: ['.js', '.ts', '.jsx', '.tsx'],
   },
   {
+    id: 'dangerously-set-inner-html',
     pattern: /dangerouslySetInnerHTML/g,
     category: 'security',
     severity: 'warning',
@@ -80,6 +93,7 @@ const CODE_PATTERNS: Array<{
     extensions: ['.jsx', '.tsx'],
   },
   {
+    id: 'hardcoded-password',
     pattern: /password\s*=\s*['"][^'"]+['"]/gi,
     category: 'security',
     severity: 'error',
@@ -87,15 +101,17 @@ const CODE_PATTERNS: Array<{
     suggestion: 'Use environment variables for sensitive data',
   },
   {
+    id: 'hardcoded-api-key',
     pattern: /api[_-]?key\s*=\s*['"][^'"]+['"]/gi,
     category: 'security',
     severity: 'error',
     message: 'Hardcoded API key detected',
     suggestion: 'Use environment variables for API keys',
   },
-  
+
   // Performance issues
   {
+    id: 'foreach-await',
     pattern: /\.forEach\s*\([^)]*\)\s*{\s*await/g,
     category: 'performance',
     severity: 'warning',
@@ -104,6 +120,7 @@ const CODE_PATTERNS: Array<{
     extensions: ['.js', '.ts', '.jsx', '.tsx'],
   },
   {
+    id: 'await-in-loop',
     pattern: /for\s*\([^)]+\)\s*{\s*await/g,
     category: 'performance',
     severity: 'info',
@@ -112,15 +129,17 @@ const CODE_PATTERNS: Array<{
     extensions: ['.js', '.ts', '.jsx', '.tsx'],
   },
   {
+    id: 'select-star',
     pattern: /SELECT\s+\*/gi,
     category: 'performance',
     severity: 'warning',
     message: 'SELECT * can be inefficient, select only needed columns',
     suggestion: 'Specify required columns explicitly',
   },
-  
+
   // Bug-prone patterns
   {
+    id: 'loose-null-check',
     pattern: /==\s*null|null\s*==/g,
     category: 'bug',
     severity: 'info',
@@ -129,6 +148,7 @@ const CODE_PATTERNS: Array<{
     extensions: ['.js', '.ts', '.jsx', '.tsx'],
   },
   {
+    id: 'empty-catch',
     pattern: /catch\s*\(\s*\w*\s*\)\s*{\s*}/g,
     category: 'bug',
     severity: 'warning',
@@ -136,6 +156,7 @@ const CODE_PATTERNS: Array<{
     suggestion: 'Log the error or handle it appropriately',
   },
   {
+    id: 'console-statement',
     pattern: /console\.(log|debug|info|warn|error)\s*\(/g,
     category: 'maintainability',
     severity: 'info',
@@ -144,15 +165,17 @@ const CODE_PATTERNS: Array<{
     extensions: ['.js', '.ts', '.jsx', '.tsx'],
   },
   {
+    id: 'todo-comment',
     pattern: /TODO|FIXME|HACK|XXX/g,
     category: 'maintainability',
     severity: 'info',
     message: 'TODO/FIXME comment found',
     suggestion: 'Address the TODO or create a ticket',
   },
-  
+
   // Type safety
   {
+    id: 'any-type',
     pattern: /:\s*any\b/g,
     category: 'types',
     severity: 'warning',
@@ -161,6 +184,7 @@ const CODE_PATTERNS: Array<{
     extensions: ['.ts', '.tsx'],
   },
   {
+    id: 'ts-ignore',
     pattern: /@ts-ignore/g,
     category: 'types',
     severity: 'warning',
@@ -169,6 +193,7 @@ const CODE_PATTERNS: Array<{
     extensions: ['.ts', '.tsx'],
   },
   {
+    id: 'as-any',
     pattern: /as\s+any\b/g,
     category: 'types',
     severity: 'warning',
@@ -176,9 +201,10 @@ const CODE_PATTERNS: Array<{
     suggestion: 'Use proper type assertion or fix the types',
     extensions: ['.ts', '.tsx'],
   },
-  
+
   // Best practices
   {
+    id: 'var-usage',
     pattern: /var\s+\w+/g,
     category: 'best-practice',
     severity: 'info',
@@ -187,6 +213,7 @@ const CODE_PATTERNS: Array<{
     extensions: ['.js', '.jsx'],
   },
   {
+    id: 'anonymous-function',
     pattern: /function\s*\(/g,
     category: 'style',
     severity: 'info',
@@ -194,9 +221,10 @@ const CODE_PATTERNS: Array<{
     suggestion: 'Consider using arrow functions or named functions',
     extensions: ['.js', '.ts', '.jsx', '.tsx'],
   },
-  
+
   // Documentation
   {
+    id: 'missing-jsdoc',
     pattern: /export\s+(default\s+)?(?:function|class|const)\s+\w+/g,
     category: 'documentation',
     severity: 'suggestion',
@@ -212,28 +240,40 @@ const CODE_PATTERNS: Array<{
 function analyzeFile(
   filePath: string,
   content: string,
-  projectRoot: string
+  projectRoot: string,
+  rules: RuleDef[],
+  disabled: Set<string>
 ): ReviewIssue[] {
   const issues: ReviewIssue[] = [];
   const ext = extname(filePath);
   const relativePath = relative(projectRoot, filePath);
   const lines = content.split('\n');
-  
-  for (const pattern of CODE_PATTERNS) {
+
+  // Skip the regex pass on very large files (the cheap line-count heuristics
+  // below still run) so an oversized file can't stall the reviewer. NOTE: this
+  // bounds input SIZE only, not regex run-time — catastrophic backtracking is a
+  // function of pattern shape. Untrusted custom rules from .codeep/review.json
+  // are additionally screened at load (utils/reviewConfig.ts) and the GitHub
+  // Action caps wall-clock, but a zero-width match is guarded right here.
+  const scannable = content.length <= 2_000_000 ? content : '';
+  const MAX_MATCHES_PER_RULE = 1000;
+
+  for (const pattern of rules) {
     // Skip if pattern doesn't apply to this file type
     if (pattern.extensions && !pattern.extensions.includes(ext)) {
       continue;
     }
-    
+
     // Find all matches
     let match;
+    let count = 0;
     const regex = new RegExp(pattern.pattern.source, pattern.pattern.flags);
-    
-    while ((match = regex.exec(content)) !== null) {
+
+    while ((match = regex.exec(scannable)) !== null) {
       // Find line number
-      const beforeMatch = content.slice(0, match.index);
+      const beforeMatch = scannable.slice(0, match.index);
       const lineNumber = beforeMatch.split('\n').length;
-      
+
       issues.push({
         file: relativePath,
         line: lineNumber,
@@ -242,11 +282,17 @@ function analyzeFile(
         message: pattern.message,
         suggestion: pattern.suggestion,
       });
+
+      // A zero-width match (e.g. a custom rule like `a?` or `(?:)`) leaves
+      // lastIndex unchanged, so exec() would return it forever — advance past it.
+      if (match.index === regex.lastIndex) regex.lastIndex++;
+      // Bound pathological match floods (also caps the per-match work above).
+      if (++count >= MAX_MATCHES_PER_RULE) break;
     }
   }
-  
+
   // Check for long files
-  if (lines.length > 500) {
+  if (!disabled.has('long-file') && lines.length > 500) {
     issues.push({
       file: relativePath,
       severity: 'info',
@@ -254,12 +300,13 @@ function analyzeFile(
       message: `File has ${lines.length} lines - consider splitting into smaller modules`,
     });
   }
-  
+
   // Check for long functions (basic heuristic)
   let braceDepth = 0;
   let functionStart = -1;
-  
-  for (let i = 0; i < lines.length; i++) {
+  const checkLongFunctions = !disabled.has('long-function');
+
+  for (let i = 0; checkLongFunctions && i < lines.length; i++) {
     const line = lines[i];
     
     if (/function\s+\w+|=>\s*{|\)\s*{/.test(line)) {
@@ -361,7 +408,30 @@ export function performCodeReview(
   specificFiles?: string[]
 ): ReviewResult {
   const projectRoot = projectContext.root || process.cwd();
-  const filesToReview = getFilesToReview(projectRoot, specificFiles);
+
+  // Project-level config (.codeep/review.json): custom rules, disabled built-in
+  // ids, and include/exclude globs. Absent/invalid → defaults (built-ins only).
+  const config = loadReviewConfig(projectRoot);
+  const disabled = config?.disabled ?? new Set<string>();
+  const effectiveRules: RuleDef[] = [
+    ...CODE_PATTERNS.filter((p) => !disabled.has(p.id)),
+    ...(config?.rules ?? []),
+  ];
+
+  let filesToReview = getFilesToReview(projectRoot, specificFiles);
+
+  // Apply include/exclude globs (posix-relative paths). Empty include = all.
+  if (config && (config.include.length > 0 || config.exclude.length > 0)) {
+    const inc = config.include.map(globToRegExp);
+    const exc = config.exclude.map(globToRegExp);
+    filesToReview = filesToReview.filter((f) => {
+      const rel = relative(projectRoot, f).split('\\').join('/');
+      if (inc.length > 0 && !inc.some((re) => re.test(rel))) return false;
+      if (exc.some((re) => re.test(rel))) return false;
+      return true;
+    });
+  }
+
   const allIssues: ReviewIssue[] = [];
 
   // Determine scope — mirrors the branching in getFilesToReview so the user
@@ -374,11 +444,11 @@ export function performCodeReview(
   } else {
     scope = `full src/ scan — no git changes (${filesToReview.length} file${filesToReview.length === 1 ? '' : 's'})`;
   }
-  
+
   for (const filePath of filesToReview) {
     try {
       const content = readFileSync(filePath, 'utf-8');
-      const issues = analyzeFile(filePath, content, projectRoot);
+      const issues = analyzeFile(filePath, content, projectRoot, effectiveRules, disabled);
       allIssues.push(...issues);
     } catch {}
   }

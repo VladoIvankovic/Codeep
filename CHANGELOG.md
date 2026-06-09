@@ -11,6 +11,31 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.6.0] — 2026-06-09
+
+> New: configurable code-review rules. Drop a `.codeep/review.json` into a repo to add your own deterministic review rules, disable built-in ones, and scope which files are reviewed — enforced the same way by `codeep review` (CLI) and the Codeep GitHub Action, with zero LLM cost.
+
+### Added
+
+- **`.codeep/review.json` — review rules as config.** The deterministic
+  reviewer (`codeep review`, `/review --static`, and the GitHub Action) now
+  reads a per-project config:
+  - **`rules`** — your own checks: `id`, `pattern` (regex), `message` (required)
+    plus optional `flags`, `category`, `severity`, `suggestion`, `extensions`.
+  - **`disable`** — turn off built-in rules by id (each built-in now has a stable
+    id, e.g. `eval-usage`, `todo-comment`, `any-type`, `long-file`).
+  - **`include` / `exclude`** — glob scoping (`**`, `*`, `?`).
+  A missing, malformed, or partially-invalid config never breaks a review — bad
+  entries are skipped with a warning and valid ones still apply.
+
+### Security
+
+- **Hardened the reviewer against untrusted custom rules.** Since a PR's
+  `.codeep/review.json` runs in CI via the Action, custom regexes are screened
+  at load (length cap + a catastrophic-backtracking/ReDoS heuristic), the match
+  loop guards zero-width patterns (no infinite loop) and caps matches per rule,
+  and the GitHub Action bounds each review's wall-clock at 180s.
+
 ## [2.5.2] — 2026-06-08
 
 > Security: provider API keys are now stored in your OS keychain instead of plaintext in the config file, and there's a first-class telemetry opt-out (`CODEEP_NO_TELEMETRY` / `DO_NOT_TRACK` / `telemetry: false`). Existing plaintext keys migrate to the keychain automatically on first run.
