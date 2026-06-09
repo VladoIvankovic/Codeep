@@ -82,9 +82,11 @@ jobs:
           fi
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        # v3 runs on the Node 24 Actions runtime (v2 was Node 20, which GitHub
+        # force-deprecates 2026-06-16). Same input API — pure runtime bump.
+        uses: softprops/action-gh-release@v3
         with:
-          # Explicit GITHUB_TOKEN — without this, action-gh-release@v2 sometimes
+          # Explicit GITHUB_TOKEN — without this, action-gh-release sometimes
           # falls back to an unauthenticated request and the upload step fails
           # with HTTP 401. Has happened intermittently in our runs (v1.3.35–37).
           token: ${{ secrets.GITHUB_TOKEN }}
