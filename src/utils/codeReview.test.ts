@@ -8,7 +8,7 @@ vi.mock('fs', async (importOriginal) => {
 vi.mock('./git', () => ({ getChangedFiles: vi.fn(() => []), getGitDiff: vi.fn(() => '') }));
 
 import { existsSync, readFileSync } from 'fs';
-import { performCodeReview } from './codeReview';
+import { performCodeReview, listBuiltinRules } from './codeReview';
 
 const mockExists = existsSync as ReturnType<typeof vi.fn>;
 const mockRead = readFileSync as ReturnType<typeof vi.fn>;
@@ -95,5 +95,15 @@ describe('performCodeReview with .codeep/review.json', () => {
     const zw = result.issues.filter((i) => i.message === 'zero width');
     expect(zw.length).toBeGreaterThan(0);
     expect(zw.length).toBeLessThanOrEqual(1000); // capped, never infinite
+  });
+});
+
+describe('listBuiltinRules', () => {
+  it('lists built-in rule ids (incl. the heuristics), all unique and fully populated', () => {
+    const rules = listBuiltinRules();
+    const ids = rules.map((r) => r.id);
+    expect(ids).toEqual(expect.arrayContaining(['eval-usage', 'todo-comment', 'any-type', 'long-file', 'long-function']));
+    expect(new Set(ids).size).toBe(ids.length); // ids are unique
+    expect(rules.every((r) => r.id && r.category && r.severity && r.description)).toBe(true);
   });
 });

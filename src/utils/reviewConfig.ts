@@ -23,9 +23,12 @@
  */
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import yaml from 'js-yaml';
 import type { RuleDef, ReviewCategory, ReviewIssue } from './codeReview';
 
-const CONFIG_PATH = '.codeep/review.json';
+// Candidate config files, in precedence order: YAML preferred (nicer for a
+// human-authored rules file — comments, single-quoted regex), JSON as fallback.
+const CONFIG_PATHS = ['.codeep/review.yml', '.codeep/review.yaml', '.codeep/review.json'];
 const MAX_RULES = 200;
 const VALID_CATEGORIES: ReviewCategory[] = [
   'security', 'performance', 'maintainability', 'bug', 'style', 'types', 'best-practice', 'documentation',
@@ -65,18 +68,29 @@ function asStringArray(v: unknown): string[] {
 }
 
 export function loadReviewConfig(projectRoot: string): ReviewConfig | null {
-  const filePath = join(projectRoot, CONFIG_PATH);
-  if (!existsSync(filePath)) return null;
+  // First existing candidate wins (.yml > .yaml > .json).
+  let chosen: string | null = null;
+  let text = '';
+  for (const candidate of CONFIG_PATHS) {
+    const fp = join(projectRoot, candidate);
+    if (existsSync(fp)) {
+      chosen = candidate;
+      try { text = readFileSync(fp, 'utf-8'); } catch { return null; }
+      break;
+    }
+  }
+  if (!chosen) return null;
+  const isJson = chosen.endsWith('.json');
 
   let data: unknown;
   try {
-    data = JSON.parse(readFileSync(filePath, 'utf-8'));
+    data = isJson ? JSON.parse(text) : yaml.load(text);
   } catch {
-    console.warn(`[codeep] Ignoring ${CONFIG_PATH}: not valid JSON.`);
+    console.warn(`[codeep] Ignoring ${chosen}: not valid ${isJson ? 'JSON' : 'YAML'}.`);
     return null;
   }
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
-    console.warn(`[codeep] Ignoring ${CONFIG_PATH}: expected a JSON object.`);
+    console.warn(`[codeep] Ignoring ${chosen}: expected a top-level object.`);
     return null;
   }
   const cfg = data as Record<string, unknown>;
@@ -94,12 +108,12 @@ export function loadReviewConfig(projectRoot: string): ReviewConfig | null {
     const message = typeof r.message === 'string' && r.message.trim() ? r.message.trim() : null;
     const patternSrc = typeof r.pattern === 'string' && r.pattern ? r.pattern : null;
     if (!id || !message || !patternSrc) {
-      console.warn(`[codeep] Skipping a rule in ${CONFIG_PATH}: each rule needs id, pattern and message.`);
+      console.warn(`[codeep] Skipping a rule in ${chosen}: each rule needs id, pattern and message.`);
       continue;
     }
     // Reject oversized patterns outright — keeps regex compilation/run bounded.
     if (patternSrc.length > 1000) {
-      console.warn(`[codeep] Skipping rule "${id}" in ${CONFIG_PATH}: pattern is too long (>1000 chars).`);
+      console.warn(`[codeep] Skipping rule "${id}" in ${chosen}: pattern is too long (>1000 chars).`);
       continue;
     }
     // Conservative ReDoS screen: reject the classic catastrophic shape — a group
@@ -107,7 +121,7 @@ export function loadReviewConfig(projectRoot: string): ReviewConfig | null {
     // (\d*)*, (.*)+, (x+){2,}. Not exhaustive (the GitHub Action also bounds
     // wall-clock), but it blocks the common foot-guns in an untrusted review.json.
     if (/\([^)]*[+*]\)\s*[+*{]/.test(patternSrc)) {
-      console.warn(`[codeep] Skipping rule "${id}" in ${CONFIG_PATH}: nested quantifiers risk catastrophic backtracking (ReDoS).`);
+      console.warn(`[codeep] Skipping rule "${id}" in ${chosen}: nested quantifiers risk catastrophic backtracking (ReDoS).`);
       continue;
     }
     // Always include the global flag so every match in a file is found.
@@ -117,7 +131,7 @@ export function loadReviewConfig(projectRoot: string): ReviewConfig | null {
     try {
       pattern = new RegExp(patternSrc, flags);
     } catch {
-      console.warn(`[codeep] Skipping rule "${id}" in ${CONFIG_PATH}: invalid regex.`);
+      console.warn(`[codeep] Skipping rule "${id}" in ${chosen}: invalid regex.`);
       continue;
     }
     const category = (VALID_CATEGORIES as string[]).includes(r.category as string)

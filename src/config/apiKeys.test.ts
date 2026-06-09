@@ -45,6 +45,7 @@ describe('config API key storage — secure, no plaintext', () => {
     config.set('providerApiKeys', []);
     config.set('configuredProviderIds', []);
     config.set('apiKey', '');
+    config.set('apiKeys', {});
     config.set('keysSecured', true); // skip migration unless a test opts in
     mockKeytar._store.clear();
     vi.clearAllMocks();
@@ -114,6 +115,21 @@ describe('config API key storage — secure, no plaintext', () => {
     config.set('providerApiKeys', [{ providerId: 'minimax', apiKey: 'sk-should-not-migrate' }]);
     await loadAllApiKeys();
     expect(config.get('providerApiKeys')).toEqual([{ providerId: 'minimax', apiKey: 'sk-should-not-migrate' }]);
+  });
+
+  // Placed BEFORE the keychain-write-failure tests below: those flip the shared
+  // SmartStorage's useKeychain to false (memoized for the process), which would
+  // make a later sweep see the keychain as unavailable.
+  it('sweeps plaintext fallback keys into the keychain once it is available', async () => {
+    // Simulate a prior keychain-less run that left a key in the plaintext map.
+    config.set('apiKeys', { minimax: 'sk-from-fallback' });
+    config.set('configuredProviderIds', []);
+    await loadAllApiKeys(); // runs the sweep (mock keychain is available)
+    // Key moved into the (mock) keychain, indexed, and removed from plaintext.
+    expect(mockKeytar._store.get('codeep::api-key-minimax')).toBe('sk-from-fallback');
+    expect(config.get('configuredProviderIds')).toContain('minimax');
+    expect((config.get('apiKeys') || {}).minimax).toBeUndefined();
+    expect(getApiKey('minimax')).toBe('sk-from-fallback');
   });
 
   it('migration retains keys that fail to persist and stays unsecured for retry (no data loss)', async () => {

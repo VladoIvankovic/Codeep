@@ -160,6 +160,23 @@ export function classifyPermissionOutcome(outcome: string | undefined | null): P
   return 'deny-once'; // 'reject_once' OR anything unexpected → fail closed
 }
 
+/**
+ * Build the set of tools that require a permission prompt this run. Derived from
+ * the global agentConfirm* settings, plus any `extra` tools forced in for this
+ * run only (ACP manual mode passes ['write_file','edit_file'] this way instead
+ * of mutating the global `agentConfirmWriteFile` config — which would leak the
+ * session's mode into the TUI and race on restore). Exported for unit testing.
+ */
+export function buildDangerousTools(extra: string[] = []): Set<string> {
+  const tools = new Set<string>([
+    ...(config.get('agentConfirmDeleteFile') !== false ? ['delete_file'] : []),
+    ...(config.get('agentConfirmExecuteCommand') !== false ? ['execute_command'] : []),
+    ...(config.get('agentConfirmWriteFile') === true ? ['write_file', 'edit_file'] : []),
+  ]);
+  for (const t of extra) tools.add(t);
+  return tools;
+}
+
 export interface AgentOptions {
   maxIterations: number;
   maxDuration: number; // milliseconds
@@ -172,6 +189,10 @@ export interface AgentOptions {
   onTaskPlan?: (plan: TaskPlan) => void;
   onTaskUpdate?: (task: SubTask) => void;
   onRequestPermission?: (toolCall: ToolCall) => Promise<PermissionOutcome>;
+  /** Tool names to force into the per-run dangerous set, on top of the global
+   *  agentConfirm* settings. ACP manual mode passes ['write_file','edit_file']
+   *  here to gate them for THIS run only, instead of mutating global config. */
+  extraDangerousTools?: string[];
   onExecuteCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /**
    * Optional filesystem callbacks. When the ACP client advertises `fs`
@@ -521,11 +542,7 @@ export async function runAgent(
   // Track tools permanently rejected this session via reject_always
   const alwaysRejectedTools = new Set<string>();
   // Tools that require permission when onRequestPermission is set (configurable)
-  const dangerousTools = new Set<string>([
-    ...(config.get('agentConfirmDeleteFile') !== false ? ['delete_file'] : []),
-    ...(config.get('agentConfirmExecuteCommand') !== false ? ['execute_command'] : []),
-    ...(config.get('agentConfirmWriteFile') === true ? ['write_file', 'edit_file'] : []),
-  ]);
+  const dangerousTools = buildDangerousTools(opts.extraDangerousTools);
 
   // Delegation handler: run a named (or generic) sub-agent in its own fresh
   // context and return its summary as the tool result. Reachable only when the

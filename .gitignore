@@ -42,6 +42,8 @@ codeep-debug.log
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+bun.lock
+bun.lockb
 *.bun-build
 
 # Local repos

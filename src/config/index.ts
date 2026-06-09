@@ -125,6 +125,10 @@ interface ConfigSchema {
   /** True once legacy plaintext keys (providerApiKeys / apiKey) have been
    *  migrated into secure storage and wiped from the config file. */
   keysSecured: boolean;
+  /** Plaintext fallback key map used by utils/keychain.ts ONLY when the OS
+   *  keychain is unavailable. Swept into the keychain once it becomes available
+   *  (see sweepFallbackKeysToKeychain). Empty {} on keychain-capable systems. */
+  apiKeys?: Record<string, string>;
   /** Master switch for automatic cloud uploads (usage stats, session
    *  transcripts, progress, memory notes). Default true; set false to opt out.
    *  The CODEEP_NO_TELEMETRY / DO_NOT_TRACK env vars also force it off. */
@@ -345,6 +349,7 @@ function createConfig(): Conf<ConfigSchema> {
     providerApiKeys: [],
     configuredProviderIds: [],
     keysSecured: false,
+    apiKeys: {},
     telemetry: true,
     githubId: '',
     githubUsername: '',
@@ -520,6 +525,37 @@ async function migrateKeysToSecureStorage(): Promise<void> {
   try { await _migrationPromise; } finally { _migrationPromise = null; }
 }
 
+let _sweepPromise: Promise<void> | null = null;
+/**
+ * If the OS keychain is now available but API keys are still sitting in the
+ * plaintext `apiKeys` fallback map (written by utils/keychain.ts while the
+ * keychain was unavailable on a prior run), move each into the keychain. The
+ * keychain write also deletes the entry from the plaintext fallback map, so a
+ * successful sweep leaves no plaintext behind. Cheap no-op when the map is
+ * empty or the keychain is unavailable; deduped for concurrent callers. Runs
+ * independently of `keysSecured` so a key written during a keychain outage is
+ * still swept up later.
+ */
+async function sweepFallbackKeysToKeychain(): Promise<void> {
+  if (!_sweepPromise) {
+    _sweepPromise = (async () => {
+      const store = secureKeyStore();
+      // Only sweep when the keychain is actually usable; otherwise leave the
+      // plaintext fallback in place (there's nowhere safer to move it).
+      if (!store.isKeychainAvailable || !(await store.isKeychainAvailable())) return;
+      const plaintext = config.get('apiKeys') || {};
+      for (const [providerId, apiKey] of Object.entries(plaintext)) {
+        if (typeof apiKey !== 'string' || !apiKey) continue;
+        try {
+          await store.setApiKey(providerId, apiKey); // writes keychain + deletes from fallback map
+          addConfiguredProviderId(providerId);
+        } catch { /* keep the plaintext entry on failure — never lose a key */ }
+      }
+    })();
+  }
+  try { await _sweepPromise; } finally { _sweepPromise = null; }
+}
+
 export const LANGUAGES: Record<string, string> = {
   'auto': 'Auto-detect',
   'en': 'English',
@@ -585,9 +621,11 @@ export async function loadApiKey(providerId?: string): Promise<string> {
  * Should be called at app startup
  */
 export async function loadAllApiKeys(): Promise<void> {
-  // Migrate any legacy plaintext keys, then load all from secure storage using
-  // the non-secret configuredProviderIds index (no need to probe every provider).
+  // Migrate any legacy plaintext keys, then sweep any keychain-fallback plaintext
+  // up into the keychain (no-op when none / keychain unavailable), then load all
+  // from secure storage using the non-secret configuredProviderIds index.
   await migrateKeysToSecureStorage();
+  await sweepFallbackKeysToKeychain();
   const store = secureKeyStore();
   for (const providerId of (config.get('configuredProviderIds') || [])) {
     const key = await store.getApiKey(providerId);

@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { VERSION } from '../version';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -13,11 +14,13 @@ export interface VersionInfo {
 }
 
 /**
- * Get current version from package.json
+ * Current Codeep version. Uses the build-time-baked VERSION constant (works in
+ * the bun-compiled binary, which has no package.json on disk), falling back to
+ * reading package.json for an unbuilt dev tree.
  */
 export function getCurrentVersion(): string {
+  if (VERSION) return VERSION;
   try {
-    // In built version, package.json is in parent directory
     const packagePath = join(__dirname, '../../package.json');
     const packageJson = JSON.parse(readFileSync(packagePath, 'utf-8'));
     return packageJson.version;

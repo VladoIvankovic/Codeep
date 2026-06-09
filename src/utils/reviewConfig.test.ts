@@ -11,9 +11,16 @@ import { loadReviewConfig, globToRegExp } from './reviewConfig';
 const mockExists = existsSync as ReturnType<typeof vi.fn>;
 const mockRead = readFileSync as ReturnType<typeof vi.fn>;
 
-function withConfig(obj: unknown) {
-  mockExists.mockReturnValue(true);
-  mockRead.mockReturnValue(typeof obj === 'string' ? obj : JSON.stringify(obj));
+// Path-aware fs mock: existsSync is true only for the target config file, so
+// the loader's .yml > .yaml > .json candidate search is exercised honestly.
+function withConfig(obj: unknown, ext: 'json' | 'yml' | 'yaml' = 'json') {
+  const target = `.codeep/review.${ext}`;
+  const body = typeof obj === 'string' ? obj : JSON.stringify(obj);
+  mockExists.mockImplementation((p: string) => p.endsWith(target));
+  mockRead.mockImplementation((p: string) => {
+    if (!p.endsWith(target)) throw new Error('ENOENT ' + p);
+    return body;
+  });
 }
 
 describe('globToRegExp', () => {
@@ -137,5 +144,58 @@ describe('loadReviewConfig', () => {
   it('skips an over-long pattern', () => {
     withConfig({ rules: [{ id: 'long', pattern: 'a'.repeat(1001), message: 'm' }] });
     expect(loadReviewConfig('/proj')!.rules).toHaveLength(0);
+  });
+});
+
+describe('loadReviewConfig — YAML', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  const YAML = [
+    'disable:',
+    '  - eval-usage',
+    'include:',
+    "  - 'src/**'",
+    'rules:',
+    '  - id: no-foo',
+    "    pattern: 'foo\\('",   // single-quoted YAML keeps the backslash literal
+    '    severity: error',
+    '    message: Avoid foo()',
+  ].join('\n');
+
+  it('parses .codeep/review.yml', () => {
+    withConfig(YAML, 'yml');
+    const cfg = loadReviewConfig('/proj')!;
+    expect(cfg).not.toBeNull();
+    expect(cfg.disabled.has('eval-usage')).toBe(true);
+    expect(cfg.include).toEqual(['src/**']);
+    expect(cfg.rules).toHaveLength(1);
+    expect(cfg.rules[0].id).toBe('no-foo');
+    expect(cfg.rules[0].severity).toBe('error');
+    expect(cfg.rules[0].pattern.test('foo(')).toBe(true);
+  });
+
+  it('also accepts the .yaml extension', () => {
+    withConfig('disable: [todo-comment]\n', 'yaml');
+    expect(loadReviewConfig('/proj')!.disabled.has('todo-comment')).toBe(true);
+  });
+
+  it('prefers .yml over .json when both exist', () => {
+    mockExists.mockImplementation((p: string) => p.endsWith('.yml') || p.endsWith('.json'));
+    mockRead.mockImplementation((p: string) => {
+      if (p.endsWith('.yml')) return 'disable: [from-yml]\n';
+      if (p.endsWith('.json')) return JSON.stringify({ disable: ['from-json'] });
+      throw new Error('ENOENT');
+    });
+    const cfg = loadReviewConfig('/proj')!;
+    expect(cfg.disabled.has('from-yml')).toBe(true);
+    expect(cfg.disabled.has('from-json')).toBe(false);
+  });
+
+  it('returns null on malformed YAML', () => {
+    withConfig('rules:\n  - id: x\n   bad: indent\n', 'yml');
+    expect(loadReviewConfig('/proj')).toBeNull();
   });
 });

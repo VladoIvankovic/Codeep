@@ -569,3 +569,47 @@ ${formatReviewResult(result)}
 
 Be concise and practical. Focus on issues that matter most for code quality and maintainability.`;
 }
+
+export interface BuiltinRuleInfo {
+  id: string;
+  category: ReviewCategory;
+  severity: ReviewIssue['severity'];
+  description: string;
+}
+
+/**
+ * Built-in rule metadata (id + what each flags) — the ids that
+ * `.codeep/review.{json,yml}` "disable" accepts. Includes the two line-count
+ * heuristics (long-file / long-function) that live outside CODE_PATTERNS.
+ */
+export function listBuiltinRules(): BuiltinRuleInfo[] {
+  return [
+    ...CODE_PATTERNS.map((p) => ({
+      id: p.id,
+      category: p.category,
+      severity: p.severity,
+      description: p.message,
+    })),
+    { id: 'long-file', category: 'maintainability', severity: 'info', description: 'File exceeds 500 lines — consider splitting into smaller modules' },
+    { id: 'long-function', category: 'maintainability', severity: 'info', description: 'Function exceeds 50 lines — consider breaking it down' },
+  ];
+}
+
+/**
+ * Append an advisory "AI second opinion" section to a markdown review report.
+ * Advisory only — it never changes the score or the exit code; the deterministic
+ * review remains authoritative.
+ */
+export function appendAiSection(
+  markdown: string,
+  aiText: string | null,
+  meta: { provider?: string; model?: string } = {},
+): string {
+  const label = meta.model
+    ? `${meta.model}${meta.provider ? ` via ${meta.provider}` : ''}`
+    : (meta.provider || 'your provider');
+  if (!aiText || !aiText.trim()) {
+    return `${markdown}\n\n## AI Second Opinion\n_Skipped — no response from ${label}._`;
+  }
+  return `${markdown}\n\n## AI Second Opinion (${label})\n_Advisory — does not affect the score or exit code; the deterministic review above is authoritative._\n\n${aiText.trim()}`;
+}

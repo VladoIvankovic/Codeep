@@ -21,6 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Codeep Review
-        uses: VladoIvankovic/codeep-action@v1.0.1   # pinned to an immutable release (not the moving @v1 tag) for supply-chain safety
+        uses: VladoIvankovic/codeep-action@v1.0.2   # pinned to an immutable release (not the moving @v1 tag) for supply-chain safety
         with:
           fail-on: none   # informational rollout: posts comment + annotations, never blocks. Tighten to error|warning once trusted.

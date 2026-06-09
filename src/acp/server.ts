@@ -1030,11 +1030,10 @@ export function startAcpServer(): Promise<void> {
 
     resetTokenTracking();
 
-    // In manual mode, confirm write/edit operations
-    const prevConfirmWrite = config.get('agentConfirmWriteFile');
-    if (session.currentModeId === 'manual') {
-      config.set('agentConfirmWriteFile', true);
-    }
+    // Manual mode gates write/edit for THIS run via a per-call option passed to
+    // runAgentSession (extraDangerousTools, below) — NOT by mutating the global
+    // `agentConfirmWriteFile` config, which leaked the session's mode into the
+    // TUI/other processes and raced on a non-atomic restore.
 
     const agentResponseChunks: string[] = [];
     const sendChunk = (text: string) => {
@@ -1142,6 +1141,9 @@ export function startAcpServer(): Promise<void> {
               }
             }
           },
+          // Manual mode gates write_file/edit_file for this run only (per-call,
+          // no global config mutation).
+          extraDangerousTools: session.currentModeId === 'manual' ? ['write_file', 'edit_file'] : undefined,
           // Only request permission in Manual mode
           onRequestPermission: session.currentModeId === 'manual'
             ? async (toolCall: ToolCall): Promise<PermissionOutcome> => {
@@ -1246,7 +1248,6 @@ export function startAcpServer(): Promise<void> {
           if (agentResponse) {
             session.history.push({ role: 'assistant', content: agentResponse });
           }
-          config.set('agentConfirmWriteFile', prevConfirmWrite);
           autoSaveSession(session.history, session.workspaceRoot);
 
           // Report token usage to dashboard
@@ -1310,7 +1311,6 @@ export function startAcpServer(): Promise<void> {
             transport.error(msg.id, -32000, err.message);
           }
         }).finally(() => {
-          config.set('agentConfirmWriteFile', prevConfirmWrite);
           if (session) session.abortController = null;
           planEntries.clear();
         });

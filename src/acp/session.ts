@@ -16,6 +16,8 @@ export interface AgentSessionOptions {
   onThought?: (text: string) => void;
   onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[], rawOutput?: string) => void;
   onRequestPermission?: (toolCall: ToolCall) => Promise<PermissionOutcome>;
+  /** Tools to force into the per-run dangerous set (ACP manual mode). */
+  extraDangerousTools?: string[];
   onExecuteCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** Optional fs delegation when the ACP client advertises `fs` capability. */
   fs?: FsCallbacks;
@@ -174,6 +176,7 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
       }
     },
     onRequestPermission: opts.onRequestPermission,
+    extraDangerousTools: opts.extraDangerousTools,
     onExecuteCommand: opts.onExecuteCommand,
     fs: opts.fs,
     // Route MCP-prefixed tool calls through the per-session registry.

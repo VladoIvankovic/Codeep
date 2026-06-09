@@ -441,7 +441,12 @@ async function main(): Promise<void> {
   // the review usage rather than the top-level help.
   if (args[0] === 'review') {
     const { runHeadlessReview } = await import('../utils/headlessReview.js');
-    process.exit(runHeadlessReview(args.slice(1)));
+    process.exit(await runHeadlessReview(args.slice(1)));
+  }
+
+  if (args[0] === 'hook') {
+    const { runHookCommand } = await import('../utils/gitHookInstaller.js');
+    process.exit(runHookCommand(args.slice(1)));
   }
 
   if (args.includes('--version') || args.includes('-v')) {
@@ -458,7 +463,9 @@ Usage:
   codeep account sync   Pull keys + personalities + commands + profile from codeep.dev
   codeep account push   Push local keys + personalities + commands + profile to codeep.dev
   codeep acp          Start ACP server (for Zed editor integration)
-  codeep review       Offline code review for CI (--json, --fail-on <level>)
+  codeep review       Offline code review for CI (--json, --fail-on, --rules, --ai)
+  codeep hook install   Install a git pre-commit hook running \`codeep review\`
+  codeep hook uninstall Remove the Codeep git hook
   codeep --version    Show version
   codeep --help       Show this help
 

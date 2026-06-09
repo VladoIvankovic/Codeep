@@ -30,6 +30,9 @@ export interface SecureStorage {
   setApiKey(providerId: string, apiKey: string): Promise<void>;
   deleteApiKey(providerId: string): Promise<void>;
   hasApiKey(providerId: string): Promise<boolean>;
+  /** Whether the OS keychain is usable (vs the plaintext-config fallback).
+   *  Optional — only SmartStorage (what createSecureStorage returns) implements it. */
+  isKeychainAvailable?(): Promise<boolean>;
 }
 
 class KeychainStorage implements SecureStorage {
@@ -144,6 +147,11 @@ class SmartStorage implements SecureStorage {
     }
 
     this.keychainTested = true;
+  }
+
+  async isKeychainAvailable(): Promise<boolean> {
+    await this.ensureKeychainTested();
+    return this.useKeychain;
   }
 
   async getApiKey(providerId: string): Promise<string | null> {

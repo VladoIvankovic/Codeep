@@ -11,6 +11,45 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.7.0] — 2026-06-09
+
+> A batch of review tooling: YAML review config, a `codeep hook install` pre-commit reviewer, `codeep review --rules` to list rule ids, and an opt-in `codeep review --ai` second opinion. Plus fixes: compiled binaries report the real version (no more "vunknown"), ACP editor sessions no longer mutate the global confirmation setting, and keychain-fallback keys get swept into the keychain once it's available.
+
+### Added
+
+- **YAML review config.** `.codeep/review.yml` / `.codeep/review.yaml` are now
+  supported alongside `.codeep/review.json` (YAML preferred when present).
+  Single-quoted YAML keeps regex backslashes literal (`pattern: '\bfoo\('`),
+  avoiding JSON's double-escaping. Same schema; format is auto-detected.
+- **`codeep hook install`** — installs a git pre-commit (or `--pre-push`) hook
+  that runs `codeep review --fail-on <level>` on your changes, blocking the
+  commit when issues at/above the threshold are found (honors `.codeep/review.*`,
+  no API key). `codeep hook uninstall` removes it; Codeep never overwrites a hook
+  it didn't create.
+- **`codeep review --rules`** — lists the built-in rule ids (the values you can
+  put in `disable` in `.codeep/review.*`) and exits.
+- **`codeep review --ai`** — opt-in: after the offline pass, asks your configured
+  provider for a contextual second opinion, merged into the report as a clearly
+  tagged advisory section. Needs an API key (degrades to deterministic-only
+  without one) and never affects the exit code — the deterministic review stays
+  authoritative, so CI (the GitHub Action) is unchanged.
+
+### Fixed
+
+- **Keychain fallback sweep.** If the OS keychain was unavailable on a prior run,
+  API keys fell back to plaintext config. They're now swept into the keychain
+  automatically once it becomes available (completes the 2.5.2 key-storage work).
+
+- **Compiled binary version.** The standalone binaries printed "Codeep
+  vunknown" because they read the version from `package.json`, which isn't on
+  disk in a compiled binary. The version is now baked in at build time, so
+  `--version` is correct everywhere (npm, Homebrew, and the standalone binaries).
+- **ACP confirmation setting no longer leaks/races.** Manual-mode editor
+  sessions used to flip the global `agentConfirmWriteFile` config and restore it
+  non-atomically around each prompt — which could leak the session's mode into
+  the terminal app and race when prompts overlapped. Write/edit confirmation is
+  now scoped to the run via a per-call option, with no global config mutation.
+
 ## [2.6.0] — 2026-06-09
 
 > New: configurable code-review rules. Drop a `.codeep/review.json` into a repo to add your own deterministic review rules, disable built-in ones, and scope which files are reviewed — enforced the same way by `codeep review` (CLI) and the Codeep GitHub Action, with zero LLM cost.
