@@ -89,6 +89,9 @@ const AVAILABLE_COMMANDS = [
   { name: 'learn',     description: 'Learn coding preferences from project files' },
   { name: 'memory',    description: 'Project memory notes — add / list / remove / clear', input: { hint: '<note> | list | remove <n> | clear' } },
   { name: 'profile',   description: 'Save / load / delete provider+model presets', input: { hint: 'save | load | delete | list | <name>' } },
+  // Privacy toggles
+  { name: 'telemetry', description: 'Show or toggle automatic cloud telemetry', input: { hint: '[on|off]' } },
+  { name: 'keysync',   description: 'Show or toggle syncing API keys to codeep.dev (off by default)', input: { hint: '[on|off]' } },
   // Skills + custom commands
   { name: 'skills',    description: 'List/create/share skill bundles. Subcommands: bundles, create-bundle, show, publish, install, browse, unpublish', input: { hint: '[query] | bundles | create-bundle <name> | show <name> | publish <slug> [--public] | install <owner>/<slug> | browse [q] | unpublish <owner>/<slug>' } },
   { name: 'commands',  description: 'List user-authored commands from .codeep/commands/*.md' },

@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "node scripts/gen-version.js && node --import tsx src/renderer/main.ts",
-    "prepack": "node scripts/gen-version.js && tsc; node scripts/fix-imports.js",
+    "prepack": "node scripts/gen-version.js && tsc && node scripts/fix-imports.js",
     "build": "node scripts/gen-version.js && tsc && node scripts/fix-imports.js",
     "start": "node dist/renderer/main.js",
     "demo:renderer": "node --import tsx src/renderer/demo.ts",
