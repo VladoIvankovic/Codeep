@@ -1742,10 +1742,33 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         break;
       }
 
-      // /tasks add <title>  — create a new task on the dashboard
+      // /tasks add <title> [--bug | --feature] [--desc <text>]  — create a task
+      // on the dashboard. Type matches the dashboard picker (task | bug |
+      // feature); a --bug/--feature/--task flag anywhere sets it (default task).
+      // --desc/--description captures the following words (until the next flag)
+      // as the description — the same field the dashboard + macOS app set, and
+      // which the list view and the agent task-context prompt already render.
       if (subCmd === 'add') {
-        const title = args.slice(1).join(' ').trim();
-        if (!title) { ctx.app.notify('Usage: /tasks add <title>'); break; }
+        const TASK_TYPES = ['task', 'bug', 'feature'];
+        let type = 'task';
+        const titleWords: string[] = [];
+        const descWords: string[] = [];
+        let capturingDesc = false;
+        for (const w of args.slice(1)) {
+          const flag = /^--([\w-]+)$/.exec(w);
+          if (flag) {
+            const name = flag[1].toLowerCase();
+            if (name === 'desc' || name === 'description') { capturingDesc = true; continue; }
+            if (TASK_TYPES.includes(name)) type = name;
+            capturingDesc = false; // any non-desc flag ends description capture
+            continue;
+          }
+          if (capturingDesc) descWords.push(w);
+          else titleWords.push(w);
+        }
+        const title = titleWords.join(' ').trim();
+        const description = descWords.join(' ').trim();
+        if (!title) { ctx.app.notify('Usage: /tasks add <title> [--bug | --feature] [--desc <text>]'); break; }
         const projectName = ctx.projectContext?.name;
         const projectId = ctx.projectContext?.root ? generateProjectId(ctx.projectContext.root) : undefined;
         const { getSyncToken } = await import('../config/index.js');
@@ -1755,10 +1778,10 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
           const res = await fetch('https://codeep.dev/api/tasks', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
-            body: JSON.stringify({ projectName: projectName || '', projectId: projectId ?? null, title, type: 'task' }),
+            body: JSON.stringify({ projectName: projectName || '', projectId: projectId ?? null, title, type, ...(description ? { description } : {}) }),
           });
           if (res.ok) {
-            ctx.app.notify(`+ Task added: ${title}`);
+            ctx.app.notify(`+ ${type[0].toUpperCase()}${type.slice(1)} added: ${title}`);
           } else {
             ctx.app.notify('Failed to add task');
           }
@@ -1789,7 +1812,10 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       const lines = [`## Tasks${projectName ? ` — ${projectName}` : ''}`, ''];
       tasks.forEach((t, i) => {
         const icon = TYPE_ICON[t.type] ?? '[task]';
-        lines.push(`${i + 1}. ${icon} ${t.title}${t.description ? `\n   ${t.description}` : ''}`);
+        // In a global listing (not scoped to one project) tag each row with its
+        // project so a mixed list is legible — matches the macOS/web task rows.
+        const proj = !projectName && t.project_name ? ` _(${t.project_name})_` : '';
+        lines.push(`${i + 1}. ${icon} ${t.title}${proj}${t.description ? `\n   ${t.description}` : ''}`);
       });
       lines.push('', `*${tasks.length} pending task${tasks.length > 1 ? 's' : ''}. Use /tasks done <n> to mark complete.*`);
       lines.push('*Tasks loaded into agent context — agent will see them in the next message.*');
@@ -1928,9 +1954,12 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       break;
     }
 
-    case 'stats':
-    case 'cost': {
-      const { getCostBreakdown, getSessionStats, formatTokenCount, getPricingTable } = await import('../utils/tokenTracker');
+    // /stats — detailed session view: per-model breakdown, total, prompt-cache
+    // summary, and the per-1M pricing reference. `/cost` is the concise sibling
+    // (formatCostReport, above); the two are intentionally distinct, so this
+    // case no longer also claims 'cost' (which always hit the handler above).
+    case 'stats': {
+      const { getCostBreakdown, getSessionStats, formatTokenCount, getPricingTable, getCacheStats } = await import('../utils/tokenTracker');
       const stats = getSessionStats();
       const lines: string[] = ['## Session Cost', ''];
 
@@ -1955,6 +1984,19 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
             lines.push(`**Total: free · ${formatTokenCount(stats.totalTokens)} tokens**`);
           } else if (stats.estimatedCost > 0) {
             lines.push(`**Total: ~$${stats.estimatedCost.toFixed(4)}**`);
+          }
+        }
+        // Prompt caching — parity with /cost (the 2.0.2 caching section was
+        // only wired into formatCostReport). Shown only when caching landed.
+        const cache = getCacheStats();
+        if (cache.cacheReadTokens > 0 || cache.cacheCreationTokens > 0) {
+          lines.push('', '### Prompt caching');
+          lines.push(`Cache reads: ${formatTokenCount(cache.cacheReadTokens)} tokens (billed at 0.1× input rate)`);
+          if (cache.cacheCreationTokens > 0) {
+            lines.push(`Cache writes: ${formatTokenCount(cache.cacheCreationTokens)} tokens (billed at 1.25× input rate)`);
+          }
+          if (cache.estimatedSavingsUsd > 0) {
+            lines.push(`Estimated savings vs no caching: $${cache.estimatedSavingsUsd.toFixed(4)}`);
           }
         }
         lines.push('');

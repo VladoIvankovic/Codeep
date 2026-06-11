@@ -94,7 +94,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'learn': 'Learn code preferences',
   'cost': 'Show session cost and token usage',
   'profile': 'Save/load settings profiles',
-  'tasks': 'Show pending tasks from codeep.dev dashboard',
+  'tasks': 'List/add/done/delete codeep.dev tasks — add <title> [--bug|--feature]',
   'sync': 'Sync learning preferences and profiles to codeep.dev',
   'telemetry': 'Show or toggle automatic cloud telemetry (on/off)',
   'keysync': 'Show or toggle syncing API keys to codeep.dev (on/off)',
@@ -301,7 +301,7 @@ export class App {
     'multiline', 'memory', 'init',
     'provider', 'model', 'protocol', 'lang', 'grant', 'login', 'logout',
     'context-save', 'context-load', 'context-clear', 'learn',
-    'cost', 'tasks', 'account', 'sync', 'telemetry',
+    'cost', 'tasks', 'account', 'sync', 'keysync', 'telemetry',
     // 2.0 — extensions, checkpoints, MCP, custom commands, OpenRouter prefs.
     // Keep in lockstep with COMMAND_DESCRIPTIONS below and helpCategories.
     'compact', 'commands', 'checkpoint', 'checkpoints', 'rewind',

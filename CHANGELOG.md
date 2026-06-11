@@ -11,6 +11,52 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.10.0] — 2026-06-11
+
+> `/tasks add` now matches the dashboard: tag a task as a bug or feature and give it a description inline (`--bug` / `--feature` / `--desc`), and the list tags each row with its project when global.
+
+### Added
+
+- **Task types in `/tasks add`.** Append `--bug` or `--feature` (or `--task`,
+  the default) to file the task under the right type on the codeep.dev
+  dashboard — e.g. `/tasks add login button misaligned --bug`. The flag can sit
+  anywhere in the arguments and is stripped from the title; the dashboard and
+  the macOS app already render the type with its own icon and color, so this
+  brings all three surfaces to parity (the dashboard and macOS both let you pick
+  a type; the CLI previously hardcoded `task`).
+- **Task descriptions in `/tasks add`.** `--desc` (or `--description`) captures
+  the following words — up to the next flag — as the task's description, e.g.
+  `/tasks add Fix login --bug --desc NPE when the email is empty`. It's the same
+  field the dashboard and macOS app set; the `/tasks` list already prints it and
+  it's injected into the agent's task-context prompt, so a CLI-set description
+  immediately enriches what the agent sees. Omitted from the request when absent.
+
+### Changed
+
+- **`/tasks` list tags each row with its project when listed globally.** Running
+  `/tasks` outside a project lists pending tasks across all projects; each row
+  now shows its project name (matching the macOS and dashboard task rows) so a
+  mixed list is legible. Inside a project the header already names it, so rows
+  stay uncluttered.
+- **`/tasks` autocomplete description** now reflects the full command — it
+  covered only "show pending tasks" and hid the `add`/`done`/`delete`
+  subcommands and the type flags from `/` autocomplete.
+
+### Fixed
+
+- **`/stats` now shows the prompt-caching summary, and a dead duplicate cost
+  case is gone.** The session-cost view had two switch branches sharing a
+  `case 'cost'`: `/cost` always rendered the full `formatCostReport()` (the
+  cross-surface report the editor clients use, with the prompt-caching section),
+  while the second branch — the detailed `/stats` view — was unreachable for
+  `/cost` yet was the only one *missing* that caching section. `/stats` now
+  reports cache reads/writes and estimated savings too (parity with `/cost` and
+  the 2.0.2 caching work), and the dead `cost` label was removed so the dispatch
+  is honest. What `/cost` displays is unchanged.
+- **`/keysync` now appears in `/` autocomplete.** The command shipped in 2.8.0
+  with a description and an ACP entry, but was missing from the TUI command
+  list, so terminal users never saw it offered. (It always worked when typed.)
+
 ## [2.9.0] — 2026-06-09
 
 > Claude Fable 5 — Anthropic's most powerful model, a new tier above Opus — is now in the model picker ($10/$50 per MTok, 1M context). Opus 4.7 and 4.6 leave the picker (Opus 4.8 stays the default). Plus a real compatibility fix: temperature is no longer sent to models that reject it (Fable 5 / Opus 4.7+), which previously surfaced as an opaque 400.
