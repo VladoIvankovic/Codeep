@@ -315,7 +315,7 @@ function createConfig(): Conf<ConfigSchema> {
     apiKey: '',
     migrationVersion: 0,
     provider: 'z.ai',
-    model: 'glm-5.2[1m]',
+    model: 'glm-5.2',
     agentMode: 'on',
     ollamaUrl: 'http://localhost:11434',
     ollamaNativeApi: false,

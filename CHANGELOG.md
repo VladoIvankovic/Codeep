@@ -11,6 +11,19 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.11.1] — 2026-06-14
+
+> Hotfix: the Z.AI default was `glm-5.2[1m]`, but the API rejects that id ("Unknown Model", code 1211) — so a fresh Z.AI session failed on its first request. The default is now plain `glm-5.2` (which works), and the non-working `[1m]` variant is removed from the picker.
+
+### Fixed
+
+- **Z.AI default model `glm-5.2[1m]` returned "Unknown Model".** The 1M-context
+  `[1m]` suffix from the devpack docs isn't accepted by the Z.AI chat API
+  endpoints Codeep uses, so it 400'd on every request. The default (and
+  cold-start default) is now `glm-5.2`, and `glm-5.2[1m]` is dropped from all
+  four Z.AI providers' model lists. If your config still points at
+  `glm-5.2[1m]`, switch with `/model glm-5.2`.
+
 ## [2.11.0] — 2026-06-12
 
 > New default model **GLM-5.2** (1M-context `glm-5.2[1m]`) across every Z.AI provider, plus TUI polish: ↑ recalls history, diffs render green/red, full `/` autocomplete, and `/settings` values now stick.

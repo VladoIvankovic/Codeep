@@ -44,7 +44,6 @@ interface TokenRecord {
 // and produce phantom estimates against the wrong context size.
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Z.AI / ZhipuAI
-  'glm-5.2[1m]':          1_000_000,
   'glm-5.2':              200_000,
   'glm-5.1':              131_072,
   'glm-5':                80_000,
@@ -88,7 +87,6 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // its successor) provisionally so /cost stays sane; update when z.ai posts it.
   // Note: on the GLM Coding Plan (the default `z.ai` provider) billing is a flat
   // subscription, so this only affects the pay-per-use estimate.
-  'glm-5.2[1m]':       { inputPer1M: 1.00,  outputPer1M: 3.20 },
   'glm-5.2':           { inputPer1M: 1.00,  outputPer1M: 3.20 },
   'glm-5.1':           { inputPer1M: 1.00,  outputPer1M: 3.20 },
   'glm-5':             { inputPer1M: 0.72,  outputPer1M: 2.30 },

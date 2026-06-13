@@ -346,7 +346,7 @@ Run `/agents` to list them. The agent invokes them itself via the `delegate` too
 name: migrator
 description: Writes and runs database migrations
 tools: [read_file, write_file, edit_file, execute_command]   # allowlist; omit = all
-model: glm-5.2[1m]        # optional override
+model: glm-5.2            # optional override
 personality: senior-reviewer   # optional preset
 maxIterations: 12         # optional budget
 ---
@@ -1007,7 +1007,7 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 **Model favorites** — save provider+model combos and switch instantly:
 ```
 > /provider      # switch to z.ai
-> /model glm-5.2[1m]
+> /model glm-5.2
 > /profile save fast
 
 > /provider      # switch to openai
