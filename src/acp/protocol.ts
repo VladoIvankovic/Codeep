@@ -95,6 +95,12 @@ export interface SessionNewParams {
 
 export interface SessionNewResult {
   sessionId: string;
+  // On a resume (`fresh: false`) the server loads the workspace's prior
+  // session, so it can return that transcript here — letting a client that
+  // reconnected (e.g. a VS Code window reload) repaint the chat instead of
+  // showing blank while the agent still has the context. Empty/omitted on a
+  // fresh session. Mirrors SessionLoadResult.history (user/assistant only).
+  history?: { role: string; content: string }[];
   modes?: SessionModeState | null;
   configOptions?: SessionConfigOption[] | null;
 }

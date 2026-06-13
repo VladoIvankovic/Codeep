@@ -570,6 +570,10 @@ export function startAcpServer(): Promise<void> {
 
     const result: SessionNewResult = {
       sessionId: acpSessionId,
+      // On a resume (fresh=false) `history` holds the prior transcript;
+      // return it (user/assistant only) so a reconnected client can repaint
+      // the chat. Empty on a fresh session, so this is harmless there.
+      history: history.filter(m => m.role === 'user' || m.role === 'assistant'),
       modes: AGENT_MODES,
       configOptions: buildConfigOptions(),
     };

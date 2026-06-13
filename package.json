@@ -1,6 +1,6 @@
 {
   "name": "codeep",
-  "version": "2.10.0",
+  "version": "2.11.0",
   "description": "AI-powered coding assistant built for the terminal. Multiple LLM providers, project-aware context, and a seamless development workflow.",
   "type": "module",
   "main": "dist/index.js",
@@ -12,8 +12,6 @@
     "prepack": "node scripts/gen-version.js && tsc && node scripts/fix-imports.js",
     "build": "node scripts/gen-version.js && tsc && node scripts/fix-imports.js",
     "start": "node dist/renderer/main.js",
-    "demo:renderer": "node --import tsx src/renderer/demo.ts",
-    "demo:app": "node --import tsx src/renderer/demo-app.ts",
     "build:binary": "npm run build && pkg dist/renderer/main.js --targets node18-macos-arm64,node18-macos-x64,node18-linux-x64 --output bin/codeep",
     "test": "vitest run",
     "test:watch": "vitest",

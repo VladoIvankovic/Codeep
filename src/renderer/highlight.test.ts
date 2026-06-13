@@ -61,3 +61,28 @@ describe('highlightCode — language aliases', () => {
     expect(highlightCode('interface X', 'typescript')).toContain(SYNTAX.keyword + 'interface');
   });
 });
+
+describe('highlightCode — diff', () => {
+  const diff = '--- a/x.ts\n+++ b/x.ts\n@@ -1 +1 @@\n-const a = 1\n+const a = 2\n unchanged';
+
+  it('colours additions green (string) and removals red, leaving context plain', () => {
+    const out = highlightCode(diff, 'diff');
+    expect(out).toContain(SYNTAX.string + '+const a = 2');
+    expect(out).toContain(SYNTAX.operator + '@@ -1 +1 @@');
+    // a context line keeps no colour — it stays verbatim, unwrapped
+    expect(out).toContain('\n unchanged');
+    expect(out.endsWith(' unchanged')).toBe(true);
+  });
+
+  it('does NOT treat +/- lines as JS keywords (the old fallback bug)', () => {
+    // `const` inside a diff line must not get keyword colouring — the whole
+    // line is one diff token.
+    const out = highlightCode('+const a = 2', 'diff');
+    expect(out).not.toContain(SYNTAX.keyword + 'const');
+  });
+
+  it('preserves text under ANSI strip', () => {
+    expect(stripAnsi(highlightCode(diff, 'diff'))).toBe(diff);
+    expect(stripAnsi(highlightCode(diff, 'patch'))).toBe(diff);
+  });
+});

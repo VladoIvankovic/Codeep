@@ -94,7 +94,7 @@ describe('config utilities', () => {
       const defaults = {
         apiKey: '',
         provider: 'z.ai',
-        model: 'glm-5.1',
+        model: 'glm-5.2[1m]',
         protocol: 'openai',
         plan: 'lite',
         language: 'en',

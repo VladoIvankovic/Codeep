@@ -40,6 +40,19 @@ export function highlightCode(code: string, lang: string): string {
   const normalizedLang = LANG_ALIASES[lang.toLowerCase()] || lang.toLowerCase();
   const keywords = KEYWORDS[normalizedLang] || KEYWORDS['js'] || [];
 
+  // Diffs are line-oriented: +added/-removed/@@hunk. The agent emits
+  // ```diff on every edit confirmation, so without this branch the most
+  // common block in an agent run fell through to JS keyword colors.
+  if (normalizedLang === 'diff' || normalizedLang === 'patch') {
+    return code.split('\n').map(line => {
+      if (line.startsWith('+++') || line.startsWith('---')) return SYNTAX.codeLang + line + '\x1b[0m';
+      if (line.startsWith('@@')) return SYNTAX.operator + line + '\x1b[0m';
+      if (line.startsWith('+')) return SYNTAX.string + line + '\x1b[0m';   // green — additions
+      if (line.startsWith('-')) return fg.rgb(224, 108, 117) + line + '\x1b[0m'; // red — removals
+      return line;
+    }).join('\n');
+  }
+
   if (normalizedLang === 'html' || normalizedLang === 'xml' || normalizedLang === 'svg') {
     return code.replace(/(<\/?)(\w[\w-]*)((?:\s+[\w-]+(?:=(?:"[^"]*"|'[^']*'|\S+))?)*)(\s*\/?>)/g,
       (_match, open, tag, attrs, close) => {

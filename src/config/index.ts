@@ -76,6 +76,9 @@ interface ConfigSchema {
    *  can't execute shell on first tool call). Granted via `/hooks trust`. */
   trustedHookProjects: string[];
   currentSessionId: string;
+  /** Highest one-shot config migration applied (see the migration block
+   *  after config creation). Bump MIGRATION_VERSION when adding one. */
+  migrationVersion: number;
   temperature: number;
   maxTokens: number;
   apiTimeout: number;
@@ -310,8 +313,9 @@ function isWritable(dir: string): boolean {
 function createConfig(): Conf<ConfigSchema> {
   const defaults: ConfigSchema = {
     apiKey: '',
+    migrationVersion: 0,
     provider: 'z.ai',
-    model: 'glm-5.1',
+    model: 'glm-5.2[1m]',
     agentMode: 'on',
     ollamaUrl: 'http://localhost:11434',
     ollamaNativeApi: false,
@@ -421,26 +425,35 @@ if ((config.get('agentMode') as string) === 'auto') {
   config.set('agentMode', 'on');
 }
 
-// Migrate the old runaway default (10000 iterations) back down to a sane ceiling.
-// The old migration kept forcing it up, so a user who had the bad default baked
-// into their local config will still see "step X/10000" until this trims it.
-if (config.get('agentMaxIterations') >= 10000) {
-  config.set('agentMaxIterations', 50);
-}
-if (config.get('agentMaxDuration') < 480) {
-  config.set('agentMaxDuration', 480);
-}
-if (config.get('maxTokens') < 32768) {
-  config.set('maxTokens', 32768);
-}
-if (config.get('agentApiTimeout') <= 180000) {
-  config.set('agentApiTimeout', 600000);
-}
-if (config.get('rateLimitApi') <= 30) {
-  config.set('rateLimitApi', 10000);
-}
-if (config.get('rateLimitCommands') <= 100) {
-  config.set('rateLimitCommands', 10000);
+// One-shot migrations of old defaults. These used to run unconditionally on
+// EVERY startup, which silently clobbered values the user later chose in
+// /settings (e.g. maxTokens 8192 was forced back to 32768 each launch — the
+// affected sliders were effectively lies). Each migration now runs exactly
+// once per config, recorded via `migrationVersion`; after that, whatever the
+// user sets sticks. Bump MIGRATION_VERSION when adding a new one.
+const MIGRATION_VERSION = 1;
+if ((config.get('migrationVersion') ?? 0) < 1) {
+  // Migrate the old runaway default (10000 iterations) down to a sane
+  // ceiling, and old conservative defaults up to the current ones.
+  if (config.get('agentMaxIterations') >= 10000) {
+    config.set('agentMaxIterations', 50);
+  }
+  if (config.get('agentMaxDuration') < 480) {
+    config.set('agentMaxDuration', 480);
+  }
+  if (config.get('maxTokens') < 32768) {
+    config.set('maxTokens', 32768);
+  }
+  if (config.get('agentApiTimeout') <= 180000) {
+    config.set('agentApiTimeout', 600000);
+  }
+  if (config.get('rateLimitApi') <= 30) {
+    config.set('rateLimitApi', 10000);
+  }
+  if (config.get('rateLimitCommands') <= 100) {
+    config.set('rateLimitCommands', 10000);
+  }
+  config.set('migrationVersion', MIGRATION_VERSION);
 }
 
 // Global sessions directory - use same directory as conf package for cross-platform consistency

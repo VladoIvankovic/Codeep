@@ -63,6 +63,12 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'git-commit': 'Commit with message',
   'push': 'Git push',
   'pull': 'Git pull',
+  'amend': 'Amend the last commit',
+  'pr': 'Create a pull request description',
+  'changelog': 'Generate changelog from recent commits',
+  'branch': 'Create a new branch with smart naming',
+  'stash': 'Stash changes with a meaningful message',
+  'unstash': 'Apply and drop the most recent stash',
   'init': 'Initialize project (.codeep/)',
   'scan': 'Scan project',
   'memory': 'Add/list/remove project memory notes',
@@ -80,6 +86,38 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'explain': 'Explain code',
   'optimize': 'Optimize performance',
   'debug': 'Debug problems',
+  'test-fix': 'Fix failing tests',
+  'coverage': 'Analyze test coverage and suggest improvements',
+  'e2e': 'Generate end-to-end tests',
+  'mock': 'Generate mock data for testing',
+  'readme': 'Generate or update README',
+  'api-docs': 'Generate API documentation',
+  'translate': 'Translate code comments to English',
+  'types': 'Add or improve TypeScript types',
+  'cleanup': 'Clean up code (remove unused, format)',
+  'modernize': 'Update code to use modern syntax',
+  'migrate': 'Migrate code to newer version',
+  'split': 'Split a large file into smaller modules',
+  'security': 'Security audit',
+  'log': 'Add logging to code',
+  'build': 'Build the project',
+  'deploy': 'Build and deploy',
+  'release': 'Create a new release',
+  'publish': 'Publish package to npm',
+  'component': 'Generate a React/Vue component',
+  'api': 'Generate an API endpoint',
+  'hook': 'Generate a React hook',
+  'service': 'Generate a service/utility module',
+  'page': 'Generate a new page/route',
+  'form': 'Generate a form with validation',
+  'crud': 'Generate full CRUD for an entity',
+  'docker': 'Generate Dockerfile and docker-compose',
+  'ci': 'Generate CI/CD configuration',
+  'env': 'Setup environment configuration',
+  'k8s': 'Generate Kubernetes manifests',
+  'terraform': 'Generate Terraform configuration',
+  'nginx': 'Generate Nginx configuration',
+  'monitor': 'Add monitoring and observability',
   'skills': 'List all skills',
   'provider': 'Switch provider',
   'model': 'Switch model',
@@ -88,6 +126,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'grant': 'Grant write permission',
   'login': 'Change API key',
   'logout': 'Logout',
+  'account': 'Link this machine to your codeep.dev account',
   'context-save': 'Save conversation',
   'context-load': 'Load conversation',
   'context-clear': 'Clear saved context',
@@ -119,7 +158,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
 import { helpCategories, keyboardShortcuts } from './components/Help';
 import { StatusInfo } from './components/Status';
 
-import { renderSettingsScreen, handleSettingsKey, SettingsState, SETTINGS } from './components/Settings';
+import { handleSettingsKey, SettingsState, SETTINGS } from './components/Settings';
 import { SelectItem } from './components/SelectScreen';
 import { renderExportPanel, handleExportKey as handleExportKeyComponent, ExportState } from './components/Export';
 import { renderLogoutPanel, handleLogoutKey as handleLogoutKeyComponent, LogoutState } from './components/Logout';
@@ -161,6 +200,9 @@ export class App {
   private isLoading = false;
   private options: AppOptions;
   private scrollOffset = 0;
+  /** Messages that arrived while the user was scrolled up — drives the
+   *  status bar's "↓ N new" badge; 0 whenever the view is at the bottom. */
+  private unseenWhileScrolled = 0;
   private notification = '';
   private notificationIsWarn = false;
   private notificationTimeout: NodeJS.Timeout | null = null;
@@ -283,41 +325,13 @@ export class App {
   // Glitch characters for intro animation
   private static readonly GLITCH_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%&*<>?/;:[]=';
   
-  // All available commands
-  private static readonly COMMANDS = [
-    'help', 'status', 'settings', 'version', 'update', 'clear', 'exit',
-    'sessions', 'new', 'rename', 'search', 'export',
-    'agent', 'agent-dry', 'stop', 'undo', 'undo-all', 'history', 'changes',
-    'diff', 'commit', 'git-commit', 'push', 'pull', 'scan', 'review',
-    'copy', 'paste', 'apply', 'add', 'drop',
-    'test', 'docs', 'refactor', 'fix', 'explain', 'optimize', 'debug', 'skills',
-    'amend', 'pr', 'changelog', 'branch', 'stash', 'unstash',
-    'build', 'deploy', 'release', 'publish',
-    'component', 'api', 'hook', 'service', 'page', 'form', 'crud',
-    'security', 'profile', 'log', 'types', 'cleanup', 'modernize', 'migrate',
-    'split', 'rename', 'coverage', 'e2e', 'mock', 'readme', 'translate',
-    'docker', 'ci', 'env', 'k8s', 'terraform', 'nginx', 'monitor',
-    'test-fix', 'api-docs',
-    'multiline', 'memory', 'init',
-    'provider', 'model', 'protocol', 'lang', 'grant', 'login', 'logout',
-    'context-save', 'context-load', 'context-clear', 'learn',
-    'cost', 'tasks', 'account', 'sync', 'keysync', 'telemetry',
-    // 2.0 — extensions, checkpoints, MCP, custom commands, OpenRouter prefs.
-    // Keep in lockstep with COMMAND_DESCRIPTIONS below and helpCategories.
-    'compact', 'commands', 'checkpoint', 'checkpoints', 'rewind',
-    'hooks', 'mcp', 'openrouter',
-    // 2.0.2 — plan mode.
-    'plan', 'go',
-    // 2.0.3 — personalities + insights.
-    'personality', 'insights',
-    // 2.1.0 — cross-session recall.
-    'recall',
-    // 2.2.0 — user profile.
-    'me',
-    // 2.3.0 — sub-agents / delegation.
-    'agents',
-    'c', 't', 'd', 'r', 'f', 'e', 'o', 'b', 'p',
-  ];
+  // The `/` autocomplete list, derived from COMMAND_DESCRIPTIONS so it IS
+  // the registry — a command can no longer ship without a description (a
+  // hand-maintained parallel array drifted to 48 blank rows over time).
+  // Single-letter shortcuts (c, t, d, r, f, e, o, b, p) stay routable in
+  // commands.ts but are deliberately not listed: they alias commands that
+  // already appear, and bare one-letter rows just cluttered the dropdown.
+  private static readonly COMMANDS = Object.keys(COMMAND_DESCRIPTIONS);
   
   constructor(options: AppOptions) {
     this.screen = new Screen();
@@ -354,12 +368,19 @@ export class App {
   }
   
   /**
-   * Add a message
+   * Add a message. Autoscrolls only when the user is already at the
+   * bottom — if they scrolled up to read something, new messages must
+   * not yank the view away; the status bar shows a "↓ N new" badge
+   * instead (cleared when they return to the bottom).
    */
   addMessage(message: Message): void {
     this.messages.push(message);
     this.messageCache.push(null); // slot za novu poruku
-    this.scrollOffset = 0;
+    if (this.scrollOffset === 0) {
+      this.unseenWhileScrolled = 0;
+    } else {
+      this.unseenWhileScrolled++;
+    }
     this.scheduleRender();
   }
 
@@ -367,6 +388,7 @@ export class App {
     this.messages = messages;
     this.messageCache = new Array(messages.length).fill(null);
     this.scrollOffset = 0;
+    this.unseenWhileScrolled = 0;
     this.scheduleRender();
   }
 
@@ -374,6 +396,7 @@ export class App {
     this.messages = [];
     this.messageCache = [];
     this.scrollOffset = 0;
+    this.unseenWhileScrolled = 0;
     this.scheduleRender();
   }
   
@@ -1155,23 +1178,16 @@ export class App {
     if (event.key === 'pagedown') {
       // Scroll down (show newer messages)
       this.scrollOffset = Math.max(0, this.scrollOffset - 10);
+      if (this.scrollOffset === 0) this.unseenWhileScrolled = 0;
       this.scheduleRender();
       return;
     }
     
-    // Arrow up/down can also scroll when input is empty
-    if (event.key === 'up' && !this.editor.getValue() && !this.showAutocomplete) {
-      this.scrollOffset += 3;
-      this.scheduleRender();
-      return;
-    }
-    
-    if (event.key === 'down' && !this.editor.getValue() && !this.showAutocomplete && this.scrollOffset > 0) {
-      this.scrollOffset = Math.max(0, this.scrollOffset - 3);
-      this.scheduleRender();
-      return;
-    }
-    
+    // NOTE: ↑/↓ on an empty input deliberately fall through to the editor —
+    // that's prompt-history recall (Input.ts), which the status bar has
+    // always advertised but this handler used to shadow with a 3-line
+    // scroll. Scrolling lives on PgUp/PgDn and the mouse wheel.
+
     // Mouse scroll
     if (event.key === 'scrollup') {
       this.scrollOffset += 3;
@@ -1181,6 +1197,7 @@ export class App {
     
     if (event.key === 'scrolldown') {
       this.scrollOffset = Math.max(0, this.scrollOffset - 3);
+      if (this.scrollOffset === 0) this.unseenWhileScrolled = 0;
       this.scheduleRender();
       return;
     }
@@ -2616,7 +2633,14 @@ export class App {
       this.screen.write(leftX + 3, y, tokenStr, fg.gray);
     }
 
-    // Right: context-sensitive hints
+    // Right: context-sensitive hints. While scrolled up, the "new
+    // messages below" badge takes priority — it's the only signal that
+    // the conversation moved on (addMessage no longer yanks the view).
+    if (this.scrollOffset > 0 && this.unseenWhileScrolled > 0) {
+      const badge = `↓ ${this.unseenWhileScrolled} new · PgDn `;
+      this.screen.write(width - badge.length, y, badge, PRIMARY_COLOR);
+      return;
+    }
     let rightText: string;
     if (this.isStreaming || this.isLoading) {
       rightText = 'Esc to stop ';

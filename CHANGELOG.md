@@ -11,6 +11,60 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.11.0] — 2026-06-12
+
+> New default model **GLM-5.2** (1M-context `glm-5.2[1m]`) across every Z.AI provider, plus TUI polish: ↑ recalls history, diffs render green/red, full `/` autocomplete, and `/settings` values now stick.
+
+### Added
+
+- **GLM-5.2 — the new default Z.AI model.** Added across all four Z.AI
+  providers (international + China, subscription + pay-per-use): `glm-5.2[1m]`
+  (1M context — the `[1m]` suffix selects the million-token window) is now the
+  default, with plain `glm-5.2` also offered; GLM-5.1, GLM-5 Turbo, and GLM-5
+  stay available. Context-window and cost tables include both new ids. (GLM-5.2
+  per-token pricing isn't published yet, so `/cost` mirrors GLM-5.1 for now —
+  and on the GLM Coding Plan billing is a flat subscription anyway.) Editor
+  clients pick this up automatically over ACP.
+
+### Fixed
+
+- **`/settings` values stick now.** A block of startup "migrations" ran on
+  every launch and silently forced user-chosen values back up — `maxTokens`
+  below 32768, `agentMaxDuration` below 480 min, API timeout and rate limits —
+  so the affected settings were effectively lies. They now run exactly once
+  per config (recorded via `migrationVersion`); after that, what you set is
+  what you get.
+- **`↑` recalls prompt history on an empty input.** The status bar has always
+  advertised "↑↓ history", but a scroll handler intercepted the arrows first,
+  so history recall was unreachable. Arrows now do history (like every shell);
+  scrolling lives on PgUp/PgDn and the mouse wheel.
+- **New messages no longer yank you to the bottom.** While you're scrolled up
+  reading, incoming messages (every agent action, mid-run) used to reset the
+  view to the bottom. The view now stays put and the status bar shows a
+  "↓ N new · PgDn" badge until you return.
+
+### Changed
+
+- **Diff blocks render as diffs.** ```diff fences — which the agent emits on
+  every edit confirmation — now highlight +added lines green, -removed red,
+  and @@hunks cyan. Previously they fell through to JS keyword colors.
+- **Every command in `/` autocomplete has a description.** 48 of 123 rows were
+  blank (the whole scaffold/git/devops family — /component, /pr, /docker, …)
+  and 9 bare single-letter aliases cluttered the list. The dropdown is now
+  derived from a single command registry, so a command can't ship without a
+  description again; the single-letter shortcuts (`/c`, `/t`, …) still work,
+  they're just not listed.
+- **~800 lines of dead UI code removed** (an unused parallel chat renderer and
+  two unreachable fullscreen screens) — no behavior change, but edits can no
+  longer land in the wrong renderer by mistake.
+- **ACP `session/new` now returns the prior transcript on resume.** When an
+  editor client reconnects with `fresh: false` (e.g. a VS Code window reload),
+  the response carries the workspace session's `history` (user/assistant only,
+  mirroring `session/load`) so the client can repaint the chat instead of
+  showing blank while the agent still holds the context. Empty on a fresh
+  session; older clients ignore the extra field. Powers Codeep VS Code 2.6.0's
+  reload restore.
+
 ## [2.10.0] — 2026-06-11
 
 > `/tasks add` now matches the dashboard: tag a task as a bug or feature and give it a description inline (`--bug` / `--feature` / `--desc`), and the list tags each row with its project when global.
