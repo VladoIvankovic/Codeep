@@ -372,10 +372,12 @@ export async function handleCommand(
       break;
     }
 
+    case 'd':
     case 'docs': {
       // Open per-command web docs in the system browser. Lets the inline
       // /help stay terse (single-line entries) while users who want the
-      // long story get one keystroke away from a real page.
+      // long story get one keystroke away from a real page. `/d` is the
+      // short alias.
       const cmd = (args[0] ?? '').toLowerCase().replace(/^\//, '');
       const KNOWN: Record<string, string> = {
         personality: 'https://codeep.dev/docs/agent#personalities',
@@ -1471,8 +1473,6 @@ Format: use headers per category, only include categories where you found issues
     case 'commit':
     case 't':
     case 'test':
-    case 'd':
-    case 'docs':
     case 'r':
     case 'refactor':
     case 'f':

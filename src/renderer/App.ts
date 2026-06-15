@@ -80,7 +80,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'drop': 'Remove file from context',
   'multiline': 'Toggle multi-line input',
   'test': 'Generate/run tests',
-  'docs': 'Add documentation',
+  'docs': 'Open web docs for a command (e.g. /docs personality)',
   'refactor': 'Improve code quality',
   'fix': 'Debug and fix issues',
   'explain': 'Explain code',
