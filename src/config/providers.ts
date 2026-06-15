@@ -61,9 +61,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     },
     models: [
       { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest GLM model, available to all users' },
-      { id: 'glm-5.1', name: 'GLM-5.1', description: 'Previous GLM model, available to all users' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant, available to all users' },
-      { id: 'glm-5', name: 'GLM-5', description: 'Most capable GLM-5 model (Pro/Max plan only)' },
     ],
     defaultModel: 'glm-5.2',
     defaultProtocol: 'openai',
@@ -89,9 +87,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     },
     models: [
       { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest GLM model' },
-      { id: 'glm-5.1', name: 'GLM-5.1', description: 'Previous GLM model' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant' },
-      { id: 'glm-5', name: 'GLM-5', description: 'Most capable GLM-5 model' },
     ],
     defaultModel: 'glm-5.2',
     defaultProtocol: 'openai',
@@ -117,9 +113,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     },
     models: [
       { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest GLM model, available to all users' },
-      { id: 'glm-5.1', name: 'GLM-5.1', description: 'Previous GLM model, available to all users' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant, available to all users' },
-      { id: 'glm-5', name: 'GLM-5', description: 'Most capable GLM-5 model (Pro/Max plan only)' },
     ],
     defaultModel: 'glm-5.2',
     defaultProtocol: 'openai',
@@ -145,9 +139,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     },
     models: [
       { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest GLM model' },
-      { id: 'glm-5.1', name: 'GLM-5.1', description: 'Previous GLM model' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant' },
-      { id: 'glm-5', name: 'GLM-5', description: 'Most capable GLM-5 model' },
     ],
     defaultModel: 'glm-5.2',
     defaultProtocol: 'openai',
@@ -267,7 +259,6 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       { id: 'gpt-5.5',      name: 'GPT-5.5',       description: 'Latest GPT model — best for coding' },
       { id: 'gpt-5.4',      name: 'GPT-5.4',       description: 'Previous generation GPT' },
       { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini',  description: 'Faster and cheaper GPT-5.4' },
-      { id: 'gpt-5.4-nano', name: 'GPT-5.4 Nano',  description: 'Most affordable, great for simple tasks' },
     ],
     defaultModel: 'gpt-5.5',
     defaultProtocol: 'openai',
@@ -289,7 +280,6 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'claude-fable-5',            name: 'Claude Fable 5',        description: 'Most powerful — new tier above Opus' },
       { id: 'claude-opus-4-8',           name: 'Claude Opus 4.8',       description: 'Most capable Opus model' },
       { id: 'claude-sonnet-4-6',         name: 'Claude Sonnet',         description: 'Best balance of speed and intelligence' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku',          description: 'Fastest and most affordable' },

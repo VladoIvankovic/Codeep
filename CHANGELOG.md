@@ -11,6 +11,29 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.11.2] — 2026-06-14
+
+> Trimmed the model pickers (Claude Fable 5 is de-listed — unavailable under the US export ban — and a few older variants drop off), and editor clients (VS Code, Zed) now see API retry/backoff instead of an endless "Thinking…" spinner.
+
+### Changed
+
+- **Model picker cleanup across every provider.** Claude **Fable 5** is removed
+  from the Anthropic picker (unavailable under the US export ban; Opus 4.8 stays
+  the default). Z.AI drops `glm-5.1` and `glm-5` (keeps `glm-5.2` + `glm-5-turbo`);
+  OpenAI drops `gpt-5.4-nano` (keeps 5.5 / 5.4 / 5.4-mini). DeepSeek, Google, and
+  MiniMax are unchanged. All ids remain valid if set by hand — they're just no
+  longer offered. Context/cost tables updated to match.
+
+### Fixed
+
+- **ACP retry visibility.** When a request hit a transient API error and the
+  agent retried with backoff, the ACP path dropped the notice (only the bare
+  iteration counter was suppressed, but the retry message went with it) — so
+  editor clients showed an indefinite "Thinking…" while the CLI was actually
+  retrying. Retry/backoff notices ("API 429 … retrying in 10s (1/3)") and
+  context warnings (⚠) are now forwarded as agent thoughts; the plain
+  iteration counter stays internal.
+
 ## [2.11.1] — 2026-06-14
 
 > Hotfix: the Z.AI default was `glm-5.2[1m]`, but the API rejects that id ("Unknown Model", code 1211) — so a fresh Z.AI session failed on its first request. The default is now plain `glm-5.2` (which works), and the non-working `[1m]` variant is removed from the picker.

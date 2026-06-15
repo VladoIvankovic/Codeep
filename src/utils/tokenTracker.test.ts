@@ -73,7 +73,7 @@ describe('extractAnthropicUsage', () => {
 
 describe('getModelContextWindow', () => {
   it('returns a known window for a listed model', () => {
-    expect(getModelContextWindow('glm-5.1')).toBe(131_072);
+    expect(getModelContextWindow('glm-5.2')).toBe(200_000);
     expect(getModelContextWindow('claude-opus-4-8')).toBe(1_000_000);
   });
 
@@ -110,14 +110,14 @@ describe('recordTokenUsage + getSessionStats', () => {
   });
 
   it('aggregates across multiple records', () => {
-    recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.1', 'z.ai');
-    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'glm-5.1', 'z.ai');
+    recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.2', 'z.ai');
+    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'glm-5.2', 'z.ai');
     const stats = getSessionStats();
     expect(stats.totalPromptTokens).toBe(300);
     expect(stats.totalCompletionTokens).toBe(150);
     expect(stats.totalTokens).toBe(450);
     expect(stats.requestCount).toBe(2);
-    // glm-5.1: 1.00 input, 3.20 output per 1M tokens
+    // glm-5.2: 1.00 input, 3.20 output per 1M tokens
     // (300/1M * 1) + (150/1M * 3.20) = 0.0003 + 0.00048 = 0.00078
     expect(stats.estimatedCost).toBeCloseTo(0.00078, 6);
   });
@@ -125,11 +125,11 @@ describe('recordTokenUsage + getSessionStats', () => {
 
 describe('getCostBreakdown', () => {
   it('groups by provider/model', () => {
-    recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.1', 'z.ai');
+    recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.2', 'z.ai');
     recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-4-8', 'anthropic');
     const breakdown = getCostBreakdown();
     expect(breakdown).toHaveLength(2);
-    const glm = breakdown.find(b => b.model === 'glm-5.1');
+    const glm = breakdown.find(b => b.model === 'glm-5.2');
     expect(glm?.promptTokens).toBe(100);
     expect(glm?.completionTokens).toBe(50);
     expect(glm?.provider).toBe('z.ai');
@@ -166,11 +166,11 @@ describe('getCostBreakdown', () => {
   it('falls back to local pricing when actualCostUsd is missing', () => {
     recordTokenUsage(
       { promptTokens: 1_000_000, completionTokens: 0, totalTokens: 1_000_000 },
-      'glm-5.1',
+      'glm-5.2',
       'z.ai',
     );
     const breakdown = getCostBreakdown();
-    // glm-5.1 pricing: 1.00 USD per 1M input tokens.
+    // glm-5.2 pricing: 1.00 USD per 1M input tokens.
     expect(breakdown[0].estimatedCost).toBeCloseTo(1.0, 6);
   });
 
@@ -198,7 +198,7 @@ describe('getCostBreakdown', () => {
   it('mixes reported + computed costs in the same session', () => {
     recordTokenUsage(
       { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
-      'glm-5.1',
+      'glm-5.2',
       'z.ai',
     );
     recordTokenUsage(
@@ -210,7 +210,7 @@ describe('getCostBreakdown', () => {
     const breakdown = getCostBreakdown();
     expect(breakdown).toHaveLength(2);
     const total = breakdown.reduce((s, b) => s + b.estimatedCost, 0);
-    // glm-5.1: (100/1M * 1) + (50/1M * 3.20) = 0.0001 + 0.00016 = 0.00026
+    // glm-5.2: (100/1M * 1) + (50/1M * 3.20) = 0.0001 + 0.00016 = 0.00026
     // openrouter: 0.025 (reported)
     // total ≈ 0.02526
     expect(total).toBeCloseTo(0.02526, 5);
@@ -232,9 +232,9 @@ describe('getPricingTable', () => {
   it('lists every priced model', () => {
     const table = getPricingTable();
     const ids = table.map(e => e.model);
-    expect(ids).toContain('glm-5.1');
+    expect(ids).toContain('glm-5.2');
     expect(ids).toContain('claude-opus-4-8');
-    expect(ids).toContain('claude-fable-5');
+    expect(ids).toContain('claude-sonnet-4-6');
   });
 
   it('only contains models that also have context-window entries', () => {
@@ -253,7 +253,7 @@ describe('formatCostReport', () => {
   });
 
   it('renders requests, tokens, and total cost', () => {
-    recordTokenUsage({ promptTokens: 1_000, completionTokens: 500, totalTokens: 1_500 }, 'glm-5.1', 'z.ai');
+    recordTokenUsage({ promptTokens: 1_000, completionTokens: 500, totalTokens: 1_500 }, 'glm-5.2', 'z.ai');
     const report = formatCostReport();
     expect(report).toMatch(/## Session Cost/);
     expect(report).toMatch(/\*\*Requests:\*\* 1/);
@@ -262,11 +262,11 @@ describe('formatCostReport', () => {
   });
 
   it('includes a per-model table when multiple providers/models are used', () => {
-    recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.1', 'z.ai');
+    recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.2', 'z.ai');
     recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-4-8', 'anthropic');
     const report = formatCostReport();
     expect(report).toMatch(/\| Provider \/ Model \| Input \| Output \| Cost \|/);
-    expect(report).toMatch(/`z\.ai` \/ `glm-5\.1`/);
+    expect(report).toMatch(/`z\.ai` \/ `glm-5\.2`/);
     expect(report).toMatch(/`anthropic` \/ `claude-opus-4-8`/);
   });
 

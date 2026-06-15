@@ -134,10 +134,11 @@ describe('providers', () => {
       expect(models.length).toBe(0);
     });
 
-    it('should include glm-5.1 for z.ai', () => {
+    it('should include glm-5.2 for z.ai', () => {
       const models = getProviderModels('z.ai');
       const ids = models.map(m => m.id);
-      expect(ids).toContain('glm-5.1');
+      expect(ids).toContain('glm-5.2');
+      expect(ids).toContain('glm-5-turbo');
     });
   });
 
@@ -216,11 +217,12 @@ describe('providers', () => {
     it('should include Claude Opus 4.8 as default model', () => {
       expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-4-8');
       const modelIds = PROVIDERS['anthropic'].models.map(m => m.id);
-      expect(modelIds).toContain('claude-fable-5');
       expect(modelIds).toContain('claude-opus-4-8');
       expect(modelIds).toContain('claude-sonnet-4-6');
       expect(modelIds).toContain('claude-haiku-4-5-20251001');
-      // De-listed with the Fable 5 launch (ids stay valid if set manually)
+      // Fable 5 is de-listed (unavailable under the US export ban); the id
+      // stays valid in the sampling-params guard if set manually.
+      expect(modelIds).not.toContain('claude-fable-5');
       expect(modelIds).not.toContain('claude-opus-4-7');
       expect(modelIds).not.toContain('claude-opus-4-6');
     });

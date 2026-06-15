@@ -118,8 +118,15 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
   const result = await runAgent(opts.prompt, projectContext, {
     abortSignal: opts.abortSignal,
     onChunk: (text: string) => { chunksEmitted++; opts.onChunk(text); },
-    onIteration: (_iteration: number, _message: string) => {
-      // Intentionally not forwarded — iteration count is internal detail
+    onIteration: (_iteration: number, message: string) => {
+      // The bare iteration counter is internal noise, but transient notices —
+      // API retry/backoff ("retrying in Ns") and context warnings (⚠) — are
+      // exactly what the user needs to see when a request stalls, otherwise
+      // the editor just shows an endless "Thinking…" spinner. Surface those
+      // (and only those) as a thought.
+      if (opts.onThought && /retry|⚠/i.test(message)) {
+        opts.onThought(message);
+      }
     },
     onThinking: (text: string) => {
       if (opts.onThought) {
