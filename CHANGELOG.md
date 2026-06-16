@@ -11,6 +11,32 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.12.0] — 2026-06-16
+
+> New `/thinking` (alias `/effort`) reasoning-effort control — `auto · low · medium · high · max`, shown beside the model in the status bar and clamped per provider+model so it never sends a value the API rejects. Plus a Codeep agent identity and iOS-testing MCP servers.
+
+### Added
+
+- **`/thinking` (alias `/effort`) — thinking / reasoning-effort tiers.** A single
+  control with five tiers (`auto · low · medium · high · max`) for how hard the
+  model reasons. `auto` (default) sends nothing — each model's own default. The
+  other tiers are clamped to the nearest level the **active provider+model**
+  actually accepts, so an unsupported value is never sent: Anthropic Opus/Sonnet
+  → `output_config.effort`, OpenAI GPT‑5.x → `reasoning_effort` (Max→xhigh),
+  Google Gemini 3 → low/high, DeepSeek V4 & Z.AI **GLM‑5.2** → high/max,
+  OpenRouter → unified `reasoning.effort`. The active tier shows next to the
+  model in the status bar; models without a graded knob (Haiku, GLM‑Turbo,
+  Ollama, custom) hide it.
+- **About‑Codeep persona.** The agent system prompt now states what Codeep is and
+  points you at the right slash‑command, backed by a curated command index.
+- **MCP marketplace: iOS‑testing servers.** Added **iOS Simulator** and **Mobile
+  (iOS + Android)** servers for device/UI automation.
+
+### Changed
+
+- **MCP browser server is now Playwright** (supersedes Puppeteer) — the de‑facto
+  browser‑automation MCP.
+
 ## [2.11.2] — 2026-06-14
 
 > Trimmed the model pickers (Claude Fable 5 is de-listed — unavailable under the US export ban — and a few older variants drop off), and editor clients (VS Code, Zed) now see API retry/backoff instead of an endless "Thinking…" spinner.
