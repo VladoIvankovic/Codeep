@@ -38,7 +38,7 @@ import {
 } from '../config/index';
 import { getProjectContext } from '../utils/project';
 import { getCurrentVersion } from '../utils/update';
-import { getProviderList, getProvider } from '../config/providers';
+import { getProviderList, getProvider, modelSupportsReasoningEffort, reasoningParamsFor, availableReasoningTiers, resolveReasoningTier, REASONING_TIERS, type ReasoningTier } from '../config/providers';
 import { setProjectContext } from '../api/index';
 import { AppExecutionContext, runSkill, runCommandChain } from './agentExecution';
 import { loadProjectIntelligence, saveProjectIntelligence } from '../utils/projectIntelligence';
@@ -340,6 +340,55 @@ export async function handleCommand(
       kLines.push('');
       kLines.push('OFF by default. API keys live only in your OS keychain unless you turn this on. When on, `codeep account push`/`sync` upload/download keys, which are stored **server-readable** on codeep.dev. Toggle with `/keysync on` or `/keysync off`; wipe server copies with `codeep account purge-keys`.');
       ctx.app.addMessage({ role: 'system', content: kLines.join('\n') } as Message);
+      break;
+    }
+
+    case 'effort':
+    case 'thinking': {
+      const providerId = config.get('provider');
+      const model = config.get('model');
+      const supported = modelSupportsReasoningEffort(providerId, model);
+      // Tiers THIS model actually distinguishes (e.g. GLM-5.2 → auto/high/max).
+      const available = availableReasoningTiers(providerId, model);
+      const sub = args[0]?.toLowerCase();
+
+      if (sub && REASONING_TIERS.includes(sub as ReasoningTier)) {
+        config.set('reasoningEffort', sub as ReasoningTier);
+        if (sub === 'auto') {
+          ctx.app.notify('Thinking effort: auto — each model uses its own default.');
+        } else if (!supported) {
+          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 4.8, GPT-5.x, Gemini 3, DeepSeek V4, GLM-5.2).`);
+        } else {
+          // Tell the user what THIS model will actually run (the tier may
+          // collapse onto a level the model distinguishes, e.g. low→high on GLM).
+          const resolved = resolveReasoningTier(providerId, model, sub as ReasoningTier);
+          const note = resolved === sub ? '' : ` (${model} runs this as "${resolved}")`;
+          ctx.app.notify(`Thinking effort: ${sub}${note} — sending ${JSON.stringify(reasoningParamsFor(providerId, model, sub as ReasoningTier))}.`);
+        }
+        break;
+      }
+      if (sub && sub !== 'status') {
+        const offer = available.length > 0 ? available : REASONING_TIERS;
+        ctx.app.notify(`Usage: /thinking ${offer.join(' · /thinking ')}`);
+        break;
+      }
+
+      const tier = (config.get('reasoningEffort') ?? 'auto') as ReasoningTier;
+      const resolved = resolveReasoningTier(providerId, model, tier);
+      const tLines: string[] = ['## Thinking effort', ''];
+      tLines.push(`**Tier**       ${tier}${resolved !== tier && tier !== 'auto' ? ` → ${resolved} on this model` : ''}`);
+      tLines.push(`**Model**      ${model} (${providerId})`);
+      if (!supported) {
+        tLines.push('**Effective**  not sent — this model has no graded thinking control');
+      } else if (tier === 'auto') {
+        tLines.push('**Effective**  model default (no param sent)');
+      } else {
+        tLines.push(`**Effective**  ${JSON.stringify(reasoningParamsFor(providerId, model, tier))}`);
+      }
+      if (supported) tLines.push(`**Available**  ${available.join(' · ')}`);
+      tLines.push('');
+      tLines.push('Sets how hard the model reasons. Each model offers only the levels it distinguishes (GLM-5.2 / DeepSeek → high · max; Gemini → low · high; Opus/Sonnet & GPT-5.x → the full set). The setting is global and clamps to the active model, so it never sends a value the API rejects. `/effort` is an alias.');
+      ctx.app.addMessage({ role: 'system', content: tLines.join('\n') } as Message);
       break;
     }
 

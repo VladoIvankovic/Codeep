@@ -137,6 +137,8 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   'sync': 'Sync learning preferences and profiles to codeep.dev',
   'telemetry': 'Show or toggle automatic cloud telemetry (on/off)',
   'keysync': 'Show or toggle syncing API keys to codeep.dev (on/off)',
+  'thinking': 'Set the thinking/reasoning-effort tier (auto/low/medium/high/max) for models that support it',
+  'effort': 'Alias for /thinking — set the reasoning-effort tier',
   // 2.0 — surfaced for `/` autocomplete; documented in /help too.
   'compact': 'Summarize older messages to free up context',
   'commands': 'List custom slash commands in .codeep/commands/*.md',
@@ -2623,6 +2625,14 @@ export class App {
     if (modelName) {
       this.screen.write(leftX, y, PRIMARY_COLOR + modelName + style.reset);
       leftX += modelName.length + 2;
+      this.screen.write(leftX - 1, y, '·', fg.gray);
+      leftX += 1;
+    }
+    // Thinking-effort tier, right beside the model (the CLI twin of the Mac
+    // app's effort chip). Only present when set + supported — see getStatus.
+    if (status.reasoningEffort) {
+      this.screen.write(leftX, y, fg.yellow + status.reasoningEffort + style.reset);
+      leftX += status.reasoningEffort.length + 2;
       this.screen.write(leftX - 1, y, '·', fg.gray);
       leftX += 1;
     }

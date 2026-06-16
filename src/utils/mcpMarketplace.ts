@@ -9,7 +9,9 @@
  *   - Each entry's `args` should be the **invocation-without-runtime-args**
  *     so `/mcp install` can prompt for the things that vary per user
  *     (paths, tokens, etc.) via `argHints`.
- *   - Prefer official `@modelcontextprotocol/*` packages over third-party.
+ *   - Prefer official `@modelcontextprotocol/*` packages; well-maintained
+ *     third-party servers are fine when they're the de-facto standard for
+ *     their niche (e.g. Playwright for browsers, the iOS-simulator servers).
  */
 
 import type { McpServer } from '../acp/protocol.js';
@@ -138,11 +140,25 @@ export const MCP_MARKETPLACE: MarketplaceEntry[] = [
     url: 'https://github.com/modelcontextprotocol/servers/tree/main/src/time',
   },
   {
-    id: 'puppeteer',
-    name: 'Puppeteer (browser)',
-    description: 'Headless Chromium for navigating, screenshotting, and scraping pages.',
-    server: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-puppeteer'] },
-    url: 'https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer',
+    id: 'playwright',
+    name: 'Playwright (browser)',
+    description: 'Drive a real browser — navigate, click, fill, screenshot, and scrape — via Microsoft Playwright. The de-facto browser-automation MCP (supersedes Puppeteer).',
+    server: { command: 'npx', args: ['-y', '@playwright/mcp@latest'] },
+    url: 'https://github.com/microsoft/playwright-mcp',
+  },
+  {
+    id: 'ios-simulator',
+    name: 'iOS Simulator',
+    description: 'Drive the iOS Simulator — tap, type, swipe, screenshot, record, install & launch apps. macOS only; needs Xcode + idb (`brew install facebook/fb/idb-companion`).',
+    server: { command: 'npx', args: ['-y', 'ios-simulator-mcp'] },
+    url: 'https://github.com/joshuayoes/ios-simulator-mcp',
+  },
+  {
+    id: 'mobile',
+    name: 'Mobile (iOS + Android)',
+    description: 'UI automation for end-to-end mobile testing across iOS simulators/devices and Android. macOS needs Xcode command-line tools.',
+    server: { command: 'npx', args: ['-y', '@mobilenext/mobile-mcp@latest'] },
+    url: 'https://github.com/mobile-next/mobile-mcp',
   },
 ];
 

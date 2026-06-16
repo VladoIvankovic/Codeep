@@ -14,6 +14,9 @@ export interface StatusInfo {
   provider: string;
   model: string;
   agentMode: string;
+  /** Thinking-effort tier to show beside the model (e.g. "max") — only set
+   *  when non-auto AND the active model supports a graded knob; undefined hides it. */
+  reasoningEffort?: string;
   projectPath: string;
   hasWriteAccess: boolean;
   sessionId: string;

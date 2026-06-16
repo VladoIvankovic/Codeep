@@ -18,8 +18,9 @@ import { createHash } from 'crypto';
 import { ProjectContext } from './project';
 import { config, getApiKey, Message, resolveBaseUrl } from '../config/index';
 import { loadProjectIntelligence, generateContextFromIntelligence } from './projectIntelligence';
+import { formatCommandIndex } from './commandIndex';
 import { syncProgress, generateProjectId } from './codeepCloud';
-import { getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, isNoApiKeyProvider } from '../config/providers';
+import { getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, isNoApiKeyProvider, reasoningParamsFor, type ReasoningTier } from '../config/providers';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { formatToolDefinitions, getOpenAITools, getAnthropicTools, AdditionalToolDef } from './tools';
@@ -301,6 +302,16 @@ export function getAgentSystemPrompt(projectContext: ProjectContext): string {
 - Keep working until the task is actually finished. If you still have work to do, CALL A TOOL — don't just narrate. If you're done, reply with a short summary and no tool calls.
 - Don't ask permission for routine work; the user already launched the agent.
 
+## About Codeep
+Codeep is an open-source, terminal-native AI coding agent — also a native macOS app and a VS Code / Zed extension (over ACP). Beyond the file/command tools above, the user can extend you through Codeep features:
+- Skills — reusable workflow bundles (browse/add/run with \`/skills\`)
+- MCP — connect external tools & data, e.g. Postgres, GitHub, a browser, the iOS simulator (\`/mcp\`)
+- Sub-agents — delegate focused subtasks (\`/agents\`)
+- Personalities — change your working style (\`/personality\`)
+- A dashboard at codeep.dev for synced sessions, usage & cost
+When the user asks what you can do, or a task maps to one of these, point them at the right slash-command:
+${formatCommandIndex()}
+
 ## Codeep App Storage (your own metadata)
 This project uses Codeep. The following paths are Codeep's internal state — **read** them if you need context about prior sessions, but do not edit them manually during a task:
 - \`${root}/.codeep/intelligence.json\` — cached project analysis (structure, frameworks, CI/CD, conventions). Refresh via \`/scan\`.
@@ -396,6 +407,8 @@ export async function agentChat(
     // Provider-level guard (OpenAI GPT-5+) OR model-level guard — Anthropic's
     // Fable 5 / Opus 4.7+ reject temperature with a 400; omission is safe.
     const tempParam = (requiresDefaultTemperature(providerId) || modelRejectsSamplingParams(model)) ? {} : { temperature: config.get('temperature') };
+    // Thinking-effort tier → provider-shaped param ({} for 'auto'/unsupported).
+    const reasoningParam = reasoningParamsFor(providerId, model, config.get('reasoningEffort') as ReasoningTier);
     if (protocol === 'openai') {
       const maxTok = getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384));
       const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };
@@ -450,7 +463,7 @@ export async function agentChat(
       body = {
         model, messages: [{ role: 'system', content: systemPrompt }, ...messages],
         tools: getOpenAITools(additionalTools), tool_choice: 'auto', stream: useStreaming,
-        ...tempParam, ...tokParam,
+        ...tempParam, ...tokParam, ...reasoningParam,
         ...(useStreaming && providerId === 'openai' ? { stream_options: { include_usage: true } } : {}),
         ...openRouterExtras,
       };
@@ -475,7 +488,7 @@ export async function agentChat(
         system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' as const } }],
         messages,
         tools: cachedTools, stream: useStreaming,
-        ...tempParam, max_tokens: getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384)),
+        ...tempParam, ...reasoningParam, max_tokens: getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384)),
       };
     }
 
@@ -599,13 +612,15 @@ export async function agentChatFallback(
     // Provider-level guard (OpenAI GPT-5+) OR model-level guard — Anthropic's
     // Fable 5 / Opus 4.7+ reject temperature with a 400; omission is safe.
     const tempParam = (requiresDefaultTemperature(providerId) || modelRejectsSamplingParams(model)) ? {} : { temperature: config.get('temperature') };
+    // Thinking-effort tier → provider-shaped param ({} for 'auto'/unsupported).
+    const reasoningParam = reasoningParamsFor(providerId, model, config.get('reasoningEffort') as ReasoningTier);
     if (protocol === 'openai') {
       const maxTok = getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384));
       const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };
       endpoint = `${baseUrl}/chat/completions`;
       body = {
         model, messages: [{ role: 'system', content: fallbackPrompt }, ...messages],
-        stream: Boolean(onChunk), ...tempParam, ...tokParam,
+        stream: Boolean(onChunk), ...tempParam, ...tokParam, ...reasoningParam,
       };
     } else {
       endpoint = `${baseUrl}/v1/messages`;
@@ -621,7 +636,7 @@ export async function agentChatFallback(
           { role: 'assistant', content: 'Understood. I will use the tools as specified.' },
           ...messages,
         ],
-        stream: Boolean(onChunk), ...tempParam,
+        stream: Boolean(onChunk), ...tempParam, ...reasoningParam,
         max_tokens: getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384)),
       };
     }

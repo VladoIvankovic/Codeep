@@ -42,7 +42,7 @@ import {
   ProjectContext,
 } from '../utils/project';
 import { getCurrentVersion, checkForUpdates, getUpdateInstructions } from '../utils/update';
-import { getProviderList, isNoApiKeyProvider } from '../config/providers';
+import { getProviderList, isNoApiKeyProvider, resolveReasoningTier } from '../config/providers';
 import { getSessionStats, getCostBreakdown } from '../utils/tokenTracker';
 import { isGitRepository } from '../utils/git';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
@@ -112,11 +112,17 @@ function getStatus(): StatusInfo {
   const providers = getProviderList();
   const providerInfo = providers.find(p => p.id === provider.id);
   const stats = getSessionStats();
+  // Show the thinking-effort tier beside the model. Resolve the (global) tier
+  // to what THIS model actually runs — e.g. a global 'low' shows as 'high' on
+  // GLM-5.2, which only grades high|max. 'auto'/unsupported → hidden.
+  const resolved = resolveReasoningTier(provider.id, config.get('model'), config.get('reasoningEffort'));
+  const reasoningEffort = resolved !== 'auto' ? resolved : undefined;
   return {
     version: getCurrentVersion(),
     provider: providerInfo?.name || 'Unknown',
     model: config.get('model'),
     agentMode: config.get('agentMode') || 'off',
+    reasoningEffort,
     projectPath,
     hasWriteAccess,
     sessionId,

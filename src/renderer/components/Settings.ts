@@ -42,6 +42,19 @@ export const SETTINGS: SettingItem[] = [
     step: 256,
   },
   {
+    key: 'reasoningEffort',
+    label: 'Thinking Effort',
+    getValue: () => config.get('reasoningEffort') ?? 'auto',
+    type: 'select',
+    options: [
+      { value: 'auto', label: 'Auto (model default)' },
+      { value: 'low', label: 'Low' },
+      { value: 'medium', label: 'Medium' },
+      { value: 'high', label: 'High' },
+      { value: 'max', label: 'Max' },
+    ],
+  },
+  {
     key: 'apiTimeout',
     label: 'API Timeout (ms)',
     getValue: () => config.get('apiTimeout'),

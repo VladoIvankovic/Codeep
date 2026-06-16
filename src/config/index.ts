@@ -81,6 +81,11 @@ interface ConfigSchema {
   migrationVersion: number;
   temperature: number;
   maxTokens: number;
+  /** Thinking / reasoning-effort tier sent with each request. 'auto' (default)
+   *  omits the param so each model uses its own default; low/medium/high/max are
+   *  clamped per provider+model by reasoningParamsFor() (config/providers.ts).
+   *  Only applied for models that expose a graded knob — set via `/thinking`. */
+  reasoningEffort: 'auto' | 'low' | 'medium' | 'high' | 'max';
   apiTimeout: number;
   rateLimitApi: number; // API requests per minute
   rateLimitCommands: number; // Commands per minute
@@ -352,6 +357,7 @@ function createConfig(): Conf<ConfigSchema> {
     currentSessionId: '',
     temperature: 0.7,
     maxTokens: 32768,
+    reasoningEffort: 'auto',
     apiTimeout: 60000,
     rateLimitApi: 10000,
     rateLimitCommands: 10000,

@@ -513,3 +513,163 @@ export function getEffectiveMaxTokens(providerId: string, requested: number): nu
   if (!provider?.maxOutputTokens) return requested;
   return Math.min(requested, provider.maxOutputTokens);
 }
+
+// ---------------------------------------------------------------------------
+// Thinking / reasoning-effort tiers
+// ---------------------------------------------------------------------------
+
+/**
+ * Unified, user-facing thinking-effort tiers (the `/thinking` setting).
+ *
+ *   'auto'  — omit the param entirely → each provider's own default.
+ *   low / medium / high / max — four explicit depth tiers.
+ *
+ * The four tiers are CONCEPTUAL. `reasoningParamsFor()` clamps each one to the
+ * nearest level the active provider+model actually accepts, so we never send a
+ * value that would 400 (e.g. Gemini rejects "medium"; OpenAI has no "max").
+ * The control is a pure DEPTH knob on models that already think — it never
+ * toggles thinking on/off, which keeps us clear of the reasoning_content-replay
+ * contract that DeepSeek/GLM impose when thinking mode is flipped.
+ */
+export type ReasoningTier = 'auto' | 'low' | 'medium' | 'high' | 'max';
+
+export const REASONING_TIERS: ReasoningTier[] = ['auto', 'low', 'medium', 'high', 'max'];
+
+/**
+ * Canonicalize a model id for capability matching: lowercase, drop any
+ * `vendor/` namespace (OpenRouter sends `anthropic/claude-opus-4.8`), and
+ * normalize `.` version separators to `-` (`glm-5.2` → `glm-5-2`,
+ * `claude-opus-4.8` → `claude-opus-4-8`). Mirrors macOS `ModelTuning.canonicalModelID`.
+ */
+export function canonicalModelId(model: string): string {
+  let id = model.toLowerCase();
+  const slash = id.lastIndexOf('/');
+  if (slash !== -1) id = id.slice(slash + 1);
+  return id.replace(/\./g, '-');
+}
+
+/** True when `id` equals `prefix` or starts with `prefix-` (catches dated variants). */
+function idMatches(id: string, prefix: string): boolean {
+  return id === prefix || id.startsWith(`${prefix}-`);
+}
+
+/**
+ * Does this provider+model expose a GRADED thinking-effort control we can drive?
+ * Used to gate the `/thinking` UI — hidden entirely for models without one.
+ * Keep in lockstep with macOS `ModelTuning.reasoningEffortSupported`.
+ */
+export function modelSupportsReasoningEffort(providerId: string, model: string): boolean {
+  const id = canonicalModelId(model);
+  switch (providerId) {
+    case 'anthropic':
+      // Effort is GA on Opus 4.5+, Sonnet 4.6, Fable 5 — NOT Haiku or Sonnet 4.5.
+      if (idMatches(id, 'claude-haiku-4-5') || idMatches(id, 'claude-sonnet-4-5')) return false;
+      return /^claude-(opus-4-([5-9]|\d\d)|sonnet-4-6|fable-5)/.test(id);
+    case 'openai':
+      // GPT-5.x are reasoning models — reasoning_effort across the family (incl. mini).
+      return id.startsWith('gpt-5');
+    case 'google':
+      // Gemini 3.x thinking_level via the OpenAI-compat reasoning_effort mapping.
+      return id.startsWith('gemini-3');
+    case 'deepseek':
+      return id.startsWith('deepseek-v4');
+    case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
+      // GLM-5.2 added graded High/Max effort. glm-5-turbo is a plain thinking
+      // toggle (no graded levels) so it stays out.
+      return idMatches(id, 'glm-5-2');
+    case 'openrouter':
+      // OpenRouter normalizes a unified `reasoning` field and silently ignores
+      // it for non-reasoning models, so the control is always safe to expose.
+      return true;
+    default:
+      // minimax (toggle only), ollama, custom — no graded depth knob.
+      return false;
+  }
+}
+
+/**
+ * Build the request-body fields that carry the chosen effort tier for the
+ * active provider+model+protocol. Returns `{}` for 'auto', unsupported
+ * models, or providers without a graded knob — so callers can spread it
+ * unconditionally. Keep in lockstep with macOS `ModelTuning.reasoningParams`.
+ */
+export function reasoningParamsFor(
+  providerId: string,
+  model: string,
+  tier: ReasoningTier,
+): Record<string, unknown> {
+  // 'auto', or any unexpected value from an older/garbled config, → no param.
+  // (Guards against ever emitting e.g. `effort: undefined`, which could 400.)
+  if (tier === 'auto' || !REASONING_TIERS.includes(tier)) return {};
+  if (!modelSupportsReasoningEffort(providerId, model)) return {};
+
+  switch (providerId) {
+    case 'anthropic':
+      // low / medium / high / max — all valid on the capable Claude models.
+      return { output_config: { effort: tier } };
+    case 'openai':
+      // none/low/medium/high/xhigh — no "max"; map our Max → xhigh (the ceiling).
+      return { reasoning_effort: tier === 'max' ? 'xhigh' : tier };
+    case 'google':
+      // Gemini 3 (OpenAI-compat) accepts ONLY low/high — "medium" 400s.
+      return { reasoning_effort: tier === 'low' ? 'low' : 'high' };
+    case 'deepseek':
+    case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
+      // Graded thinking depth: high (default) or max. Lower tiers collapse to high.
+      return { reasoning_effort: tier === 'max' ? 'max' : 'high' };
+    case 'openrouter':
+      // Unified reasoning object; no "max" effort → cap at high.
+      return { reasoning: { effort: tier === 'max' ? 'high' : tier } };
+    default:
+      return {};
+  }
+}
+
+/**
+ * The DISTINCT tiers a given provider+model actually exposes — used to build a
+ * per-model picker that only offers levels the model can tell apart (e.g.
+ * GLM-5.2/DeepSeek grade only high|max; Gemini via the OpenAI-compat layer only
+ * low|high). Always leads with 'auto'. `[]` for models with no graded knob.
+ *
+ * Kept in lockstep with `reasoningParamsFor` (the providers-test asserts every
+ * listed tier yields a DISTINCT param, so this can't silently drift). Mirrors
+ * macOS `ModelTuning.availableReasoningTiers`.
+ */
+export function availableReasoningTiers(providerId: string, model: string): ReasoningTier[] {
+  if (!modelSupportsReasoningEffort(providerId, model)) return [];
+  switch (providerId) {
+    case 'anthropic':
+    case 'openai':
+      return ['auto', 'low', 'medium', 'high', 'max'];
+    case 'google':
+      // OpenAI-compat layer accepts only low/high — "medium" 400s.
+      return ['auto', 'low', 'high'];
+    case 'deepseek':
+    case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
+      return ['auto', 'high', 'max'];
+    case 'openrouter':
+      return ['auto', 'low', 'medium', 'high'];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Map a (possibly out-of-range) tier to the tier this model actually distinguishes,
+ * for display — the chip + the checked menu row. The effort setting is global, so
+ * a tier picked on Opus ('low') may not exist on GLM-5.2; we show the level GLM
+ * will really run (its 'low' clamps to 'high'). Picks the available tier whose
+ * effective param equals the requested one. 'auto' (or unsupported) → 'auto'.
+ */
+export function resolveReasoningTier(providerId: string, model: string, tier: ReasoningTier): ReasoningTier {
+  if (tier === 'auto') return 'auto';
+  const avail = availableReasoningTiers(providerId, model);
+  if (avail.length === 0) return 'auto';
+  if (avail.includes(tier)) return tier;
+  const target = JSON.stringify(reasoningParamsFor(providerId, model, tier));
+  for (const t of avail) {
+    if (t === 'auto') continue;
+    if (JSON.stringify(reasoningParamsFor(providerId, model, t)) === target) return t;
+  }
+  return 'auto';
+}

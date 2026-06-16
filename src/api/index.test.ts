@@ -34,6 +34,9 @@ vi.mock('../config/providers', () => ({
   usesMaxCompletionTokens: vi.fn(() => false),
   requiresDefaultTemperature: vi.fn(() => false),
   modelRejectsSamplingParams: vi.fn(() => false),
+  // Thinking-effort param builder — return {} so request bodies are unchanged
+  // in these tests (the tier defaults to 'auto' anyway).
+  reasoningParamsFor: vi.fn(() => ({})),
   // Added to match the real module — api/index.ts dynamically imports this
   // to decide whether to skip the API-key requirement (e.g. Ollama runs keyless).
   isNoApiKeyProvider: vi.fn((_id: string) => false),

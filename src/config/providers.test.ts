@@ -8,6 +8,12 @@ import {
   getProviderAuthHeader,
   getProviderMcpEndpoints,
   modelRejectsSamplingParams,
+  canonicalModelId,
+  modelSupportsReasoningEffort,
+  reasoningParamsFor,
+  availableReasoningTiers,
+  resolveReasoningTier,
+  REASONING_TIERS,
 } from './providers';
 
 describe('providers', () => {
@@ -310,6 +316,134 @@ describe('providers', () => {
       const modelIds = provider!.models.map(m => m.id);
       expect(modelIds).toContain('gemini-3.1-pro-preview');
       expect(modelIds).toContain('gemini-3.5-flash');
+    });
+  });
+
+  describe('canonicalModelId', () => {
+    it('lowercases, strips vendor/ prefix, and normalizes dots to dashes', () => {
+      expect(canonicalModelId('Claude-Opus-4.8')).toBe('claude-opus-4-8');
+      expect(canonicalModelId('anthropic/claude-opus-4.8')).toBe('claude-opus-4-8');
+      expect(canonicalModelId('glm-5.2')).toBe('glm-5-2');
+      expect(canonicalModelId('GPT-5.5')).toBe('gpt-5-5');
+    });
+  });
+
+  describe('modelSupportsReasoningEffort', () => {
+    it('supports capable Anthropic models, not Haiku or Sonnet 4.5', () => {
+      expect(modelSupportsReasoningEffort('anthropic', 'claude-opus-4-8')).toBe(true);
+      expect(modelSupportsReasoningEffort('anthropic', 'claude-sonnet-4-6')).toBe(true);
+      expect(modelSupportsReasoningEffort('anthropic', 'claude-haiku-4-5-20251001')).toBe(false);
+      expect(modelSupportsReasoningEffort('anthropic', 'claude-sonnet-4-5')).toBe(false);
+    });
+    it('supports GPT-5.x, Gemini 3, DeepSeek V4', () => {
+      expect(modelSupportsReasoningEffort('openai', 'gpt-5.5')).toBe(true);
+      expect(modelSupportsReasoningEffort('openai', 'gpt-5.4-mini')).toBe(true);
+      expect(modelSupportsReasoningEffort('google', 'gemini-3.1-pro-preview')).toBe(true);
+      expect(modelSupportsReasoningEffort('deepseek', 'deepseek-v4-pro')).toBe(true);
+    });
+    it('supports GLM-5.2 but not glm-5-turbo (toggle only)', () => {
+      expect(modelSupportsReasoningEffort('z.ai', 'glm-5.2')).toBe(true);
+      expect(modelSupportsReasoningEffort('z.ai-cn', 'glm-5.2')).toBe(true);
+      expect(modelSupportsReasoningEffort('z.ai', 'glm-5-turbo')).toBe(false);
+    });
+    it('treats OpenRouter as always supported (unified, silently ignored)', () => {
+      expect(modelSupportsReasoningEffort('openrouter', 'anthropic/claude-opus-4')).toBe(true);
+    });
+    it('returns false for minimax, ollama, custom', () => {
+      expect(modelSupportsReasoningEffort('minimax', 'MiniMax-M3')).toBe(false);
+      expect(modelSupportsReasoningEffort('ollama', 'llama3.2')).toBe(false);
+      expect(modelSupportsReasoningEffort('custom', 'anything')).toBe(false);
+    });
+  });
+
+  describe('reasoningParamsFor', () => {
+    it('returns {} for auto or unsupported models', () => {
+      expect(reasoningParamsFor('anthropic', 'claude-opus-4-8', 'auto')).toEqual({});
+      expect(reasoningParamsFor('anthropic', 'claude-haiku-4-5-20251001', 'high')).toEqual({});
+      expect(reasoningParamsFor('ollama', 'llama3.2', 'max')).toEqual({});
+    });
+    it('returns {} (never effort:undefined) for a garbage/legacy tier value', () => {
+      // Simulates an old config string that isn't one of the 5 tiers.
+      expect(reasoningParamsFor('anthropic', 'claude-opus-4-8', 'ultra' as never)).toEqual({});
+      expect(reasoningParamsFor('openai', 'gpt-5.5', undefined as never)).toEqual({});
+    });
+    it('Anthropic → output_config.effort, passed through 1:1', () => {
+      expect(reasoningParamsFor('anthropic', 'claude-opus-4-8', 'low')).toEqual({ output_config: { effort: 'low' } });
+      expect(reasoningParamsFor('anthropic', 'claude-opus-4-8', 'max')).toEqual({ output_config: { effort: 'max' } });
+    });
+    it('OpenAI → reasoning_effort, max maps to xhigh (no native max)', () => {
+      expect(reasoningParamsFor('openai', 'gpt-5.5', 'medium')).toEqual({ reasoning_effort: 'medium' });
+      expect(reasoningParamsFor('openai', 'gpt-5.5', 'max')).toEqual({ reasoning_effort: 'xhigh' });
+    });
+    it('Gemini → reasoning_effort clamped to low/high (never medium → would 400)', () => {
+      expect(reasoningParamsFor('google', 'gemini-3.1-pro-preview', 'low')).toEqual({ reasoning_effort: 'low' });
+      expect(reasoningParamsFor('google', 'gemini-3.1-pro-preview', 'medium')).toEqual({ reasoning_effort: 'high' });
+      expect(reasoningParamsFor('google', 'gemini-3.1-pro-preview', 'max')).toEqual({ reasoning_effort: 'high' });
+    });
+    it('DeepSeek / GLM-5.2 → reasoning_effort high|max', () => {
+      expect(reasoningParamsFor('deepseek', 'deepseek-v4-pro', 'low')).toEqual({ reasoning_effort: 'high' });
+      expect(reasoningParamsFor('deepseek', 'deepseek-v4-pro', 'max')).toEqual({ reasoning_effort: 'max' });
+      expect(reasoningParamsFor('z.ai', 'glm-5.2', 'high')).toEqual({ reasoning_effort: 'high' });
+      expect(reasoningParamsFor('z.ai', 'glm-5.2', 'max')).toEqual({ reasoning_effort: 'max' });
+    });
+    it('OpenRouter → reasoning.effort, max capped at high', () => {
+      expect(reasoningParamsFor('openrouter', 'openai/gpt-5.5', 'medium')).toEqual({ reasoning: { effort: 'medium' } });
+      expect(reasoningParamsFor('openrouter', 'openai/gpt-5.5', 'max')).toEqual({ reasoning: { effort: 'high' } });
+    });
+    it('never emits a value Gemini/OpenAI reject across all tiers', () => {
+      for (const tier of REASONING_TIERS) {
+        const g = reasoningParamsFor('google', 'gemini-3.5-flash', tier) as { reasoning_effort?: string };
+        if (g.reasoning_effort) expect(['low', 'high']).toContain(g.reasoning_effort);
+        const o = reasoningParamsFor('openai', 'gpt-5.5', tier) as { reasoning_effort?: string };
+        if (o.reasoning_effort) expect(['none', 'low', 'medium', 'high', 'xhigh']).toContain(o.reasoning_effort);
+      }
+    });
+  });
+
+  describe('availableReasoningTiers', () => {
+    it('lists only the levels each model distinguishes', () => {
+      expect(availableReasoningTiers('anthropic', 'claude-opus-4-8')).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+      expect(availableReasoningTiers('openai', 'gpt-5.5')).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+      expect(availableReasoningTiers('google', 'gemini-3.1-pro-preview')).toEqual(['auto', 'low', 'high']);
+      expect(availableReasoningTiers('z.ai', 'glm-5.2')).toEqual(['auto', 'high', 'max']);
+      expect(availableReasoningTiers('deepseek', 'deepseek-v4-pro')).toEqual(['auto', 'high', 'max']);
+      expect(availableReasoningTiers('openrouter', 'openai/gpt-5.5')).toEqual(['auto', 'low', 'medium', 'high']);
+    });
+    it('returns [] for unsupported models', () => {
+      expect(availableReasoningTiers('anthropic', 'claude-haiku-4-5-20251001')).toEqual([]);
+      expect(availableReasoningTiers('ollama', 'llama3.2')).toEqual([]);
+    });
+    it('drift guard — every listed non-auto tier yields a DISTINCT param', () => {
+      const cases = [
+        ['anthropic', 'claude-opus-4-8'], ['openai', 'gpt-5.5'],
+        ['google', 'gemini-3.1-pro-preview'], ['z.ai', 'glm-5.2'],
+        ['deepseek', 'deepseek-v4-pro'], ['openrouter', 'openai/gpt-5.5'],
+      ];
+      for (const [pid, model] of cases) {
+        const tiers = availableReasoningTiers(pid, model).filter(t => t !== 'auto');
+        const params = tiers.map(t => JSON.stringify(reasoningParamsFor(pid, model, t)));
+        expect(new Set(params).size).toBe(params.length); // all distinct
+        for (const p of params) expect(p).not.toBe('{}'); // and none a no-op
+      }
+    });
+  });
+
+  describe('resolveReasoningTier', () => {
+    it('passes through tiers the model distinguishes', () => {
+      expect(resolveReasoningTier('anthropic', 'claude-opus-4-8', 'low')).toBe('low');
+      expect(resolveReasoningTier('z.ai', 'glm-5.2', 'max')).toBe('max');
+    });
+    it('collapses out-of-range tiers to the level the model actually runs', () => {
+      // GLM-5.2 grades only high|max — low/medium run as high.
+      expect(resolveReasoningTier('z.ai', 'glm-5.2', 'low')).toBe('high');
+      expect(resolveReasoningTier('z.ai', 'glm-5.2', 'medium')).toBe('high');
+      // Gemini (OpenAI-compat) has only low|high — medium/max run as high.
+      expect(resolveReasoningTier('google', 'gemini-3.1-pro-preview', 'medium')).toBe('high');
+      expect(resolveReasoningTier('google', 'gemini-3.1-pro-preview', 'max')).toBe('high');
+    });
+    it('returns auto for auto or unsupported models', () => {
+      expect(resolveReasoningTier('z.ai', 'glm-5.2', 'auto')).toBe('auto');
+      expect(resolveReasoningTier('ollama', 'llama3.2', 'max')).toBe('auto');
     });
   });
 });
