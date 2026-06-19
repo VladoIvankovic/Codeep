@@ -27,6 +27,10 @@ export interface ProviderConfig {
   maxOutputTokens?: number; // Provider-specific max output tokens limit
   useMaxCompletionTokens?: boolean; // Use max_completion_tokens instead of max_tokens (e.g. OpenAI GPT-5+)
   requiresDefaultTemperature?: boolean; // Provider rejects custom temperature (e.g. OpenAI GPT-5+ only allows 1)
+  /** Provider's OpenAI-compatible endpoint rejects `tools` together with
+   *  `stream: true` (Alibaba/Qwen DashScope). When true, agent turns that send
+   *  tools are issued non-streamed (we buffer the full response). */
+  noStreamWithTools?: boolean;
   envKey?: string; // Environment variable name for API key
   subscribeUrl?: string; // URL to get API key
   noApiKey?: boolean; // Provider doesn't require an API key (e.g. Ollama)
@@ -245,6 +249,196 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     groupLabel: 'DeepSeek',
     hint: 'Pay-per-use via DeepSeek API key (platform.deepseek.com).',
   },
+  // ── Kimi (Moonshot AI) ────────────────────────────────────────────
+  // Subscription (Kimi Code) mirrors the Z.AI GLM-Coding-Plan shape: a
+  // dedicated coding base URL + a separate key, model id ALWAYS
+  // `kimi-for-coding` (a backend alias). OpenAI-compatible is the
+  // battle-tested path so we don't expose the Anthropic surface here.
+  'kimi': {
+    name: 'Kimi (Moonshot) — Coding Plan',
+    description: 'Kimi Code subscription',
+    protocols: {
+      openai: { baseUrl: 'https://api.kimi.com/coding/v1', authHeader: 'Bearer', supportsNativeTools: true },
+    },
+    models: [
+      { id: 'kimi-for-coding', name: 'Kimi Code', description: 'Subscription alias — auto-maps to the latest Kimi coding model (K2.7 Code)' },
+    ],
+    defaultModel: 'kimi-for-coding',
+    defaultProtocol: 'openai',
+    maxOutputTokens: 32_768,
+    envKey: 'KIMI_CODE_API_KEY',
+    subscribeUrl: 'https://www.kimi.com/code',
+    groupLabel: 'Kimi — Subscription (Kimi Code)',
+    hint: 'Uses your Kimi Code subscription — no per-token charges. Key from kimi.com/code/console.',
+  },
+  'kimi-api': {
+    name: 'Kimi (Moonshot) API (pay-per-use)',
+    description: 'Moonshot AI Kimi models via API key',
+    protocols: {
+      openai: { baseUrl: 'https://api.moonshot.ai/v1', authHeader: 'Bearer', supportsNativeTools: true },
+    },
+    models: [
+      { id: 'kimi-k2.7-code',           name: 'Kimi K2.7 Code',            description: 'Flagship agentic coding model (256K context)' },
+      { id: 'kimi-k2.7-code-highspeed', name: 'Kimi K2.7 Code (High-Speed)', description: 'Throughput-tuned K2.7 Code for latency-sensitive loops' },
+      { id: 'kimi-k2.6',                name: 'Kimi K2.6',                 description: 'Previous-gen multimodal reasoning model' },
+      { id: 'kimi-k2.5',                name: 'Kimi K2.5',                 description: 'Older general-purpose model (cheaper)' },
+    ],
+    defaultModel: 'kimi-k2.7-code',
+    defaultProtocol: 'openai',
+    maxOutputTokens: 32_768,
+    envKey: 'MOONSHOT_API_KEY',
+    subscribeUrl: 'https://platform.kimi.ai/console/api-keys',
+    groupLabel: 'Kimi — API (pay-per-use)',
+    hint: 'Pay-per-use via Moonshot API key (platform.kimi.ai).',
+  },
+  'kimi-cn': {
+    name: 'Kimi China (Moonshot)',
+    description: 'Moonshot AI Kimi models (China)',
+    protocols: {
+      openai: { baseUrl: 'https://api.moonshot.cn/v1', authHeader: 'Bearer', supportsNativeTools: true },
+    },
+    models: [
+      { id: 'kimi-k2.7-code',           name: 'Kimi K2.7 Code',            description: 'Flagship agentic coding model (256K context)' },
+      { id: 'kimi-k2.7-code-highspeed', name: 'Kimi K2.7 Code (High-Speed)', description: 'Throughput-tuned K2.7 Code' },
+      { id: 'kimi-k2.6',                name: 'Kimi K2.6',                 description: 'Previous-gen multimodal reasoning model' },
+      { id: 'kimi-k2.5',                name: 'Kimi K2.5',                 description: 'Older general-purpose model' },
+    ],
+    defaultModel: 'kimi-k2.7-code',
+    defaultProtocol: 'openai',
+    maxOutputTokens: 32_768,
+    envKey: 'MOONSHOT_CN_API_KEY',
+    subscribeUrl: 'https://platform.moonshot.cn/console/api-keys',
+    groupLabel: 'Kimi China — API (pay-per-use)',
+    hint: 'Pay-per-use via Moonshot China API key (platform.moonshot.cn).',
+  },
+  // ── Grok (xAI) ────────────────────────────────────────────────────
+  // Pay-per-use today (console.x.ai key). The SuperGrok / X Premium+
+  // subscription is OAuth-based — added separately. Reasoning models
+  // require max_completion_tokens (like GPT-5), so useMaxCompletionTokens.
+  'grok': {
+    name: 'Grok (xAI)',
+    description: 'xAI Grok models',
+    protocols: {
+      openai: { baseUrl: 'https://api.x.ai/v1', authHeader: 'Bearer', supportsNativeTools: true },
+    },
+    models: [
+      { id: 'grok-build-0.1',        name: 'Grok Build 0.1',        description: 'Agentic coding model — fast, 256K context' },
+      { id: 'grok-4.3',              name: 'Grok 4.3',              description: 'Flagship — highest quality, 1M context' },
+      { id: 'grok-code-fast-1',      name: 'Grok Code Fast 1',      description: 'Low-cost speed-first coder (alias of Build 0.1)' },
+      { id: 'grok-4-fast-reasoning', name: 'Grok 4 Fast (reasoning)', description: 'Cheap reasoning model, very large context' },
+    ],
+    defaultModel: 'grok-build-0.1',
+    defaultProtocol: 'openai',
+    useMaxCompletionTokens: true, // reasoning models reject max_tokens
+    envKey: 'XAI_API_KEY',
+    subscribeUrl: 'https://console.x.ai',
+    groupLabel: 'xAI Grok',
+    hint: 'Pay-per-use via xAI API key (console.x.ai).',
+  },
+  // ── Qwen (Alibaba Model Studio / DashScope) ───────────────────────
+  // Coding Plan subscription = dedicated base URL + sk-sp- key (mirrors
+  // Z.AI). Qwen's OpenAI-compatible surface CANNOT combine tools with
+  // streaming, so all Qwen entries set noStreamWithTools.
+  'qwen': {
+    name: 'Qwen (Alibaba) — Coding Plan',
+    description: 'Qwen Coding Plan subscription',
+    protocols: {
+      openai: { baseUrl: 'https://coding-intl.dashscope.aliyuncs.com/v1', authHeader: 'Bearer', supportsNativeTools: true },
+    },
+    models: [
+      { id: 'qwen3-coder-plus', name: 'Qwen3-Coder Plus', description: 'Flagship coding model — best quality' },
+      { id: 'qwen3-coder-next', name: 'Qwen3-Coder Next', description: 'Balanced quality/speed/cost' },
+      { id: 'qwen3-max',        name: 'Qwen3-Max',        description: 'Flagship general model (code + reasoning)' },
+    ],
+    defaultModel: 'qwen3-coder-plus',
+    defaultProtocol: 'openai',
+    maxOutputTokens: 65_536,
+    noStreamWithTools: true,
+    envKey: 'BAILIAN_CODING_PLAN_API_KEY',
+    subscribeUrl: 'https://www.alibabacloud.com/help/en/model-studio/qwen-code-coding-plan',
+    groupLabel: 'Qwen — Subscription (Coding Plan)',
+    hint: 'Uses your Qwen Coding Plan — no per-token charges. sk-sp-… key from Model Studio. Interactive coding use only.',
+  },
+  'qwen-api': {
+    name: 'Qwen (Alibaba) API (pay-per-use)',
+    description: 'Alibaba Model Studio Qwen models via API key',
+    protocols: {
+      openai: { baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', authHeader: 'Bearer', supportsNativeTools: true },
+    },
+    models: [
+      { id: 'qwen3-coder-plus',  name: 'Qwen3-Coder Plus',  description: 'Flagship coding model (256K, up to 1M)' },
+      { id: 'qwen3-coder-next',  name: 'Qwen3-Coder Next',  description: 'Balanced quality/speed/cost' },
+      { id: 'qwen3-coder-flash', name: 'Qwen3-Coder Flash', description: 'Fast/cheap coder' },
+      { id: 'qwen3-max',         name: 'Qwen3-Max',         description: 'Flagship general model' },
+    ],
+    defaultModel: 'qwen3-coder-plus',
+    defaultProtocol: 'openai',
+    maxOutputTokens: 65_536,
+    noStreamWithTools: true,
+    envKey: 'DASHSCOPE_API_KEY',
+    subscribeUrl: 'https://modelstudio.console.alibabacloud.com/',
+    groupLabel: 'Qwen — API (pay-per-use)',
+    hint: 'Pay-per-use via Alibaba Model Studio key (DASHSCOPE_API_KEY).',
+  },
+  'qwen-cn': {
+    name: 'Qwen China — Coding Plan',
+    description: 'Qwen Coding Plan subscription (China)',
+    protocols: {
+      openai: { baseUrl: 'https://coding.dashscope.aliyuncs.com/v1', authHeader: 'Bearer', supportsNativeTools: true },
+    },
+    models: [
+      { id: 'qwen3-coder-plus', name: 'Qwen3-Coder Plus', description: 'Flagship coding model — best quality' },
+      { id: 'qwen3-coder-next', name: 'Qwen3-Coder Next', description: 'Balanced quality/speed/cost' },
+      { id: 'qwen3-max',        name: 'Qwen3-Max',        description: 'Flagship general model' },
+    ],
+    defaultModel: 'qwen3-coder-plus',
+    defaultProtocol: 'openai',
+    maxOutputTokens: 65_536,
+    noStreamWithTools: true,
+    envKey: 'BAILIAN_CODING_PLAN_CN_API_KEY',
+    subscribeUrl: 'https://bailian.console.aliyun.com/',
+    groupLabel: 'Qwen China — Subscription (Coding Plan)',
+    hint: 'Uses your Qwen Coding Plan (China). sk-sp-… key from Bailian.',
+  },
+  'qwen-cn-api': {
+    name: 'Qwen China API (pay-per-use)',
+    description: 'Alibaba Model Studio Qwen models via API key (China)',
+    protocols: {
+      openai: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', authHeader: 'Bearer', supportsNativeTools: true },
+    },
+    models: [
+      { id: 'qwen3-coder-plus',  name: 'Qwen3-Coder Plus',  description: 'Flagship coding model' },
+      { id: 'qwen3-coder-next',  name: 'Qwen3-Coder Next',  description: 'Balanced quality/speed/cost' },
+      { id: 'qwen3-coder-flash', name: 'Qwen3-Coder Flash', description: 'Fast/cheap coder' },
+      { id: 'qwen3-max',         name: 'Qwen3-Max',         description: 'Flagship general model' },
+    ],
+    defaultModel: 'qwen3-coder-plus',
+    defaultProtocol: 'openai',
+    maxOutputTokens: 65_536,
+    noStreamWithTools: true,
+    envKey: 'DASHSCOPE_CN_API_KEY',
+    subscribeUrl: 'https://bailian.console.aliyun.com/',
+    groupLabel: 'Qwen China — API (pay-per-use)',
+    hint: 'Pay-per-use via Alibaba Model Studio China key.',
+  },
+  'modelscope': {
+    name: 'ModelScope (free Qwen)',
+    description: 'Free Qwen3-Coder inference via ModelScope',
+    protocols: {
+      openai: { baseUrl: 'https://api-inference.modelscope.cn/v1', authHeader: 'Bearer', supportsNativeTools: true },
+    },
+    models: [
+      { id: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', name: 'Qwen3-Coder 480B', description: 'Open MoE coder — free tier (~2000 req/day)' },
+    ],
+    defaultModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct',
+    defaultProtocol: 'openai',
+    maxOutputTokens: 65_536,
+    noStreamWithTools: true,
+    envKey: 'MODELSCOPE_API_KEY',
+    subscribeUrl: 'https://modelscope.cn/my/myaccesstoken',
+    groupLabel: 'ModelScope — Free (Qwen)',
+    hint: 'Free tier (~2000 req/day) via ModelScope token (modelscope.cn). Needs a bound Aliyun account.',
+  },
   'openai': {
     name: 'OpenAI',
     description: 'GPT and o-series models',
@@ -407,14 +601,24 @@ const DISPLAY_ORDER: string[] = [
   'openrouter',   // 100+ models, one key — surfaced high on purpose for 2.0.0.
   'z.ai',
   'z.ai-api',
+  'kimi',
+  'kimi-api',
+  'qwen',
+  'qwen-api',
+  'grok',
   'deepseek',
   'google',
   'minimax',
   'minimax-api',
+  'modelscope',
   'ollama',
   'custom',
+  // Regional + parameter-variant entries trail.
   'z.ai-cn',
   'z.ai-cn-api',
+  'kimi-cn',
+  'qwen-cn',
+  'qwen-cn-api',
   'minimax-cn',
 ];
 
@@ -492,13 +696,26 @@ export function requiresDefaultTemperature(providerId: string): boolean {
 }
 
 /**
+ * Returns true if the provider's OpenAI-compatible endpoint rejects `tools`
+ * together with `stream: true` (Alibaba/Qwen) — callers must issue tool-bearing
+ * agent turns non-streamed.
+ */
+export function providerNoStreamWithTools(providerId: string): boolean {
+  return PROVIDERS[providerId]?.noStreamWithTools ?? false;
+}
+
+/**
  * Models that reject sampling parameters (temperature/top_p/top_k) with a 400.
  * Anthropic removed them on Fable 5 and Opus 4.7+; older Claude models still
  * accept them, so this must be a MODEL-level check, not a provider-level one
  * (requiresDefaultTemperature can't express it). Omitting the field is always
- * safe — the API treats omission as default.
+ * safe — the API treats omission as default. Kimi K2.x code/thinking models
+ * fix temperature internally and 400 on any custom value, so they're here too.
  */
-const SAMPLING_PARAMS_REJECTED = ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7'];
+const SAMPLING_PARAMS_REJECTED = [
+  'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7',
+  'kimi-k2.7-code', 'kimi-for-coding',
+];
 
 export function modelRejectsSamplingParams(model: string): boolean {
   return SAMPLING_PARAMS_REJECTED.some(id => model === id || model.startsWith(`${id}-`));
@@ -577,6 +794,12 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
       // GLM-5.2 added graded High/Max effort. glm-5-turbo is a plain thinking
       // toggle (no graded levels) so it stays out.
       return idMatches(id, 'glm-5-2');
+    case 'grok':
+      // Grok reasoning models accept reasoning_effort (none/low/medium/high).
+      // Explicit *-non-reasoning variants don't think → excluded.
+      return id.startsWith('grok') && !id.includes('non-reasoning');
+    // Kimi (thinking on/off, not graded) and Qwen coders (non-thinking) have
+    // no graded knob → fall through to default false.
     case 'openrouter':
       // OpenRouter normalizes a unified `reasoning` field and silently ignores
       // it for non-reasoning models, so the control is always safe to expose.
@@ -617,6 +840,9 @@ export function reasoningParamsFor(
     case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
       // Graded thinking depth: high (default) or max. Lower tiers collapse to high.
       return { reasoning_effort: tier === 'max' ? 'max' : 'high' };
+    case 'grok':
+      // none/low/medium/high — no "max"; map our Max → high (the ceiling).
+      return { reasoning_effort: tier === 'max' ? 'high' : tier };
     case 'openrouter':
       // Unified reasoning object; no "max" effort → cap at high.
       return { reasoning: { effort: tier === 'max' ? 'high' : tier } };
@@ -647,6 +873,8 @@ export function availableReasoningTiers(providerId: string, model: string): Reas
     case 'deepseek':
     case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
       return ['auto', 'high', 'max'];
+    case 'grok':
+      return ['auto', 'low', 'medium', 'high'];
     case 'openrouter':
       return ['auto', 'low', 'medium', 'high'];
     default:

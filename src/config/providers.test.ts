@@ -13,6 +13,7 @@ import {
   reasoningParamsFor,
   availableReasoningTiers,
   resolveReasoningTier,
+  providerNoStreamWithTools,
   REASONING_TIERS,
 } from './providers';
 
@@ -418,6 +419,7 @@ describe('providers', () => {
         ['anthropic', 'claude-opus-4-8'], ['openai', 'gpt-5.5'],
         ['google', 'gemini-3.1-pro-preview'], ['z.ai', 'glm-5.2'],
         ['deepseek', 'deepseek-v4-pro'], ['openrouter', 'openai/gpt-5.5'],
+        ['grok', 'grok-4.3'],
       ];
       for (const [pid, model] of cases) {
         const tiers = availableReasoningTiers(pid, model).filter(t => t !== 'auto');
@@ -425,6 +427,55 @@ describe('providers', () => {
         expect(new Set(params).size).toBe(params.length); // all distinct
         for (const p of params) expect(p).not.toBe('{}'); // and none a no-op
       }
+    });
+  });
+
+  describe('new providers — Kimi / Grok / Qwen', () => {
+    it('registers the subscription + pay-per-use + CN variants', () => {
+      for (const id of ['kimi', 'kimi-api', 'kimi-cn', 'grok', 'qwen', 'qwen-api', 'qwen-cn', 'qwen-cn-api', 'modelscope']) {
+        expect(PROVIDERS[id], id).toBeDefined();
+      }
+    });
+    it('Kimi Code subscription uses the coding base URL + kimi-for-coding alias', () => {
+      expect(PROVIDERS['kimi'].protocols.openai?.baseUrl).toBe('https://api.kimi.com/coding/v1');
+      expect(PROVIDERS['kimi'].defaultModel).toBe('kimi-for-coding');
+      expect(PROVIDERS['kimi-api'].protocols.openai?.baseUrl).toBe('https://api.moonshot.ai/v1');
+      expect(PROVIDERS['kimi-api'].defaultModel).toBe('kimi-k2.7-code');
+    });
+    it('Qwen Coding Plan vs pay-per-use base URLs (mirrors z.ai pattern)', () => {
+      expect(PROVIDERS['qwen'].protocols.openai?.baseUrl).toBe('https://coding-intl.dashscope.aliyuncs.com/v1');
+      expect(PROVIDERS['qwen-api'].protocols.openai?.baseUrl).toBe('https://dashscope-intl.aliyuncs.com/compatible-mode/v1');
+      expect(PROVIDERS['qwen'].defaultModel).toBe('qwen3-coder-plus');
+    });
+    it('Grok uses api.x.ai + max_completion_tokens (reasoning models)', () => {
+      expect(PROVIDERS['grok'].protocols.openai?.baseUrl).toBe('https://api.x.ai/v1');
+      expect(PROVIDERS['grok'].defaultModel).toBe('grok-build-0.1');
+      expect(PROVIDERS['grok'].useMaxCompletionTokens).toBe(true);
+    });
+    it('Qwen + ModelScope set noStreamWithTools; others do not', () => {
+      expect(providerNoStreamWithTools('qwen')).toBe(true);
+      expect(providerNoStreamWithTools('qwen-api')).toBe(true);
+      expect(providerNoStreamWithTools('modelscope')).toBe(true);
+      expect(providerNoStreamWithTools('grok')).toBe(false);
+      expect(providerNoStreamWithTools('kimi')).toBe(false);
+      expect(providerNoStreamWithTools('openai')).toBe(false);
+    });
+    it('Kimi coding models reject custom sampling params (fixed temperature)', () => {
+      expect(modelRejectsSamplingParams('kimi-k2.7-code')).toBe(true);
+      expect(modelRejectsSamplingParams('kimi-for-coding')).toBe(true);
+      expect(modelRejectsSamplingParams('kimi-k2.5')).toBe(false);
+    });
+    it('Grok supports graded reasoning_effort; Kimi/Qwen-coders do not', () => {
+      expect(modelSupportsReasoningEffort('grok', 'grok-4.3')).toBe(true);
+      expect(modelSupportsReasoningEffort('grok', 'grok-build-0.1')).toBe(true);
+      expect(modelSupportsReasoningEffort('grok', 'grok-4-fast-non-reasoning')).toBe(false);
+      expect(modelSupportsReasoningEffort('kimi', 'kimi-for-coding')).toBe(false);
+      expect(modelSupportsReasoningEffort('qwen', 'qwen3-coder-plus')).toBe(false);
+    });
+    it('Grok reasoning_effort: none/low/medium/high, Max → high', () => {
+      expect(reasoningParamsFor('grok', 'grok-4.3', 'medium')).toEqual({ reasoning_effort: 'medium' });
+      expect(reasoningParamsFor('grok', 'grok-4.3', 'max')).toEqual({ reasoning_effort: 'high' });
+      expect(availableReasoningTiers('grok', 'grok-4.3')).toEqual(['auto', 'low', 'medium', 'high']);
     });
   });
 

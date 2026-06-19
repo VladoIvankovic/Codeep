@@ -11,6 +11,34 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.13.0] — 2026-06-18
+
+> Three new providers — **Kimi** (Moonshot), **Grok** (xAI), and **Qwen** (Alibaba) — covering the major coding models. Kimi and Qwen include their flat-fee coding-plan subscriptions alongside pay-per-use; Grok adds graded `/thinking` effort.
+
+### Added
+
+- **Kimi (Moonshot AI).** `kimi` drives the **Kimi Code** subscription
+  (`api.kimi.com/coding`, model alias `kimi-for-coding`); `kimi-api` is
+  pay-per-use (`api.moonshot.ai`, default `kimi-k2.7-code`); `kimi-cn` for
+  mainland China. Keys: `KIMI_CODE_API_KEY` / `MOONSHOT_API_KEY`.
+- **Qwen (Alibaba Model Studio).** `qwen` drives the **Coding Plan**
+  subscription (`coding-intl.dashscope…`, `sk-sp-` key); `qwen-api` is
+  pay-per-use (DashScope, default `qwen3-coder-plus`); plus `qwen-cn` /
+  `qwen-cn-api` and a free **ModelScope** tier (`modelscope`). Keys:
+  `BAILIAN_CODING_PLAN_API_KEY` / `DASHSCOPE_API_KEY` / `MODELSCOPE_API_KEY`.
+- **Grok (xAI).** `grok` — pay-per-use (`api.x.ai`), default `grok-build-0.1`
+  plus `grok-4.3` and the fast/reasoning variants. Key: `XAI_API_KEY`.
+
+### Changed
+
+- **`/thinking` now covers Grok** (`reasoning_effort` — low/medium/high). Kimi
+  and the Qwen coder models have no graded knob, so they stay out of the picker.
+- **Qwen tool turns are sent non-streamed.** DashScope rejects `tools` with
+  `stream:true`, so agent turns that carry tools buffer the reply (handled
+  transparently); other providers keep streaming.
+- Kimi K2.x code models fix temperature internally — Codeep withholds the
+  sampling params so they don't 400.
+
 ## [2.12.0] — 2026-06-16
 
 > New `/thinking` (alias `/effort`) reasoning-effort control — `auto · low · medium · high · max`, shown beside the model in the status bar and clamped per provider+model so it never sends a value the API rejects. Plus a Codeep agent identity and iOS-testing MCP servers.

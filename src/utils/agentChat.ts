@@ -20,7 +20,7 @@ import { config, getApiKey, Message, resolveBaseUrl } from '../config/index';
 import { loadProjectIntelligence, generateContextFromIntelligence } from './projectIntelligence';
 import { formatCommandIndex } from './commandIndex';
 import { syncProgress, generateProjectId } from './codeepCloud';
-import { getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, isNoApiKeyProvider, reasoningParamsFor, type ReasoningTier } from '../config/providers';
+import { getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, isNoApiKeyProvider, reasoningParamsFor, providerNoStreamWithTools, type ReasoningTier } from '../config/providers';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { formatToolDefinitions, getOpenAITools, getAnthropicTools, AdditionalToolDef } from './tools';
@@ -402,7 +402,10 @@ export async function agentChat(
   try {
     let endpoint: string;
     let body: Record<string, unknown>;
-    const useStreaming = Boolean(onChunk);
+    // Qwen/DashScope reject `tools` + `stream:true` together; this path always
+    // sends tools, so force a non-streamed request there (the non-streaming
+    // branch below still emits the content via onChunk). Other providers stream.
+    const useStreaming = Boolean(onChunk) && !providerNoStreamWithTools(providerId);
 
     // Provider-level guard (OpenAI GPT-5+) OR model-level guard — Anthropic's
     // Fable 5 / Opus 4.7+ reject temperature with a 400; omission is safe.

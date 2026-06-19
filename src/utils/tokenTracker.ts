@@ -63,6 +63,23 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gemini-3-flash-preview':        1_000_000,
   // MiniMax
   'MiniMax-M3':             524_288,
+  // Kimi (Moonshot) — 256K across the K2.x line
+  'kimi-k2.7-code':            262_144,
+  'kimi-k2.7-code-highspeed':  262_144,
+  'kimi-k2.6':                 262_144,
+  'kimi-k2.5':                 262_144,
+  'kimi-for-coding':           262_144,
+  // Grok (xAI)
+  'grok-build-0.1':            256_000,
+  'grok-4.3':                  1_000_000,
+  'grok-code-fast-1':          256_000,
+  'grok-4-fast-reasoning':     2_000_000,
+  // Qwen (Alibaba) — 256K native (1M with extrapolation)
+  'qwen3-coder-plus':          262_144,
+  'qwen3-coder-next':          262_144,
+  'qwen3-coder-flash':         262_144,
+  'qwen3-max':                 262_144,
+  'Qwen/Qwen3-Coder-480B-A35B-Instruct': 262_144,
 };
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -102,6 +119,26 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'gemini-3-flash-preview':        { inputPer1M: 0.50, outputPer1M: 3.00 },
   // MiniMax
   'MiniMax-M3':             { inputPer1M: 0.60,  outputPer1M: 2.40 },
+  // Kimi (Moonshot) — pay-per-use cache-miss rates; `kimi-for-coding` is the
+  // subscription alias (flat-fee in reality, priced notionally like K2.7 Code).
+  'kimi-k2.7-code':            { inputPer1M: 0.60, outputPer1M: 2.50 },
+  'kimi-k2.7-code-highspeed':  { inputPer1M: 0.60, outputPer1M: 2.50 },
+  'kimi-k2.6':                 { inputPer1M: 0.55, outputPer1M: 2.20 },
+  'kimi-k2.5':                 { inputPer1M: 0.40, outputPer1M: 1.90 },
+  'kimi-for-coding':           { inputPer1M: 0.60, outputPer1M: 2.50 },
+  // Grok (xAI)
+  'grok-build-0.1':            { inputPer1M: 1.00, outputPer1M: 2.00 },
+  'grok-4.3':                  { inputPer1M: 1.25, outputPer1M: 2.50 },
+  'grok-code-fast-1':          { inputPer1M: 0.20, outputPer1M: 1.50 },
+  'grok-4-fast-reasoning':     { inputPer1M: 0.20, outputPer1M: 0.50 },
+  // Qwen (Alibaba) — qwen3-coder-* 0–256K tier; the Coding Plan is flat-fee so
+  // this only affects the pay-per-use estimate.
+  'qwen3-coder-plus':          { inputPer1M: 0.28, outputPer1M: 1.65 },
+  'qwen3-coder-next':          { inputPer1M: 0.28, outputPer1M: 1.65 },
+  'qwen3-coder-flash':         { inputPer1M: 0.10, outputPer1M: 0.50 },
+  'qwen3-max':                 { inputPer1M: 1.20, outputPer1M: 6.00 },
+  // ModelScope free tier — no per-token charge.
+  'Qwen/Qwen3-Coder-480B-A35B-Instruct': { inputPer1M: 0, outputPer1M: 0 },
 };
 
 export function getPricingTable(): { model: string; inputPer1M: number; outputPer1M: number }[] {
