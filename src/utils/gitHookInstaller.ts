@@ -3,7 +3,7 @@
 // issues at/above the threshold are found. Honors .codeep/review.{yml,json}.
 //
 // This is a GIT-hook installer — distinct from the lifecycle SHELL hooks in
-// utils/hooks.ts (.codeep/hooks/<event>.sh) and the React hook in src/hooks/.
+// utils/hooks.ts (.codeep/hooks/<event>.sh).
 import { readFileSync, writeFileSync, mkdirSync, chmodSync, rmSync } from 'fs';
 import { join, dirname, isAbsolute } from 'path';
 import { execSync } from 'child_process';

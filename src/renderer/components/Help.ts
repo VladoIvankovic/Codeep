@@ -1,13 +1,15 @@
 /**
- * Help screen component
+ * Help screen component.
+ *
+ * The `/help` layout lives in `../commands/registry.ts` as `HELP_LAYOUT`
+ * (single source of truth, alongside the command metadata). This file
+ * re-exports it under the historical `helpCategories` name so existing
+ * callers (`App.ts`, `handlers.ts`) keep working, and owns the keyboard-
+ * shortcuts panel (which is independent of commands). The actual rendering
+ * is done by `App.ts`, which iterates `helpCategories` directly.
  */
 
-import { Screen } from '../Screen';
-import { fg, style } from '../ansi';
-import { renderHelpModal } from './Modal';
-
-// Primary color: #f02a30 (Codeep red)
-const PRIMARY_COLOR = fg.rgb(240, 42, 48);
+import { HELP_LAYOUT } from '../commands/registry';
 
 export interface HelpCategory {
   title: string;
@@ -15,181 +17,14 @@ export interface HelpCategory {
 }
 
 /**
- * Codeep command help data
+ * Codeep command help data — re-exported from the registry so there's a
+ * single source of truth for both `/help` rendering and `/` autocomplete.
  */
-export const helpCategories: HelpCategory[] = [
-  {
-    title: 'General',
-    items: [
-      { key: '/help', description: 'Show this help' },
-      { key: '/status', description: 'Current status' },
-      { key: '/settings', description: 'Open settings' },
-      { key: '/version', description: 'Show version' },
-      { key: '/update', description: 'Check for updates' },
-      { key: '/stats (/cost)', description: 'Token usage & cost this session' },
-      { key: '/clear', description: 'Clear chat' },
-      { key: '/exit', description: 'Quit application' },
-    ],
-  },
-  {
-    title: 'Sessions',
-    items: [
-      { key: '/sessions', description: 'List and load sessions' },
-      { key: '/new', description: 'Start new session' },
-      { key: '/rename <name>', description: 'Rename current session' },
-      { key: '/search <term>', description: 'Search the current session' },
-      { key: '/recall <query>', description: 'Search across ALL saved sessions (cross-session)' },
-      { key: '/recall … --resume', description: 'Load the top-matching session directly' },
-      { key: '/recall … --summarize', description: 'LLM recap of what you did across matches' },
-      { key: '/export [md|json|txt]', description: 'Export chat' },
-      { key: '/compact [keepN]', description: 'AI-summarize older messages to free up context (keeps last N)' },
-    ],
-  },
-  {
-    title: 'Checkpoints (2.0)',
-    items: [
-      { key: '/checkpoint [name]', description: 'Snapshot conversation + provider/model + git HEAD' },
-      { key: '/checkpoints', description: 'List saved checkpoints in this workspace' },
-      { key: '/rewind <id>', description: 'Restore conversation from a checkpoint' },
-      { key: '/checkpoint delete <id>', description: 'Delete a saved checkpoint' },
-    ],
-  },
-  {
-    title: 'Agent Mode',
-    items: [
-      { key: '/agent <task>', description: 'Run agent with task' },
-      { key: '/agent-dry <task>', description: 'Dry run (no changes)' },
-      { key: '/plan <task>', description: 'Generate a plan first — review before /go executes' },
-      { key: '/go', description: 'Execute the pending plan from /plan' },
-      { key: '/stop', description: 'Stop running agent' },
-      { key: '/undo', description: 'Undo last agent action' },
-      { key: '/undo-all', description: 'Undo all agent actions' },
-      { key: '/history', description: 'Show agent history' },
-      { key: '/changes', description: 'Show session changes' },
-    ],
-  },
-  {
-    title: 'Git & Project',
-    items: [
-      { key: '/diff', description: 'Review git diff with AI' },
-      { key: '/diff --staged', description: 'Review staged changes' },
-      { key: '/commit (/c)', description: 'Generate commit message' },
-      { key: '/git-commit <msg>', description: 'Commit with message' },
-      { key: '/push (/p)', description: 'Git push' },
-      { key: '/pull', description: 'Git pull' },
-      { key: '/amend', description: 'Amend last commit' },
-      { key: '/branch', description: 'Create/manage branches' },
-      { key: '/stash', description: 'Stash changes' },
-      { key: '/init', description: 'Initialize project (.codeep/ folder)' },
-      { key: '/scan', description: 'Scan project structure' },
-      { key: '/memory <note>', description: 'Add note to project intelligence' },
-      { key: '/memory list', description: 'Show all memory notes' },
-      { key: '/memory remove <n>', description: 'Remove note by index' },
-      { key: '/memory clear', description: 'Clear all memory notes' },
-      { key: '/review', description: 'AI review of unstaged git changes (not full codebase)' },
-      { key: '/review --staged', description: 'AI review of staged git changes' },
-      { key: '/review --static', description: 'Static analysis — changed files, or whole src/ if clean' },
-      { key: '/review <file>', description: 'Static analysis of specific file(s)' },
-    ],
-  },
-  {
-    title: 'Code Operations',
-    items: [
-      { key: '/copy [n]', description: 'Copy code block to clipboard' },
-      { key: '/paste', description: 'Paste from clipboard' },
-      { key: '/apply', description: 'Apply file changes from AI' },
-      { key: '/add <path>', description: 'Add file to context' },
-      { key: '/drop [path]', description: 'Remove file (or all) from context' },
-      { key: '/multiline', description: 'Toggle multi-line input mode' },
-    ],
-  },
-  {
-    title: 'Skills (Shortcuts)',
-    items: [
-      { key: '/test (/t)', description: 'Generate/run tests' },
-      { key: '/docs (/d)', description: 'Add documentation' },
-      { key: '/refactor (/r)', description: 'Improve code quality' },
-      { key: '/fix (/f)', description: 'Debug and fix issues' },
-      { key: '/explain (/e)', description: 'Explain code' },
-      { key: '/optimize (/o)', description: 'Optimize performance' },
-      { key: '/debug (/b)', description: 'Debug problems' },
-      { key: '/security', description: 'Security audit (SQLi, XSS, secrets, auth)' },
-      { key: '/coverage', description: 'Run/analyze test coverage' },
-      { key: '/component <name>', description: 'Generate UI component' },
-      { key: '/api <name>', description: 'Generate API endpoint' },
-      { key: '/docker', description: 'Generate Dockerfile + compose' },
-      { key: '/skills', description: 'List all 50+ skills' },
-      { key: '/skills <query>', description: 'Search skills by keyword' },
-    ],
-  },
-  {
-    title: 'Settings',
-    items: [
-      { key: '/provider', description: 'Change AI provider' },
-      { key: '/model', description: 'Change model' },
-      { key: '/model <name>', description: 'Load saved profile (e.g. /model fast)' },
-      { key: '/protocol', description: 'Switch API protocol' },
-      { key: '/lang', description: 'Set response language' },
-      { key: '/grant', description: 'Grant write permission' },
-      { key: '/login', description: 'Login with API key' },
-      { key: '/logout', description: 'Logout from provider' },
-      { key: '/profile save <name>', description: 'Save current provider+model as profile' },
-      { key: '/profile list', description: 'List saved profiles' },
-      { key: '/openrouter', description: 'OpenRouter routing prefs (prefer/ignore providers, fallbacks, privacy)' },
-      { key: '/personality', description: 'List or switch agent tone (concise / verbose / security / senior-reviewer / …)' },
-      { key: '/personality <name>', description: 'Activate a personality. /personality off to clear.' },
-      { key: '/me', description: 'Your user profile (reply language, style, stack) — adapts the agent to you' },
-      { key: '/me init [project]', description: 'Scaffold a profile template (global, or for this project). /me off to disable' },
-      { key: '/me learn [on|off]', description: 'Learn durable prefs from this session now; on/off toggles auto-learn. /me forget clears it' },
-      { key: '/me sync', description: 'Push your profile to the codeep.dev dashboard (and pull on a fresh machine)' },
-      { key: '/agents', description: 'List sub-agents the agent can delegate to (researcher / reviewer / tester / your own)' },
-      { key: '/insights [--days N]', description: 'Activity summary — runs, files, tools, projects over the last N days (default 7)' },
-    ],
-  },
-  {
-    title: 'Extensions & MCP (2.0)',
-    items: [
-      { key: '/mcp', description: 'List connected MCP servers + their tools' },
-      { key: '/mcp browse [id]', description: 'Browse marketplace (12 servers) or show one' },
-      { key: '/mcp install <id> [args]', description: 'Install a marketplace server into this project' },
-      { key: '/mcp add <name> <cmd>', description: 'Add a custom MCP server (npx, binary, etc.)' },
-      { key: '/mcp remove <name>', description: 'Remove a project-scoped MCP server' },
-      { key: '/mcp reload', description: 'Re-read .codeep/mcp_servers.json (after manual edit)' },
-      { key: '/mcp resources', description: 'List resources exposed by connected servers' },
-      { key: '/mcp read <uri>', description: 'Read one MCP resource' },
-      { key: '/mcp prompts', description: 'List prompt templates exposed by servers' },
-      { key: '/mcp prompt <server> <name>', description: 'Materialize a prompt with arguments (key=value)' },
-      { key: '/hooks', description: 'List installed lifecycle hooks (.codeep/hooks/<event>.sh)' },
-      { key: '/commands', description: 'List custom slash commands (.codeep/commands/*.md)' },
-    ],
-  },
-  {
-    title: 'Context',
-    items: [
-      { key: '/context-save', description: 'Save conversation' },
-      { key: '/context-load', description: 'Load conversation' },
-      { key: '/context-clear', description: 'Clear saved context' },
-      { key: '/learn', description: 'Learn code preferences' },
-      { key: '/learn status', description: 'Show learned prefs' },
-      { key: '/learn rule <text>', description: 'Add custom rule' },
-    ],
-  },
-  {
-    title: 'Ollama (Local AI)',
-    items: [
-      { key: '/provider', description: 'Select "ollama" for local models' },
-      { key: '/settings > Ollama URL', description: 'Set URL (default: http://localhost:11434)' },
-      { key: '/model', description: 'Pick installed Ollama model dynamically' },
-      { key: '/model pull <model>', description: 'Pull an Ollama model (local Ollama only)' },
-      { key: '/model browse', description: 'Browse recommended local coding models and pull one' },
-      { key: '/model rm <model>', description: 'Remove a locally-installed Ollama model (local only)' },
-      { key: 'OLLAMA_HOST=0.0.0.0', description: 'Required env var for remote Ollama access' },
-    ],
-  },
-];
+export const helpCategories: HelpCategory[] = HELP_LAYOUT;
 
 /**
- * Keyboard shortcuts
+ * Keyboard shortcuts (independent of the command registry — raw key
+ * bindings, not slash commands).
  */
 export const keyboardShortcuts = [
   { key: 'Enter', description: 'Send message' },
@@ -218,4 +53,3 @@ export function getHelpTotalPages(screenHeight: number): number {
   
   return Math.max(1, Math.ceil(itemCount / availableHeight));
 }
-

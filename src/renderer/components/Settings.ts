@@ -4,7 +4,7 @@
 
 import { Screen } from '../Screen';
 import { fg, style } from '../ansi';
-import { config } from '../../config/index';
+import { config, type ConfigSchema } from '../../config/index';
 import { updateRateLimits } from '../../utils/ratelimit';
 
 // Primary color: #f02a30 (Codeep red)
@@ -12,7 +12,10 @@ const PRIMARY_COLOR = fg.rgb(240, 42, 48);
 const PRIMARY_BRIGHT = fg.rgb(255, 80, 85);
 
 export interface SettingItem {
-  key: string;
+  /** Must be a known config key — typed as `keyof ConfigSchema` so adding a
+   *  setting with an unknown key is a compile error, not a silent runtime
+   *  no-op. */
+  key: keyof ConfigSchema;
   label: string;
   getValue: () => string | number | boolean;
   type: 'number' | 'select' | 'text';
@@ -20,6 +23,25 @@ export interface SettingItem {
   max?: number;
   step?: number;
   options?: { value: string | number | boolean; label: string }[];
+}
+
+/**
+ * Write a value to the config for a given setting.
+ *
+ * This is the single typed write path for the settings screen. The win is on
+ * the KEY: `setting.key` is `keyof ConfigSchema` and `config.set` is generic
+ * over the key, so a misspelled or unknown setting key is now a compile error
+ * (previously every call site used `config.set(setting.key as any, …)`, which
+ * suppressed that check too). The VALUE is NOT checked against the specific
+ * key's type — because `SettingItem` is heterogeneous, `typeof setting.key`
+ * widens to the full key union and `ConfigSchema[typeof setting.key]` collapses
+ * to the union of every value type, so the cast here is intentionally wide.
+ * Centralising it keeps that one unavoidable cast in a single audited spot
+ * instead of seven. (Per-key value safety would need a generic `SettingItem<K>`
+ * authored via a `defineSetting<K>` helper — tracked as a follow-up.)
+ */
+function writeSetting(setting: SettingItem, value: string | number | boolean): void {
+  config.set(setting.key, value as ConfigSchema[typeof setting.key]);
 }
 
 export const SETTINGS: SettingItem[] = [
@@ -337,7 +359,7 @@ export function handleSettingsKey(
         const num = parseFloat(state.editValue);
         if (!isNaN(num)) {
           const clamped = Math.max(setting.min || 0, Math.min(setting.max || Infinity, num));
-          config.set(setting.key as any, clamped);
+          writeSetting(setting, clamped);
           if (setting.key === 'rateLimitApi' || setting.key === 'rateLimitCommands') {
             updateRateLimits();
           }
@@ -347,7 +369,7 @@ export function handleSettingsKey(
         }
       }
       if (setting.type === 'text' && state.editValue.trim()) {
-        config.set(setting.key as any, state.editValue.trim());
+        writeSetting(setting, state.editValue.trim());
         newState.editing = false;
         newState.editValue = '';
         return { handled: true, close: false, notify: `${setting.label}: ${state.editValue.trim()}`, newState };
@@ -395,7 +417,7 @@ export function handleSettingsKey(
       const step = setting.step || 1;
       const delta = key === 'left' ? -step : step;
       const newValue = Math.max(setting.min || 0, Math.min(setting.max || Infinity, current + delta));
-      config.set(setting.key as any, newValue);
+      writeSetting(setting, newValue);
       
       if (setting.key === 'rateLimitApi' || setting.key === 'rateLimitCommands') {
         updateRateLimits();
@@ -405,12 +427,12 @@ export function handleSettingsKey(
     }
     
     if (setting.type === 'select' && setting.options) {
-      const current = config.get(setting.key as any);
+      const current = config.get(setting.key);
       const currentIdx = setting.options.findIndex(o => o.value === current);
       const newIdx = key === 'left'
         ? (currentIdx - 1 + setting.options.length) % setting.options.length
         : (currentIdx + 1) % setting.options.length;
-      config.set(setting.key as any, setting.options[newIdx].value as any);
+      writeSetting(setting, setting.options[newIdx].value);
       return { handled: true, close: false, newState };
     }
     
@@ -427,10 +449,10 @@ export function handleSettingsKey(
     }
 
     if (setting.type === 'select' && setting.options) {
-      const current = config.get(setting.key as any);
+      const current = config.get(setting.key);
       const currentIdx = setting.options.findIndex(o => o.value === current);
       const newIdx = (currentIdx + 1) % setting.options.length;
-      config.set(setting.key as any, setting.options[newIdx].value as any);
+      writeSetting(setting, setting.options[newIdx].value);
       return { 
         handled: true, 
         close: false, 

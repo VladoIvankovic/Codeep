@@ -12,8 +12,10 @@
     "rootDir": "./src",
     "declaration": true,
     "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "types": ["node"],
+    "noEmitOnError": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "src/hooks/**/*"]
+  "exclude": ["node_modules", "dist"]
 }

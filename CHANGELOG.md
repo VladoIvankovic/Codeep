@@ -11,6 +11,180 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.13.1] — 2026-06-24
+
+> Repo hygiene: dropped dead React-hooks dir, locked the package manager to npm, made `npm run build` rebuild `dist/` from scratch, added a command registry as the single source of truth for autocomplete + `/help` + dispatch validation, lifted ACP test coverage from 0% to ~45% on the testable surface, removed all `as any` casts from the settings screen, upgraded `conf` to v13, fixed the tsconfig so `tsc --noEmit` is now genuinely clean (was silently emitting 445+ errors), patched the high-severity `vite` advisory, switched CI from bun to npm, added `CONTRIBUTING.md` + `SECURITY.md`, extracted the synchronous ACP handlers + pure helpers out of the `startAcpServer()` closure into a testable `serverHandlers.ts` module (89.7% line coverage on the extracted surface; 0 → 25.7% on `server.ts`), migrated `release-binaries.yml` from bun to npm (keeping bun only for the `bun build --compile` binary step), removed the deprecated + vulnerable `pkg` devDependency (0 high/critical advisories remaining), and hardened the build with `noEmitOnError: true`.
+
+### Removed
+
+- **`src/hooks/` deleted.** This directory (`index.ts` + `useAgent.ts`) was a
+  leftover from the old Ink-based TUI: it imported `react` (which is **not** in
+  `package.json`) and was kept out of `tsc` via an `exclude` in `tsconfig.json`,
+  so the project type-checked only because the dead code was hidden. Nobody
+  imported it (`grep "from.*hooks/" src/` returned zero hits), and it referenced
+  a `runAgent` signature that no longer exists. The `src/hooks/**/*` exclude
+  entry is removed from `tsconfig.json` — `tsc --noEmit` is now clean with
+  nothing hidden.
+
+### Changed
+
+- **Single package manager: npm.** `bun.lock` is removed and `package-lock.json`
+  is now the canonical lockfile (previously both were git-ignored and drifted).
+  `.gitignore` no longer ignores `package-lock.json`; other lockfiles
+  (`yarn.lock`, `pnpm-lock.yaml`, `bun.lock*`) stay ignored.
+- **`/` autocomplete trimmed.** Five rarely-tab-completed utility/legacy
+  commands were dropped from the `/` dropdown — `/clear`, `/exit`,
+  `/context-save`, `/context-load`, `/context-clear` — to cut clutter. They
+  remain fully dispatchable and listed in `/help`. (`/sessions` was kept in
+  the dropdown as a primary navigation command.)
+- **`npm run build` now wipes `dist/` first** (`rm -rf dist && tsc …`). The
+  `bun build --compile` binary step reads from `dist/`, so a stale `dist/`
+  (e.g. leftover output from the now-deleted `src/hooks/` dir, or a renamed
+  module) could ship outdated JS. A clean rebuild on every build closes that
+  hole.
+- **`src/acp/**/*.ts` added to the Vitest coverage scope** so the editor-
+  integration layer is measured alongside `utils/`, `api/`, and `config/`.
+- **`conf` upgraded 12 → 13** (`^13.1.0`). Brings `rootSchema`/`ajvOptions`
+  options, a `.delete()` dot-notation typing fix, and updated transitive deps
+  (`dot-prop` 8→9, `ajv` patch bumps). Held below v14 pending a separate
+  engine/compat review — the v13 bump was all this release needed.
+- **`tsconfig.json` now declares `"types": ["node"]`.** Without it, `tsc
+  --noEmit` was silently emitting 445+ `TS2591: Cannot find name 'fs'/'path'/
+  'process'/…` errors across 86 files — `npm run build` appeared to succeed
+  only because the config doesn't set `noEmitOnError`, so the broken JS was
+  written to `dist/` alongside the errors. With `types: ["node"]` the type
+  check is genuinely clean (0 errors). This was a long-standing latent issue
+  masked by the emit-on-error behaviour.
+- **`npm audit fix` patched the high-severity `vite` advisory**
+  (GHSA-v6wh-96g9-6wx3 / GHSA-fx2h-pf6j-xcff — `launch-editor` UNC path +
+  `server.fs.deny` bypass on Windows) by bumping the transitive `vite`
+  brought in by `vitest`. One advisory remains: a single **low** in `esbuild`
+  (GHSA-g7r4-m6w7-qqqr — dev-server-only arbitrary file read on Windows),
+  pulled in transitively by `vitest`/`tsx`, with no fix short of a major bump
+  of those dev tools. Removing `pkg` (below) cleared the prior moderate
+  advisory, so `npm audit` now reports **0 high/critical** (1 low total).
+
+### Added
+
+- **Command registry — single source of truth for slash-command metadata**
+  (`src/renderer/commands/registry.ts`). Previously three places carried the
+  same data and drifted: the `COMMAND_DESCRIPTIONS` record in `App.ts` (123
+  hand-typed rows driving `/` autocomplete), the `helpCategories` array in
+  `components/Help.ts` (hand-typed `/help` rows), and the `case` labels in
+  `renderer/commands.ts` + `acp/commands.ts`. Now `App.ts` and `Help.ts` both
+  derive from the registry, and two new tests (`registry.test.ts`) enforce the
+  invariant at build time: **every top-level `case` label in either dispatcher
+  must exist in the registry** — adding a `case 'foo':` without a registry
+  entry now fails CI. The registry also exposes `resolveCommand()`,
+  `ALL_COMMAND_NAMES`, and `ALL_ALIASES` so the dispatchers themselves can
+  move to registry lookups incrementally.
+- **ACP layer test coverage.** Two new test files lift the previously
+  untested ACP adapter from 0% to meaningful coverage:
+  - `src/acp/session.test.ts` (35 tests) covers `buildProjectContext`,
+    `toolCallMeta` (every tool → ACP kind mapping), and `buildRawOutput`
+    (diff formatting for edits, stdout surfacing for commands, error paths).
+    `toolCallMeta` and `buildRawOutput` were promoted from module-private to
+    exported specifically so they can be tested in isolation.
+  - `src/acp/commands.test.ts` (10 tests) covers `initWorkspace` — the
+    filesystem bootstrap that runs on every ACP `session/new`: `.codeep/`
+    creation, project initialization, the read+write permission grant, and
+    the informed-consent banners for custom slash commands and lifecycle
+    hooks. Uses an isolated tmpdir per test (same pattern as
+    `checkpoints.test.ts`).
+  - Together they catch regressions in the data-shaping surface and the
+    onboarding flow without mocking the agent loop, which is exercised
+    end-to-end by `toolExecution.test.ts`.
+- **Settings screen: all 7 `as any` casts removed.** Previously every
+  `config.set`/`config.get` call in `Settings.ts` used `setting.key as any`
+  because `SettingItem.key` was typed as `string` rather than `keyof
+  ConfigSchema`. Now:
+  - `ConfigSchema` is exported from `config/index.ts` so consumers can
+    reference its keys.
+  - `SettingItem.key` is typed as `keyof ConfigSchema` — a typo'd or unknown
+    setting key is now a compile error, not a silent runtime no-op.
+  - All writes go through a single typed `writeSetting(setting, value)`
+    helper. The unavoidable `as ConfigSchema[K]` cast lives in exactly one
+    audited spot instead of seven call sites, and `config.get(setting.key)`
+    no longer needs any cast.
+  - 13 new tests (`Settings.test.ts`) pin the write path: number editing +
+    clamping, select cycling (forward/backward/wrap), escape-abort, and the
+    `updateRateLimits()` side effect for the rate-limit settings.
+- **`CONTRIBUTING.md` + `SECURITY.md` added.** Previously the repo had
+  neither — the README's "Contributing" section was one sentence pointing
+  at GitHub issues. The new files cover:
+  - `CONTRIBUTING.md`: the npm-based setup, the test/build/type-check loop
+    (including "what gets a test" guidance), code style, an architecture
+    reading order for new contributors, the provider-integration flow, and
+    the release pipeline.
+  - `SECURITY.md`: how to report a vulnerability (GitHub Security Advisories
+    preferred), what's in/out of scope for an agent that can edit files and
+    run shell commands, and a list of the hardening features already in place
+    (project permissions, confirmation modes, hook trust gate, keychain
+    storage, telemetry opt-out) so contributors don't regress them.
+  - The README's "Contributing" section now links to both.
+- **CI workflow switched from bun to npm** (`.github/workflows/ci.yml`).
+  The workflow used `bun install --frozen-lockfile`, but `bun.lock` was
+  removed and `.gitignored` when npm became canonical (#2), so the gate
+  would fail on a clean checkout. Now uses `actions/setup-node@v5` with
+  Node 20 + `npm ci` + `npx tsc --noEmit` + `npm test`, consistent with
+  `CONTRIBUTING.md`. `release-binaries.yml` still uses bun (its
+  `bun build --compile` step produces the cross-platform binaries — that's
+  tracked as a separate migration, not safe to flip blindly).
+- **`server.ts` refactor: extracted handlers + pure helpers to module scope.**
+  `startAcpServer()` was a ~1300-line closure whose 12+ request handlers
+  (`session/set_mode`, `session/set_config_option`, `session/list`,
+  `session/delete`, …) were unreachable by unit tests because they captured
+  the live stdio transport. The refactor lifts them into two testable
+  surfaces:
+  - **`server.ts` module-scope exports** — the pure helpers
+    (`formatToolInputForPermission`, `resolveLocalPath`,
+    `collectEmbeddedContext`, `providerHasKey`, `buildConfigOptions`,
+    `AGENT_MODES`) now carry `export` and are covered by `server.test.ts`.
+  - **New `serverHandlers.ts` module** — the four synchronous session
+    handlers (`handleSetMode`, `handleSetConfigOption`, `handleSessionList`,
+    `handleSessionDelete`) plus a pure `applyConfigOption` helper, each
+    taking an explicit `(msg, deps)` pair where `deps = { transport,
+    sessions }`. The transport is stubbed in tests via a recorded-call
+    array, which is what makes the assertions readable.
+  - `startAcpServer()` now constructs one `handlerDeps` object and delegates
+    to the extracted functions, keeping the dispatch loop intact.
+  - The async handlers (`handleSessionPrompt`, `handleSessionNew`,
+    `handleSessionLoad`, `handleSessionResume`, image/vision, agent loop)
+    stay in the closure for now — they reach into MCP spawning, the
+    keychain, and `runAgentSession`, each of which needs its own extraction
+    pass. Tracked as a follow-up.
+  - Coverage: `serverHandlers.ts` at **89.7% lines / 87% statements**;
+    `server.ts` up from 0% to 25.7%. 56 new tests across `server.test.ts`
+    (34) and `serverHandlers.test.ts` (22).
+- **`release-binaries.yml` migrated from bun to npm** (build + publish-npm
+  jobs). `bun install` → `npm ci`, `bun run` → `npm run`,
+  `setup-bun` → `setup-node@v5` (Node 20 build, Node 24 publish). Only the
+  `bun build --compile` step keeps bun — it produces the distributed
+  standalone binaries and has no npm-side equivalent (the deprecated `pkg`
+  was never wired into CI). This makes CI + release consistent with the
+  canonical npm toolchain (#8 fixed the same drift in `ci.yml`).
+- **Removed deprecated `pkg` devDependency.** `pkg` was unmaintained since
+  2023 (archived by Vercel), carried a moderate-severity advisory, and its
+  `build:binary` script was never invoked by any workflow — the release
+  pipeline uses `bun build --compile` instead. Removed `pkg`, the
+  `build:binary` script, and the top-level `"pkg"` config block from
+  `package.json`. `npm audit` now reports **0 high/critical** (was 1 high).
+  `@yao-pkg/pkg` (the active fork) stays available if we ever need an
+  npm-side path to standalone binaries.
+- **Added `noEmitOnError: true` to `tsconfig.json`.** Now that `tsc --noEmit`
+  is clean (0 errors), this flag hardens the build: `tsc` will refuse to emit
+  `dist/` if a type error slips in, so a broken build can no longer be masked
+  by a stale `dist/`. Prevents regressions of the kind that #7 fixed (445+
+  errors silently emitted for months).
+- **Lifted `handleListProviders` + `buildProviderList` into
+  `serverHandlers.ts`.** The provider-catalog handler was the simplest
+  remaining async-safe handler — pure shape mapping over `PROVIDERS` + a
+  single `transport.respond`. Extracted as `buildProviderList()` (pure,
+  testable shape) + `handleListProviders(msg, deps)` (thin wrapper). 5 new
+  tests pin the shape including `dynamicModels` flagging for open-ended
+  providers (OpenRouter, Ollama). `serverHandlers.ts` coverage now at
+  **89.7% lines**.
+
 ## [2.13.0] — 2026-06-18
 
 > Three new providers — **Kimi** (Moonshot), **Grok** (xAI), and **Qwen** (Alibaba) — covering the major coding models. Kimi and Qwen include their flat-fee coding-plan subscriptions alongside pay-per-use; Grok adds graded `/thinking` effort.

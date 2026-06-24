@@ -1,6 +1,6 @@
 {
   "name": "codeep",
-  "version": "2.13.0",
+  "version": "2.13.1",
   "description": "AI-powered coding assistant built for the terminal. Multiple LLM providers, project-aware context, and a seamless development workflow.",
   "type": "module",
   "main": "dist/index.js",
@@ -10,9 +10,8 @@
   "scripts": {
     "dev": "node scripts/gen-version.js && node --import tsx src/renderer/main.ts",
     "prepack": "node scripts/gen-version.js && tsc && node scripts/fix-imports.js",
-    "build": "node scripts/gen-version.js && tsc && node scripts/fix-imports.js",
+    "build": "node scripts/gen-version.js && rm -rf dist && tsc && node scripts/fix-imports.js",
     "start": "node dist/renderer/main.js",
-    "build:binary": "npm run build && pkg dist/renderer/main.js --targets node18-macos-arm64,node18-macos-x64,node18-linux-x64 --output bin/codeep",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -39,7 +38,7 @@
   "homepage": "https://codeep.dev",
   "dependencies": {
     "clipboardy": "^4.0.0",
-    "conf": "^12.0.0",
+    "conf": "^13.1.0",
     "js-yaml": "^4.1.0",
     "keytar": "^7.9.0",
     "open": "^10.0.0"
@@ -48,7 +47,6 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.10.0",
     "@vitest/coverage-v8": "^4.0.18",
-    "pkg": "^5.8.1",
     "tsx": "^4.7.0",
     "typescript": "^6.0.2",
     "vitest": "^4.0.18"
@@ -67,10 +65,5 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "pkg": {
-    "assets": [
-      "dist/acp/**/*"
-    ]
   }
 }

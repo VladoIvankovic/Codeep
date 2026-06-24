@@ -46,7 +46,10 @@ export function buildProjectContext(workspaceRoot: string): ProjectContext {
 }
 
 // Maps internal tool names to ACP tool_call kind values and human titles.
-function toolCallMeta(toolName: string, params: Record<string, string>, workspaceRoot: string): { kind: string; title: string } {
+// Exported (not just module-private) so it can be unit-tested in isolation —
+// testing it through runAgentSession would require mocking the entire agent
+// loop, which would defeat the point of covering this mapping.
+export function toolCallMeta(toolName: string, params: Record<string, string>, workspaceRoot: string): { kind: string; title: string } {
   const file = params.path ?? params.file ?? '';
   // Use full path for edit tools (Zed renders it as a clickable file link)
   const absFile = file
@@ -74,7 +77,8 @@ function toolCallMeta(toolName: string, params: Record<string, string>, workspac
 // Builds rawOutput content to display inside tool call cards.
 // For write/edit operations, returns the code content or diff.
 // For command execution, returns the command output.
-function buildRawOutput(
+// Exported for direct unit testing (see session.test.ts).
+export function buildRawOutput(
   toolName: string,
   params: Record<string, string>,
   toolResult: { success: boolean; output: string; error?: string }

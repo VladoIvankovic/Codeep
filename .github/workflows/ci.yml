@@ -4,6 +4,10 @@ name: CI
 # and tsc only ran locally — releases shipped to npm/GitHub/Homebrew without
 # CI ever executing them. This closes that gap; release-binaries.yml runs
 # the same suite again as a pre-publish gate.
+#
+# Uses npm (not bun) because npm is now the canonical package manager for
+# the project — package-lock.json is committed and other lockfiles are
+# .gitignored. See CONTRIBUTING.md.
 
 on:
   push:
@@ -19,16 +23,20 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: oven-sh/setup-bun@v2
-
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       - name: Type-check
-        run: bunx tsc --noEmit
+        run: npx tsc --noEmit
 
       - name: Test (vitest)
-        run: bun run test
+        run: npm test

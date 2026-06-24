@@ -13,11 +13,7 @@ import {
   SessionResumeParams, SessionResumeResult,
   SessionPromptParams,
   SessionCancelParams,
-  SetSessionModeParams,
-  SetSessionConfigOptionParams,
   SessionModeState, SessionConfigOption,
-  ListSessionsParams, ListSessionsResult, AcpSessionInfo,
-  DeleteSessionParams,
   JsonRpcRequest, JsonRpcNotification,
   RequestPermissionResult,
   TerminalCreateResult, TerminalOutputResult, TerminalWaitForExitResult,
@@ -25,14 +21,22 @@ import {
 } from './protocol.js';
 import { runAgentSession } from './session.js';
 import { loadCustomCommands } from '../utils/customCommands.js';
-import { registerSessionServers, disposeSession as disposeMcpSession, disposeAllSessions as disposeAllMcpSessions } from '../utils/mcpRegistry.js';
+import { registerSessionServers, disposeAllSessions as disposeAllMcpSessions } from '../utils/mcpRegistry.js';
 import { loadMcpServerConfig, mergeMcpServers } from '../utils/mcpConfig.js';
 import { handleMcpSamplingRequest } from '../utils/mcpSamplingBridge.js';
 import { executeCommandAsync } from '../utils/shell.js';
 import { PermissionOutcome } from '../utils/agent.js';
 import { ToolCall } from '../utils/tools.js';
 import { initWorkspace, loadWorkspace, handleCommand, AcpSession } from './commands.js';
-import { autoSaveSession, config, setProvider, setApiKey, getApiKey, getConfiguredProviders, listSessionsWithInfo, deleteSession as deleteSessionFile, type LanguageCode } from '../config/index.js';
+import {
+  handleSetMode as handleSetModeExternal,
+  handleSetConfigOption as handleSetConfigOptionExternal,
+  handleSessionList as handleSessionListExternal,
+  handleSessionDelete as handleSessionDeleteExternal,
+  handleListProviders as handleListProvidersExternal,
+  type AcpHandlerDeps,
+} from './serverHandlers.js';
+import { autoSaveSession, config, getApiKey, getConfiguredProviders } from '../config/index.js';
 import { ApiError } from '../api/index.js';
 import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
@@ -110,8 +114,9 @@ const AVAILABLE_COMMANDS = [
 ];
 
 // ─── Mode definitions ─────────────────────────────────────────────────────────
+// Exported for unit testing + reference from serverHandlers modules.
 
-const AGENT_MODES: SessionModeState = {
+export const AGENT_MODES: SessionModeState = {
   currentModeId: 'auto',
   availableModes: [
     { id: 'auto',   name: 'Auto',   description: 'Agent runs automatically without confirmation' },
@@ -139,8 +144,10 @@ const LANGUAGE_OPTIONS = [
 /**
  * Format a tool call's parameters into a human-readable object for the
  * permission dialog. Truncates long content fields so the dialog stays readable.
+ *
+ * Exported for unit testing (see server.test.ts).
  */
-function formatToolInputForPermission(tool: string, params: Record<string, unknown>): Record<string, string> {
+export function formatToolInputForPermission(tool: string, params: Record<string, unknown>): Record<string, string> {
   const MAX_LEN = 120;
   // Bigger budget for diff/content fields so clients can render an actual preview
   // before the user clicks Allow. Truncated with a visible marker so users know
@@ -196,8 +203,10 @@ function formatToolInputForPermission(tool: string, params: Record<string, unkno
  * Resolve a `file://` (or absolute path) URI to a local filesystem path.
  * Returns null for unsupported schemes (http/https/git/etc.) — we only embed
  * local content for safety/privacy.
+ *
+ * Exported for unit testing (see server.test.ts).
  */
-function resolveLocalPath(uri: string): string | null {
+export function resolveLocalPath(uri: string): string | null {
   if (!uri) return null;
   if (uri.startsWith('file://')) {
     try { return fileURLToPath(uri); } catch { return null; }
@@ -212,8 +221,10 @@ function resolveLocalPath(uri: string): string | null {
  * blocks. ResourceLink → read file from disk. Resource → use embedded text.
  * Returns a markdown-fenced snippet block ready to prepend to the prompt,
  * or empty string if there are no embedded contexts.
+ *
+ * Exported for unit testing (see server.test.ts).
  */
-async function collectEmbeddedContext(blocks: import('./protocol.js').ContentBlock[]): Promise<string> {
+export async function collectEmbeddedContext(blocks: import('./protocol.js').ContentBlock[]): Promise<string> {
   const MAX_BYTES_PER_FILE = 200_000; // ~200 KB cap per resource
   const snippets: string[] = [];
 
@@ -265,8 +276,11 @@ async function collectEmbeddedContext(blocks: import('./protocol.js').ContentBlo
 
 /** Check if a provider has an API key stored (synchronous; relies on the cache
  *  loaded at startup via loadAllApiKeys and the non-secret configuredProviderIds
- *  index — never reads plaintext key material). */
-function providerHasKey(providerId: string): boolean {
+ *  index — never reads plaintext key material).
+ *
+ *  Exported for unit testing (see server.test.ts).
+ */
+export function providerHasKey(providerId: string): boolean {
   // Check environment variable first
   const envKey = PROVIDERS[providerId]?.envKey;
   if (envKey && process.env[envKey]) return true;
@@ -276,7 +290,14 @@ function providerHasKey(providerId: string): boolean {
   return getConfiguredProviders().some(p => p.id === providerId);
 }
 
-function buildConfigOptions(): SessionConfigOption[] {
+/**
+ * Build the list of session-level config options advertised to the ACP client
+ * (provider/model picker, language, per-tool confirmation toggles).
+ *
+ * Reads the global config + provider table; pure of transport/session state.
+ * Exported for unit testing (see server.test.ts).
+ */
+export function buildConfigOptions(): SessionConfigOption[] {
   const currentModel = config.get('model') ?? '';
   const currentProviderId = config.get('provider') ?? '';
   // Only show providers that have an API key configured
@@ -368,6 +389,11 @@ export function startAcpServer(): Promise<void> {
 
   // ACP sessionId → full AcpSession (includes history + codeep session tracking)
   const sessions = new Map<string, AcpSession & { abortController: AbortController | null; currentModeId: string; titleSent: boolean; hadHistory: boolean }>();
+
+  // Shared deps object for the extracted handlers in serverHandlers.ts.
+  // Handlers read transport + sessions off this; stubbing both in a test
+  // (see serverHandlers.test.ts) is what makes them unit-testable.
+  const handlerDeps: AcpHandlerDeps = { transport, sessions };
 
   // Tear down all MCP child processes when the CLI dies. Without this,
   // killing `codeep acp` with Ctrl+C orphans any servers we spawned —
@@ -758,153 +784,25 @@ export function startAcpServer(): Promise<void> {
   // ── session/set_mode ────────────────────────────────────────────────────────
 
   function handleSetMode(msg: JsonRpcRequest): void {
-    const { sessionId, modeId } = msg.params as SetSessionModeParams;
-    const session = sessions.get(sessionId);
-    if (!session) {
-      transport.error(msg.id, -32602, `Unknown sessionId: ${sessionId}`);
-      return;
-    }
-
-    const validMode = AGENT_MODES.availableModes.find(m => m.id === modeId);
-    if (!validMode) {
-      transport.error(msg.id, -32602, `Unknown modeId: ${modeId}`);
-      return;
-    }
-
-    session.currentModeId = modeId;
-    // Do NOT persist the global `agentConfirmation` config here. The ACP
-    // permission gate is driven per-session by `session.currentModeId` (see the
-    // onRequestPermission wiring in handleSessionPrompt). Writing it globally
-    // would leak this session's mode into other processes — e.g. switching ACP
-    // to 'auto' would silently disarm the TUI's confirmation gate. Mode stays
-    // on the in-memory session object only.
-
-    transport.respond(msg.id, {});
-
-    // Notify Zed of the mode change
-    transport.notify('session/update', {
-      sessionId,
-      update: {
-        sessionUpdate: 'current_mode_update',
-        currentModeId: modeId,
-      },
-    });
+    handleSetModeExternal(msg, handlerDeps);
   }
 
   // ── session/set_config_option ───────────────────────────────────────────────
 
   function handleSetConfigOption(msg: JsonRpcRequest): void {
-    const { sessionId, configId, value } = msg.params as SetSessionConfigOptionParams;
-    const session = sessions.get(sessionId);
-    if (!session) {
-      transport.error(msg.id, -32602, `Unknown sessionId: ${sessionId}`);
-      return;
-    }
-
-    if (configId === 'model' && typeof value === 'string') {
-      // value is "providerId/modelId" — split and switch both
-      const slashIdx = value.indexOf('/');
-      if (slashIdx !== -1) {
-        const providerId = value.slice(0, slashIdx);
-        const modelId = value.slice(slashIdx + 1);
-        setProvider(providerId);   // sets provider + defaultModel + protocol
-        config.set('model', modelId);
-      } else {
-        config.set('model', value);
-      }
-    } else if (configId === 'provider' && typeof value === 'string') {
-      // Switch provider without specifying a model — picks the provider's
-      // default model + protocol. Used by editor clients that pin a provider
-      // in their settings (e.g. the VS Code `codeep.provider` setting).
-      setProvider(value);
-    } else if (configId === 'customBaseUrl' && typeof value === 'string') {
-      // Base URL for the `custom` (OpenAI-compatible) provider — lets editor
-      // clients point Codeep at a self-hosted endpoint (vLLM/LiteLLM/LM Studio)
-      // without hand-editing ~/.codeep/config.json.
-      config.set('customBaseUrl', value);
-    } else if (configId === 'language' && typeof value === 'string') {
-      config.set('language', value as LanguageCode);
-    } else if (
-      configId === 'agentConfirmDeleteFile' ||
-      configId === 'agentConfirmExecuteCommand' ||
-      configId === 'agentConfirmWriteFile' ||
-      configId === 'userProfile' ||
-      configId === 'autoLearnProfile'
-    ) {
-      // Accept boolean or "true"/"false" string from Zed/VSCode
-      const bool = value === true || value === 'true';
-      config.set(configId, bool);
-    } else if (configId === 'login' && typeof value === 'string') {
-      // value is "providerId:apiKey"
-      const colonIdx = value.indexOf(':');
-      if (colonIdx !== -1) {
-        const providerId = value.slice(0, colonIdx);
-        const apiKey = value.slice(colonIdx + 1);
-        if (providerId && apiKey) {
-          setProvider(providerId);
-          // Cache is updated synchronously inside setApiKey; the keychain write
-          // resolves while the long-lived server runs. Swallow a persistence
-          // failure here (secondary path) so it can't become an unhandled
-          // rejection — the key still works for this session via the cache.
-          setApiKey(apiKey, providerId).catch(() => { /* persistence failed; cached for session */ });
-        }
-      }
-    }
-
-    transport.respond(msg.id, {});
-
-    // Confirm the new value back to Zed so its UI state stays in sync
-    transport.notify('session/update', {
-      sessionId,
-      update: {
-        sessionUpdate: 'config_option_update',
-        configOptions: buildConfigOptions(),
-      },
-    });
+    handleSetConfigOptionExternal(msg, handlerDeps);
   }
 
   // ── session/list ─────────────────────────────────────────────────────────────
 
   function handleSessionList(msg: JsonRpcRequest): void {
-    const params = (msg.params ?? {}) as ListSessionsParams;
-
-    // Collect local (project-scoped) sessions and global sessions, deduplicated by name
-    const seen = new Set<string>();
-    const merged = [
-      ...listSessionsWithInfo(params.cwd),   // project-local first
-      ...listSessionsWithInfo(),              // global fallback
-    ].filter(s => {
-      if (seen.has(s.name)) return false;
-      seen.add(s.name);
-      return true;
-    });
-
-    // Sort newest first
-    merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-    const acpSessions: AcpSessionInfo[] = merged.map(s => ({
-      sessionId: s.name,
-      cwd: params.cwd ?? '',
-      title: s.title,
-      updatedAt: s.createdAt,
-    }));
-    const result: ListSessionsResult = { sessions: acpSessions };
-    transport.respond(msg.id, result);
+    handleSessionListExternal(msg, handlerDeps);
   }
 
   // ── session/delete ───────────────────────────────────────────────────────────
 
   function handleSessionDelete(msg: JsonRpcRequest): void {
-    const { sessionId, cwd } = (msg.params ?? {}) as DeleteSessionParams;
-    // Remove from in-memory sessions map if present
-    sessions.delete(sessionId);
-    // Tear down any MCP server processes attached to this session — leaks
-    // children otherwise. Fire-and-forget; client doesn't wait on stop().
-    disposeMcpSession(sessionId).catch(() => { /* logged inside */ });
-    // Try project dir first, then global
-    const deleted = deleteSessionFile(sessionId, cwd || undefined);
-    if (!deleted && cwd) deleteSessionFile(sessionId);
-    transport.respond(msg.id, {});
+    handleSessionDeleteExternal(msg, handlerDeps);
   }
 
   // ── session/list_providers ──────────────────────────────────────────────────
@@ -913,24 +811,7 @@ export function startAcpServer(): Promise<void> {
   // source instead of carrying its own hardcoded copy. Keep this stable —
   // adding new fields is fine, removing/renaming would break existing clients.
   function handleListProviders(msg: JsonRpcRequest): void {
-    const providers = Object.entries(PROVIDERS).map(([id, p]) => ({
-      id,
-      name: p.name,
-      description: p.description,
-      groupLabel: p.groupLabel ?? p.name,
-      hint: p.hint ?? p.description,
-      requiresKey: !p.noApiKey,
-      subscribeUrl: p.subscribeUrl,
-      // Model metadata so ACP clients (e.g. the VS Code model picker) can
-      // offer a provider → model selector without hardcoding a catalog.
-      // `dynamicModels` flags providers whose model list is open-ended
-      // (OpenRouter, Ollama, custom endpoints) — clients should let the
-      // user type a model id rather than only pick from `models`.
-      models: p.models.map((m) => ({ id: m.id, name: m.name })),
-      defaultModel: p.defaultModel,
-      dynamicModels: p.dynamicModels ?? false,
-    }));
-    transport.respond(msg.id, { providers });
+    handleListProvidersExternal(msg, handlerDeps);
   }
 
   // ── session/prompt ──────────────────────────────────────────────────────────

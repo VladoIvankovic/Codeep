@@ -1340,7 +1340,15 @@ Apache 2.0
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request on [GitHub](https://github.com/VladoIvankovic/Codeep).
+Contributions are welcome! Before opening a PR, please read the
+[**Contributing guide**](./CONTRIBUTING.md) — it covers the development setup
+(npm is the canonical package manager), the test/build loop, code style, and
+how to propose a change. For provider integrations specifically, the guide
+walks through the files you need to touch.
+
+Quick version: `npm install` → `npm test` → `npx tsc --noEmit` clean → open a
+PR against `main`. To report a security issue, see
+[**Security policy**](./SECURITY.md).
 
 ## Support
 

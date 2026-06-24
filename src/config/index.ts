@@ -42,9 +42,9 @@ interface ProviderApiKey {
   apiKey: string;
 }
 
-type AgentMode = 'on' | 'manual';
+type AgentMode = 'on' | 'manual' | 'off';
 
-interface ConfigSchema {
+export interface ConfigSchema {
   apiKey: string; // Legacy, kept for backwards compatibility
   provider: string;
   model: string;

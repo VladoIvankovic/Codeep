@@ -38,8 +38,7 @@ todo.md
 .junie/
 codeep-debug.log
 
-# Package manager
-package-lock.json
+# Package manager — npm is canonical; ignore other lockfiles
 yarn.lock
 pnpm-lock.yaml
 bun.lock
