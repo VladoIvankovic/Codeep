@@ -41,7 +41,7 @@ export interface AppExecutionContext {
   formatAddedFilesContext: () => string;
   handleCommand: (command: string, args: string[]) => Promise<void>;
   sessionDisplayName?: string;
-  setSessionDisplayName?: (name: string) => void;
+  setSessionDisplayName?: (name: string | null) => void;
 }
 
 // ─── Dangerous tool detection ────────────────────────────────────────────────

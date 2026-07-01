@@ -173,10 +173,18 @@ export function formatToolInputForPermission(tool: string, params: Record<string
           ? lines.slice(0, MAX_CONTENT_LINES).join('\n') + `\n… (${lines.length - MAX_CONTENT_LINES} more lines)`
           : params.content;
       }
-      if (typeof params.old_string === 'string' && typeof params.new_string === 'string') {
-        out.changes = `replace ${(params.old_string as string).split('\n').length} line(s)`;
-        out.old_string = truncateDiff(params.old_string as string);
-        out.new_string = truncateDiff(params.new_string as string);
+      // The built-in edit_file tool schema emits old_text / new_text (see
+      // utils/tools.ts); accept the old_string/new_string spelling too for
+      // robustness. Without this the permission dialog dropped the diff and
+      // showed only { file, path } — the user approved edits blind.
+      const oldText = typeof params.old_text === 'string' ? params.old_text as string
+        : (typeof params.old_string === 'string' ? params.old_string as string : undefined);
+      const newText = typeof params.new_text === 'string' ? params.new_text as string
+        : (typeof params.new_string === 'string' ? params.new_string as string : undefined);
+      if (oldText !== undefined && newText !== undefined) {
+        out.changes = `replace ${oldText.split('\n').length} line(s)`;
+        out.old_string = truncateDiff(oldText);
+        out.new_string = truncateDiff(newText);
       }
       return out;
     }

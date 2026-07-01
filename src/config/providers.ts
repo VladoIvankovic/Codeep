@@ -475,7 +475,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     },
     models: [
       { id: 'claude-opus-4-8',           name: 'Claude Opus 4.8',       description: 'Most capable Opus model' },
-      { id: 'claude-sonnet-4-6',         name: 'Claude Sonnet',         description: 'Best balance of speed and intelligence' },
+      { id: 'claude-sonnet-5',           name: 'Claude Sonnet 5',       description: 'Best balance of speed and intelligence' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku',          description: 'Fastest and most affordable' },
     ],
     defaultModel: 'claude-opus-4-8',
@@ -522,7 +522,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     models: [
       { id: 'openrouter/auto',                  name: 'Auto-route',         description: 'OpenRouter picks the best model for the task' },
       { id: 'anthropic/claude-opus-4',          name: 'Claude Opus 4',      description: 'Anthropic — most capable' },
-      { id: 'anthropic/claude-sonnet-4',        name: 'Claude Sonnet 4',    description: 'Anthropic — balanced' },
+      { id: 'anthropic/claude-sonnet-5',        name: 'Claude Sonnet 5',    description: 'Anthropic — balanced' },
       { id: 'openai/gpt-5.5',                   name: 'GPT-5.5',            description: 'OpenAI — flagship' },
       { id: 'openai/gpt-5.4-mini',              name: 'GPT-5.4 Mini',       description: 'OpenAI — fast/cheap' },
       { id: 'google/gemini-3.1-pro',            name: 'Gemini 3.1 Pro',     description: 'Google — multimodal' },
@@ -706,14 +706,15 @@ export function providerNoStreamWithTools(providerId: string): boolean {
 
 /**
  * Models that reject sampling parameters (temperature/top_p/top_k) with a 400.
- * Anthropic removed them on Fable 5 and Opus 4.7+; older Claude models still
- * accept them, so this must be a MODEL-level check, not a provider-level one
- * (requiresDefaultTemperature can't express it). Omitting the field is always
- * safe — the API treats omission as default. Kimi K2.x code/thinking models
- * fix temperature internally and 400 on any custom value, so they're here too.
+ * Anthropic removed them on Fable 5 and Opus 4.7+, and Sonnet 5 rejects any
+ * non-default value; older Claude models still accept them, so this must be a
+ * MODEL-level check, not a provider-level one (requiresDefaultTemperature
+ * can't express it). Omitting the field is always safe — the API treats
+ * omission as default. Kimi K2.x code/thinking models fix temperature
+ * internally and 400 on any custom value, so they're here too.
  */
 const SAMPLING_PARAMS_REJECTED = [
-  'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7',
+  'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5',
   'kimi-k2.7-code', 'kimi-for-coding',
 ];
 
@@ -779,9 +780,9 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
   const id = canonicalModelId(model);
   switch (providerId) {
     case 'anthropic':
-      // Effort is GA on Opus 4.5+, Sonnet 4.6, Fable 5 — NOT Haiku or Sonnet 4.5.
+      // Effort is GA on Opus 4.5+, Sonnet 4.6/5, Fable 5 — NOT Haiku or Sonnet 4.5.
       if (idMatches(id, 'claude-haiku-4-5') || idMatches(id, 'claude-sonnet-4-5')) return false;
-      return /^claude-(opus-4-([5-9]|\d\d)|sonnet-4-6|fable-5)/.test(id);
+      return /^claude-(opus-4-([5-9]|\d\d)|sonnet-(4-6|5)|fable-5)/.test(id);
     case 'openai':
       // GPT-5.x are reasoning models — reasoning_effort across the family (incl. mini).
       return id.startsWith('gpt-5');
@@ -796,7 +797,11 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
       return idMatches(id, 'glm-5-2');
     case 'grok':
       // Grok reasoning models accept reasoning_effort (none/low/medium/high).
-      // Explicit *-non-reasoning variants don't think → excluded.
+      // The coders (grok-code-fast, grok-build — the default) are NON-reasoning
+      // and 400 on reasoning_effort; a 400 here silently drops the whole turn
+      // into the weaker text-tool fallback (agentChat.ts), so exclude them
+      // alongside the explicit *-non-reasoning variants.
+      if (id.startsWith('grok-build') || id.startsWith('grok-code')) return false;
       return id.startsWith('grok') && !id.includes('non-reasoning');
     // Kimi (thinking on/off, not graded) and Qwen coders (non-thinking) have
     // no graded knob → fall through to default false.

@@ -225,7 +225,7 @@ describe('providers', () => {
       expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-4-8');
       const modelIds = PROVIDERS['anthropic'].models.map(m => m.id);
       expect(modelIds).toContain('claude-opus-4-8');
-      expect(modelIds).toContain('claude-sonnet-4-6');
+      expect(modelIds).toContain('claude-sonnet-5');
       expect(modelIds).toContain('claude-haiku-4-5-20251001');
       // Fable 5 is de-listed (unavailable under the US export ban); the id
       // stays valid in the sampling-params guard if set manually.
@@ -467,7 +467,10 @@ describe('providers', () => {
     });
     it('Grok supports graded reasoning_effort; Kimi/Qwen-coders do not', () => {
       expect(modelSupportsReasoningEffort('grok', 'grok-4.3')).toBe(true);
-      expect(modelSupportsReasoningEffort('grok', 'grok-build-0.1')).toBe(true);
+      // Coders (grok-build, grok-code-fast) are non-reasoning — reasoning_effort
+      // 400s on them, which would silently drop the turn into the text-tool fallback.
+      expect(modelSupportsReasoningEffort('grok', 'grok-build-0.1')).toBe(false);
+      expect(modelSupportsReasoningEffort('grok', 'grok-code-fast-1')).toBe(false);
       expect(modelSupportsReasoningEffort('grok', 'grok-4-fast-non-reasoning')).toBe(false);
       expect(modelSupportsReasoningEffort('kimi', 'kimi-for-coding')).toBe(false);
       expect(modelSupportsReasoningEffort('qwen', 'qwen3-coder-plus')).toBe(false);

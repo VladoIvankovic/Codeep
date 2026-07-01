@@ -693,6 +693,9 @@ export async function handleCommand(
     case 'new': {
       ctx.app.clearMessages();
       ctx.setSessionId(startNewSession());
+      // Clear the derived display name so the next chat re-derives it — else
+      // the new session syncs/reports under the PREVIOUS session's name.
+      ctx.setSessionDisplayName?.(null);
       ctx.app.notify('New session started');
       break;
     }
@@ -1081,7 +1084,7 @@ Format: use headers per category, only include categories where you found issues
       }
       if (codeBlocks.length === 0) { ctx.app.notify('No code blocks found'); return; }
       const index = blockNum === -1 ? codeBlocks.length - 1 : blockNum - 1;
-      if (index < 0 || index >= codeBlocks.length) {
+      if (Number.isNaN(index) || index < 0 || index >= codeBlocks.length) {
         ctx.app.notify(`Invalid block number. Available: 1-${codeBlocks.length}`);
         return;
       }

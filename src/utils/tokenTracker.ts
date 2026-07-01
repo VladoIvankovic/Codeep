@@ -57,6 +57,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic
   'claude-opus-4-8':              1_000_000,
   'claude-sonnet-4-6':            1_000_000,
+  'claude-sonnet-5':              1_000_000,
   'claude-haiku-4-5-20251001':    200_000,
   // DeepSeek
   'deepseek-v4-pro':      1_000_000,
@@ -113,6 +114,7 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // Anthropic
   'claude-opus-4-8':              { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-sonnet-4-6':            { inputPer1M: 3.00,  outputPer1M: 15.00 },
+  'claude-sonnet-5':              { inputPer1M: 3.00,  outputPer1M: 15.00 },
   'claude-haiku-4-5-20251001':    { inputPer1M: 1.00,  outputPer1M: 5.00 },
   // DeepSeek (cache-miss input pricing)
   'deepseek-v4-pro':   { inputPer1M: 1.74,  outputPer1M: 3.48 },
@@ -183,10 +185,16 @@ export function recordTokenUsage(
  */
 export function extractOpenAIUsage(data: any): TokenUsage | null {
   if (data?.usage) {
+    // OpenAI-protocol `prompt_tokens` is INCLUSIVE of cached prompt tokens
+    // (DeepSeek/OpenAI report cache hits in prompt_tokens_details.cached_tokens).
+    // Surface them so getCostBreakdown bills cache reads at the discounted
+    // rate instead of the full cache-miss input rate.
+    const cached = data.usage.prompt_tokens_details?.cached_tokens || 0;
     return {
       promptTokens: data.usage.prompt_tokens || 0,
       completionTokens: data.usage.completion_tokens || 0,
       totalTokens: data.usage.total_tokens || 0,
+      cacheReadTokens: cached || undefined,
     };
   }
   return null;
