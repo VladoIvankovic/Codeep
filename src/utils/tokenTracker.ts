@@ -21,6 +21,10 @@ export interface SessionTokenStats {
   totalTokens: number;
   requestCount: number;
   estimatedCost: number;
+  /** Anthropic prompt caching: total tokens written to cache this session. */
+  totalCacheCreationTokens: number;
+  /** Anthropic prompt caching: total tokens read from cache this session. */
+  totalCacheReadTokens: number;
 }
 
 // Per-message tracking
@@ -216,6 +220,12 @@ export interface ProviderCostBreakdown {
   model: string;
   promptTokens: number;
   completionTokens: number;
+  /** Anthropic prompt caching: tokens written to cache (billed ~1.25× input).
+   *  0 for providers that don't report caching. */
+  cacheCreationTokens: number;
+  /** Anthropic prompt caching: tokens read from cache (billed ~0.1× input).
+   *  0 for providers that don't report caching. */
+  cacheReadTokens: number;
   estimatedCost: number;
 }
 
@@ -226,9 +236,11 @@ export function getCostBreakdown(): ProviderCostBreakdown[] {
   const grouped = new Map<string, ProviderCostBreakdown>();
   for (const record of records) {
     const key = `${record.provider}/${record.model}`;
-    const existing = grouped.get(key) ?? { provider: record.provider, model: record.model, promptTokens: 0, completionTokens: 0, estimatedCost: 0 };
+    const existing = grouped.get(key) ?? { provider: record.provider, model: record.model, promptTokens: 0, completionTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, estimatedCost: 0 };
     existing.promptTokens += record.promptTokens;
     existing.completionTokens += record.completionTokens;
+    existing.cacheCreationTokens += record.cacheCreationTokens ?? 0;
+    existing.cacheReadTokens += record.cacheReadTokens ?? 0;
 
     // Cost source priority:
     //   1. Provider-reported USD (OpenRouter, MaxiCloud, etc.) — most accurate.
@@ -297,11 +309,15 @@ export function getSessionStats(): SessionTokenStats {
   let totalPromptTokens = 0;
   let totalCompletionTokens = 0;
   let totalTokens = 0;
+  let totalCacheCreationTokens = 0;
+  let totalCacheReadTokens = 0;
 
   for (const record of records) {
     totalPromptTokens += record.promptTokens;
     totalCompletionTokens += record.completionTokens;
     totalTokens += record.totalTokens;
+    totalCacheCreationTokens += record.cacheCreationTokens ?? 0;
+    totalCacheReadTokens += record.cacheReadTokens ?? 0;
   }
 
   const estimatedCost = getCostBreakdown().reduce((s, b) => s + b.estimatedCost, 0);
@@ -312,6 +328,8 @@ export function getSessionStats(): SessionTokenStats {
     totalTokens,
     requestCount: records.length,
     estimatedCost,
+    totalCacheCreationTokens,
+    totalCacheReadTokens,
   };
 }
 

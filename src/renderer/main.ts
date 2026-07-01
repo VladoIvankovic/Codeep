@@ -254,6 +254,8 @@ async function handleSubmit(message: string): Promise<void> {
           provider: entry.provider,
           inputTokens: entry.promptTokens || undefined,
           outputTokens: entry.completionTokens || undefined,
+          cacheCreationTokens: entry.cacheCreationTokens || undefined,
+          cacheReadTokens: entry.cacheReadTokens || undefined,
           estimatedCost: entry.estimatedCost || undefined,
         });
       }
@@ -940,6 +942,8 @@ async function gracefulShutdown() {
       projectId,
       inputTokens: tokenStats.totalPromptTokens || undefined,
       outputTokens: tokenStats.totalCompletionTokens || undefined,
+      cacheCreationTokens: tokenStats.totalCacheCreationTokens || undefined,
+      cacheReadTokens: tokenStats.totalCacheReadTokens || undefined,
       estimatedCost: tokenStats.estimatedCost || undefined,
     }),
   ]);

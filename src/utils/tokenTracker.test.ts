@@ -106,6 +106,8 @@ describe('recordTokenUsage + getSessionStats', () => {
       totalTokens: 0,
       requestCount: 0,
       estimatedCost: 0,
+      totalCacheCreationTokens: 0,
+      totalCacheReadTokens: 0,
     });
   });
 
@@ -121,6 +123,23 @@ describe('recordTokenUsage + getSessionStats', () => {
     // (300/1M * 1) + (150/1M * 3.20) = 0.0003 + 0.00048 = 0.00078
     expect(stats.estimatedCost).toBeCloseTo(0.00078, 6);
   });
+
+  it('aggregates Anthropic cache tokens into session totals', () => {
+    // The cloud-stats payload sends totalCacheCreationTokens / totalCacheReadTokens
+    // for the dashboard's "saved $X with caching" view. getSessionStats must
+    // sum them across all records.
+    recordTokenUsage(
+      { promptTokens: 1000, completionTokens: 50, totalTokens: 1050, cacheCreationTokens: 500, cacheReadTokens: 300 },
+      'claude-sonnet-4-6', 'anthropic',
+    );
+    recordTokenUsage(
+      { promptTokens: 800, completionTokens: 30, totalTokens: 830, cacheCreationTokens: 0, cacheReadTokens: 700 },
+      'claude-sonnet-4-6', 'anthropic',
+    );
+    const stats = getSessionStats();
+    expect(stats.totalCacheCreationTokens).toBe(500);
+    expect(stats.totalCacheReadTokens).toBe(1000);
+  });
 });
 
 describe('getCostBreakdown', () => {
@@ -133,6 +152,27 @@ describe('getCostBreakdown', () => {
     expect(glm?.promptTokens).toBe(100);
     expect(glm?.completionTokens).toBe(50);
     expect(glm?.provider).toBe('z.ai');
+    // Non-caching providers report 0 in the cache buckets.
+    expect(glm?.cacheCreationTokens).toBe(0);
+    expect(glm?.cacheReadTokens).toBe(0);
+  });
+
+  it('aggregates cache tokens into the cost-breakdown buckets', () => {
+    // The cloud-stats call sites send entry.cacheCreationTokens / cacheReadTokens
+    // per provider+model group. getCostBreakdown must accumulate them.
+    recordTokenUsage(
+      { promptTokens: 1000, completionTokens: 50, totalTokens: 1050, cacheCreationTokens: 400, cacheReadTokens: 300 },
+      'claude-opus-4-8', 'anthropic',
+    );
+    recordTokenUsage(
+      { promptTokens: 500, completionTokens: 20, totalTokens: 520, cacheCreationTokens: 100, cacheReadTokens: 600 },
+      'claude-opus-4-8', 'anthropic',
+    );
+    const breakdown = getCostBreakdown();
+    expect(breakdown).toHaveLength(1);
+    const b = breakdown[0];
+    expect(b.cacheCreationTokens).toBe(500);
+    expect(b.cacheReadTokens).toBe(900);
   });
 
   it('returns cost of 0 for models without pricing entry', () => {

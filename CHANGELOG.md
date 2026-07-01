@@ -11,6 +11,35 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.13.2] — 2026-06-30
+
+> Cloud stats: the CLI now reports Anthropic prompt-caching breakdown (cache-creation and cache-read token counts) alongside the existing input/output/cost totals, so the dashboard can show "saved $X with caching" for CLI and VS Code (ACP) sessions.
+
+### Changed
+
+- **Cache token reporting in cloud stats.** `StatsPayload`
+  (`src/utils/codeepCloud.ts`) now carries optional
+  `cacheCreationTokens` / `cacheReadTokens`. The three `reportStats`
+  call sites — `src/renderer/main.ts` (sync and async paths) and
+  `src/renderer/agentExecution.ts` — pass through the per-model
+  buckets from `getCostBreakdown()`, and `getSessionStats()` exposes
+  session-totals via new `totalCacheCreationTokens` /
+  `totalCacheReadTokens` fields. The ACP server (`src/acp/server.ts`)
+  — the path VS Code uses — was updated in lockstep so both clients
+  report the same shape.
+
+  Why: `estimatedCost` already folded cache multipliers into the
+  dollar total, but the *raw cache counts* were dropped on the floor,
+  so the dashboard couldn't break out "this session read 500k tokens
+  from cache." Now it can.
+
+- **`ProviderCostBreakdown` and `SessionTokenStats` extended.** Both
+  interfaces gained `cacheCreationTokens` / `cacheReadTokens`
+  (required on the breakdown, since every provider reports something
+  — 0 for non-caching). `getCostBreakdown()` accumulates them per
+  provider/model group; `getSessionStats()` sums across all records.
+  Two new tests cover the accumulation paths.
+
 ## [2.13.1] — 2026-06-24
 
 > Repo hygiene: dropped dead React-hooks dir, locked the package manager to npm, made `npm run build` rebuild `dist/` from scratch, added a command registry as the single source of truth for autocomplete + `/help` + dispatch validation, lifted ACP test coverage from 0% to ~45% on the testable surface, removed all `as any` casts from the settings screen, upgraded `conf` to v13, fixed the tsconfig so `tsc --noEmit` is now genuinely clean (was silently emitting 445+ errors), patched the high-severity `vite` advisory, switched CI from bun to npm, added `CONTRIBUTING.md` + `SECURITY.md`, extracted the synchronous ACP handlers + pure helpers out of the `startAcpServer()` closure into a testable `serverHandlers.ts` module (89.7% line coverage on the extracted surface; 0 → 25.7% on `server.ts`), migrated `release-binaries.yml` from bun to npm (keeping bun only for the `bun build --compile` binary step), removed the deprecated + vulnerable `pkg` devDependency (0 high/critical advisories remaining), and hardened the build with `noEmitOnError: true`.

@@ -1159,6 +1159,8 @@ export function startAcpServer(): Promise<void> {
                 provider: entry.provider,
                 inputTokens: entry.promptTokens || undefined,
                 outputTokens: entry.completionTokens || undefined,
+                cacheCreationTokens: entry.cacheCreationTokens || undefined,
+                cacheReadTokens: entry.cacheReadTokens || undefined,
                 estimatedCost: entry.estimatedCost || undefined,
               });
             }

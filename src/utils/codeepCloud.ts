@@ -124,6 +124,12 @@ export interface StatsPayload {
   isGit?: boolean;
   inputTokens?: number;
   outputTokens?: number;
+  /** Anthropic prompt caching: tokens written to cache (billed ~1.25× input).
+   *  Undefined for providers that don't report caching. */
+  cacheCreationTokens?: number;
+  /** Anthropic prompt caching: tokens read from cache (billed ~0.1× input).
+   *  Undefined for providers that don't report caching. */
+  cacheReadTokens?: number;
   estimatedCost?: number;
 }
 
