@@ -2,6 +2,8 @@
  * Token and cost tracking for API usage
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
@@ -55,6 +57,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gpt-5.4':              1_050_000,
   'gpt-5.4-mini':         400_000,
   // Anthropic
+  'claude-fable-5':               1_000_000,
   'claude-opus-4-8':              1_000_000,
   'claude-sonnet-4-6':            1_000_000,
   'claude-sonnet-5':              1_000_000,
@@ -112,6 +115,7 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'gpt-5.4':      { inputPer1M: 2.50,  outputPer1M: 15.00 },
   'gpt-5.4-mini': { inputPer1M: 0.75,  outputPer1M: 4.50 },
   // Anthropic
+  'claude-fable-5':               { inputPer1M: 10.00, outputPer1M: 50.00 },
   'claude-opus-4-8':              { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-sonnet-4-6':            { inputPer1M: 3.00,  outputPer1M: 15.00 },
   'claude-sonnet-5':              { inputPer1M: 3.00,  outputPer1M: 15.00 },
@@ -151,8 +155,45 @@ export function getPricingTable(): { model: string; inputPer1M: number; outputPe
   return Object.entries(MODEL_PRICING).map(([model, p]) => ({ model, ...p }));
 }
 
-// Session-level accumulator
-const records: TokenRecord[] = [];
+// Session-level accumulator.
+//
+// Usage is recorded deep in the API layer (api/index.ts, agentStream.ts) which
+// has no session context, so we can't thread a scope id through every call
+// site. Instead we scope the record buffer per async execution flow with
+// AsyncLocalStorage: the single-session TUI (and anything that never enters a
+// scope) reads/writes `defaultRecords`, exactly as before; the ACP server —
+// which multiplexes many sessions on one process — runs each session's prompts
+// inside `runWithTokenScope` with that session's own buffer, so concurrent
+// sessions can't clobber each other's totals and each session's `/cost` stays
+// cumulative across its prompts.
+
+/** An isolated token-record buffer for one scope (e.g. one ACP session). */
+export type TokenScope = TokenRecord[];
+
+const defaultRecords: TokenScope = [];
+const recordsStore = new AsyncLocalStorage<TokenScope>();
+
+/** The record buffer for the current async flow (a scope's buffer inside
+ *  runWithTokenScope, otherwise the process-wide default). */
+function currentRecords(): TokenScope {
+  return recordsStore.getStore() ?? defaultRecords;
+}
+
+/** Create a fresh, empty scope buffer (one per ACP session). */
+export function createTokenScope(): TokenScope {
+  return [];
+}
+
+/**
+ * Run `fn` with `scope` as the active token-record buffer. Every
+ * recordTokenUsage() call made within `fn`'s async flow (including across
+ * awaits) accumulates into `scope`, and reads (getCostBreakdown/…) made in the
+ * same flow see only `scope`. Used by the ACP server to isolate per-session
+ * usage without threading a session id through the deep API layer.
+ */
+export function runWithTokenScope<T>(scope: TokenScope, fn: () => T): T {
+  return recordsStore.run(scope, fn);
+}
 
 /**
  * Record token usage from an API response. The optional `actualCostUsd`
@@ -167,7 +208,7 @@ export function recordTokenUsage(
   provider: string,
   actualCostUsd?: number,
 ): void {
-  records.push({
+  currentRecords().push({
     timestamp: Date.now(),
     promptTokens: usage.promptTokens,
     completionTokens: usage.completionTokens,
@@ -238,11 +279,16 @@ export interface ProviderCostBreakdown {
 }
 
 /**
- * Get cost breakdown grouped by provider/model
+ * Get cost breakdown grouped by provider/model.
+ *
+ * `startIndex` lets callers price only the records appended since a marker (see
+ * getRecordCount) — used to report a single run/prompt's delta to cloud
+ * telemetry WITHOUT wiping the session-cumulative store the status bar and
+ * `/cost` read. Defaults to 0 (the whole current scope).
  */
-export function getCostBreakdown(): ProviderCostBreakdown[] {
+export function getCostBreakdown(startIndex = 0): ProviderCostBreakdown[] {
   const grouped = new Map<string, ProviderCostBreakdown>();
-  for (const record of records) {
+  for (const record of currentRecords().slice(startIndex)) {
     const key = `${record.provider}/${record.model}`;
     const existing = grouped.get(key) ?? { provider: record.provider, model: record.model, promptTokens: 0, completionTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, estimatedCost: 0 };
     existing.promptTokens += record.promptTokens;
@@ -294,7 +340,7 @@ export function getCacheStats(): CacheStats {
   let cacheCreate = 0;
   let cacheRead = 0;
   let savings = 0;
-  for (const record of records) {
+  for (const record of currentRecords()) {
     cacheCreate += record.cacheCreationTokens ?? 0;
     cacheRead += record.cacheReadTokens ?? 0;
     // Savings = what cache-read tokens would have cost at full input rate,
@@ -320,7 +366,7 @@ export function getSessionStats(): SessionTokenStats {
   let totalCacheCreationTokens = 0;
   let totalCacheReadTokens = 0;
 
-  for (const record of records) {
+  for (const record of currentRecords()) {
     totalPromptTokens += record.promptTokens;
     totalCompletionTokens += record.completionTokens;
     totalTokens += record.totalTokens;
@@ -334,7 +380,7 @@ export function getSessionStats(): SessionTokenStats {
     totalPromptTokens,
     totalCompletionTokens,
     totalTokens,
-    requestCount: records.length,
+    requestCount: currentRecords().length,
     estimatedCost,
     totalCacheCreationTokens,
     totalCacheReadTokens,
@@ -345,6 +391,7 @@ export function getSessionStats(): SessionTokenStats {
  * Get last request usage
  */
 export function getLastUsage(): TokenRecord | null {
+  const records = currentRecords();
   return records.length > 0 ? records[records.length - 1] : null;
 }
 
@@ -358,10 +405,23 @@ export function formatTokenCount(tokens: number): string {
 }
 
 /**
- * Reset session tracking
+ * Number of records in the current scope. Capture before a run/prompt and pass
+ * it to getCostBreakdown(startIndex) to price just that run's delta (for cloud
+ * telemetry) without wiping the cumulative store the status bar and `/cost`
+ * read.
+ */
+export function getRecordCount(): number {
+  return currentRecords().length;
+}
+
+/**
+ * Reset the current scope's tracking. Production run/prompt paths no longer
+ * call this (they use getRecordCount + getCostBreakdown(startIndex) so the
+ * session-cumulative totals survive); retained for the test suite, which uses
+ * it to isolate the process-wide default buffer between cases.
  */
 export function resetTokenTracking(): void {
-  records.length = 0;
+  currentRecords().length = 0;
 }
 
 /**

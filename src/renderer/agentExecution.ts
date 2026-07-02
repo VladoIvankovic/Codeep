@@ -13,7 +13,7 @@ import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
 import { getGitStatus, isGitRepository } from '../utils/git';
-import { getSessionStats, getCostBreakdown, resetTokenTracking } from '../utils/tokenTracker';
+import { getSessionStats, getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
 
 function getActionType(toolName: string): string {
   return toolName.includes('write') ? 'write' :
@@ -200,7 +200,9 @@ export async function executeAgentTask(
   ctx.setAgentRunning(true);
   const abortController = new AbortController();
   ctx.setAbortController(abortController);
-  resetTokenTracking(); // Reset per-run so reportStats sends only this run's tokens
+  // Marker for cloud reporting: report only this run's tokens to the dashboard
+  // without wiping the session-cumulative store the status bar and `/cost` read.
+  const tokenReportStart = getRecordCount();
 
   const prefix = dryRun ? '[DRY RUN] ' : '[AGENT] ';
   app.addMessage({ role: 'user', content: prefix + task });
@@ -440,8 +442,9 @@ export async function executeAgentTask(
       messages: app.getMessages(),
     });
     // Report per-model so tokens are attributed to the correct model/provider
-    // even if the user switched model mid-session.
-    const costBreakdown = getCostBreakdown();
+    // even if the user switched model mid-session. Only this run's delta
+    // (since tokenReportStart) is reported; the cumulative store is preserved.
+    const costBreakdown = getCostBreakdown(tokenReportStart);
     const sharedFields = {
       sessionId,
       sessionName: displayName,

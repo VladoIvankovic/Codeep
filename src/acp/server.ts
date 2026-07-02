@@ -41,7 +41,7 @@ import { ApiError } from '../api/index.js';
 import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud.js';
-import { getCostBreakdown, resetTokenTracking } from '../utils/tokenTracker.js';
+import { getCostBreakdown, getRecordCount, createTokenScope, runWithTokenScope, type TokenScope } from '../utils/tokenTracker.js';
 import { isGitRepository } from '../utils/git.js';
 import { getProjectContext } from '../utils/project.js';
 
@@ -396,7 +396,7 @@ export function startAcpServer(): Promise<void> {
   const transport = new StdioTransport();
 
   // ACP sessionId → full AcpSession (includes history + codeep session tracking)
-  const sessions = new Map<string, AcpSession & { abortController: AbortController | null; currentModeId: string; titleSent: boolean; hadHistory: boolean }>();
+  const sessions = new Map<string, AcpSession & { abortController: AbortController | null; currentModeId: string; titleSent: boolean; hadHistory: boolean; tokenRecords?: TokenScope }>();
 
   // Shared deps object for the extracted handlers in serverHandlers.ts.
   // Handlers read transport + sessions off this; stubbing both in a test
@@ -924,8 +924,6 @@ export function startAcpServer(): Promise<void> {
       });
     };
 
-    resetTokenTracking();
-
     // Manual mode gates write/edit for THIS run via a per-call option passed to
     // runAgentSession (extraDangerousTools, below) — NOT by mutating the global
     // `agentConfirmWriteFile` config, which leaked the session's mode into the
@@ -943,8 +941,16 @@ export function startAcpServer(): Promise<void> {
       });
     };
 
-    // Try slash commands first
-    handleCommand(prompt, session, sendChunk, abortController.signal)
+    // Try slash commands first.
+    // Run the whole prompt lifecycle inside THIS ACP session's token scope so
+    // (a) concurrent sessions on one process can't mix usage totals, and
+    // (b) usage accumulates into the session's own buffer across prompts, so
+    // `/cost` stays session-cumulative. `tokenReportStart` marks the pre-prompt
+    // count so we report only this prompt's delta to cloud telemetry.
+    session.tokenRecords ??= createTokenScope();
+    runWithTokenScope(session.tokenRecords, () => {
+    const tokenReportStart = getRecordCount();
+    return handleCommand(prompt, session, sendChunk, abortController.signal)
       .then((cmd) => {
         if (cmd.handled) {
           if (cmd.response) sendChunk(cmd.response);
@@ -1158,7 +1164,7 @@ export function startAcpServer(): Promise<void> {
             language: projectCtx?.type,
             isGit: isGitRepository(session.workspaceRoot),
           };
-          const costBreakdown = getCostBreakdown();
+          const costBreakdown = getCostBreakdown(tokenReportStart);
           if (costBreakdown.length > 0) {
             for (const entry of costBreakdown) {
               reportStats({
@@ -1225,6 +1231,7 @@ export function startAcpServer(): Promise<void> {
         }
         if (session) session.abortController = null;
       });
+    });
   }
 
   // Keep process alive until stdin closes (Zed terminates us)

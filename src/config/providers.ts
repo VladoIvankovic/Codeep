@@ -474,6 +474,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
+      { id: 'claude-fable-5',            name: 'Claude Fable 5',        description: 'Most capable — hardest reasoning & long-horizon agentic work' },
       { id: 'claude-opus-4-8',           name: 'Claude Opus 4.8',       description: 'Most capable Opus model' },
       { id: 'claude-sonnet-5',           name: 'Claude Sonnet 5',       description: 'Best balance of speed and intelligence' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku',          description: 'Fastest and most affordable' },
@@ -521,7 +522,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // get a working dropdown.
     models: [
       { id: 'openrouter/auto',                  name: 'Auto-route',         description: 'OpenRouter picks the best model for the task' },
-      { id: 'anthropic/claude-opus-4',          name: 'Claude Opus 4',      description: 'Anthropic — most capable' },
+      { id: 'anthropic/claude-fable-5',         name: 'Claude Fable 5',     description: 'Anthropic — most capable' },
+      { id: 'anthropic/claude-opus-4',          name: 'Claude Opus 4',      description: 'Anthropic — Opus tier' },
       { id: 'anthropic/claude-sonnet-5',        name: 'Claude Sonnet 5',    description: 'Anthropic — balanced' },
       { id: 'openai/gpt-5.5',                   name: 'GPT-5.5',            description: 'OpenAI — flagship' },
       { id: 'openai/gpt-5.4-mini',              name: 'GPT-5.4 Mini',       description: 'OpenAI — fast/cheap' },

@@ -11,6 +11,60 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.14.0] — 2026-07-01
+
+> Claude Sonnet 5 replaces Sonnet 4.6 in the Anthropic picker (1M context, the full low→max reasoning-effort range), plus correctness fixes from a full-project audit: the ACP edit-approval diff, per-session naming, Grok effort gating, OpenAI-protocol cache accounting, and a `/copy` edge case.
+
+### Added
+
+- **Claude Sonnet 5** (`claude-sonnet-5`) replaces Claude Sonnet 4.6 in the
+  Anthropic model list (and the OpenRouter seed). Same $3/$15 pricing and 1M
+  context window; graded `/thinking` effort (`low`–`max`). Sonnet 5 rejects
+  *non-default* sampling params, so a custom `/temperature` is now omitted for
+  it (it would otherwise 400) — matching the Fable 5 / Opus 4.7+ handling.
+- **Claude Fable 5** (`claude-fable-5`) is back in the Anthropic model picker
+  (and the OpenRouter seed) now that it's available again — Anthropic's most
+  capable model, for the hardest reasoning and long-horizon agentic work. 1M
+  context, full `low`–`max` `/thinking` effort, $10/$50 pricing in `/cost`. The
+  sampling-param and effort handling were already wired up, so this just re-lists
+  it in the picker.
+
+### Fixed
+
+- **ACP edit approvals showed no diff.** The permission dialog shown to Zed /
+  VS Code branched on `old_string`/`new_string`, but the `edit_file` tool emits
+  `old_text`/`new_text` — so in Manual mode you approved an edit seeing only the
+  file path, not the change. Now reads the real parameter names.
+- **`/new` reported the new session under the previous session's name.** The
+  derived display name wasn't cleared on `/new`, so `syncSession`/`reportStats`
+  attributed the fresh, unrelated session to the old name on the dashboard.
+- **`reasoning_effort` sent to non-reasoning Grok coders.** `grok-build` (the
+  default) and `grok-code-fast` are coders, not reasoning models — the param
+  400s, and a 400 there silently dropped the turn into the weaker text-tool
+  fallback. They're now excluded from the effort gate.
+- **OpenAI-protocol cache tokens over-billed in `/cost`.** `extractOpenAIUsage`
+  ignored `prompt_tokens_details.cached_tokens`, so DeepSeek/OpenAI cache hits
+  were estimated at the full input rate instead of the ~0.1× cache-read rate.
+- **`/copy <non-number>`** (e.g. `/copy abc`) reported a bogus success and
+  cleared the clipboard instead of showing "Invalid block number"; now guarded.
+- **Streamed agent turns recorded zero tokens on most non-OpenAI providers.**
+  `stream_options.include_usage` was only requested for the literal `openai`
+  provider, so DeepSeek/Kimi/Grok/Qwen/GLM/… streamed with no usage block and
+  the whole turn logged 0 tokens / $0.00 in `/cost` and the dashboard. Now
+  requested for every OpenAI-compatible provider (as the plain-chat path
+  already does).
+- **An agent run (or ACP prompt) wiped the session's running `/cost` total.**
+  Token tracking was destructively reset at the start of each run to compute
+  the cloud-telemetry delta, so the status bar and `/cost` lost all prior
+  session usage (and in the ACP server, `/cost` after a 2nd prompt showed only
+  the last one — or nothing). Now uses a non-destructive marker: cloud stats
+  still get only the run's delta while the session-cumulative total survives.
+- **Concurrent ACP sessions mixed each other's token usage.** The tracker kept
+  one process-wide record buffer, so two sessions on one process (e.g. VS Code
+  "New chat" while another turn streams) clobbered and cross-reported totals.
+  Each ACP session now accumulates into its own buffer (via AsyncLocalStorage),
+  isolating usage while keeping the single-session TUI path unchanged.
+
 ## [2.13.2] — 2026-06-30
 
 > Cloud stats: the CLI now reports Anthropic prompt-caching breakdown (cache-creation and cache-read token counts) alongside the existing input/output/cost totals, so the dashboard can show "saved $X with caching" for CLI and VS Code (ACP) sessions.

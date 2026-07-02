@@ -467,7 +467,11 @@ export async function agentChat(
         model, messages: [{ role: 'system', content: systemPrompt }, ...messages],
         tools: getOpenAITools(additionalTools), tool_choice: 'auto', stream: useStreaming,
         ...tempParam, ...tokParam, ...reasoningParam,
-        ...(useStreaming && providerId === 'openai' ? { stream_options: { include_usage: true } } : {}),
+        // Ask ALL OpenAI-compatible providers to emit a usage block in the
+        // stream — without this most (DeepSeek/Kimi/Grok/Qwen/GLM/…) send no
+        // usage on streamed responses and the whole turn records zero tokens.
+        // (OpenRouter also gets usage via openRouterExtras below; both is fine.)
+        ...(useStreaming ? { stream_options: { include_usage: true } } : {}),
         ...openRouterExtras,
       };
     } else {

@@ -11,6 +11,9 @@ import {
   formatTokenCount,
   formatCostReport,
   resetTokenTracking,
+  getRecordCount,
+  createTokenScope,
+  runWithTokenScope,
 } from './tokenTracker';
 
 beforeEach(() => {
@@ -315,5 +318,75 @@ describe('formatCostReport', () => {
     const report = formatCostReport();
     expect(report).toMatch(/no pricing entry/i);
     expect(report).toMatch(/phantom-x1/);
+  });
+});
+
+describe('per-run reporting delta (finding cli-6)', () => {
+  it('prices only records after the marker while cumulative totals survive', () => {
+    // A prior chat turn.
+    recordTokenUsage({ promptTokens: 1000, completionTokens: 500, totalTokens: 1500 }, 'claude-opus-4-8', 'anthropic');
+    // Marker captured at the start of an agent run/prompt (was a destructive
+    // resetTokenTracking() before the fix — which wiped the 1500 above).
+    const marker = getRecordCount();
+    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-4-8', 'anthropic');
+
+    // Cloud telemetry gets ONLY this run's delta.
+    const delta = getCostBreakdown(marker);
+    expect(delta).toHaveLength(1);
+    expect(delta[0].promptTokens).toBe(200);
+    expect(delta[0].completionTokens).toBe(100);
+
+    // Status bar + /cost still see BOTH turns — the cumulative store is not wiped.
+    const full = getCostBreakdown();
+    expect(full[0].promptTokens).toBe(1200);
+    expect(full[0].completionTokens).toBe(600);
+    expect(getSessionStats().totalTokens).toBe(1800);
+    expect(getSessionStats().requestCount).toBe(2);
+  });
+});
+
+describe('runWithTokenScope isolation (finding cli-11 — concurrent ACP sessions)', () => {
+  it('keeps each scope\'s records independent even when interleaved', async () => {
+    // Two ACP sessions whose prompt lifecycles overlap on one process. Each
+    // records into its own scope buffer; neither should see the other, and the
+    // default (out-of-scope) buffer must stay untouched. Manual gates force the
+    // interleave A → B(record+reset) → A so we exercise the exact clobber the
+    // old shared-array design suffered.
+    const scopeA = createTokenScope();
+    const scopeB = createTokenScope();
+
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const aStarted = new Promise<void>((r) => { releaseA = r; });
+    const bRecorded = new Promise<void>((r) => { releaseB = r; });
+
+    const sessionA = runWithTokenScope(scopeA, async () => {
+      recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'claude-opus-4-8', 'anthropic');
+      releaseA();
+      await bRecorded;      // let B record (and reset its own scope) in between
+      recordTokenUsage({ promptTokens: 10, completionTokens: 5, totalTokens: 15 }, 'claude-opus-4-8', 'anthropic');
+      return getCostBreakdown();
+    });
+
+    const sessionB = runWithTokenScope(scopeB, async () => {
+      await aStarted;
+      resetTokenTracking(); // clears only scope B — must NOT wipe session A's records
+      recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'glm-5.2', 'z.ai');
+      releaseB();
+      return getCostBreakdown();
+    });
+
+    const [a, b] = await Promise.all([sessionA, sessionB]);
+
+    // A sees only its two opus records (110/55), never B's glm usage.
+    expect(a).toHaveLength(1);
+    expect(a[0]).toMatchObject({ provider: 'anthropic', model: 'claude-opus-4-8', promptTokens: 110, completionTokens: 55 });
+
+    // B sees only its glm record.
+    expect(b).toHaveLength(1);
+    expect(b[0]).toMatchObject({ provider: 'z.ai', model: 'glm-5.2', promptTokens: 200, completionTokens: 100 });
+
+    // The default (out-of-scope) buffer is untouched by either session.
+    expect(getCostBreakdown()).toHaveLength(0);
   });
 });

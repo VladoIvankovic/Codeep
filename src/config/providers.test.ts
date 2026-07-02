@@ -227,9 +227,8 @@ describe('providers', () => {
       expect(modelIds).toContain('claude-opus-4-8');
       expect(modelIds).toContain('claude-sonnet-5');
       expect(modelIds).toContain('claude-haiku-4-5-20251001');
-      // Fable 5 is de-listed (unavailable under the US export ban); the id
-      // stays valid in the sampling-params guard if set manually.
-      expect(modelIds).not.toContain('claude-fable-5');
+      // Fable 5 is re-listed (available again) — Anthropic's most capable model.
+      expect(modelIds).toContain('claude-fable-5');
       expect(modelIds).not.toContain('claude-opus-4-7');
       expect(modelIds).not.toContain('claude-opus-4-6');
     });
