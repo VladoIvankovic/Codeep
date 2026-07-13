@@ -39,7 +39,7 @@ function isProjectDirectory(path: string): boolean {
 
 type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 
-interface LogEntry {
+export interface LogEntry {
   timestamp: string;
   level: LogLevel;
   message: string;
@@ -69,7 +69,7 @@ function getLogFilePaths(): { global: string; local?: string } {
 /**
  * Format log entry as string
  */
-function formatLogEntry(entry: LogEntry): string {
+export function formatLogEntry(entry: LogEntry): string {
   const dataStr = entry.data ? ` ${JSON.stringify(entry.data)}` : '';
   return `[${entry.timestamp}] [${entry.level.toUpperCase()}] ${entry.message}${dataStr}\n`;
 }

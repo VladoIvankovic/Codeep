@@ -1129,8 +1129,30 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
 
     case 'mcp': {
       const sub = args[0]?.toLowerCase();
-      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfig } = await import('../utils/mcpConfig.js');
+      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfig, loadMcpServerConfigSplit, isWorkspaceMcpTrusted, trustWorkspaceMcp, untrustWorkspaceMcp } = await import('../utils/mcpConfig.js');
       const { registerSessionServers } = await import('../utils/mcpRegistry.js');
+
+      if (sub === 'trust') {
+        if (isWorkspaceMcpTrusted(session.workspaceRoot)) {
+          return { handled: true, response: '_Workspace MCP servers are already trusted here._' };
+        }
+        trustWorkspaceMcp(session.workspaceRoot);
+        const { workspace } = loadMcpServerConfigSplit(session.workspaceRoot);
+        if (workspace.length === 0) {
+          return { handled: true, response: '_Workspace trusted — no workspace MCP servers defined yet._' };
+        }
+        onChunk(`_Workspace trusted. Spawning ${workspace.length} MCP server(s)…_\n\n`);
+        const merged = loadMcpServerConfig(session.workspaceRoot);
+        const { registered, errors } = await registerSessionServers(session.sessionId, merged, { workspaceRoot: session.workspaceRoot });
+        const lines = [`Trusted workspace MCP servers (${registered.length} tool(s) available).`];
+        for (const e of errors) lines.push(`- \`${e.server}\` failed: ${e.error}`);
+        return { handled: true, response: lines.join('\n') };
+      }
+
+      if (sub === 'untrust') {
+        untrustWorkspaceMcp(session.workspaceRoot);
+        return { handled: true, response: '_Workspace MCP trust revoked — workspace servers won\'t spawn for new sessions._' };
+      }
 
       if (sub === 'add') {
         // /mcp add <name> <command> [args...]

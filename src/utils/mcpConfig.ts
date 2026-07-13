@@ -29,14 +29,55 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
+import { config } from '../config/index.js';
 import type { McpServer } from '../acp/protocol.js';
 
 const PROJECT_CONFIG_PATH = '.codeep/mcp_servers.json';
+const PROJECT_DOTMCP_PATH = '.mcp.json';
 const GLOBAL_CONFIG_PATH = '.codeep/mcp_servers.json';
 
 export interface McpConfigFile {
   /** Either the named-map form (Claude Code style) or a flat array (ACP style). */
   mcpServers?: Record<string, Omit<McpServer, 'name'>> | McpServer[];
+}
+
+/**
+ * Expand `${VAR}` / `${VAR:-default}` references from the process env —
+ * the same substitution Claude Code applies to `.mcp.json`, so a shared
+ * config with `"env": {"GITHUB_TOKEN": "${GITHUB_TOKEN}"}` works verbatim.
+ *
+ * Unset vars WITHOUT a default keep the literal `${VAR}` text: silently
+ * substituting '' would hide the misconfiguration, and the literal at
+ * least shows up as-is in error messages / `/mcp` output. (Previously the
+ * literal also SHADOWED a real env var of the same name at spawn time —
+ * expansion when the var IS set fixes that.)
+ */
+function expandEnvRefs(value: string): string {
+  return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g, (match, name: string, def?: string) => {
+    const fromEnv = process.env[name];
+    if (fromEnv !== undefined) return fromEnv;
+    if (def !== undefined) return def;
+    return match;
+  });
+}
+
+function expandRecord(rec: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!rec) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rec)) out[k] = typeof v === 'string' ? expandEnvRefs(v) : v;
+  return out;
+}
+
+/** Apply ${VAR} expansion to every string field of a server entry. */
+function expandServer(s: McpServer): McpServer {
+  return {
+    ...s,
+    command: typeof s.command === 'string' ? expandEnvRefs(s.command) : s.command,
+    args: Array.isArray(s.args) ? s.args.map(a => expandEnvRefs(a)) : s.args,
+    env: expandRecord(s.env),
+    url: typeof s.url === 'string' ? expandEnvRefs(s.url) : s.url,
+    headers: expandRecord(s.headers),
+  };
 }
 
 function parseEntries(raw: string, source: string): McpServer[] {
@@ -54,7 +95,9 @@ function parseEntries(raw: string, source: string): McpServer[] {
 
   if (Array.isArray(servers)) {
     // Defensively filter — any entry needs name + either command or url.
-    return servers.filter(s => s && typeof s.name === 'string' && (typeof s.command === 'string' || typeof s.url === 'string'));
+    return servers
+      .filter(s => s && typeof s.name === 'string' && (typeof s.command === 'string' || typeof s.url === 'string'))
+      .map(expandServer);
   }
 
   return Object.entries(servers).flatMap(([name, cfg]) => {
@@ -63,7 +106,7 @@ function parseEntries(raw: string, source: string): McpServer[] {
     const hasStdio = typeof cfg.command === 'string';
     const hasHttp = typeof (cfg as { url?: unknown }).url === 'string';
     if (!hasStdio && !hasHttp) return [];
-    return [{
+    return [expandServer({
       name,
       command: hasStdio ? cfg.command : undefined,
       args: Array.isArray(cfg.args) ? cfg.args.filter(a => typeof a === 'string') : [],
@@ -72,7 +115,7 @@ function parseEntries(raw: string, source: string): McpServer[] {
       headers: (cfg as { headers?: unknown }).headers && typeof (cfg as { headers: unknown }).headers === 'object'
         ? (cfg as { headers: Record<string, string> }).headers
         : undefined,
-    }];
+    })];
   });
 }
 
@@ -90,18 +133,80 @@ function loadFromFile(path: string): McpServer[] {
  * Load MCP server definitions for a workspace. Project entries shadow
  * global entries with the same server name. Workspace-less calls
  * (TUI without project) return only the global config.
+ *
+ * Sources read (highest precedence first on name collisions):
+ *   1. <workspace>/.codeep/mcp_servers.json  (Codeep-native project file)
+ *   2. <workspace>/.mcp.json                 (cross-tool standard — same
+ *      shape Claude Code/Cursor/Kilo Code read, so users can keep one MCP
+ *      config for their whole fleet)
+ *   3. ~/.codeep/mcp_servers.json            (global — user's machine)
  */
 export function loadMcpServerConfig(workspaceRoot?: string): McpServer[] {
   const globalServers = loadFromFile(join(homedir(), GLOBAL_CONFIG_PATH));
   const projectServers = workspaceRoot
     ? loadFromFile(join(workspaceRoot, PROJECT_CONFIG_PATH))
     : [];
+  const dotMcpServers = workspaceRoot
+    ? loadFromFile(join(workspaceRoot, PROJECT_DOTMCP_PATH))
+    : [];
 
-  // Project wins on name collisions.
+  // Higher-precedence sources win on name collisions: project (Codeep-native)
+  // beats .mcp.json beats global.
   const byName = new Map<string, McpServer>();
   for (const s of globalServers) byName.set(s.name, s);
+  for (const s of dotMcpServers) byName.set(s.name, s);
   for (const s of projectServers) byName.set(s.name, s);
   return [...byName.values()];
+}
+
+/**
+ * Same sources as `loadMcpServerConfig`, but split by trust domain:
+ * `global` (~/.codeep — the user's own machine-wide file) vs `workspace`
+ * (files that arrive WITH a repo: `.codeep/mcp_servers.json` + `.mcp.json`).
+ *
+ * Workspace entries are attacker-controllable — anyone who clones a repo
+ * containing one of these files would otherwise spawn arbitrary commands
+ * at startup — so callers must gate them behind `isWorkspaceMcpTrusted`
+ * before spawning (mirrors the `trustedHookProjects` gate for hooks).
+ * On name collisions a workspace entry shadows a global one, matching
+ * the merged loader's precedence.
+ */
+export function loadMcpServerConfigSplit(workspaceRoot?: string): { global: McpServer[]; workspace: McpServer[] } {
+  const globalServers = loadFromFile(join(homedir(), GLOBAL_CONFIG_PATH));
+  if (!workspaceRoot) return { global: globalServers, workspace: [] };
+
+  const projectServers = loadFromFile(join(workspaceRoot, PROJECT_CONFIG_PATH));
+  const dotMcpServers = loadFromFile(join(workspaceRoot, PROJECT_DOTMCP_PATH));
+  const byName = new Map<string, McpServer>();
+  for (const s of dotMcpServers) byName.set(s.name, s);
+  for (const s of projectServers) byName.set(s.name, s);
+  const workspace = [...byName.values()];
+  const workspaceNames = new Set(workspace.map(s => s.name));
+  return {
+    global: globalServers.filter(s => !workspaceNames.has(s.name)),
+    workspace,
+  };
+}
+
+// ── Workspace MCP trust ────────────────────────────────────────────────────────
+// Workspace-sourced MCP servers spawn child processes with repo-author-chosen
+// command/args/env, so they need a one-time per-workspace approval — the same
+// model as `trustedHookProjects` for hooks. Global (~/.codeep) servers are the
+// user's own config and never need approval.
+
+export function isWorkspaceMcpTrusted(workspaceRoot: string): boolean {
+  const cur = (config.get('trustedMcpProjects') as string[] | undefined) ?? [];
+  return cur.includes(workspaceRoot);
+}
+
+export function trustWorkspaceMcp(workspaceRoot: string): void {
+  const cur = (config.get('trustedMcpProjects') as string[] | undefined) ?? [];
+  if (!cur.includes(workspaceRoot)) config.set('trustedMcpProjects', [...cur, workspaceRoot]);
+}
+
+export function untrustWorkspaceMcp(workspaceRoot: string): void {
+  const cur = (config.get('trustedMcpProjects') as string[] | undefined) ?? [];
+  config.set('trustedMcpProjects', cur.filter((p) => p !== workspaceRoot));
 }
 
 /**

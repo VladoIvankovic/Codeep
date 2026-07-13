@@ -13,7 +13,7 @@ export interface ExportOptions {
 /**
  * Export messages to Markdown format
  */
-function exportToMarkdown(messages: Message[], sessionName?: string): string {
+export function exportToMarkdown(messages: Message[], sessionName?: string): string {
   const timestamp = new Date().toLocaleString('hr-HR');
   let markdown = `# Codeep Chat Export\n\n`;
   
@@ -39,7 +39,7 @@ function exportToMarkdown(messages: Message[], sessionName?: string): string {
 /**
  * Export messages to JSON format
  */
-function exportToJson(messages: Message[], sessionName?: string): string {
+export function exportToJson(messages: Message[], sessionName?: string): string {
   const exportData = {
     session: sessionName || 'Unnamed',
     exportedAt: new Date().toISOString(),
@@ -53,7 +53,7 @@ function exportToJson(messages: Message[], sessionName?: string): string {
 /**
  * Export messages to plain text format
  */
-function exportToText(messages: Message[], sessionName?: string): string {
+export function exportToText(messages: Message[], sessionName?: string): string {
   const timestamp = new Date().toLocaleString('hr-HR');
   let text = `Codeep Chat Export\n`;
   text += `===================\n\n`;

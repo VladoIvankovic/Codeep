@@ -42,6 +42,8 @@ import { getProviderList, getProvider, modelSupportsReasoningEffort, reasoningPa
 import { setProjectContext } from '../api/index';
 import { AppExecutionContext, runSkill, runCommandChain } from './agentExecution';
 import { loadProjectIntelligence, saveProjectIntelligence } from '../utils/projectIntelligence';
+import { ollamaModelHint } from './ollamaHint';
+import { buildSearchSnippets, parseKeepRecent, joinSessionName, parseTaskAddArgs, formatTaskList } from './commands/helpers';
 
 // ─── Extended context for command handlers ────────────────────────────────────
 
@@ -58,16 +60,6 @@ export interface AppCommandContext extends AppExecutionContext {
  * Returns a hint for an Ollama model name based on parameter count.
  * Models ≥7B are suitable for agent mode; smaller ones are chat-only.
  */
-function ollamaModelHint(modelId: string): string {
-  const lower = modelId.toLowerCase();
-  // Extract number before 'b' (e.g. "7b", "1.5b", "14b", "72b")
-  const match = lower.match(/(\d+(?:\.\d+)?)b/);
-  if (!match) return '';
-  const params = parseFloat(match[1]);
-  if (params >= 7) return '✓ agent mode';
-  return '⚠ chat only (< 7B)';
-}
-
 // ─── Main dispatch ────────────────────────────────────────────────────────────
 
 export async function handleCommand(
@@ -690,6 +682,148 @@ export async function handleCommand(
       break;
     }
 
+    case 'cloud': {
+      // Cross-device resume: list sessions synced from other devices/Mac app
+      // and pull the selected one into the local store, then load it.
+      //
+      // Not linked → friendly prompt to run `codeep account`.
+      // Network/empty → notify (no crash).
+      //
+      // We scope to the current project when one is open, so a user on their
+      // laptop sees the sessions they ran on the desktop for the same repo.
+      // BUT: project identity is a hash of the LOCAL absolute path, so the
+      // same repo cloned at a different path (the normal cross-device case)
+      // has a different projectId. When the scoped list comes back empty we
+      // fall back to listing everything, and a non-empty scoped list still
+      // offers a "show all" escape hatch — otherwise cross-device resume
+      // only works when both machines use identical directory layouts.
+      const { listCloudSessions, pullCloudSession, generateProjectId } = await import('../utils/codeepCloud');
+      const projectId = ctx.projectPath ? generateProjectId(ctx.projectPath) : undefined;
+      ctx.app.notify('Fetching cloud sessions…');
+      let summaries = await listCloudSessions(projectId);
+      if (summaries === null) {
+        ctx.app.notify('Not linked — run `codeep account` to enable cloud sync.');
+        break;
+      }
+      let scopedToProject = Boolean(projectId);
+      if (summaries.length === 0 && projectId) {
+        // Nothing under this project's path-hash — try the unscoped list so
+        // sessions synced from a machine with a different path still show up.
+        const all = await listCloudSessions();
+        if (all && all.length > 0) {
+          summaries = all;
+          scopedToProject = false;
+          ctx.app.notify('No sessions matched this project — showing all cloud sessions.');
+        }
+      }
+      if (summaries.length === 0) {
+        ctx.app.notify(projectId
+          ? 'No cloud sessions for this project yet.'
+          : 'No cloud sessions yet.');
+        break;
+      }
+      // Non-null binding for the picker closure — TS can't carry the null
+      // narrowing of a reassigned `let` into the callback.
+      let sessionList = summaries;
+      // Render each row as: title · date · N msg · [project?]
+      // Mirrors the /sessions list layout so the picker feels familiar.
+      const SHOW_ALL = 'Show all cloud sessions…';
+      const labels = summaries.map(s => {
+        const date = new Date(s.updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const title = s.sessionName || s.sessionId.slice(0, 8);
+        const projectTag = s.projectName ? ` · ${s.projectName}` : '';
+        return `${title}  ·  ${date} · ${s.messageCount} msg${projectTag}`;
+      });
+      if (scopedToProject) labels.push(SHOW_ALL);
+      // Named so the "Show all" branch can re-present the picker with the
+      // same handler (a const arrow can reference itself; the binding is
+      // initialized long before the callback can fire).
+      const onPickCloudSession = async (index: number): Promise<void> => {
+        if (scopedToProject && index === sessionList.length) {
+          // "Show all" — re-list unscoped. Re-dispatching /cloud would
+          // re-scope to the project, so fetch + present inline instead.
+          const all = await listCloudSessions();
+          if (!all || all.length === 0) {
+            ctx.app.notify('No other cloud sessions.');
+            return;
+          }
+          sessionList = all;
+          scopedToProject = false;
+          const allLabels = all.map(s => {
+            const date = new Date(s.updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            const title = s.sessionName || s.sessionId.slice(0, 8);
+            const projectTag = s.projectName ? ` · ${s.projectName}` : '';
+            return `${title}  ·  ${date} · ${s.messageCount} msg${projectTag}`;
+          });
+          ctx.app.showList('Cloud Sessions (all)', allLabels, onPickCloudSession);
+          return;
+        }
+        const selected = sessionList[index];
+        // The cloud id becomes a local FILENAME (saveSession joins it into
+        // .codeep/sessions/<name>.json) — whitelist it so a hostile or
+        // corrupted server response can't traverse outside the sessions dir.
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(selected.sessionId)) {
+          ctx.app.notify('Cloud session has an unexpected id format — refusing to save it locally.');
+          return;
+        }
+        ctx.app.notify(`Pulling ${selected.sessionName || selected.sessionId.slice(0, 8)}…`);
+        const full = await pullCloudSession(selected.sessionId);
+        if (!full) {
+          ctx.app.notify('Failed to pull session (network or not found).');
+          return;
+        }
+        // Cloud messages are {role, content}; local Message is the same shape
+        // plus 'system'. Filter to user/assistant (the server already does,
+        // but be defensive) and coerce.
+        const history = full.messages
+          .filter(m => m.role === 'user' || m.role === 'assistant')
+          .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+        if (history.length === 0) {
+          ctx.app.notify('Cloud session has no loadable messages.');
+          return;
+        }
+        // Persist locally so the resumed session is first-class: it appears
+        // in /sessions, autosaves on next change, and re-syncs on next turn.
+        // We reuse the cloud sessionId as the local name so a subsequent
+        // push updates the same cloud record (ON DUPLICATE KEY UPDATE).
+        const localName = selected.sessionId;
+        // If a local copy of this session exists and is NEWER than the cloud
+        // record (continued locally since the last sync), load it instead of
+        // clobbering the newer history with the older cloud copy.
+        try {
+          const { statSync, existsSync } = await import('fs');
+          const { join } = await import('path');
+          const { getSessionsDir } = await import('../config/index');
+          const localPath = join(getSessionsDir(ctx.projectPath), `${localName}.json`);
+          const cloudUpdatedAt = Date.parse(selected.updatedAt);
+          if (existsSync(localPath) && Number.isFinite(cloudUpdatedAt)
+              && statSync(localPath).mtimeMs > cloudUpdatedAt) {
+            const local = loadSession(localName, ctx.projectPath);
+            if (local && local.length > 0) {
+              ctx.app.setMessages(local);
+              ctx.setSessionId(localName);
+              config.set('currentSessionId', localName);
+              ctx.setSessionDisplayName?.(selected.sessionName ?? null);
+              ctx.app.notify('Local copy is newer than the cloud record — loaded the local session instead.');
+              return;
+            }
+          }
+        } catch { /* mtime probe is best-effort — fall through to cloud copy */ }
+        saveSession(localName, history, ctx.projectPath);
+        ctx.app.setMessages(history);
+        // Keep ALL session-identity state in step, not just the renderer's
+        // copy: autosave + agent-mode sync read config.currentSessionId, and
+        // the next syncSession reads the display name — leaving either stale
+        // writes/renames the pulled history under the PREVIOUS session.
+        ctx.setSessionId(localName);
+        config.set('currentSessionId', localName);
+        ctx.setSessionDisplayName?.(selected.sessionName ?? null);
+        ctx.app.notify(`Resumed from cloud: ${selected.sessionName || localName}`);
+      };
+      ctx.app.showList('Cloud Sessions', labels, onPickCloudSession);
+      break;
+    }
+
     case 'new': {
       ctx.app.clearMessages();
       ctx.setSessionId(startNewSession());
@@ -854,7 +988,7 @@ Format: use headers per category, only include categories where you found issues
 
     case 'rename': {
       if (!args.length) { ctx.app.notify('Usage: /rename <new-name>'); return; }
-      const newName = args.join('-');
+      const newName = joinSessionName(args);
       const messages = ctx.app.getMessages();
       if (messages.length === 0) { ctx.app.notify('No messages to save. Start a conversation first.'); return; }
       saveSession(ctx.sessionId, messages, ctx.projectPath);
@@ -883,18 +1017,7 @@ Format: use headers per category, only include categories where you found issues
       if (!args.length) { ctx.app.notify('Usage: /search <term>'); return; }
       const searchTerm = args.join(' ').toLowerCase();
       const messages = ctx.app.getMessages();
-      const searchResults: Array<{ role: string; messageIndex: number; matchedText: string }> = [];
-      messages.forEach((m, index) => {
-        if (m.content.toLowerCase().includes(searchTerm)) {
-          const lowerContent = m.content.toLowerCase();
-          const matchStart = Math.max(0, lowerContent.indexOf(searchTerm) - 30);
-          const matchEnd = Math.min(m.content.length, lowerContent.indexOf(searchTerm) + searchTerm.length + 50);
-          const matchedText = (matchStart > 0 ? '...' : '') +
-            m.content.slice(matchStart, matchEnd).replace(/\n/g, ' ') +
-            (matchEnd < m.content.length ? '...' : '');
-          searchResults.push({ role: m.role, messageIndex: index, matchedText });
-        }
-      });
+      const searchResults = buildSearchSnippets(messages, searchTerm);
       if (searchResults.length === 0) {
         ctx.app.notify(`No matches for "${searchTerm}"`);
       } else {
@@ -1286,7 +1409,7 @@ Format: use headers per category, only include categories where you found issues
 
     case 'compact': {
       const messages = ctx.app.getMessages();
-      const keepRecent = args[0] ? Math.max(2, parseInt(args[0], 10) || 4) : 4;
+      const keepRecent = parseKeepRecent(args[0]);
       if (messages.length <= keepRecent + 2) {
         ctx.app.notify(`Nothing to compact — only ${messages.length} message(s) in this session.`);
         break;
@@ -1801,25 +1924,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       // as the description — the same field the dashboard + macOS app set, and
       // which the list view and the agent task-context prompt already render.
       if (subCmd === 'add') {
-        const TASK_TYPES = ['task', 'bug', 'feature'];
-        let type = 'task';
-        const titleWords: string[] = [];
-        const descWords: string[] = [];
-        let capturingDesc = false;
-        for (const w of args.slice(1)) {
-          const flag = /^--([\w-]+)$/.exec(w);
-          if (flag) {
-            const name = flag[1].toLowerCase();
-            if (name === 'desc' || name === 'description') { capturingDesc = true; continue; }
-            if (TASK_TYPES.includes(name)) type = name;
-            capturingDesc = false; // any non-desc flag ends description capture
-            continue;
-          }
-          if (capturingDesc) descWords.push(w);
-          else titleWords.push(w);
-        }
-        const title = titleWords.join(' ').trim();
-        const description = descWords.join(' ').trim();
+        const { title, description, type } = parseTaskAddArgs(args.slice(1));
         if (!title) { ctx.app.notify('Usage: /tasks add <title> [--bug | --feature] [--desc <text>]'); break; }
         const projectName = ctx.projectContext?.name;
         const projectId = ctx.projectContext?.root ? generateProjectId(ctx.projectContext.root) : undefined;
@@ -1859,19 +1964,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       }
 
       setTaskContext(tasks);
-
-      const TYPE_ICON: Record<string, string> = { bug: '[bug]', feature: '[feature]', task: '[task]' };
-      const lines = [`## Tasks${projectName ? ` — ${projectName}` : ''}`, ''];
-      tasks.forEach((t, i) => {
-        const icon = TYPE_ICON[t.type] ?? '[task]';
-        // In a global listing (not scoped to one project) tag each row with its
-        // project so a mixed list is legible — matches the macOS/web task rows.
-        const proj = !projectName && t.project_name ? ` _(${t.project_name})_` : '';
-        lines.push(`${i + 1}. ${icon} ${t.title}${proj}${t.description ? `\n   ${t.description}` : ''}`);
-      });
-      lines.push('', `*${tasks.length} pending task${tasks.length > 1 ? 's' : ''}. Use /tasks done <n> to mark complete.*`);
-      lines.push('*Tasks loaded into agent context — agent will see them in the next message.*');
-      ctx.app.addMessage({ role: 'system', content: lines.join('\n') } as Message);
+      ctx.app.addMessage({ role: 'system', content: formatTaskList(tasks, projectName) } as Message);
       break;
     }
 
@@ -2147,8 +2240,34 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         return true;
       };
 
-      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfig } = await import('../utils/mcpConfig');
+      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfig, loadMcpServerConfigSplit, isWorkspaceMcpTrusted, trustWorkspaceMcp, untrustWorkspaceMcp } = await import('../utils/mcpConfig');
       const { registerSessionServers } = await import('../utils/mcpRegistry');
+
+      if (sub === 'trust') {
+        if (!requireProject()) break;
+        if (isWorkspaceMcpTrusted(projectPath!)) {
+          ctx.app.notify('Workspace MCP servers are already trusted here.');
+          break;
+        }
+        trustWorkspaceMcp(projectPath!);
+        const { workspace } = loadMcpServerConfigSplit(projectPath!);
+        if (workspace.length === 0) {
+          ctx.app.notify('Workspace trusted — no workspace MCP servers defined yet.');
+          break;
+        }
+        ctx.app.notify(`Workspace trusted. Spawning ${workspace.length} MCP server(s)…`);
+        const { registered, errors } = await registerSessionServers(TUI_SESSION, workspace, { workspaceRoot: projectPath });
+        if (registered.length > 0) ctx.app.notify(`MCP: ${registered.length} tool(s) ready. Type /mcp.`);
+        for (const e of errors) ctx.app.notifyWarn(`MCP server "${e.server}" failed: ${e.error}`);
+        break;
+      }
+
+      if (sub === 'untrust') {
+        if (!requireProject()) break;
+        untrustWorkspaceMcp(projectPath!);
+        ctx.app.notify('Workspace MCP trust revoked — workspace servers won\'t spawn on next start. (Running servers stop when you exit.)');
+        break;
+      }
 
       if (sub === 'add') {
         if (!requireProject()) break;

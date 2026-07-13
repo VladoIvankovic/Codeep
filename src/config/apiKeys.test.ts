@@ -4,19 +4,31 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // SmartStorage probes the keychain (set+delete a test key); backing it with a
 // working Map makes it choose the keychain path, so secrets never fall back to
 // plaintext config — exactly the production behavior we want to assert.
-const { mockKeytar } = vi.hoisted(() => {
+//
+// @napi-rs/keyring exposes `AsyncEntry` — a class whose instance methods
+// return Promises (getPassword resolves null for a missing entry). We fake
+// it with a constructor capturing (service, account) and routing through
+// the shared Map.
+const { mockKeyring, _defaultEntry } = vi.hoisted(() => {
   const store = new Map<string, string>();
   const k = (service: string, account: string) => `${service}::${account}`;
+  function DefaultEntry(this: any, service: string, account: string) {
+    this.getPassword = async () => store.get(k(service, account)) ?? null;
+    this.setPassword = async (pw: string) => { store.set(k(service, account), pw); };
+    this.deletePassword = async () => { store.delete(k(service, account)); return true; };
+  }
+  const holder: { AsyncEntry: any } = { AsyncEntry: DefaultEntry };
   return {
-    mockKeytar: {
+    _defaultEntry: DefaultEntry,
+    mockKeyring: {
       _store: store,
-      getPassword: vi.fn(async (s: string, a: string) => store.get(k(s, a)) ?? null),
-      setPassword: vi.fn(async (s: string, a: string, p: string) => { store.set(k(s, a), p); }),
-      deletePassword: vi.fn(async (s: string, a: string) => store.delete(k(s, a))),
+      _holder: holder,
+      get AsyncEntry() { return holder.AsyncEntry; },
+      set AsyncEntry(v: any) { holder.AsyncEntry = v; },
     },
   };
 });
-vi.mock('keytar', () => ({ default: mockKeytar, ...mockKeytar }));
+vi.mock('@napi-rs/keyring', () => mockKeyring);
 
 import {
   config,
@@ -49,7 +61,8 @@ describe('config API key storage — secure, no plaintext', () => {
     config.set('apiKey', '');
     config.set('apiKeys', {});
     config.set('keysSecured', true); // skip migration unless a test opts in
-    mockKeytar._store.clear();
+    mockKeyring._store.clear();
+    mockKeyring.AsyncEntry = _defaultEntry; // restore working impl after failure tests
     vi.clearAllMocks();
   });
 
@@ -58,7 +71,7 @@ describe('config API key storage — secure, no plaintext', () => {
 
     expect(getApiKey('minimax')).toBe('sk-minimax-123');
     // The secret reached the (mock) keychain...
-    expect(mockKeytar.setPassword).toHaveBeenCalledWith('codeep', 'api-key-minimax', 'sk-minimax-123');
+    expect(mockKeyring._store.get('codeep::api-key-minimax')).toBe('sk-minimax-123');
     // ...and NOT the plaintext config array.
     const plaintext = (config.get('providerApiKeys') || []).find(k => k.providerId === 'minimax');
     expect(plaintext).toBeUndefined();
@@ -75,7 +88,7 @@ describe('config API key storage — secure, no plaintext', () => {
 
     expect(getApiKey('deepseek')).toBe('');
     expect(config.get('configuredProviderIds')).not.toContain('deepseek');
-    expect(mockKeytar.deletePassword).toHaveBeenCalledWith('codeep', 'api-key-deepseek');
+    expect(mockKeyring._store.has('codeep::api-key-deepseek')).toBe(false);
   });
 
   it('getConfiguredProviders reflects the non-secret index', async () => {
@@ -104,7 +117,7 @@ describe('config API key storage — secure, no plaintext', () => {
     // Index records the migrated providers.
     expect(config.get('configuredProviderIds')).toEqual(expect.arrayContaining(['openrouter', 'z.ai']));
     // Secrets live in the (mock) keychain, not the config file.
-    expect(mockKeytar._store.get('codeep::api-key-openrouter')).toBe('sk-legacy-arr');
+    expect(mockKeyring._store.get('codeep::api-key-openrouter')).toBe('sk-legacy-arr');
   });
 
   it('migration is idempotent — does not re-run once secured', async () => {
@@ -128,7 +141,7 @@ describe('config API key storage — secure, no plaintext', () => {
     config.set('configuredProviderIds', []);
     await loadAllApiKeys(); // runs the sweep (mock keychain is available)
     // Key moved into the (mock) keychain, indexed, and removed from plaintext.
-    expect(mockKeytar._store.get('codeep::api-key-minimax')).toBe('sk-from-fallback');
+    expect(mockKeyring._store.get('codeep::api-key-minimax')).toBe('sk-from-fallback');
     expect(config.get('configuredProviderIds')).toContain('minimax');
     expect((config.get('apiKeys') || {}).minimax).toBeUndefined();
     expect(getApiKey('minimax')).toBe('sk-from-fallback');
@@ -139,7 +152,11 @@ describe('config API key storage — secure, no plaintext', () => {
     config.set('providerApiKeys', [{ providerId: 'minimax', apiKey: 'sk-keepme' }]);
     // Force BOTH the keychain probe/write AND the plaintext fallback write to
     // fail for this key, so secure storage genuinely cannot persist it.
-    mockKeytar.setPassword.mockRejectedValue(new Error('keychain down'));
+    mockKeyring.AsyncEntry = function (this: any) {
+      this.getPassword = () => null;
+      this.setPassword = () => { throw new Error('keychain down'); };
+      this.deletePassword = () => true;
+    };
     const realSet = config.set.bind(config);
     const spy = vi.spyOn(config, 'set').mockImplementation((key: any, value?: any) => {
       if (key === 'apiKeys') throw new Error('disk full');
@@ -157,7 +174,11 @@ describe('config API key storage — secure, no plaintext', () => {
   });
 
   it('setApiKey propagates a hard persistence failure instead of reporting success', async () => {
-    mockKeytar.setPassword.mockRejectedValue(new Error('keychain down'));
+    mockKeyring.AsyncEntry = function (this: any) {
+      this.getPassword = () => null;
+      this.setPassword = () => { throw new Error('keychain down'); };
+      this.deletePassword = () => true;
+    };
     const realSet = config.set.bind(config);
     const spy = vi.spyOn(config, 'set').mockImplementation((key: any, value?: any) => {
       if (key === 'apiKeys') throw new Error('disk full');

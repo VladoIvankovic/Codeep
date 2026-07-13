@@ -5,8 +5,13 @@
 
 import { Screen } from './Screen';
 import { Input, LineEditor, KeyEvent } from './Input';
-import { fg, bg, style, stringWidth } from './ansi';
-import { SYNTAX, highlightCode } from './highlight';
+import { fg, style } from './ansi';
+import { getActionColor, formatActionTarget, getActionLabel } from './components/ActionFormatting';
+import { PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES, LOGO_HEIGHT } from './components/uiConstants';
+import { bottomPanelHeight, chatLayout, messageOffsets, scrollOffsetForTarget, scrollWindow, formatTokenCount, statusBarRightHint, activePanel, computeInputDisplay, agentProgressBar, truncateNotification, shouldShowPasteDialog, buildPasteInfo, type LayoutSnapshot } from './layout';
+import { parseCommandInput } from './inputParsing';
+import { formatWelcomeMessage } from './components/WelcomeFormatter';
+import { filterCommands } from './components/Autocomplete';
 import {
   handleInlineStatusKey,
   handleInlineHelpKey,
@@ -20,22 +25,8 @@ import clipboardy from 'clipboardy';
 import { readImageFromClipboard } from '../utils/clipboard.js';
 import { spawn } from 'child_process';
 
-// Primary color: #f02a30 (Codeep red)
-const PRIMARY_COLOR = fg.rgb(240, 42, 48);
-
-// 8-bit block spinner frames
-const SPINNER_FRAMES = ['▖', '▘', '▝', '▗', '▌', '▀', '▐', '▄'];
-
-// ASCII Logo
-const LOGO_LINES = [
-  ' ██████╗ ██████╗ ██████╗ ███████╗███████╗██████╗ ',
-  '██╔════╝██╔═══██╗██╔══██╗██╔════╝██╔════╝██╔══██╗',
-  '██║     ██║   ██║██║  ██║█████╗  █████╗  ██████╔╝',
-  '██║     ██║   ██║██║  ██║██╔══╝  ██╔══╝  ██╔═══╝ ',
-  '╚██████╗╚██████╔╝██████╔╝███████╗███████╗██║     ',
-  ' ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝╚═╝     ',
-];
-const LOGO_HEIGHT = LOGO_LINES.length;
+// (PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES, LOGO_HEIGHT moved to
+// ./components/uiConstants — imported above.)
 
 // ─── Command metadata ────────────────────────────────────────────────────────
 //
@@ -52,6 +43,10 @@ import { SelectItem } from './components/SelectScreen';
 import { renderExportPanel, handleExportKey as handleExportKeyComponent, ExportState } from './components/Export';
 import { renderLogoutPanel, handleLogoutKey as handleLogoutKeyComponent, LogoutState } from './components/Logout';
 import { renderSearchPanel, handleSearchKey as handleSearchKeyComponent, SearchState } from './components/Search';
+import {
+  formatMessage as formatMessageFn,
+  type BlockCounter,
+} from './components/MessageFormatter';
 
 export interface Message {
   role: 'user' | 'assistant' | 'system' | 'welcome';
@@ -115,7 +110,7 @@ export class App {
   // Paste detection state
   private pasteInfo: { chars: number; lines: number; preview: string; fullText: string } | null = null;
   private pasteInfoOpen = false;
-  private codeBlockCounter = 0; // Global code block counter for /copy numbering
+  private codeBlockCounter: BlockCounter = { current: 0 }; // Global code block counter for /copy numbering
 
   // Message render cache: index → { lines, width, startBlock, blockCount }
   private messageCache: Array<{ lines: Array<{ text: string; style: string; raw?: boolean }>; width: number; startBlock: number; blockCount: number } | null> = [];
@@ -302,34 +297,17 @@ export class App {
   scrollToMessage(messageIndex: number): void {
     const { width, height } = this.screen.getSize();
     const maxWidth = width - 4; // Account for margins
-    
-    // Calculate actual line count for messages up to target
-    let totalLines = 0;
-    let targetStartLine = 0;
-    
-    for (let i = 0; i < this.messages.length; i++) {
-      const msg = this.messages[i];
-      
-      if (i === messageIndex) {
-        targetStartLine = totalLines;
-      }
-      
-      // Count lines for this message (header + content)
-      const contentLines = msg.content.split('\n');
-      let msgLines = 2; // Header + empty line after
-      
-      for (const line of contentLines) {
-        // Account for word wrapping
-        msgLines += Math.ceil(Math.max(1, line.length) / maxWidth);
-      }
-      
-      totalLines += msgLines + 1; // +1 for spacing between messages
-    }
-    
+
+    const { totalLines, targetStartLine } = messageOffsets(
+      this.messages.map((m) => m.content),
+      maxWidth,
+      messageIndex,
+    );
+
     const visibleLines = height - 12; // Approximate visible area
-    
+
     // Set scroll offset to show the target message near the top
-    this.scrollOffset = Math.max(0, totalLines - targetStartLine - Math.floor(visibleLines / 2));
+    this.scrollOffset = scrollOffsetForTarget(totalLines, targetStartLine, visibleLines);
     this.scheduleRender();
     this.notify(`Jumped to message #${messageIndex + 1}`);
   }
@@ -502,11 +480,8 @@ export class App {
    * Handle paste detection - call this when large text is pasted
    */
   handlePaste(text: string): void {
-    const lines = text.split('\n');
-    const chars = text.length;
-    
     // Only show paste info for significant pastes (>100 chars or >3 lines)
-    if (chars < 100 && lines.length <= 3) {
+    if (!shouldShowPasteDialog(text)) {
       // Small paste - just add to input directly
       this.editor.insert(text);
       this.updateAutocomplete();
@@ -515,13 +490,7 @@ export class App {
     }
     
     // Large paste - show info box
-    const preview = text.length > 200 ? text.slice(0, 197) + '...' : text;
-    this.pasteInfo = {
-      chars,
-      lines: lines.length,
-      preview,
-      fullText: text,
-    };
+    this.pasteInfo = buildPasteInfo(text);
     this.pasteInfoOpen = true;
     this.scheduleRender();
   }
@@ -879,84 +848,42 @@ export class App {
    * Handle chat screen keys
    */
   private handleChatKey(event: KeyEvent): void {
-    // If paste info is open, handle paste keys first
-    if (this.pasteInfoOpen) {
-      this.handlePasteInfoKey(event);
-      return;
-    }
-    
-    // If permission is open, handle permission keys first
-    if (this.permissionOpen) {
-      this.handleInlinePermissionKey(event);
-      return;
-    }
-    
-    // If session picker is open, handle session picker keys first
-    if (this.sessionPickerOpen) {
-      this.handleInlineSessionPickerKey(event);
-      return;
-    }
-    
-    // If confirm is open, handle confirm keys first
-    if (this.confirmOpen) {
-      this.handleInlineConfirmKey(event);
-      return;
-    }
-    
-    // If status is open, handle status keys first
-    if (this.statusOpen) {
-      this.handleInlineStatusKey(event);
-      return;
+    // Dispatch to whichever inline panel currently owns focus.
+    switch (activePanel({
+      pasteInfoOpen: this.pasteInfoOpen,
+      permissionOpen: this.permissionOpen,
+      sessionPickerOpen: this.sessionPickerOpen,
+      confirmOpen: this.confirmOpen,
+      statusOpen: this.statusOpen,
+      helpOpen: this.helpOpen,
+      settingsOpen: this.settingsOpen,
+      searchOpen: this.searchOpen,
+      exportOpen: this.exportOpen,
+      logoutOpen: this.logoutOpen,
+      loginOpen: this.loginOpen,
+      menuOpen: this.menuOpen,
+      showAutocomplete: this.showAutocomplete,
+    })) {
+      case 'pasteInfo':      this.handlePasteInfoKey(event); return;
+      case 'permission':     this.handleInlinePermissionKey(event); return;
+      case 'sessionPicker':  this.handleInlineSessionPickerKey(event); return;
+      case 'confirm':        this.handleInlineConfirmKey(event); return;
+      case 'status':         this.handleInlineStatusKey(event); return;
+      case 'help':           this.handleInlineHelpKey(event); return;
+      case 'settings':       this.handleInlineSettingsKey(event); return;
+      case 'search':         this.handleSearchKey(event); return;
+      case 'export':         this.handleExportKey(event); return;
+      case 'logout':         this.handleLogoutKey(event); return;
+      case 'login':          this.handleLoginKey(event); return;
+      case 'menu':           this.handleMenuKey(event); return;
     }
 
-    // If help is open, handle help keys first
-    if (this.helpOpen) {
-      this.handleInlineHelpKey(event);
-      return;
-    }
-    
-    // If settings is open, handle settings keys first
-    if (this.settingsOpen) {
-      this.handleInlineSettingsKey(event);
-      return;
-    }
-    
-    // If search is open, handle search keys first
-    if (this.searchOpen) {
-      this.handleSearchKey(event);
-      return;
-    }
-    
-    // If export is open, handle export keys first
-    if (this.exportOpen) {
-      this.handleExportKey(event);
-      return;
-    }
-    
-    // If logout is open, handle logout keys first
-    if (this.logoutOpen) {
-      this.handleLogoutKey(event);
-      return;
-    }
-    
-    // If login is open, handle login keys first
-    if (this.loginOpen) {
-      this.handleLoginKey(event);
-      return;
-    }
-    
-    // If intro is playing, skip on any key
+    // If intro is playing, skip on any key.
     if (this.showIntro) {
       this.skipIntro();
       return;
     }
-    
-    // If menu is open, handle menu keys first
-    if (this.menuOpen) {
-      this.handleMenuKey(event);
-      return;
-    }
-    
+
     // Escape to cancel streaming/loading/agent or close autocomplete
     if (event.key === 'escape') {
       if (this.showAutocomplete) {
@@ -1158,20 +1085,14 @@ export class App {
    * Update autocomplete suggestions
    */
   private updateAutocomplete(): void {
-    const value = this.editor.getValue();
-    
-    // Show autocomplete only when typing a command
-    if (value.startsWith('/') && !value.includes(' ')) {
-      const query = value.slice(1).toLowerCase();
-      this.autocompleteItems = App.COMMANDS.filter(cmd => 
-        cmd.startsWith(query)
-      ).slice(0, 8); // Max 8 items
-      
-      this.showAutocomplete = this.autocompleteItems.length > 0 && query.length > 0;
-      this.autocompleteIndex = 0;
-    } else {
+    const result = filterCommands(this.editor.getValue(), App.COMMANDS);
+    if (result === null) {
       this.showAutocomplete = false;
       this.autocompleteItems = [];
+    } else {
+      this.autocompleteItems = result.items;
+      this.showAutocomplete = result.items.length > 0;
+      this.autocompleteIndex = result.index;
     }
   }
   
@@ -1428,9 +1349,9 @@ export class App {
    * Handle command
    */
   private handleCommand(input: string): void {
-    const parts = input.slice(1).split(' ');
-    const command = parts[0].toLowerCase();
-    const args = parts.slice(1);
+    const parsed = parseCommandInput(input);
+    if (!parsed) return;
+    const { command, args } = parsed;
     
     switch (command) {
       case 'help':
@@ -1509,47 +1430,40 @@ export class App {
     this.screen.clear();
     
     // If menu or settings is open, reserve space for it at bottom
-    let bottomPanelHeight = 0;
-    if (this.pasteInfoOpen && this.pasteInfo) {
-      const previewLines = Math.min(this.pasteInfo.preview.split('\n').length, 5);
-      bottomPanelHeight = previewLines + 6; // title + preview + extra line indicator + options
-    } else if (this.isAgentRunning && !(this.confirmOpen && this.confirmOptions)) {
-      bottomPanelHeight = 9; // Agent progress box: top + 5 log lines + stats + bottom + 1 margin
-    } else if (this.permissionOpen) {
-      bottomPanelHeight = 10; // Permission dialog
-    } else if (this.sessionPickerOpen) {
-      bottomPanelHeight = Math.min(this.sessionPickerItems.length + 6, 14); // Session picker
-    } else if (this.confirmOpen && this.confirmOptions) {
-      bottomPanelHeight = this.confirmOptions.message.length + 5; // title + messages + buttons + padding
-    } else if (this.statusOpen) {
-      bottomPanelHeight = 16; // Status info panel
-    } else if (this.helpOpen) {
-      bottomPanelHeight = Math.min(height - 6, 20); // Help takes more space
-    } else if (this.searchOpen) {
-      bottomPanelHeight = Math.min(this.searchResults.length * 3 + 6, 18); // Search results
-    } else if (this.exportOpen) {
-      bottomPanelHeight = 10; // Export dialog
-    } else if (this.logoutOpen) {
-      bottomPanelHeight = Math.min(this.logoutProviders.length + 6, 12); // Logout picker
-    } else if (this.loginOpen) {
-      bottomPanelHeight = this.loginStep === 'provider' 
-        ? Math.min(this.loginProviders.length + 5, 14) 
-        : 8; // Login dialog
-    } else if (this.menuOpen) {
-      bottomPanelHeight = Math.min(this.menuItems.length + 4, 14);
-    } else if (this.settingsOpen) {
-      bottomPanelHeight = Math.min(SETTINGS.length + 4, 16);
-    } else if (this.showAutocomplete && this.autocompleteItems.length > 0) {
-      bottomPanelHeight = Math.min(this.autocompleteItems.length + 3, 12);
-    }
-    const mainHeight = height - bottomPanelHeight;
-    
-    // Layout - main UI takes top portion
-    const messagesStart = 0;
-    const messagesEnd = Math.max(0, mainHeight - 4);
-    const separatorLine = Math.max(0, mainHeight - 3);
-    const inputLine = Math.max(0, mainHeight - 2);
-    const statusLine = Math.max(0, mainHeight - 1);
+    const panelHeight = bottomPanelHeight({
+      height,
+      pasteInfoOpen: this.pasteInfoOpen,
+      pasteInfoPreviewLines: this.pasteInfo ? this.pasteInfo.preview.split('\n').length : 0,
+      isAgentRunning: this.isAgentRunning,
+      confirmOpen: this.confirmOpen && !!this.confirmOptions,
+      permissionOpen: this.permissionOpen,
+      sessionPickerOpen: this.sessionPickerOpen,
+      sessionPickerItemCount: this.sessionPickerItems.length,
+      confirmMessageCount: this.confirmOptions?.message.length ?? 0,
+      statusOpen: this.statusOpen,
+      helpOpen: this.helpOpen,
+      searchOpen: this.searchOpen,
+      searchResultCount: this.searchResults.length,
+      exportOpen: this.exportOpen,
+      logoutOpen: this.logoutOpen,
+      logoutProviderCount: this.logoutProviders.length,
+      loginOpen: this.loginOpen,
+      loginStep: this.loginStep,
+      loginProviderCount: this.loginProviders.length,
+      menuOpen: this.menuOpen,
+      menuItemCount: this.menuItems.length,
+      settingsOpen: this.settingsOpen,
+      settingsCount: SETTINGS.length,
+      showAutocomplete: this.showAutocomplete,
+      autocompleteItemCount: this.autocompleteItems.length,
+    } satisfies LayoutSnapshot);
+    const layout = chatLayout(height, panelHeight);
+    const mainHeight = layout.mainHeight;
+    const messagesStart = layout.messagesStart;
+    const messagesEnd = layout.messagesEnd;
+    const separatorLine = layout.separatorLine;
+    const inputLine = layout.inputLine;
+    const statusLine = layout.statusLine;
 
     // Messages
     const messagesHeight = Math.max(1, messagesEnd - messagesStart + 1);
@@ -1823,22 +1737,20 @@ export class App {
     }
     
     // Build prompt prefix
-    const lines = inputValue.split('\n');
-    const lineCount = lines.length;
-    // ❯ for normal, ❯❯ for multiline, [n] for multi-line with count
-    const promptSymbol = lineCount > 1 ? `[${lineCount}] ❯ ` : this.isMultilineMode ? '❯❯ ' : '❯ ';
-    const maxInputWidth = width - promptSymbol.length - 1;
+    const display = computeInputDisplay({
+      value: inputValue,
+      cursorPos,
+      width,
+      isMultilineMode: this.isMultilineMode,
+    });
 
     // Show placeholder when input is empty
-    if (!inputValue) {
-      this.screen.write(0, y, promptSymbol, PRIMARY_COLOR);
-      const placeholder = this.isMultilineMode
-        ? 'Multi-line mode  Enter=newline · Esc=send'
-        : 'Message or /command';
-      this.screen.write(promptSymbol.length, y, placeholder, fg.gray);
+    if (display.isEmpty) {
+      this.screen.write(0, y, display.promptSymbol, PRIMARY_COLOR);
+      this.screen.write(display.promptSymbol.length, y, display.placeholder, fg.gray);
 
       if (!hideCursor) {
-        this.screen.setCursor(promptSymbol.length, y);
+        this.screen.setCursor(display.promptSymbol.length, y);
         this.screen.showCursor(true);
       } else {
         this.screen.showCursor(false);
@@ -1846,41 +1758,15 @@ export class App {
       return;
     }
 
-    // For multi-line content, show the last line being edited
-    const lastLine = lines[lines.length - 1];
-    const displayInput = lineCount > 1 ? lastLine : inputValue;
-    const charsBeforeLastLine = lineCount > 1 ? inputValue.lastIndexOf('\n') + 1 : 0;
-    const cursorInLine = cursorPos - charsBeforeLastLine;
-
-    let displayValue: string;
-    let cursorX: number;
-
-    if (displayInput.length <= maxInputWidth) {
-      displayValue = displayInput;
-      cursorX = promptSymbol.length + Math.max(0, cursorInLine);
-    } else {
-      const effectiveCursor = Math.max(0, cursorInLine);
-      const visibleStart = Math.max(0, effectiveCursor - Math.floor(maxInputWidth * 0.7));
-      const visibleEnd = visibleStart + maxInputWidth;
-
-      if (visibleStart > 0) {
-        displayValue = '…' + displayInput.slice(visibleStart + 1, visibleEnd);
-      } else {
-        displayValue = displayInput.slice(0, maxInputWidth);
-      }
-
-      cursorX = promptSymbol.length + (effectiveCursor - visibleStart);
-    }
-
     // Prompt symbol in primary color, input text in white
-    this.screen.write(0, y, promptSymbol, PRIMARY_COLOR);
-    this.screen.write(promptSymbol.length, y, displayValue, fg.white);
+    this.screen.write(0, y, display.promptSymbol, PRIMARY_COLOR);
+    this.screen.write(display.promptSymbol.length, y, display.displayValue, fg.white);
     
     // Hide cursor when menu/settings is open
     if (hideCursor) {
       this.screen.showCursor(false);
     } else {
-      this.screen.setCursor(Math.min(cursorX, width - 1), y);
+      this.screen.setCursor(Math.min(display.cursorX, width - 1), y);
       this.screen.showCursor(true);
     }
   }
@@ -2401,17 +2287,7 @@ export class App {
     // 8-bit gradient progress bar (right side, if max iterations known)
     if (this.agentMaxIterations > 0) {
       const barWidth = 14;
-      const progress = Math.min(this.agentIteration / this.agentMaxIterations, 1);
-      const filled = Math.round(progress * barWidth);
-      // Use block chars: █▓▒░ for gradient fill effect
-      const BLOCKS = ['░', '▒', '▓', '█'];
-      let bar = '';
-      for (let i = 0; i < barWidth; i++) {
-        if (i < filled - 1) bar += '█';
-        else if (i === filled - 1) bar += '▓';
-        else if (i === filled) bar += '▒';
-        else bar += '░';
-      }
+      const bar = agentProgressBar(this.agentIteration, this.agentMaxIterations, barWidth);
       const barColored = PRIMARY_COLOR + bar + style.reset;
       const stepText = `${this.agentIteration}/${this.agentMaxIterations}`;
       const barX = width - barWidth - stepText.length - 3;
@@ -2435,54 +2311,6 @@ export class App {
   /**
    * Get color for action type
    */
-  private getActionColor(type: string): string {
-    const colors: Record<string, string> = {
-      'read': fg.blue,
-      'write': fg.green,
-      'edit': fg.yellow,
-      'delete': fg.red,
-      'command': fg.magenta,
-      'search': fg.cyan,
-      'list': fg.white,
-      'mkdir': fg.blue,
-      'fetch': fg.cyan,
-    };
-    return colors[type] || fg.white;
-  }
-  
-  /**
-   * Format action target for display
-   */
-  private formatActionTarget(target: string, maxLen: number): string {
-    if (target.includes('/')) {
-      const parts = target.split('/');
-      const filename = parts[parts.length - 1];
-      if (parts.length > 2) {
-        const short = `.../${parts[parts.length - 2]}/${filename}`;
-        return short.length > maxLen ? '...' + short.slice(-(maxLen - 3)) : short;
-      }
-    }
-    return target.length > maxLen ? '...' + target.slice(-(maxLen - 3)) : target;
-  }
-  
-  /**
-   * Get action label for display
-   */
-  private getActionLabel(type: string): string {
-    const labels: Record<string, string> = {
-      'read': 'Reading',
-      'write': 'Creating',
-      'edit': 'Editing',
-      'delete': 'Deleting',
-      'command': 'Running',
-      'search': 'Searching',
-      'list': 'Listing',
-      'mkdir': 'Creating dir',
-      'fetch': 'Fetching',
-    };
-    return labels[type] || type;
-  }
-  
   /**
    * Render status bar
    */
@@ -2493,7 +2321,7 @@ export class App {
     if (this.notification) {
       const notifColor = this.notificationIsWarn ? '\x1b[38;5;208m' : PRIMARY_COLOR; // orange for warn
       const maxLen = width - 2;
-      const msg = this.notification.length > maxLen ? this.notification.slice(0, maxLen - 1) + '…' : this.notification;
+      const msg = truncateNotification(this.notification, maxLen);
       this.screen.write(0, y, notifColor + ' ' + msg + style.reset);
       return;
     }
@@ -2505,7 +2333,7 @@ export class App {
     const modelName = status.model || '';
     const msgCount = `${this.messages.length} msg`;
     const tokenStr = stats && stats.totalTokens > 0
-      ? `${stats.totalTokens < 1000 ? stats.totalTokens : (stats.totalTokens / 1000).toFixed(1) + 'K'} tok`
+      ? `${formatTokenCount(stats.totalTokens)} tok`
       : '';
 
     let leftX = 1;
@@ -2533,16 +2361,15 @@ export class App {
     // Right: context-sensitive hints. While scrolled up, the "new
     // messages below" badge takes priority — it's the only signal that
     // the conversation moved on (addMessage no longer yanks the view).
+    const rightText = statusBarRightHint({
+      scrollOffset: this.scrollOffset,
+      unseenWhileScrolled: this.unseenWhileScrolled,
+      isStreaming: this.isStreaming,
+      isLoading: this.isLoading,
+    });
     if (this.scrollOffset > 0 && this.unseenWhileScrolled > 0) {
-      const badge = `↓ ${this.unseenWhileScrolled} new · PgDn `;
-      this.screen.write(width - badge.length, y, badge, PRIMARY_COLOR);
+      this.screen.write(width - rightText.length, y, rightText, PRIMARY_COLOR);
       return;
-    }
-    let rightText: string;
-    if (this.isStreaming || this.isLoading) {
-      rightText = 'Esc to stop ';
-    } else {
-      rightText = '/help · ↑↓ history ';
     }
     this.screen.write(width - rightText.length, y, rightText, fg.gray);
   }
@@ -2552,7 +2379,7 @@ export class App {
    */
   private getVisibleMessages(height: number, width: number): Array<{ text: string; style: string; raw?: boolean }> {
     const allLines: Array<{ text: string; style: string; raw?: boolean }> = [];
-    this.codeBlockCounter = 0; // Reset block counter for each render pass
+    this.codeBlockCounter.current = 0; // Reset block counter for each render pass
 
     // Logo at the top, scrolls with content
     if (height >= 20) {
@@ -2572,403 +2399,37 @@ export class App {
       const msg = this.messages[i];
       const cached = this.messageCache[i];
 
-      if (cached && cached.width === width && cached.startBlock === this.codeBlockCounter) {
+      if (cached && cached.width === width && cached.startBlock === this.codeBlockCounter.current) {
         // Cache hit — preskoči formatiranje
-        this.codeBlockCounter += cached.blockCount;
+        this.codeBlockCounter.current += cached.blockCount;
         allLines.push(...cached.lines);
       } else {
         // Cache miss — formatiraj i spremi
-        const startBlock = this.codeBlockCounter;
+        const startBlock = this.codeBlockCounter.current;
         const msgLines = msg.role === 'welcome'
-          ? this.formatWelcomeMessage(msg.content)
-          : this.formatMessage(msg.role, msg.content, width);
-        const blockCount = this.codeBlockCounter - startBlock;
+          ? formatWelcomeMessage(msg.content)
+          : formatMessageFn(msg.role, msg.content, width, this.codeBlockCounter);
+        const blockCount = this.codeBlockCounter.current - startBlock;
         this.messageCache[i] = { lines: msgLines, width, startBlock, blockCount };
         allLines.push(...msgLines);
       }
     }
 
     if (this.isStreaming && this.streamingContent) {
-      const streamLines = this.formatMessage('assistant', this.streamingContent + '▊', width);
+      const streamLines = formatMessageFn('assistant', this.streamingContent + '▊', width, this.codeBlockCounter);
       allLines.push(...streamLines);
     }
 
     // Calculate visible window based on scroll offset
     const totalLines = allLines.length;
-
-    const maxScroll = Math.max(0, totalLines - height);
-    if (this.scrollOffset > maxScroll) {
-      this.scrollOffset = maxScroll;
-    }
-
-    const endIndex = totalLines - this.scrollOffset;
-    const startIndex = Math.max(0, endIndex - height);
+    const { startIndex, endIndex, clampedScrollOffset } = scrollWindow({
+      totalLines,
+      height,
+      scrollOffset: this.scrollOffset,
+    });
+    this.scrollOffset = clampedScrollOffset;
 
     return allLines.slice(startIndex, endIndex);
-  }
-  
-  /**
-   * Format message into lines with syntax highlighting for code blocks
-   */
-  private formatWelcomeMessage(content: string): Array<{ text: string; style: string; raw?: boolean }> {
-    const lines: Array<{ text: string; style: string; raw?: boolean }> = [];
-    const DIM = fg.rgb(80, 80, 80);
-    const LABEL = fg.rgb(100, 100, 100);
-    const SEP = DIM + '  ·  ' + style.reset;
-
-    for (const line of content.split('\n')) {
-      if (line.trim() === '') {
-        lines.push({ text: '', style: '' });
-        continue;
-      }
-
-      // Version line: "Codeep vX.X.X  ·  Provider  ·  Model"
-      if (line.startsWith('Codeep ')) {
-        const parts = line.split('  ·  ');
-        const colored = PRIMARY_COLOR + style.bold + (parts[0] || '') + style.reset
-          + SEP + fg.rgb(180, 180, 180) + (parts[1] || '') + style.reset
-          + SEP + fg.rgb(130, 130, 130) + (parts[2] || '') + style.reset;
-        lines.push({ text: colored, style: '', raw: true });
-        continue;
-      }
-
-      // Project line
-      if (/^\s+Project\s/.test(line)) {
-        const value = line.replace(/^\s+Project\s+/, '');
-        lines.push({ text: LABEL + '  Project  ' + style.reset + fg.rgb(100, 180, 220) + value + style.reset, style: '', raw: true });
-        continue;
-      }
-
-      // Access line
-      if (/^\s+Access\s/.test(line)) {
-        const value = line.replace(/^\s+Access\s+/, '');
-        const parts = value.split('  ·  ');
-        const accessColored = fg.rgb(100, 200, 120) + style.bold + (parts[0] || '') + style.reset;
-        const rest = parts.slice(1).map(p => fg.rgb(80, 160, 100) + p + style.reset).join(SEP);
-        lines.push({ text: LABEL + '  Access   ' + style.reset + accessColored + (rest ? SEP + rest : ''), style: '', raw: true });
-        continue;
-      }
-
-      // Mode line
-      if (/^\s+Mode\s/.test(line)) {
-        const value = line.replace(/^\s+Mode\s+/, '');
-        lines.push({ text: LABEL + '  Mode     ' + style.reset + fg.rgb(160, 160, 160) + value + style.reset, style: '', raw: true });
-        continue;
-      }
-
-      // Agent Mode warning
-      if (line.includes('⚠')) {
-        lines.push({ text: '  ' + fg.rgb(220, 160, 40) + line.trim() + style.reset, style: '', raw: true });
-        continue;
-      }
-
-      // Shortcuts line
-      if (line.includes('/help')) {
-        const parts = line.trim().split('  ·  ');
-        const colored = parts.map(p => fg.rgb(150, 150, 150) + p.trim() + style.reset).join(DIM + '  ·  ' + style.reset);
-        lines.push({ text: '  ' + colored, style: '', raw: true });
-        continue;
-      }
-
-      lines.push({ text: line, style: '' });
-    }
-
-    lines.push({ text: '', style: '' });
-    return lines;
-  }
-
-  private formatMessage(role: 'user' | 'assistant' | 'system', content: string, maxWidth: number): Array<{ text: string; style: string; raw?: boolean }> {
-    const lines: Array<{ text: string; style: string; raw?: boolean }> = [];
-
-    // Role-specific prefix — user gets primary color bar, assistant gets dim header, system gets diamond
-    const contIndent = '   ';
-    let firstPrefix: string;
-    const firstStyle = '';
-
-    if (role === 'user') {
-      firstPrefix = PRIMARY_COLOR + '\u258c ' + style.reset;
-    } else if (role === 'assistant') {
-      lines.push({ text: PRIMARY_COLOR + '\u254c\u254c' + style.reset + fg.rgb(120, 120, 120) + ' codeep' + style.reset, style: '', raw: true });
-      firstPrefix = ' ';
-    } else {
-      firstPrefix = PRIMARY_COLOR + '\u25b8 ' + style.reset;
-    }
-
-    const codeBlockRegex = /```([^\n]*)\n([\s\S]*?)```/g;
-    let lastIndex = 0;
-    let match;
-    let isFirstLine = true;
-
-    while ((match = codeBlockRegex.exec(content)) !== null) {
-      const textBefore = content.slice(lastIndex, match.index);
-      if (textBefore) {
-        const prefix = isFirstLine ? firstPrefix : (role === 'user' ? contIndent : ' ');
-        const textLines = this.formatTextLines(textBefore, maxWidth, prefix, firstStyle, role === 'user' && isFirstLine);
-        lines.push(...textLines);
-        isFirstLine = false;
-      }
-
-      this.codeBlockCounter++;
-      const rawLang = (match[1] || 'text').trim();
-      let lang = rawLang;
-      if (rawLang.includes(':') || rawLang.includes('.')) {
-        lang = rawLang.split('.').pop() || rawLang;
-      }
-      lines.push(...this.formatCodeBlock(match[2], lang, maxWidth, this.codeBlockCounter));
-      lastIndex = match.index + match[0].length;
-      isFirstLine = false;
-    }
-
-    const textAfter = content.slice(lastIndex);
-    if (textAfter) {
-      const prefix = isFirstLine ? firstPrefix : (role === 'user' ? contIndent : ' ');
-      const textLines = this.formatTextLines(textAfter, maxWidth, prefix, firstStyle, role === 'user' && isFirstLine);
-      lines.push(...textLines);
-    }
-
-    lines.push({ text: '', style: '' });
-    return lines;
-  }
-  
-  /**
-   * Apply inline markdown formatting (bold, italic, inline code) to a line
-   */
-  private applyInlineMarkdown(text: string): { formatted: string; hasFormatting: boolean } {
-    let result = '';
-    let hasFormatting = false;
-    let i = 0;
-
-    while (i < text.length) {
-      // Inline code: `code`
-      if (text[i] === '`' && text[i + 1] !== '`') {
-        const end = text.indexOf('`', i + 1);
-        if (end !== -1) {
-          const code = text.slice(i + 1, end);
-          result += fg.rgb(209, 154, 102) + code + '\x1b[0m';
-          hasFormatting = true;
-          i = end + 1;
-          continue;
-        }
-      }
-
-      // Bold + italic: ***text***
-      if (text.slice(i, i + 3) === '***') {
-        const end = text.indexOf('***', i + 3);
-        if (end !== -1) {
-          const inner = text.slice(i + 3, end);
-          result += style.bold + style.italic + PRIMARY_COLOR + inner + '\x1b[0m';
-          hasFormatting = true;
-          i = end + 3;
-          continue;
-        }
-      }
-
-      // Bold: **text**
-      if (text.slice(i, i + 2) === '**') {
-        const end = text.indexOf('**', i + 2);
-        if (end !== -1) {
-          const inner = text.slice(i + 2, end);
-          result += style.bold + PRIMARY_COLOR + inner + '\x1b[0m';
-          hasFormatting = true;
-          i = end + 2;
-          continue;
-        }
-      }
-
-      // Italic: *text*
-      if (text[i] === '*' && text[i + 1] !== '*') {
-        const end = text.indexOf('*', i + 1);
-        if (end !== -1 && end > i + 1) {
-          const inner = text.slice(i + 1, end);
-          result += style.italic + inner + '\x1b[0m';
-          hasFormatting = true;
-          i = end + 1;
-          continue;
-        }
-      }
-
-      // Strikethrough: ~~text~~ — using the SGR strikethrough escape (\x1b[9m).
-      // Widely supported in modern terminals (iTerm2, Kitty, WezTerm, Alacritty,
-      // gnome-terminal, Windows Terminal). Falls back gracefully to the dim
-      // text colour on terminals that don't render the SGR.
-      if (text.slice(i, i + 2) === '~~') {
-        const end = text.indexOf('~~', i + 2);
-        if (end !== -1) {
-          const inner = text.slice(i + 2, end);
-          result += '\x1b[9m' + fg.rgb(140, 140, 140) + inner + '\x1b[0m';
-          hasFormatting = true;
-          i = end + 2;
-          continue;
-        }
-      }
-
-      result += text[i];
-      i++;
-    }
-
-    return { formatted: result, hasFormatting };
-  }
-
-  /**
-   * Format plain text lines with markdown support
-   */
-  private formatTextLines(text: string, maxWidth: number, firstPrefix: string, firstStyle: string, rawPrefix = false): Array<{ text: string; style: string; raw?: boolean }> {
-    const lines: Array<{ text: string; style: string; raw?: boolean }> = [];
-    const contentLines = text.split('\n');
-
-    for (let i = 0; i < contentLines.length; i++) {
-      const line = contentLines[i];
-      const prefix = i === 0 ? firstPrefix : '  ';
-      const prefixStyle = i === 0 ? firstStyle : '';
-      const isRaw = i === 0 ? rawPrefix : false;
-
-      // Heading: ## or ### etc.
-      const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
-      if (headingMatch) {
-        const level = headingMatch[1].length;
-        const headingText = headingMatch[2];
-        const headingColor = level <= 2 ? fg.rgb(97, 175, 239) : fg.rgb(198, 120, 221);
-        lines.push({
-          text: prefix + headingColor + style.bold + headingText + '\x1b[0m',
-          style: prefixStyle,
-          raw: true,
-        });
-        continue;
-      }
-
-      // Horizontal rule: --- or *** or ___
-      if (/^[-*_]{3,}\s*$/.test(line)) {
-        const ruleWidth = Math.min(maxWidth - 4, 40);
-        lines.push({
-          text: prefix + fg.gray + '─'.repeat(ruleWidth) + '\x1b[0m',
-          style: prefixStyle,
-          raw: true,
-        });
-        continue;
-      }
-
-      // Blockquote: `> text` — render with a left accent bar (PRIMARY_COLOR)
-      // and the body in a dimmer grey so it visually sits behind regular text.
-      // Strips one level of `> ` so nested quotes render with their own bar.
-      const quoteMatch = line.match(/^(\s*)>\s?(.*)$/);
-      if (quoteMatch) {
-        const indent = quoteMatch[1];
-        const quoteText = quoteMatch[2];
-        const { formatted, hasFormatting } = this.applyInlineMarkdown(quoteText);
-        const body = hasFormatting ? formatted : quoteText;
-        // Vertical bar + space, then dim grey body. Skip if the body is
-        // empty so an isolated `>` renders cleanly.
-        const barred = PRIMARY_COLOR + '│' + '\x1b[0m' + (body ? ' ' + fg.rgb(160, 160, 160) + body + '\x1b[0m' : '');
-        lines.push({
-          text: prefix + indent + barred,
-          style: prefixStyle,
-          raw: true,
-        });
-        continue;
-      }
-
-      // List items: - item or * item or numbered 1. item
-      const listMatch = line.match(/^(\s*)([-*]|\d+\.)\s+(.+)$/);
-      if (listMatch) {
-        const indent = listMatch[1];
-        const bullet = listMatch[2];
-        const content = listMatch[3];
-        const { formatted, hasFormatting } = this.applyInlineMarkdown(content);
-        const bulletChar = bullet === '-' || bullet === '*' ? '\u25b8' : bullet;
-        if (hasFormatting) {
-          lines.push({
-            text: prefix + indent + fg.gray + bulletChar + '\x1b[0m' + ' ' + formatted,
-            style: prefixStyle,
-            raw: true,
-          });
-        } else {
-          lines.push({
-            text: prefix + indent + bulletChar + ' ' + content,
-            style: prefixStyle,
-          });
-        }
-        continue;
-      }
-
-      // Regular text with possible inline markdown
-      const { formatted, hasFormatting } = this.applyInlineMarkdown(line);
-
-      if (hasFormatting) {
-        // Use original (no-ANSI) line to measure and wrap, then apply markdown per segment
-        if (stringWidth(line) > maxWidth - prefix.length) {
-          const wrapped = this.wordWrap(line, maxWidth - prefix.length);
-          for (let j = 0; j < wrapped.length; j++) {
-            const { formatted: segFormatted } = this.applyInlineMarkdown(wrapped[j]);
-            lines.push({
-              text: (j === 0 ? prefix : '  ') + segFormatted,
-              style: j === 0 ? prefixStyle : '',
-              raw: true,
-            });
-          }
-        } else {
-          lines.push({
-            text: prefix + formatted,
-            style: prefixStyle,
-            raw: true,
-          });
-        }
-      } else {
-        // Plain text - word wrap as before
-        if (stringWidth(line) > maxWidth - prefix.length) {
-          const wrapped = this.wordWrap(line, maxWidth - prefix.length);
-          for (let j = 0; j < wrapped.length; j++) {
-            const lineIsRaw = j === 0 ? isRaw : false;
-            lines.push({
-              text: (j === 0 ? prefix : '  ') + wrapped[j],
-              style: j === 0 ? prefixStyle : '',
-              ...(lineIsRaw ? { raw: true } : {}),
-            });
-          }
-        } else {
-          lines.push({
-            text: prefix + line,
-            style: prefixStyle,
-            ...(isRaw ? { raw: true } : {}),
-          });
-        }
-      }
-    }
-    
-    return lines;
-  }
-  
-  /**
-   * Format code block with syntax highlighting (no border)
-   */
-  private formatCodeBlock(code: string, lang: string, maxWidth: number, blockNum?: number): Array<{ text: string; style: string; raw?: boolean }> {
-    const lines: Array<{ text: string; style: string; raw?: boolean }> = [];
-    const codeLines = code.split('\n');
-    
-    // Remove trailing empty line if exists
-    if (codeLines.length > 0 && codeLines[codeLines.length - 1] === '') {
-      codeLines.pop();
-    }
-    
-    // Language label with block number for /copy
-    const label = blockNum ? (lang ? `  ${lang} [${blockNum}]` : `  [${blockNum}]`) : (lang ? '  ' + lang : '');
-    if (label) {
-      lines.push({ text: label, style: SYNTAX.codeLang, raw: false });
-    }
-    
-    // Code lines with highlighting and indent
-    for (const codeLine of codeLines) {
-      const highlighted = highlightCode(codeLine, lang);
-      lines.push({ 
-        text: '    ' + highlighted, 
-        style: '', 
-        raw: true  // Don't apply additional styling, code is pre-highlighted
-      });
-    }
-    
-    // Empty line after code block
-    lines.push({ text: '', style: '', raw: false });
-    
-    return lines;
   }
   
   /**
@@ -3148,42 +2609,5 @@ export class App {
       }
       return resultLine;
     }).join('\n');
-  }
-  
-  /**
-   * Word wrap
-   */
-  private wordWrap(text: string, maxWidth: number): string[] {
-    const words = text.split(' ');
-    const lines: string[] = [];
-    let currentLine = '';
-
-    for (const word of words) {
-      const wordW = stringWidth(word);
-      // Hard-break words wider than maxWidth (e.g. long file paths with no spaces)
-      if (wordW > maxWidth) {
-        if (currentLine) { lines.push(currentLine); currentLine = ''; }
-        // Slice the word into maxWidth chunks
-        let remaining = word;
-        while (stringWidth(remaining) > maxWidth) {
-          lines.push(remaining.slice(0, maxWidth));
-          remaining = remaining.slice(maxWidth);
-        }
-        currentLine = remaining;
-        continue;
-      }
-      if (stringWidth(currentLine) + wordW + 1 > maxWidth && currentLine) {
-        lines.push(currentLine);
-        currentLine = word;
-      } else {
-        currentLine += (currentLine ? ' ' : '') + word;
-      }
-    }
-
-    if (currentLine) {
-      lines.push(currentLine);
-    }
-
-    return lines.length > 0 ? lines : [''];
   }
 }

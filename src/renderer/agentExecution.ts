@@ -15,7 +15,7 @@ import { reportStats, syncSession, generateProjectId } from '../utils/codeepClou
 import { getGitStatus, isGitRepository } from '../utils/git';
 import { getSessionStats, getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
 
-function getActionType(toolName: string): string {
+export function getActionType(toolName: string): string {
   return toolName.includes('write') ? 'write' :
     toolName.includes('edit') ? 'edit' :
     toolName.includes('read') ? 'read' :
@@ -51,7 +51,8 @@ const DANGEROUS_TOOLS = ['write', 'edit', 'delete', 'command', 'execute', 'shell
 export function isDangerousTool(toolName: string, parameters: Record<string, unknown>): boolean {
   const lowerName = toolName.toLowerCase();
   if (DANGEROUS_TOOLS.some(d => lowerName.includes(d))) return true;
-  const command = (parameters.command as string) || '';
+  const rawCommand = parameters.command;
+  const command = typeof rawCommand === 'string' ? rawCommand : '';
   const dangerousCommands = ['rm ', 'rm -', 'rmdir', 'del ', 'delete', 'drop ', 'truncate'];
   return dangerousCommands.some(c => command.toLowerCase().includes(c));
 }

@@ -177,7 +177,7 @@ export type { LanguageCode };
 /**
  * Get sessions directory - local .codeep/sessions/ if in project, otherwise global
  */
-function getSessionsDir(projectPath?: string): string {
+export function getSessionsDir(projectPath?: string): string {
   if (projectPath && isProjectDirectory(projectPath)) {
     const localDir = join(projectPath, '.codeep', 'sessions');
     if (!existsSync(localDir)) {
@@ -205,7 +205,7 @@ function getLocalConfigPath(projectPath: string): string | null {
  * Looks for common project indicators: package.json, pyproject.toml, Cargo.toml, go.mod, composer.json, etc.
  * Also checks if user has manually initialized this folder as a project (.codeep/project.json)
  */
-function isProjectDirectory(path: string): boolean {
+export function isProjectDirectory(path: string): boolean {
   // Check if user has manually initialized this as a project
   const manualProjectMarker = join(path, '.codeep', 'project.json');
   if (existsSync(manualProjectMarker)) {

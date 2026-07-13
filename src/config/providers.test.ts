@@ -16,6 +16,7 @@ import {
   providerNoStreamWithTools,
   REASONING_TIERS,
 } from './providers';
+import { getModelContextWindow } from '../utils/tokenTracker';
 
 describe('providers', () => {
   describe('PROVIDERS constant', () => {
@@ -263,13 +264,41 @@ describe('providers', () => {
   });
 
   describe('openai provider', () => {
-    it('should include GPT-5.5 as default model', () => {
+    it('should include the GPT-5.6 family with gpt-5.6-sol as default', () => {
       const provider = getProvider('openai');
       expect(provider).not.toBeNull();
-      expect(provider!.defaultModel).toBe('gpt-5.5');
+      expect(provider!.defaultModel).toBe('gpt-5.6-sol');
       const modelIds = provider!.models.map(m => m.id);
+      expect(modelIds).toContain('gpt-5.6-sol');
+      expect(modelIds).toContain('gpt-5.6-terra');
+      expect(modelIds).toContain('gpt-5.6-luna');
+      // Previous generation stays available in the picker.
       expect(modelIds).toContain('gpt-5.5');
       expect(modelIds).toContain('gpt-5.4');
+    });
+  });
+
+  describe('newly added models (this release)', () => {
+    it('lists Grok 4.5 (flagship reasoning) under grok', () => {
+      expect(getProvider('grok')!.models.map(m => m.id)).toContain('grok-4.5');
+      // Grok 4.5 is a reasoning model → graded effort supported.
+      expect(modelSupportsReasoningEffort('grok', 'grok-4.5')).toBe(true);
+    });
+    it('lists Gemini 3.1 Flash-Lite under google', () => {
+      expect(getProvider('google')!.models.map(m => m.id)).toContain('gemini-3.1-flash-lite');
+      expect(modelSupportsReasoningEffort('google', 'gemini-3.1-flash-lite')).toBe(true);
+    });
+    it('replaces qwen3-max with qwen3.7-max across every Qwen variant', () => {
+      for (const id of ['qwen', 'qwen-api', 'qwen-cn', 'qwen-cn-api']) {
+        const ids = getProvider(id)!.models.map(m => m.id);
+        expect(ids).toContain('qwen3.7-max');
+        expect(ids).not.toContain('qwen3-max');
+      }
+    });
+    it('prices and sizes the new models (pricing/context lockstep holds)', () => {
+      for (const id of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'grok-4.5', 'gemini-3.1-flash-lite', 'qwen3.7-max']) {
+        expect(getModelContextWindow(id)).not.toBe(128_000); // 128k is the unknown-fallback
+      }
     });
   });
 

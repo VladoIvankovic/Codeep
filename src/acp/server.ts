@@ -22,7 +22,7 @@ import {
 import { runAgentSession } from './session.js';
 import { loadCustomCommands } from '../utils/customCommands.js';
 import { registerSessionServers, disposeAllSessions as disposeAllMcpSessions } from '../utils/mcpRegistry.js';
-import { loadMcpServerConfig, mergeMcpServers } from '../utils/mcpConfig.js';
+import { loadMcpServerConfigSplit, isWorkspaceMcpTrusted, mergeMcpServers } from '../utils/mcpConfig.js';
 import { handleMcpSamplingRequest } from '../utils/mcpSamplingBridge.js';
 import { executeCommandAsync } from '../utils/shell.js';
 import { PermissionOutcome } from '../utils/agent.js';
@@ -556,7 +556,20 @@ export function startAcpServer(): Promise<void> {
    * in-flight registration so tool calls don't race the startup.
    */
   function spawnMcpServersForSession(acpSessionId: string, cwd: string, acpServers: McpServer[] | undefined, label: string): void {
-    const fromConfig = loadMcpServerConfig(cwd);
+    // Workspace-sourced servers (.codeep/mcp_servers.json, .mcp.json) travel
+    // with the repo, so they spawn only for workspaces the user has trusted
+    // (same gate the TUI prompts for at startup). ACP-provided servers are
+    // the editor's own config and global ~/.codeep entries are the user's —
+    // both spawn unconditionally.
+    const { global: globalServers, workspace: workspaceServers } = loadMcpServerConfigSplit(cwd);
+    const workspaceTrusted = isWorkspaceMcpTrusted(cwd);
+    if (workspaceServers.length > 0 && !workspaceTrusted) {
+      process.stderr.write(
+        `[codeep-acp] MCP (${label}): skipped ${workspaceServers.length} workspace server(s) — untrusted workspace. ` +
+        `Run /mcp trust (or \`codeep\` in the repo once) to enable.\n`,
+      );
+    }
+    const fromConfig = workspaceTrusted ? [...globalServers, ...workspaceServers] : globalServers;
     const merged = mergeMcpServers(fromConfig, acpServers);
     if (merged.length === 0) return;
     registerSessionServers(acpSessionId, merged, {

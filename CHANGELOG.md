@@ -11,6 +11,699 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.15.0] — 2026-07-13
+
+> Cross-tool rules + MCP config parity: Codeep now reads `AGENTS.md` (Claude Code / Cursor / Kilo Code standard) as a third project-rules source, and `.mcp.json` at the workspace root as a fourth MCP config source — so users coming from those tools don't have to duplicate config.
+
+### Added
+
+- **New provider models.** Refreshed the catalog for the current release:
+  OpenAI's **GPT-5.6** family — `gpt-5.6-sol` (new default, $5/$30 per MTok,
+  1.05M context), `gpt-5.6-terra` ($2.50/$15), and `gpt-5.6-luna` ($1/$6);
+  xAI **`grok-4.5`** (flagship reasoning, $2/$6, 500K context); Google
+  **`gemini-3.1-flash-lite`** (low-latency workhorse, $0.25/$1.50, ~1.05M
+  context); and **`qwen3.7-max`** (replaces `qwen3-max`, $2.50/$7.50, 1M
+  context) across all four Qwen variants. Model lists, the OpenRouter seed,
+  reasoning-effort gates, and the `tokenTracker` context + pricing tables
+  (`src/config/providers.ts`, `src/utils/tokenTracker.ts`) were updated in
+  lockstep, so cost and context-window estimates are correct for each id.
+
+- **Cross-device session resume (`/cloud`).** The CLI can now pull sessions
+  synced from other devices (Mac app, VS Code, another CLI machine) and
+  resume them locally. `src/utils/codeepCloud.ts` gained
+  `listCloudSessions(projectId?)` and `pullCloudSession(sessionId)` —
+  thin `x-sync-token`-authenticated wrappers over the existing
+  `GET /api/sessions` endpoint (which already served the web dashboard).
+  The new `/cloud` slash command lists remote sessions scoped to the
+  current project (or all if none is open), and on selection fetches the
+  full message array, persists it into the local `.codeep/sessions/`
+  store via `saveSession`, and loads it — so the resumed session is
+  first-class: it shows up in `/sessions`, autosaves on the next change,
+  and re-syncs on the next turn.
+
+  Why: the push path (`syncSession` → `POST /api/sessions`) has existed
+  since 2.0, and the Mac app and web dashboard already read from the
+  cloud store. The CLI was the only surface that could push but not
+  pull, so cross-device resume — start on the desktop, continue on the
+  laptop — was impossible from the terminal. Now it isn't.
+
+  `telemetry` is deliberately NOT consulted on the pull path: reading
+  your own previously-pushed data back is not telemetry, and the user
+  is explicitly asking for it. The original push was already gated.
+
+- **`AGENTS.md` project-rules support** (closes #3). `loadProjectRules`
+  (`src/utils/agentChat.ts`) now falls back to `AGENTS.md` when neither
+  `.codeep/rules.md` nor `CODEEP.md` exists. Lookup precedence (highest
+  first): `.codeep/rules.md` → `CODEEP.md` → `AGENTS.md`. First non-empty
+  file wins; they are not concatenated, so a user can keep a trimmed
+  `AGENTS.md` for the other tools and a richer Codeep-specific rules file.
+
+  Why: `AGENTS.md` is becoming the de-facto cross-tool project-rules
+  standard. Users coming from Claude Code, Cursor, or Kilo Code can now
+  point Codeep at their existing file without duplicating rules into a
+  Codeep-specific file.
+
+- **`.mcp.json` MCP config source** (closes #5). `loadMcpServerConfig`
+  (`src/utils/mcpConfig.ts`) now reads `.mcp.json` at the workspace root
+  in addition to `.codeep/mcp_servers.json`. Same JSON shape, same
+  `mcpServers` map/array form. Precedence chain (highest first):
+  `.codeep/mcp_servers.json` (project) → `.mcp.json` (project, cross-tool)
+  → `~/.codeep/mcp_servers.json` (global). Non-colliding server names
+  from all sources merge; on collisions, higher-precedence sources win.
+
+  Why: Claude Code, Cursor, and Kilo Code already read `.mcp.json` at
+  the repo root. Users can now keep one MCP config file for their whole
+  toolset.
+
+- **Web dashboard: cache-savings insight card.** The main dashboard
+  (`Codeep-web/src/app/dashboard/page.tsx`) now shows a green insight
+  banner when the user has any cache reads: "Prompt caching saved you
+  ~$X" with the total cache-read tokens and a circular cache-hit-ratio
+  gauge. Cost-by-model rows gained a ⚡ badge with per-model cache-read
+  counts. Brings the dashboard to parity with the macOS app's existing
+  "Saved $X via caching" display.
+
+  The savings estimate assumes $3/1M input rate (a common flagship
+  rate) and a 90% discount for cache reads. It's a ballpark — the
+  actual billed cost is already shown via `estimated_cost`. The point
+  is the "you avoided spending ~$X" framing, which is what users
+  actually want to see.
+
+### Security
+
+- **Workspace MCP servers now require a one-time trust approval.** MCP
+  servers defined by files that travel WITH a repo — `.codeep/mcp_servers.json`
+  and the new `.mcp.json` — no longer auto-spawn at startup: cloning a
+  repository containing one of these files would otherwise execute
+  repo-author-chosen commands on your machine before you typed anything.
+  The TUI now shows the server list and asks once per workspace ("Trust &
+  start"); ACP sessions (Zed, VS Code) skip untrusted workspace servers with
+  a notice. Manage with `/mcp trust` / `/mcp untrust` (mirrors the existing
+  per-workspace hooks trust). Global `~/.codeep` servers and ACP-provided
+  servers are your own config and start without a prompt.
+- **`/cloud` hardening.** Cloud API responses are now shape-validated before
+  use (malformed payloads degrade to the normal "unavailable" path instead of
+  throwing mid-picker), and the pulled session id is whitelisted before being
+  used as a local filename — a hostile or corrupted server response could
+  otherwise write outside `.codeep/sessions/`.
+- **Project rules are capped at 64KB** when injected into the system prompt
+  (applies to `.codeep/rules.md`, `CODEEP.md`, and the new `AGENTS.md`), so an
+  oversized rules file can't bloat every request or overflow small-context
+  models.
+
+### Fixed
+
+- **`/cloud` resume left session identity half-updated.** The pulled session
+  now also updates `config.currentSessionId` (autosave and agent-mode sync
+  previously kept writing under the PREVIOUS session's id) and the session
+  display name (the next sync would have renamed the cloud record to the old
+  session's title). If a local copy of the pulled session is newer than the
+  cloud record, the local copy is loaded instead of being overwritten.
+- **`/cloud` cross-device listing actually finds your sessions now.** Scope
+  is a hash of the local *absolute* project path, so the same repo cloned at
+  a different path on another machine (the normal cross-device case) produced
+  an empty list. When the project-scoped list is empty, `/cloud` now falls
+  back to listing all sessions; when it's non-empty it appends a "Show all
+  cloud sessions…" entry so a differently-pathed session is still reachable.
+- **`.mcp.json` now expands `${VAR}` / `${VAR:-default}` env references**
+  (all MCP config files do), matching Claude Code semantics — previously the
+  literal `"${GITHUB_TOKEN}"` string was passed through and even shadowed a
+  real environment variable of the same name at spawn time.
+- **Truncated action targets show the `...` marker again** — the path
+  shortener lost it for very long paths during the `ActionFormatting`
+  extraction.
+- **Lifecycle hooks degrade gracefully on Windows without a POSIX shell**
+  (closes #4). `.sh` hooks can't be spawned directly on Windows; previously a
+  `pre_tool_call` / `pre_commit` hook would fail to spawn and — because those
+  events are blocking — could wedge every tool call. Codeep now detects the
+  platform's shell: it runs `.sh` hooks through Git Bash's `sh` when installed,
+  and when no POSIX shell is found reports an explicit *"cannot run on this
+  system"* state in `/hooks` and the welcome banner and **skips** them (never
+  blocking). A new README "Windows notes" section documents which features need
+  a shell (hooks) and which are Node-native (rules, commands, skills, MCP config).
+
+### Breaking (Linux / Windows)
+
+- **Stored API keys need a one-time re-login after the keytar →
+  `@napi-rs/keyring` migration** (closes #6). The two libraries use different
+  credential-store naming on Linux (Secret Service attributes) and Windows
+  (Credential Vault target names), so keys saved by Codeep ≤ 2.14 are not
+  visible to the new backend there. The CLI detects this and prints a
+  one-time hint; re-add keys with `/login <provider> <key>`. macOS is
+  unaffected (both use the same Keychain items). Keychain access now also
+  runs off the event loop (`AsyncEntry`), so the TUI no longer freezes while
+  macOS shows a keychain-authorization dialog.
+
+### Changed
+
+- **CLI: `App.ts` message-formatting extracted into `MessageFormatter.ts`.**
+  The 3.2k-line `App.ts` had five pure (or near-pure) formatting methods
+  inlined as `private` — `wordWrap`, `applyInlineMarkdown`, `formatTextLines`,
+  `formatCodeBlock`, `formatMessage` — totalling ~600 LoC. Pulled them out
+  into `src/renderer/components/MessageFormatter.ts` (443 LoC) as
+  module-level functions, following the same `components/` pattern already
+  used by `Settings`, `Export`, `Search`, etc.
+
+  The only non-trivial change: `codeBlockCounter` (previously a `private
+  number` on `App`) is now a `BlockCounter` object (`{ current: number }`)
+  threaded through `formatMessage` by reference, so the counter still
+  increments across consecutive calls during a single render pass — block
+  numbers for `/copy [n]` stay stable.
+
+  Also removed a duplicate `wordWrap`: the chat-flavoured variant in
+  `App.ts` (hard-breaks over-width words like long file paths) is now the
+  one in `MessageFormatter.ts`; the simpler `wordWrap` in `ansi.ts`
+  (lets over-width words overflow) stays for non-chat use cases.
+
+  Why: `App.ts` was the largest TypeScript file in the project. The
+  formatting logic was untestable in isolation (it lived on a class that
+  requires a screen, input loop, and 30+ state fields to instantiate).
+  Extracted as pure functions, it now has 26 unit tests covering inline
+  markdown, word-wrap, headings, lists, blockquotes, code blocks, and
+  counter threading — the first tests ever for this code. App.ts shrank
+  from 3189 → 2860 LoC (-10%).
+
+- **ACP registry entry synced to 2.14.0.** `acp-registry/codeep/agent.json`
+  had fallen behind to 2.4.2 — ten minor releases out of date — so ACP
+  clients (Zed, Cursor, etc. via the registry) were advertising a stale
+  binary. Bumped the `version` field and all four platform archive URLs
+  (darwin-aarch64, darwin-x86_64, linux-x86_64, linux-aarch64) to the
+  `v2.14.0` GitHub release.
+
+- **CLI: commands.ts refactoring — extracted helpers module, 2 bugs fixed, +2082 tests total.**
+  Decomposed `commands.ts` (2488 → **2448 LoC**, −40) by extracting pure
+  helpers from the giant switch/case into a new
+  `renderer/commands/helpers.ts` module (140 LoC, 49 tests):
+  - `buildSearchSnippets` — the asymmetric 30/50-char window snippet
+    extractor from `/search` (kept separate from `utils/search.ts`’s
+    50/50 because the inline panel is narrower). 10 tests.
+  - `parseKeepRecent` — the `/compact <n>` arg parser.
+    **Fixed a real bug**: the old `parseInt(arg) || fallback` treated `0`
+    as falsy and returned the default (4) instead of clamping to 2.
+    Switched to `Number.isNaN` check. 7 tests.
+  - `joinSessionName` — the hyphen-joiner from `/rename`. 6 tests.
+  - `parseTaskAddArgs` — the `--bug` / `--feature` / `--desc` flag parser
+    from `/tasks add`. 13 tests.
+  - `formatTaskList` — the Markdown list renderer from `/tasks`. 13 tests.
+  The `commands.ts` cases now delegate to these helpers; the parser and
+  renderer have direct coverage for edge cases (empty args, flag
+  ordering, type overrides, null descriptions).
+
+- **CLI: App.ts refactoring round 3 — progress bar, paste detection, notification truncation extracted; 1 bug fixed.**
+  Continued decomposing `App.ts` (2622 → **2613 LoC**, −9 more) by pulling
+  three more pure concerns into `renderer/layout.ts`:
+  - `agentProgressBar` — the gradient ░▒▓█ bar from
+    `renderInlineAgentProgress`. **Fixed a real bug**: when `maxIterations`
+    was 0, the old code divided by zero (yielding Infinity) and rendered a
+    *full* bar instead of an empty one. Added a `maxIterations > 0` guard.
+    6 new tests, including the zero-budget edge case.
+  - `truncateNotification` — the ellipsis truncation from
+    `renderStatusBar`. 7 new tests.
+  - `shouldShowPasteDialog` / `buildPasteInfo` — the paste-size threshold
+    check and preview struct builder extracted from `handlePaste`.
+    14 new tests covering the exact 100-char boundary, the `>3` lines rule,
+    and the 200-char preview truncation.
+  The layout module is now **123 tests** strong and has uncovered one bug.
+
+- **CLI: App.ts refactoring round 2 — input display + scroll window extracted, +2006 tests total.**
+  Continued decomposing `App.ts` (2662 → **2632 LoC**, −30 more) by pulling
+  two more pure concerns into `renderer/layout.ts`:
+  - `computeInputDisplay` / `inputPromptSymbol` / `inputViewport` — the
+    input-row geometry: prompt-symbol scaling for multi-line content,
+    horizontal viewport scrolling for long lines (cursor anchored at 70%
+    of the available width), placeholder selection. 21 new tests.
+  - `scrollWindow` — the visible-window math from `getVisibleMessages`
+    (maxScroll clamping, startIndex/endIndex derivation). 7 new tests.
+  `renderInput` and `getVisibleMessages` now delegate to these helpers;
+  the layout module is up to **96 tests** covering every extracted helper.
+
+- **CLI: App.ts refactoring — extracted pure layout/input modules, +1978 tests total.**
+  Decomposed `App.ts` (2727 → **2662 LoC**, −65) by pulling three previously
+  inlined, untestable concerns into pure, unit-tested modules:
+
+  - **New module `renderer/layout.ts`** (190 LoC, 68 tests) — the layout math
+    that was buried inside `renderChat`, `scrollToMessage`, `renderStatusBar`,
+    and `handleChatKey`:
+    - `bottomPanelHeight(snapshot)` — the 15-branch if/else that reserves
+      space for whichever inline panel is open (paste / agent / permission /
+      session picker / confirm / status / help / search / export / logout /
+      login / menu / settings / autocomplete), with caps and priority.
+    - `chatLayout(height, panel)` — derives the y-coordinates for the
+      messages / separator / input / status rows.
+    - `messageLineCount`, `messageOffsets`, `scrollOffsetForTarget` — the
+      word-wrap line-counting and scroll-centring logic that used to live in
+      `scrollToMessage`.
+    - `formatTokenCount` — the "1.2K tok" compaction.
+    - `statusBarRightHint` — context-sensitive right-edge hint (idle /
+      streaming / "new messages below" badge).
+    - `activePanel(state)` — the focus-precedence decision the keystroke
+      handler walked as a 13-step if/else chain on every keypress.
+  - **New module `renderer/inputParsing.ts`** (14 tests) —
+    `parseCommandInput` extracts the `/command arg arg` parser from
+    `handleCommand`, with whitespace collapsing and case normalisation.
+
+  `App.ts` now delegates to these modules via small snapshot objects; the
+  big methods shrank by 65 lines and their core logic is now covered by
+  82 dedicated tests instead of being unreachable from the test suite.
+
+- **CLI: deeper coverage round 5 — 5 more test files, +50 tests.**
+  Closed the remaining small-module gaps:
+
+  - **`utils/search.test.ts`** (15 tests) — `searchMessages`:
+    case-insensitive match (both directions), messageIndex tracking,
+    one-result-per-message, 50-char context window, leading/trailing
+    ellipsis boundary, original-case preservation, multi-word terms,
+    regex-char-as-literal safety.
+  - **`utils/commandIndex.test.ts`** (8 tests) — `COMMAND_INDEX`
+    structural invariants (non-empty, no dupes, slash-prefixed) and
+    `formatCommandIndex` Markdown rendering (bullet list, backtick
+    wrapping, em-dash separator, one-bullet-per-command).
+  - **`utils/taskContext.test.ts`** (11 tests) — `getTaskContextPrompt`
+    empty-state, task title/description/project/badge rendering,
+    missing-field fallbacks, multi-task bullet list, header + footer.
+  - **`utils/ollamaCatalog.test.ts`** (10 tests) — `OLLAMA_CODING_MODELS`
+    catalog invariants (fields populated, pull-tag format, no dupes,
+    size variety) and `catalogAgentHint` (7B threshold, consistency
+    with the catalog).
+  - **`renderer/components/uiConstants.test.ts`** (6 tests) —
+    `PRIMARY_COLOR` ANSI escape, `SPINNER_FRAMES` (8 distinct single
+    chars), `LOGO_LINES` / `LOGO_HEIGHT` consistency.
+
+- **CLI: deeper coverage round 4 — 6 more test files, +83 tests, 1 duplikat helpera istaknut.**
+  - **`renderer/main.test.ts`** (10 tests) — `deriveSessionName` (whitespace
+    collapse, 5-word cap, 48-char truncation with ellipsis).
+  - **`utils/export.test.ts`** (25 tests) — Markdown / JSON / plain-text
+    exporters: header structure, role labels, message preservation,
+    session name defaulting, message-count field, ISO timestamp,
+    format dispatch + unknown-format error, empty-list safety.
+  - **`renderer/components/Box.test.ts`** (20 tests) — `boxChars`
+    completeness, `createBox` (line count, y-placement, corner chars per
+    style, middle-row pattern, x-padding, title embed/alignment/
+    truncation/narrow-box suppression), `centerBox` (centring, floor,
+    negative when overflow).
+  - **`renderer/components/Search.test.ts`** (7 tests) — `handleSearchKey`
+    (escape/close, up/down clamping, enter-selects-messageIndex,
+    empty-results guard, ignore-unknown, position vs index).
+  - **`renderer/components/Intro.test.ts`** (12 tests) — `GLITCH_CHARS`,
+    `generateNoiseLine` (length, space preservation, glitch membership),
+    `getDecryptedLine` (length, space preservation, full reveal at
+    progress > 0.95, probabilistic reveal at 0, empty + long input).
+  - **`renderer/components/Logout.test.ts`** (9 tests) — `handleLogoutKey`
+    (escape close, up/down navigation capped at providers + all + cancel,
+    enter on provider / "all" / "cancel" slot, no-callback safety,
+    unknown-key ignore, empty-providers cap).
+  - Also surfaced a **duplicate `truncatePath` helper** (identical
+    implementation in `Permission.ts` and `Status.ts`) — exported both for
+    testability; a future refactor should consolidate into a shared util.
+
+- **CLI: deeper coverage round 3 — 4 more test files, +79 tests.**
+  Continued closing the test gap:
+
+  - **`utils/terminal.test.ts`** (31 tests) — terminal control helpers:
+    `supportsSynchronizedOutput` (env-driven detection of ghostty /
+    iterm / kitty / wezterm / vscode / alacritty + xterm/256color
+    fallback), `hideCursor`/`showCursor` escape sequences, `clearLinesAbove`
+    multi-line clear-and-restore, `moveCursor` (up/down), `getTerminalSize`
+    fallback, and `createSyncWriter` (sync-frame wrapping, idempotent
+    startSync, unsupported-terminal pass-through).
+  - **`utils/skillBundles.test.ts`** (32 tests) — the skill-bundle engine:
+    `parseFrontmatter` (BOM/CRLF normalisation, inline + block lists,
+    quote stripping, kebab-case keys, body preservation, no-frontmatter
+    fallback), `stripQuotes`, `asStringArray`, `formatBundlesForSysprompt`
+    (per-line 200-char cap, 3-trigger hint, total 4000-char budget with
+    "omitted" note), `formatBundleList` (project/global grouping, version
+    badge, empty hint).
+  - **`utils/skillBundlesCloud.test.ts`** (14 tests) — `serialiseSkillMd`
+    (YAML frontmatter round-trip for all optional fields and list
+    sections), `readRawSkillMd` (missing-file null), `uninstallLocalBundle`
+    (delete + idempotent second call).
+  - **`renderer/components/Permission.test.ts`** (9 tests) —
+    `getPermissionOptions`, `truncatePath` (basename fallback, .../ prefix,
+    boundary behaviour).
+  - **`renderer/components/SelectScreen.test.ts`** (12 tests) —
+    `handleSelectKey` dispatch for all navigation keys, mutation-free
+    state, and the defensive empty-list case.
+
+- **CLI: deeper coverage round 2 — 4 more test files, +117 tests, 1 crash bug fixed.**
+  Continued closing the test gap on large untested modules:
+
+  - **`utils/codeepCloud.test.ts`** (23 tests) — `generateProjectId`
+    (deterministic sha256-16, trailing-slash + case normalisation),
+    `_readFileBundleForTest` / `_writeFileBundleForTest` (the
+    personality/command bundle sync): case-folding of filenames,
+    name-regex validation, 64-char name cap, 64 KB size cap (boundary
+    included), additive-merge (no clobber of local edits), directory
+    auto-creation, empty/invalid-body skip.
+  - **`renderer/Input.test.ts`** (35 tests) — `LineEditor`, the
+    readline-style input editor: cursor movement, word-boundary
+    navigation (`wordLeft`/`wordRight` over spaces, path separators and
+    dots), `deleteWordBackward` (path-aware), `deleteToEnd`, history
+    navigation (up/down walk, draft restoration, empty-entry skip,
+    100-entry cap), and `handleKey` dispatch (backspace/delete/left/
+    right/home/end/ctrl-left/ctrl-right/alt+b/alt+f, regular char
+    insert, ctrl-suppression).
+  - **`renderer/Screen.test.ts`** (16 tests) — the terminal screen
+    buffer: out-of-bounds rejection, newline-truncation in `write`,
+    `writeLine` overwrite, `writeWrapped` line counting, `horizontalLine`,
+    cursor API, and render/fullRender safety.
+  - **`renderer/agentExecution.test.ts`** (43 tests) — `getActionType`
+    (tool-name → action classification) and `isDangerousTool` (name +
+    command heuristics). **Found and fixed a real crash bug**: when the
+    LLM returned `parameters.command` as a number (`123`) instead of a
+    string, `isDangerousTool` threw `TypeError: command.toLowerCase is
+    not a function` — taking the whole agent loop down with it. The fix
+    guards with `typeof rawCommand === 'string'`.
+
+- **CLI: deep test coverage — 6 new test files, +126 tests.**
+  Added tests for six previously-untested modules across the CLI:
+
+  - **`config/index.test.ts`** (26 tests) — project detection (`isProjectDirectory`,
+    `hasStandardProjectMarkers`, `initializeAsProject`, `isManuallyInitializedProject`):
+    all 9 standard markers, the `.codeep/project.json` manual marker,
+    idempotent re-initialisation, non-writable-path failure, and the
+    `isProjectDirectory` precedence (manual marker wins over standard markers).
+  - **`utils/taskPlanner.test.ts`** (19 tests) — the dependency-aware task
+    scheduler (`canStartTask`, `getNextTask`, `formatTaskPlan`): blocked /
+    unblocked dependency chains, failed-dependency handling, multi-level
+    chains, in-progress skip, and the status-icon / dependency rendering.
+  - **`utils/logger.test.ts`** (9 tests) — `formatLogEntry`: level uppercasing,
+    JSON-serialised data suffix, falsy-data suppression (0/false/''),
+    multi-line messages, trailing newline.
+  - **`utils/interactive.test.ts`** (28 tests) — the prompt-clarification
+    flow (`analyzeForClarification`, `formatQuestions`, `parseAnswers`,
+    `enhancePromptWithAnswers`): all ambiguity triggers (auth, database,
+    api, deploy, test, styling, state-management, refactor, form),
+    letter-answer parsing (`1a`/`1b`), option-name matching, and the
+    "proceed" escape hatch. **Documents a real false-positive bug** in
+    `checkForDetails` (substring match: "authentication" contains "auth"
+    from the "Basic auth" option label).
+  - **`utils/mcpMarketplace.test.ts`** (14 tests) — `findMarketplaceEntry`,
+    `formatMarketplaceList`, `formatMarketplaceEntry`: case-insensitive
+    lookup, the Markdown table rendering, one-row-per-entry invariant,
+    arg-hint / env-note / docs-link sections.
+  - **`renderer/handlers.test.ts`** (30 tests) — the inline modal key
+    handlers (`handleInlineStatusKey`, `handleInlineHelpKey`,
+    `handleInlinePermissionKey`, `handleInlineSessionPickerKey`,
+    `handleInlineConfirmKey`): close-on-escape, cursor clamping, scroll
+    step sizes, the yes/no/extra cycle, delete-mode toggling, and
+    empty-list cleanup.
+
+- **CLI: `App.ts` + `commands.ts` decomposition — +61 tests, 2 more helpers extracted.**
+  Continued the `App.ts` / `commands.ts` cleanup:
+
+  - **`components/Autocomplete.ts`** — `filterCommands(value, commands)`,
+    the `/`-command prefix matcher. Rules: only triggers on input
+    starting with `/` and containing no space, case-insensitive prefix
+    match, 8-item cap. 10 tests cover the accept/reject paths, the cap,
+    and the empty-query special case.
+  - **`ollamaHint.ts`** — `ollamaModelHint(modelId)`, the parameter-
+    count hint (`✓ agent mode` / `⚠ chat only (< 7B)`) shown beside
+    Ollama models. 20 tests cover the size-threshold boundary (7B),
+    namespaced ids (`qwen3:14b`), hyphenated ids (`mistral-7b-instruct`),
+    and the no-size-detected fallback.
+  - **`utils/toolParsing.test.ts`** (31 tests) — the LLM tool-call
+    parser had **no test coverage** despite being critical path (it's
+    how the agent extracts `read_file` / `write_file` / `execute_command`
+    calls from model output). Added test seams (`_forTest` exports) for
+    the three file-private helpers (`extractPartialToolParams`,
+    `tryExtractParams`, `tryParseToolCall`) and covered: name
+    normalisation (camelCase → snake_case), OpenAI / Anthropic / text
+    response formats, the truncation-recovery path (partial JSON →
+    recovered params), required-field validation (write_file missing
+    path, edit_file missing old_text/new_text), and the trailing-comma
+    tolerance in `tryParseToolCall`.
+
+- **VS Code: `extension.ts` decomposed — 654 → 627 LoC, +50 tests (81 → 131).**
+  `extension.ts` (the activation entry point) had no test coverage and
+  kept its status-bar presentation rules and input-box validators inline.
+  Two pure-function modules extracted:
+
+  - **`statusBarRenderer.ts`** — `renderStatusBar(state)` returns the
+    text / tooltip / command / background-colour per connection state
+    (connecting / connected / reconnecting / disconnected / failed).
+    The `activate()` body now has a 6-line `applyStatusBar` wrapper that
+    applies those fields to the live `StatusBarItem`. 17 tests cover each
+    state's icon, label, click command, tooltip content (model name in
+    connected, attempt counter in reconnecting), and background tint
+    (warning vs. error).
+  - **`validators.ts`** — `validateMcpServerName`, `validateSkillBundleName`,
+    `validateApiKey`, `validateModelId`, `validateRequired`. Five regex /
+    length rules that were inline as `InputBox.validateInput` lambdas,
+    now reusable and unit-tested. 33 tests cover accept paths, reject
+    paths, boundary lengths, leading-character rules, whitespace
+    trimming, and the embedded-whitespace API-key check.
+
+- **Web: dashboard formatting helpers de-duplicated across 8 files + 24 tests.**
+  Six pure helpers (`COLORS`, `colorFor`, `maskKey`, `timeAgo`, `fmt`,
+  `fmtCost`, `fmtTokens`) were copy-pasted — sometimes with subtly
+  different bodies — across eight dashboard pages and components:
+
+  | File | Had |
+  |------|-----|
+  | `app/dashboard/page.tsx` | all six |
+  | `app/dashboard/KeysSection.tsx` | `timeAgo` |
+  | `app/dashboard/ProjectRow.tsx` | `timeAgo` |
+  | `app/dashboard/CliConnectionSection.tsx` | `timeAgo` |
+  | `app/dashboard/projects/[name]/page.tsx` | `timeAgo`, `fmtCost`, `fmtTokens` |
+  | `app/dashboard/sessions/page.tsx` | `timeAgo` |
+  | `app/dashboard/sessions/[id]/page.tsx` | `fmtTokens` |
+  | `app/dashboard/reviews/page.tsx` | `timeAgo`, `fmt` |
+  | `app/dashboard/reviews/CiTokensSection.tsx` | `timeAgo` |
+
+  Consolidated into `src/lib/format.ts` (78 LoC, single source of truth),
+  with `fmtCost`'s `Number(n) || 0` NaN-guard propagated everywhere (the
+  project-page copy lacked it). All eight call sites now import from
+  `@/lib/format`.
+
+  New `src/lib/format.test.ts` (24 tests) pins the rules — palette
+  wrapping, key masking, `timeAgo` tier boundaries (mocked clock),
+  compact number/cost/token formats including the adaptive cost
+  precision that sub-cent cached-token bills depend on.
+
+- **CLI: `App.ts` decomposed — 2860 → 2732 LoC, +22 tests, 3 constants de-duplicated.**
+  `App.ts` (the terminal renderer's main file) had drifted back to
+  2860 LoC after the earlier `MessageFormatter` extraction. Three more
+  pure-function / constant clusters extracted into `components/`:
+
+  - **`uiConstants.ts`** — `PRIMARY_COLOR`, `SPINNER_FRAMES`,
+    `LOGO_LINES`, `LOGO_HEIGHT`. **De-duplication win:** `PRIMARY_COLOR`
+    was redeclared in `Status.ts` and `Intro.ts`, and `LOGO_LINES` was
+    copy-pasted into `Intro.ts` (as `LOGO`). Both now import from the
+    single source, so the palette / logo can't drift between files.
+  - **`ActionFormatting.ts`** — `getActionColor`, `formatActionTarget`,
+    `getActionLabel` (the agent-progress-panel colour/label/path
+    helpers). Pure functions, now unit-tested (11 tests).
+  - **`WelcomeFormatter.ts`** — `formatWelcomeMessage` (the welcome-
+    banner DSL renderer: version header, Project/Access/Mode labels,
+    ⚠ warnings, /help hints). Pure function, now unit-tested (11 tests).
+
+  Writing the `ActionFormatting` tests surfaced a real truncation bug
+  in `formatActionTarget`: when a 3+ segment path was already shortened
+  to `.../parent/file` and still exceeded `maxLen`, the function
+  prepended *another* `...` and sliced from the end — producing
+  `.../b/c` → `../b/c` (dropping a dot) instead of a clean left-trim.
+  Now slices the short form directly so the file extension always
+  survives.
+
+- **Mac App: unit-test coverage expanded (+64 tests, 114 → 178) + 3 parser bugs fixed.**
+  Four new test files cover the pure parsers and helpers behind the
+  `MessageContent/` views (the ones reinstated when the split was fixed
+  in Cycle #29):
+
+  - **`MarkdownTableParserTests.swift`** (13 tests) — GFM table splitter:
+    header + delimiter detection, alignment colons, pipe-less tables,
+    row padding, prose-before/after, single-dash delimiters.
+  - **`MarkdownBlocksTests.swift`** (19 tests) — block-level markdown:
+    paragraphs, ATX headings (levels 1–6 + 7-hash fallback), bullet /
+    numbered / task lists (with `[ ]`/`[x]`/`[X]` markers), blockquotes,
+    horizontal rules, mixed content.
+  - **`ParseEditDiffTests.swift`** (8 tests) — `parseEditDiff`: the
+    edit-file tool-output parser. Nil for non-edit output, prefix-only
+    guard, mixed added/removed/context ordering, leading-blank skip.
+  - **`CodeHighlightingTests.swift`** (13 tests) — the SwiftUI bridge
+    from `SyntaxHighlighter` tokens to `Color`s. Pins the colour per
+    kind and verifies `attributed(_:)` round-trips source verbatim.
+  - **`SegmentsTests.swift`** (11 tests) — `segments(from:)`: the
+    fenced-code-block splitter driving `MessageContentView`. Covers
+    language tags, unclosed fences (streaming), inline-backtick
+    non-detection, tables-inside-prose promotion.
+
+  Writing the tests surfaced three real bugs in the parsers we'd
+  reinstated from memory in Cycle #29, now fixed:
+
+  1. **`MarkdownBlocks.parseTaskItem`** read the checkbox marker at the
+     wrong string index (off-by-one) — `- [ ]` and `- [x]` were never
+     recognized and fell through to `parseBullet`, so task items
+     rendered as plain bullets with the `[ ]`/`[x]` visible in the
+     text. Index arithmetic corrected.
+  2. **`MarkdownTableParser.isDelimiter`** required 3+ dashes per
+     delimiter cell. GFM/CommonMark only require one dash, so valid
+     tables with short delimiters (`|-|-|`, `|:--|:-:|`) were rejected
+     and rendered as prose. Regex relaxed to `:?-+:?`.
+  3. **`MarkdownTableParser.flushBuffer`** didn't trim trailing blank
+     lines, so an empty string or a table followed by a blank produced
+     a spurious empty `.prose` chunk. Now trims trailing blanks before
+     emitting.
+
+- **Mac App: `ChatView.swift` decomposed — 2554 → 1075 LoC (−58%).**
+  The 2.5k-line `ChatView.swift` was the second-largest Swift file in the
+  project (after `AppState.swift`). It bundled the main chat surface,
+  the private `ChatDetailView` helper, and **eight** independent sheet /
+  popover / banner sub-views behind a single file. The sub-views had no
+  shared state with the detail view beyond what they already received as
+  parameters or read from `@Environment(AppState.self)`, so they were
+  pure extraction candidates.
+
+  Split into eight focused files under `Views/`, each carrying a header
+  comment documenting its origin:
+
+  | File | LoC | Contents |
+  |------|-----|----------|
+  | `ConfirmationSheet.swift` | 259 | tool-approval modal (Run/Skip/Cancel) |
+  | `TasksSheet.swift` | 285 | codeep.dev tasks panel + `TaskRow` |
+  | `UsageStatsView.swift` | 193 | token/cost popover + `ModelCostRow` |
+  | `ProjectContextSheet.swift` | 243 | `.codeep/` context viewer + `ProjectNotesSheet` |
+  | `InsightsView.swift` | 224 | codeep.dev insights panel |
+  | `CheckpointsSheet.swift` | 126 | checkpoint history + rewind UI |
+  | `UserPromptsEditor.swift` | 138 | "My Prompts" CRUD editor |
+  | `ErrorBanner.swift` | 83 | error banner |
+
+  What's left in `ChatView.swift` (1075 LoC): the top-level `ChatView`
+  (NavigationSplitView shell + sheet wiring) and `ChatDetailView` (the
+  actual message list + composer + toolbar). These two are tightly
+  coupled and share a lot of state — further splitting would just
+  shuffle parameters around.
+
+  `private struct` → `struct` (module-internal) on every moved type so
+  it stays visible to `ChatView.swift` across files; `private extension`
+  companions moved with their owner.
+
+- **VS Code Extension: unit-test coverage expanded (+32 tests, 49 → 81).**
+  The VS Code extension had 4 test files covering 49 tests, all on the
+  vscode-free modules (`acpClient`, `mcpConfigFile`, `diffPreview`,
+  `webview/markdown`). `chatPanel.ts` (1008 LoC) — the largest source
+  file — had zero tests; same for `codeActions.ts`.
+
+  Three new test files + one expanded one close that gap by testing the
+  pure functions those modules already contained, exposed for tests via
+  `_…ForTest` named exports (same pattern as `diffPreview.test.ts`):
+
+  - **`chatPanel.test.ts`** (6 tests) — `friendlyError`, the user-facing
+    message formatter for CLI failure modes (timeouts, crashes, missing
+    binary). Covers each known failure string + passthrough for unknown.
+  - **`codeActions.test.ts`** (12 tests) — `fence` (code-fence builder)
+    and `buildPrompt` (lightbulb prompt templates for explain / improve /
+    tests / docs / fix). Verifies each action kind produces the right
+    instruction and embeds the fenced block; fix-without-diagnostics
+    omits the problems section.
+  - **`webview/markdown.test.ts`** (+14 tests) — `escapeHtml` and
+    `inline`, the two security-sensitive internal helpers behind
+    `renderMarkdown`. Adds direct coverage for HTML-entity escaping
+    (including the `"` href-breakout regression) and the URL-scheme
+    allowlist (`http(s)`, `mailto:`, `vscode:` pass; `javascript:`,
+    `data:` are stripped to label-only) independently of the
+    full-pipeline tests.
+
+  Mocking: `chatPanel.test.ts` and `codeActions.test.ts` use
+  `vi.mock('vscode', …)` with a minimal stub (same approach the existing
+  `diffPreview.test.ts` pioneered) so the modules load under Node
+  without the Electron extension host.
+
+- **Mac App: `AppState+MCP.swift` extracted + MessageContent build fix.**
+  The MCP (Model Context Protocol) server lifecycle — `reloadMCPServers`,
+  `trustPendingMCP`, `dismissPendingMCP`, `revokeMCPTrust`,
+  `handleMCPToolsChanged`, `addCatalogServer`, `makeMCPSampler`,
+  `reattachToolsToAllConversations` — moved out of the 2.8k-line
+  `AppState.swift` into a dedicated `AppState+MCP.swift` extension (170 LoC),
+  following the same pattern as the existing `+Cloud` / `+Git` / `+Permissions`
+  / `+RecentProjects` splits.
+
+  The MCP-related stored properties (`mcpManager`, `mcpTools`,
+  `mcpResults`, `isReloadingMCP`, `didWireMCPToolsHandler`,
+  `trustedMCPProjectPaths`, `persistTrustedMCPProjects`) were widened
+  from `private` / `private(set)` to `internal` / `internal(set)` so the
+  cross-file extension can reach them — Swift's `private` is file-scoped.
+  Each carries a comment explaining why.
+
+  Also fixed a build regression left over from the Ciklus #29
+  `MessageBubble` decomposition: `MarkdownTableParser` and `MarkdownBlocks`
+  were referenced by the extracted sub-views (`MessageContentView`,
+  `ProseView`, `MarkdownTableView`) but never defined — the parsers had
+  been dropped during the split. Added them as standalone files
+  (`MarkdownTableParser.swift` 115 LoC, `MarkdownBlocks.swift` 190 LoC)
+  and refactored the two `ForEach { switch … }` blocks in
+  `MessageContentView` and `ProseView` into dedicated `@ViewBuilder`
+  helper functions to satisfy Swift's result-builder type inference
+  (the inline switch was producing the misleading
+  `AccessibilityRotorContent` conformance error).
+
+  Why: `AppState.swift` was the largest Swift file in the project.
+  Pulling MCP out cuts it to 2684 LoC (-4.5%) and groups every
+  MCP-related entry-point under one navigable file. The parser fix
+  was blocking the build outright — Xcode was failing on
+  `MessageContentView` before any of the new MCP extension could compile.
+
+- **Mac App: `MessageBubble.swift` decomposed into focused sub-components.**
+  The 924-line view was a God Object holding the bubble shell, the markdown
+  segment dispatcher + parser, code-block rendering + syntax highlighting,
+  prose/list/heading/quote rendering, GFM table rendering, and the three
+  tool-execution card views (`ToolCallCard`, `ToolResultCard`, `DiffBody`)
+  plus their diff parser. Split into:
+
+  - `Views/MessageBubble.swift` (315 LoC) — the bubble shell: role icon,
+    content switch, hover-revealed action row, inline edit mode.
+  - `Views/MessageContent/MessageContentView.swift` — prose/code/table
+    dispatcher + the fenced-code parser.
+  - `Views/MessageContent/CodeBlockView.swift` — code panel + the shared
+    `CodeHighlighting` palette.
+  - `Views/MessageContent/ProseView.swift` — block + inline markdown.
+  - `Views/MessageContent/MarkdownTableView.swift` — GFM table grid.
+  - `Views/MessageContent/ToolCards.swift` — `ToolCallCard`,
+    `ToolResultCard`, `EditDiff`/`DiffLine`/`DiffBody`, `parseEditDiff`.
+
+  Pure relocation — no behaviour change. The `private` types became
+  `internal` so the bubble (and the existing `QuickAgentView` /
+  `ChatView` callers) can still reach them. Xcode 16 file-system-
+  synchronized groups pick up the new folder automatically, so no
+  `.pbxproj` edit was needed. The iOS target keeps its own copy for
+  now (it has UIKit-specific rendering); the same split can be applied
+  there as a follow-up.
+
+  Why: the monolith was the largest Swift file in the project and the
+  one most likely to grow further (tool-card variants, snapshot tests).
+  Smaller files mean smaller review diffs, Xcode Previews that target
+  one piece at a time, and a natural seam for the snapshot-test suite
+  that's still missing.
+
+- **README: replaced the stale "Upgrading from 1.x to 2.0" section.**
+  The top-of-README upgrade note still described the 2.0.0 breaking
+  changes as if they were the latest migration, 14 minor releases later.
+  Replaced with a short "Upgrading" paragraph that points at CHANGELOG
+  for per-release breaking changes and mentions 2.0.0 only as the last
+  breaking bump. The old details (MCP `clientInfo` version, optional
+  `McpServer` shape) remain in the 2.0.0 changelog entry.
+
+- **Native keychain backend swapped from `keytar` to `@napi-rs/keyring`.**
+  `src/utils/keychain.ts` now loads `@napi-rs/keyring` (a Rust binary
+  with prebuilt per-platform artifacts shipped as optionalDependencies)
+  instead of the deprecated `keytar` addon. The public `SecureStorage`
+  surface is unchanged — only the internal adapter was rewritten to
+  bridge the new sync `Entry` API to the async methods the rest of the
+  code expects.
+
+  Why: `keytar` pulls `prebuild-install`, which frequently fails to
+  fetch or compile on new macOS releases and ARM Linux, breaking
+  `npm install` outright for affected users. `@napi-rs/keyring` has no
+  build step and installs a precompiled binary for the target platform
+  automatically, so installs are reliable across macOS / Linux / Windows
+  / FreeBSD on both x64 and arm64.
+
+- **Docs:** `/docs/rules` and `/docs/mcp` rewritten to list the new
+  sources and the full precedence chains. README updated in lockstep.
+  The old docs claimed both Codeep-native rules files were loaded and
+  concatenated — that was never true (first non-empty file wins), so
+  the rewrite also fixes that inaccuracy.
+
 ## [2.14.0] — 2026-07-01
 
 > Claude Sonnet 5 replaces Sonnet 4.6 in the Anthropic picker (1M context, the full low→max reasoning-effort range), plus correctness fixes from a full-project audit: the ACP edit-approval diff, per-session naming, Grok effort gating, OpenAI-protocol cache accounting, and a `/copy` edge case.

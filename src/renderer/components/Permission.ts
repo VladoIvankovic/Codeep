@@ -132,7 +132,7 @@ export function getPermissionOptions(): PermissionLevel[] {
 /**
  * Truncate path for display
  */
-function truncatePath(path: string, maxLen: number): string {
+export function truncatePath(path: string, maxLen: number): string {
   if (path.length <= maxLen) return path;
   
   const parts = path.split('/');

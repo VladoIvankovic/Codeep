@@ -422,6 +422,106 @@ export async function syncSessionAsync(payload: {
   });
 }
 
+// ─── Cross-device session resume (pull) ───────────────────────────────────────
+
+/** Summary of a remote session — no messages, just metadata for listing. */
+export interface CloudSessionSummary {
+  sessionId: string;
+  sessionName: string | null;
+  projectName: string | null;
+  projectId: string | null;
+  messageCount: number;
+  updatedAt: string;
+}
+
+/** Full remote session — messages included (fetched on demand by id). */
+export interface CloudSession extends CloudSessionSummary {
+  messages: { role: string; content: string }[];
+}
+
+/**
+ * List the user's cloud sessions (summaries only — no message bodies).
+ *
+ * The server supports three scopes via the `projectId` query param:
+ *   - omitted    → all sessions for the user
+ *   - "none"     → only personal (no-project) sessions
+ *   - <id>       → sessions scoped to that project
+ *
+ * Returns null if not linked or on network/server error. The caller decides
+ * how to surface that (silently skip vs. notify).
+ *
+ * `telemetry` is NOT consulted here — reading your own previously-pushed
+ * data back is not telemetry, and the user is explicitly asking for it
+ * (via /cloud). The original push was already gated.
+ */
+export async function listCloudSessions(projectId?: string): Promise<CloudSessionSummary[] | null> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return null;
+
+  const url = new URL(`${API_BASE}/api/sessions`);
+  if (projectId) url.searchParams.set('projectId', projectId);
+
+  try {
+    const res = await fetch(url.toString(), {
+      headers: { 'x-sync-token': syncToken },
+    });
+    if (!res.ok) return null;
+    // Server responses are untrusted input — validate the shape instead of
+    // casting, so a malformed/hostile payload degrades to null (the normal
+    // "unavailable" path) rather than throwing deep inside the /cloud picker.
+    // Note `!== true` + Array.isArray also normalizes an absent field to
+    // null (a bare `data.ok ? … : null` would leak `undefined` past the
+    // caller's `=== null` check).
+    const data = await res.json() as { ok?: unknown; sessions?: unknown };
+    if (data?.ok !== true || !Array.isArray(data.sessions)) return null;
+    return (data.sessions as unknown[]).filter((s): s is CloudSessionSummary => {
+      const c = s as Partial<CloudSessionSummary> | null;
+      return !!c && typeof c === 'object' && typeof c.sessionId === 'string' && c.sessionId.length > 0;
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch a single cloud session by id, including the full message array.
+ *
+ * Used by `/cloud` → pick → resume: we pull the messages and write them
+ * into the local `.codeep/sessions/` store via `saveSession`, so the
+ * resumed session behaves identically to a locally-created one (shows
+ * up in `/sessions`, survives restarts, re-syncs on next change).
+ *
+ * Returns null if not linked, not found (404), or network/server error.
+ */
+export async function pullCloudSession(sessionId: string): Promise<CloudSession | null> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return null;
+
+  try {
+    const url = new URL(`${API_BASE}/api/sessions`);
+    url.searchParams.set('id', sessionId);
+    const res = await fetch(url.toString(), {
+      headers: { 'x-sync-token': syncToken },
+    });
+    if (!res.ok) return null;
+    // Untrusted input — validate before it flows into the local session
+    // store. Messages are filtered to well-formed {role, content} string
+    // pairs; anything else is dropped rather than persisted.
+    const data = await res.json() as { ok?: unknown; session?: unknown };
+    if (data?.ok !== true || !data.session || typeof data.session !== 'object') return null;
+    const s = data.session as Partial<CloudSession>;
+    if (typeof s.sessionId !== 'string' || s.sessionId.length === 0) return null;
+    if (!Array.isArray(s.messages)) return null;
+    const messages = (s.messages as unknown[]).filter((m): m is { role: string; content: string } => {
+      const c = m as { role?: unknown; content?: unknown } | null;
+      return !!c && typeof c === 'object' && typeof c.role === 'string' && typeof c.content === 'string';
+    });
+    return { ...(s as CloudSessionSummary), messages } as CloudSession;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Progress log sync ────────────────────────────────────────────────────────
 
 /**
@@ -599,3 +699,10 @@ async function fetchWithRetry(
   }
   return null;
 }
+
+// Test seams — these helpers are otherwise file-private; export them under
+// a `_forTest` suffix so the bundle read/write logic can be exercised
+// directly without going through the network round-trip.
+export const _globalDirForTest = globalDir;
+export const _readFileBundleForTest = readFileBundle;
+export const _writeFileBundleForTest = writeFileBundle;

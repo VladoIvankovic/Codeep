@@ -115,6 +115,11 @@ export const COMMANDS: CommandDef[] = [
     category: 'sessions',
     usage: ['<query>', '<query> --resume', '<query> --summarize'],
   },
+  {
+    name: 'cloud',
+    description: 'List and resume sessions synced from other devices',
+    category: 'sessions',
+  },
   { name: 'export', description: 'Export chat', category: 'sessions', usage: ['[md|json|txt]'] },
   { name: 'compact', description: 'AI-summarize older messages to free up context (keeps last N)', category: 'sessions', usage: ['[keepN]'] },
 

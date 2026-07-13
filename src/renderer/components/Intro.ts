@@ -4,22 +4,10 @@
 
 import { Screen } from '../Screen';
 import { fg, style } from '../ansi';
-
-// ASCII Logo (same as Ink version)
-const LOGO = [
-  ' ██████╗ ██████╗ ██████╗ ███████╗███████╗██████╗ ',
-  '██╔════╝██╔═══██╗██╔══██╗██╔════╝██╔════╝██╔══██╗',
-  '██║     ██║   ██║██║  ██║█████╗  █████╗  ██████╔╝',
-  '██║     ██║   ██║██║  ██║██╔══╝  ██╔══╝  ██╔═══╝ ',
-  '╚██████╗╚██████╔╝██████╔╝███████╗███████╗██║     ',
-  ' ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚══════╝╚═╝     ',
-];
+import { PRIMARY_COLOR, LOGO_LINES as LOGO } from './uiConstants';
 
 const TAGLINE = 'Deep into Code.';
-const GLITCH_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%&*<>?/;:[]=';
-
-// Primary color: #f02a30 (Codeep red)
-const PRIMARY_COLOR = fg.rgb(240, 42, 48);
+export const GLITCH_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%&*<>?/;:[]=';
 
 /**
  * Show intro animation with decrypt effect
@@ -90,7 +78,7 @@ export async function showIntro(screen: Screen, duration: number = 1500): Promis
 /**
  * Generate noise line (random glitch characters)
  */
-function generateNoiseLine(original: string): string {
+export function generateNoiseLine(original: string): string {
   let result = '';
   for (const char of original) {
     if (char === ' ' && Math.random() > 0.1) {
@@ -105,7 +93,7 @@ function generateNoiseLine(original: string): string {
 /**
  * Get partially decrypted line based on progress
  */
-function getDecryptedLine(original: string, progress: number): string {
+export function getDecryptedLine(original: string, progress: number): string {
   let result = '';
   
   for (let i = 0; i < original.length; i++) {

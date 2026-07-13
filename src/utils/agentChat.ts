@@ -51,16 +51,39 @@ export class TimeoutError extends Error {
  * Load project rules from .codeep/rules.md or CODEEP.md
  */
 export function loadProjectRules(projectRoot: string): string {
+  // Lookup precedence (highest first):
+  //   1. .codeep/rules.md  — Codeep-native, committed with the repo
+  //   2. CODEEP.md         — Codeep-native, root-level convenience
+  //   3. AGENTS.md         — cross-tool standard (Claude Code, Cursor,
+  //                          Kilo Code). Read so users coming from those
+  //                          tools don't have to duplicate their rules.
+  //
+  // First non-empty file wins. We deliberately don't concatenate: when two
+  // files exist, the Codeep-native one is authoritative (a user who keeps
+  // both probably has a trimmed AGENTS.md for the other tools and a richer
+  // CODEEP-specific rules file here).
   const candidates = [
     join(projectRoot, '.codeep', 'rules.md'),
     join(projectRoot, 'CODEEP.md'),
+    join(projectRoot, 'AGENTS.md'),
   ];
+
+  // Rules ride EVERY system prompt, so cap the injected size — an oversized
+  // file (AGENTS.md files from other tools can grow unbounded) would bloat
+  // every request's token bill and can push small-context models over their
+  // limit. 64KB ≈ 16k tokens is far above any sane rules file.
+  const MAX_RULES_BYTES = 64 * 1024;
 
   for (const filePath of candidates) {
     if (existsSync(filePath)) {
       try {
-        const content = readFileSync(filePath, 'utf-8').trim();
+        let content = readFileSync(filePath, 'utf-8').trim();
         if (content) {
+          if (content.length > MAX_RULES_BYTES) {
+            debug('Project rules truncated', filePath, `${content.length} > ${MAX_RULES_BYTES}`);
+            content = content.slice(0, MAX_RULES_BYTES)
+              + '\n\n[Rules truncated by Codeep — file exceeds the 64KB inline limit.]';
+          }
           debug('Loaded project rules from', filePath);
           return `\n\n## Project Rules\nThe following rules are defined by the project owner. You MUST follow these rules:\n\n${content}`;
         }

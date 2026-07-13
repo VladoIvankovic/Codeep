@@ -165,7 +165,7 @@ export async function unpublishBundle(idOrPath: string): Promise<{ ok: boolean; 
  * Used by publish so the round-trip is lossless (sort of — we drop
  * unknown frontmatter keys for now to keep the published format stable).
  */
-function serialiseSkillMd(bundle: SkillBundle): string {
+export function serialiseSkillMd(bundle: SkillBundle): string {
   const meta: string[] = ['---'];
   meta.push(`name: ${bundle.name}`);
   meta.push(`description: ${bundle.description}`);

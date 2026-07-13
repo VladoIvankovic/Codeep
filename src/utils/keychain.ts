@@ -1,19 +1,42 @@
 import { logger } from './logger';
 
-// keytar is a native addon — load it LAZILY (on first use), never at module
-// top level. A top-level `await import()` here gives the module a top-level
-// await, which makes `bun build --compile` reject any CommonJS require() that
-// transitively depends on this file (renderer/main.js → codeepCloud → config →
-// keychain). Lazy loading keeps the module side-effect-free at import time.
-let _keytar: typeof import('keytar') | null = null;
-let _keytarTried = false;
-async function loadKeytar(): Promise<typeof import('keytar') | null> {
-  if (!_keytarTried) {
-    _keytarTried = true;
-    try { _keytar = (await import('keytar')).default as typeof import('keytar'); }
-    catch { _keytar = null; /* native addon unavailable */ }
+// Native keychain access goes through `@napi-rs/keyring` (Rust binary with
+// prebuilt artifacts — no node-gyp, no prebuild-install). The previous
+// `keytar` addon pulled deprecated `prebuild-install` and frequently broke
+// on ARM Linux / new macOS releases. `@napi-rs/keyring` ships per-platform
+// binaries as optionalDependencies so npm picks the right one automatically.
+//
+// The @napi-rs/keyring API differs from keytar's:
+//   - keytar: module-level `getPassword(service, account)` etc. (async)
+//   - @napi-rs/keyring: `new AsyncEntry(service, account)` instance whose
+//     `getPassword()` / `setPassword(pw)` / `deletePassword()` return
+//     Promises and run keychain I/O off the JS thread. (The sync `Entry`
+//     variant would freeze the TUI event loop while macOS shows its
+//     keychain-authorization dialog — first run after a binary change.)
+//
+// getPassword() resolves null for a missing entry (verified against the
+// shipped binding — same contract keytar had), so SmartStorage's fallback
+// order is unchanged. Lazy loading keeps a failed/broken native binary from
+// blocking module import (and bun build --compile stays happy).
+type KeyringEntry = {
+  getPassword(): Promise<string | null>;
+  setPassword(password: string): Promise<void>;
+  deletePassword(): Promise<boolean>;
+};
+type KeyringModule = { AsyncEntry: new (service: string, account: string) => KeyringEntry };
+
+let _keyring: KeyringModule | null = null;
+let _keyringTried = false;
+async function loadKeyring(): Promise<KeyringModule | null> {
+  if (!_keyringTried) {
+    _keyringTried = true;
+    try {
+      _keyring = (await import('@napi-rs/keyring')) as KeyringModule;
+    } catch {
+      _keyring = null; /* native binary unavailable (headless / minimal install) */
+    }
   }
-  return _keytar;
+  return _keyring;
 }
 
 const SERVICE_NAME = 'codeep';
@@ -42,10 +65,11 @@ class KeychainStorage implements SecureStorage {
 
   async getApiKey(providerId: string): Promise<string | null> {
     try {
-      const kt = await loadKeytar();
-      if (!kt) return null;
+      const kr = await loadKeyring();
+      if (!kr) return null;
       const account = this.getAccountName(providerId);
-      return await kt.getPassword(SERVICE_NAME, account);
+      const entry = new kr.AsyncEntry(SERVICE_NAME, account);
+      return await entry.getPassword();
     } catch (error) {
       logger.debug(`Failed to get API key from keychain: ${error}`);
       return null;
@@ -54,10 +78,11 @@ class KeychainStorage implements SecureStorage {
 
   async setApiKey(providerId: string, apiKey: string): Promise<void> {
     try {
-      const kt = await loadKeytar();
-      if (!kt) throw new Error('keytar unavailable');
+      const kr = await loadKeyring();
+      if (!kr) throw new Error('keyring unavailable');
       const account = this.getAccountName(providerId);
-      await kt.setPassword(SERVICE_NAME, account, apiKey);
+      const entry = new kr.AsyncEntry(SERVICE_NAME, account);
+      await entry.setPassword(apiKey);
     } catch (error) {
       throw new Error(`Failed to store API key in keychain: ${error}`);
     }
@@ -65,10 +90,11 @@ class KeychainStorage implements SecureStorage {
 
   async deleteApiKey(providerId: string): Promise<void> {
     try {
-      const kt = await loadKeytar();
-      if (!kt) return;
+      const kr = await loadKeyring();
+      if (!kr) return;
       const account = this.getAccountName(providerId);
-      await kt.deletePassword(SERVICE_NAME, account);
+      const entry = new kr.AsyncEntry(SERVICE_NAME, account);
+      await entry.deletePassword();
     } catch (error) {
       logger.debug(`Failed to delete API key from keychain: ${error}`);
     }
@@ -120,12 +146,15 @@ class FallbackStorage implements SecureStorage {
 class SmartStorage implements SecureStorage {
   private keychain: KeychainStorage;
   private fallback: FallbackStorage;
+  private config: any;
   private useKeychain: boolean = true;
   private keychainTested: boolean = false;
+  private warnedLegacyKeytar: boolean = false;
 
   constructor(config: any) {
     this.keychain = new KeychainStorage();
     this.fallback = new FallbackStorage(config);
+    this.config = config;
   }
 
   private async ensureKeychainTested(): Promise<void> {
@@ -133,10 +162,11 @@ class SmartStorage implements SecureStorage {
 
     try {
       const testKey = '__codeep_test__';
-      const kt = await loadKeytar();
-      if (!kt) throw new Error('keytar unavailable');
-      await kt.setPassword(SERVICE_NAME, testKey, 'test');
-      await kt.deletePassword(SERVICE_NAME, testKey);
+      const kr = await loadKeyring();
+      if (!kr) throw new Error('keyring unavailable');
+      const entry = new kr.AsyncEntry(SERVICE_NAME, testKey);
+      await entry.setPassword('test');
+      await entry.deletePassword();
       this.useKeychain = true;
     } catch {
       this.useKeychain = false;
@@ -156,12 +186,28 @@ class SmartStorage implements SecureStorage {
 
   async getApiKey(providerId: string): Promise<string | null> {
     await this.ensureKeychainTested();
-    
+
     if (this.useKeychain) {
       const key = await this.keychain.getApiKey(providerId);
       if (key) return key;
     }
-    return this.fallback.getApiKey(providerId);
+    const fromFallback = await this.fallback.getApiKey(providerId);
+    // Migration note (Linux/Windows only): keys stored by the old keytar
+    // addon live under a different credential-store naming than keyring-rs
+    // uses, so they're invisible here — and the plaintext copies were
+    // already purged by the keysSecured migration. Nothing to silently
+    // recover; tell the user once so a missing key isn't a mystery.
+    // (macOS is unaffected — both libraries share the same Keychain items.)
+    if (fromFallback === null && !this.warnedLegacyKeytar
+        && process.platform !== 'darwin' && this.useKeychain
+        && this.config?.get?.('keysSecured') === true) {
+      this.warnedLegacyKeytar = true;
+      logger.warn(
+        'API keys saved by Codeep ≤ 2.14 (keytar) can\'t be read by the new keychain backend on this OS. ' +
+        'Re-add the affected key with /login <provider> <key> — it will be stored under the new backend.'
+      );
+    }
+    return fromFallback;
   }
 
   async setApiKey(providerId: string, apiKey: string): Promise<void> {

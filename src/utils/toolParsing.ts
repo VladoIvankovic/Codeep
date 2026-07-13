@@ -340,3 +340,11 @@ export function parseToolCalls(response: string): ToolCall[] {
 
   return toolCalls;
 }
+
+
+// Test seams — these helpers are otherwise file-private; export them under
+// a `_forTest` suffix so the parser internals can be exercised directly
+// without going through the full response-parsing pipeline.
+export const _extractPartialToolParamsForTest = extractPartialToolParams;
+export const _tryExtractParamsForTest = tryExtractParams;
+export const _tryParseToolCallForTest = tryParseToolCall;

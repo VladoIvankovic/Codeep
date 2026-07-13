@@ -79,7 +79,7 @@ interface ParsedFrontmatter {
  * unquoted. We don't ship a real YAML dep for this — the keys we care
  * about are scalars or simple arrays.
  */
-function parseFrontmatter(raw: string): ParsedFrontmatter {
+export function parseFrontmatter(raw: string): ParsedFrontmatter {
   // BOM + CRLF normalisation. Real-world files copy/paste from various
   // editors and pick up either; YAML strictly forbids tabs in scalars
   // but we don't care for the keys we read.
@@ -131,7 +131,7 @@ function parseFrontmatter(raw: string): ParsedFrontmatter {
   return { meta, body: match[2].trimStart() };
 }
 
-function stripQuotes(s: string): string {
+export function stripQuotes(s: string): string {
   return s.replace(/^["']|["']$/g, '');
 }
 
@@ -181,7 +181,7 @@ function loadFromDir(dir: string, scope: 'project' | 'global'): SkillBundle[] {
   return bundles;
 }
 
-function asStringArray(v: unknown): string[] | null {
+export function asStringArray(v: unknown): string[] | null {
   if (Array.isArray(v)) return v.filter(x => typeof x === 'string') as string[];
   if (typeof v === 'string') return [v];
   return null;

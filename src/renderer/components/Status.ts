@@ -5,9 +5,7 @@
 import { Screen } from '../Screen';
 import { fg, style } from '../ansi';
 import { createBox, centerBox } from './Box';
-
-// Primary color: #f02a30 (Codeep red)
-const PRIMARY_COLOR = fg.rgb(240, 42, 48);
+import { PRIMARY_COLOR } from './uiConstants';
 
 export interface StatusInfo {
   version: string;
@@ -121,7 +119,7 @@ export function renderStatusScreen(screen: Screen, status: StatusInfo): void {
 /**
  * Truncate path for display
  */
-function truncatePath(path: string, maxLen: number): string {
+export function truncatePath(path: string, maxLen: number): string {
   if (path.length <= maxLen) return path;
   
   // Try to keep the end of the path

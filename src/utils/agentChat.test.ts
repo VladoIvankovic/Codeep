@@ -87,6 +87,30 @@ describe('loadProjectRules', () => {
     expect(result).not.toContain('from CODEEP.md');
   });
 
+  it('loads from AGENTS.md as the last-resort fallback', () => {
+    // Cross-tool standard (Claude Code, Cursor, Kilo Code). Users coming
+    // from those tools shouldn't have to duplicate rules into CODEEP.md.
+    mockExistsSync.mockImplementation((p: string) => p.includes('AGENTS.md'));
+    mockReadFileSync.mockReturnValue('# No secrets in logs');
+    const result = loadProjectRules('/project');
+    expect(result).toContain('No secrets in logs');
+    expect(result).toContain('Project Rules');
+  });
+
+  it('prefers CODEEP.md over AGENTS.md when both exist', () => {
+    // Codeep-native beats cross-tool when both are present — the Codeep
+    // file is likely richer/Codeep-specific while AGENTS.md is shared.
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockImplementation((p: string) => {
+      if ((p as string).includes('CODEEP.md')) return 'from CODEEP.md';
+      if ((p as string).includes('AGENTS.md')) return 'from AGENTS.md';
+      return '';
+    });
+    const result = loadProjectRules('/project');
+    expect(result).toContain('from CODEEP.md');
+    expect(result).not.toContain('from AGENTS.md');
+  });
+
   it('returns empty string when file exists but is empty', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue('   ');

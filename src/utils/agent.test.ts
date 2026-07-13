@@ -98,7 +98,7 @@ describe('loadProjectRules', () => {
     expect(mockReadFileSync).toHaveBeenCalledWith(join(projectRoot, 'CODEEP.md'), 'utf-8');
   });
 
-  it('should return empty string when neither rules file exists', () => {
+  it('should return empty string when no rules file exists', () => {
     const projectRoot = '/my/project';
 
     mockExistsSync.mockReturnValue(false);
@@ -106,7 +106,9 @@ describe('loadProjectRules', () => {
     const result = loadProjectRules(projectRoot);
 
     expect(result).toBe('');
-    expect(mockExistsSync).toHaveBeenCalledTimes(2);
+    // Three candidates are checked in priority order: .codeep/rules.md,
+    // CODEEP.md, AGENTS.md.
+    expect(mockExistsSync).toHaveBeenCalledTimes(3);
     expect(mockReadFileSync).not.toHaveBeenCalled();
   });
 
@@ -147,10 +149,10 @@ describe('loadProjectRules', () => {
 
     const result = loadProjectRules(projectRoot);
 
-    // Both candidates exist but both throw on read, so should return ''
+    // All candidates exist but all throw on read, so should return ''
     expect(result).toBe('');
-    // Should have attempted to read both files
-    expect(mockReadFileSync).toHaveBeenCalledTimes(2);
+    // Should have attempted to read all three candidate files
+    expect(mockReadFileSync).toHaveBeenCalledTimes(3);
   });
 
   it('should fall back to CODEEP.md when .codeep/rules.md read throws', () => {
@@ -201,6 +203,39 @@ describe('loadProjectRules', () => {
     const result = loadProjectRules(projectRoot);
 
     expect(result).toContain('You MUST follow these rules');
+  });
+
+  it('should fall back to AGENTS.md when neither Codeep-native file exists', () => {
+    // Cross-tool parity: AGENTS.md is the Claude Code / Cursor / Kilo Code
+    // standard. Users coming from those tools shouldn't have to duplicate.
+    const projectRoot = '/my/project';
+
+    mockExistsSync.mockImplementation((filePath: string) => {
+      return filePath === join(projectRoot, 'AGENTS.md');
+    });
+    mockReadFileSync.mockReturnValue('Shared cross-tool rules');
+
+    const result = loadProjectRules(projectRoot);
+
+    expect(result).toContain('Shared cross-tool rules');
+    expect(result).toContain('## Project Rules');
+  });
+
+  it('should prefer CODEEP.md over AGENTS.md when both exist', () => {
+    // Codeep-native wins over cross-tool when both are present.
+    const projectRoot = '/my/project';
+
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (filePath === join(projectRoot, 'CODEEP.md')) return 'Codeep rules';
+      if (filePath === join(projectRoot, 'AGENTS.md')) return 'Agent rules';
+      return '';
+    });
+
+    const result = loadProjectRules(projectRoot);
+
+    expect(result).toContain('Codeep rules');
+    expect(result).not.toContain('Agent rules');
   });
 });
 

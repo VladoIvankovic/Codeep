@@ -46,6 +46,12 @@ function writeProjectConfig(content: string) {
   writeFileSync(join(dir, 'mcp_servers.json'), content);
 }
 
+function writeDotMcpConfig(content: string) {
+  // The cross-tool standard: .mcp.json at the workspace root
+  // (same shape Claude Code/Cursor/Kilo Code read).
+  writeFileSync(join(workspaceRoot, '.mcp.json'), content);
+}
+
 function writeGlobalConfig(content: string) {
   const dir = join(fakeHome, '.codeep');
   mkdirSync(dir, { recursive: true });
@@ -126,6 +132,58 @@ describe('loadMcpServerConfig', () => {
       mcpServers: { fs: { command: 'x', args: 'not-an-array' } },
     }));
     expect(loadMcpServerConfig(workspaceRoot)[0].args).toEqual([]);
+  });
+
+  it('reads .mcp.json (cross-tool standard) at the workspace root', () => {
+    // Fleet-parity: Claude Code, Cursor, Kilo Code all read .mcp.json.
+    // Users can keep one MCP config for their whole toolset.
+    writeDotMcpConfig(JSON.stringify({
+      mcpServers: {
+        fs: { command: 'npx', args: ['@modelcontextprotocol/server-filesystem', '/x'] },
+      },
+    }));
+    const servers = loadMcpServerConfig(workspaceRoot);
+    expect(servers).toHaveLength(1);
+    expect(servers[0].name).toBe('fs');
+    expect(servers[0].command).toBe('npx');
+  });
+
+  it('merges .codeep/mcp_servers.json and .mcp.json entries', () => {
+    // Both files contribute servers — non-colliding names coexist.
+    writeProjectConfig(JSON.stringify({
+      mcpServers: { codeepOnly: { command: 'a', args: [] } },
+    }));
+    writeDotMcpConfig(JSON.stringify({
+      mcpServers: { dotMcpOnly: { command: 'b', args: [] } },
+    }));
+    const names = loadMcpServerConfig(workspaceRoot).map(s => s.name).sort();
+    expect(names).toEqual(['codeepOnly', 'dotMcpOnly']);
+  });
+
+  it('.codeep/mcp_servers.json wins over .mcp.json on name collisions', () => {
+    // Codeep-native beats cross-tool when both define the same server —
+    // the Codeep file is project-specific and intentionally overrides.
+    writeProjectConfig(JSON.stringify({
+      mcpServers: { fs: { command: 'from-codeep', args: [] } },
+    }));
+    writeDotMcpConfig(JSON.stringify({
+      mcpServers: { fs: { command: 'from-dotmcp', args: [] } },
+    }));
+    const servers = loadMcpServerConfig(workspaceRoot);
+    expect(servers).toHaveLength(1);
+    expect(servers[0].command).toBe('from-codeep');
+  });
+
+  it('.mcp.json shadows global config on name collisions', () => {
+    // Precedence chain: project (.codeep) > .mcp.json > global (~/.codeep).
+    writeGlobalConfig(JSON.stringify({
+      mcpServers: { fs: { command: 'global-fs', args: [] } },
+    }));
+    writeDotMcpConfig(JSON.stringify({
+      mcpServers: { fs: { command: 'dotmcp-fs', args: [] } },
+    }));
+    const servers = loadMcpServerConfig(workspaceRoot);
+    expect(servers.find(s => s.name === 'fs')?.command).toBe('dotmcp-fs');
   });
 });
 

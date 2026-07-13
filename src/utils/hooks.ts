@@ -44,6 +44,11 @@
  * machine the first time they trigger an agent tool call. The welcome
  * banner warns when hooks exist (see `summarizeHooks`); we do not run
  * hooks from `~/.codeep/hooks/` (global) for that reason.
+ *
+ * Platform note: hooks are POSIX shell (`.sh`) scripts. On macOS/Linux they
+ * run directly; on Windows they run through Git Bash's `sh` if installed.
+ * Windows without a POSIX shell → hooks are reported `unsupported` and skipped
+ * (never blocking). See `resolveShellMode` and the README "Windows notes".
  */
 
 import { existsSync, readdirSync, statSync, accessSync, constants } from 'fs';
@@ -109,12 +114,62 @@ export interface HookResult {
   /** True when a hook script exists but the workspace isn't trusted, so it was
    *  skipped (not run). Lets callers surface "run /hooks trust to enable". */
   untrusted?: boolean;
+  /** True when a hook script exists but this OS can't run it — Codeep hooks are
+   *  POSIX shell (`.sh`) scripts and no `sh` was found (e.g. Windows without
+   *  Git Bash). A non-blocking skip; surfaced by `/hooks` + the welcome banner. */
+  unsupported?: boolean;
 }
 
 const NOT_EXECUTED: HookResult = { executed: false, exitCode: 0, stdout: '', stderr: '', blocked: false };
 
 function getHooksDir(workspaceRoot: string): string {
   return join(workspaceRoot, '.codeep', 'hooks');
+}
+
+/**
+ * Locate a POSIX shell able to run `.sh` hooks on Windows. `.sh` scripts can't
+ * be `spawn`ed directly there (no shebang support), so we invoke them through
+ * `sh`/`bash`. Scans PATH plus the default Git-for-Windows install locations.
+ * Returns the shell's path, or null if none is installed.
+ */
+function findWindowsPosixShell(): string | null {
+  const candidates: string[] = [];
+  for (const dir of (process.env.PATH ?? '').split(';')) {
+    if (dir) candidates.push(join(dir, 'sh.exe'), join(dir, 'bash.exe'));
+  }
+  candidates.push(
+    'C:\\Program Files\\Git\\bin\\sh.exe',
+    'C:\\Program Files\\Git\\usr\\bin\\sh.exe',
+    'C:\\Program Files (x86)\\Git\\bin\\sh.exe',
+  );
+  for (const c of candidates) {
+    try { if (statSync(c).isFile()) return c; } catch { /* next candidate */ }
+  }
+  return null;
+}
+
+/**
+ * Decide how a `.sh` hook runs on this platform. On POSIX it's executed
+ * directly (shebang); on Windows it needs a `sh`/`bash` interpreter, and if
+ * none is installed hooks are `unsupported` (skipped, never blocking). Pure +
+ * injectable so the platform matrix is unit-testable.
+ */
+export function resolveShellMode(
+  platform: NodeJS.Platform = process.platform,
+  findShell: () => string | null = findWindowsPosixShell,
+): { mode: 'direct' } | { mode: 'shell'; shell: string } | { mode: 'unsupported' } {
+  if (platform !== 'win32') return { mode: 'direct' };
+  const shell = findShell();
+  return shell ? { mode: 'shell', shell } : { mode: 'unsupported' };
+}
+
+/** True when this OS can actually run `.sh` hooks. Drives the `/hooks` and
+ *  welcome-banner "unsupported" state. */
+export function hooksExecutable(
+  platform: NodeJS.Platform = process.platform,
+  findShell: () => string | null = findWindowsPosixShell,
+): boolean {
+  return resolveShellMode(platform, findShell).mode !== 'unsupported';
 }
 
 function findHookScript(workspaceRoot: string, event: HookEvent): string | null {
@@ -155,6 +210,15 @@ export function runHook(ctx: HookContext, opts: { timeoutMs?: number } = {}): Ho
     return { executed: false, exitCode: 0, stdout: '', stderr: '', blocked: false, untrusted: true, scriptPath: script };
   }
 
+  // Platform gate: a `.sh` hook needs a POSIX shell. On Windows without one we
+  // must NOT spawn the script directly — that fails, and for a blocking event
+  // (pre_tool_call / pre_commit) a spawn error would wedge every tool call.
+  // Skip cleanly instead and let `/hooks` explain why.
+  const shellMode = resolveShellMode();
+  if (shellMode.mode === 'unsupported') {
+    return { executed: false, exitCode: 0, stdout: '', stderr: '', blocked: false, unsupported: true, scriptPath: script };
+  }
+
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,
     CODEEP_HOOK_EVENT: ctx.event,
@@ -179,9 +243,12 @@ export function runHook(ctx: HookContext, opts: { timeoutMs?: number } = {}): Ho
   // 30s ceiling so a runaway lint / test command can't wedge the agent
   // loop. Configurable per-call so tests can use a tight timeout.
   const timeout = opts.timeoutMs ?? 30_000;
+  // POSIX: run the script directly (shebang). Windows-with-shell: invoke it
+  // through the located `sh`/`bash` so the shebang isn't required.
+  const [cmd, cmdArgs] = shellMode.mode === 'shell' ? [shellMode.shell, [script]] : [script, []];
   let proc;
   try {
-    proc = spawnSync(script, [], {
+    proc = spawnSync(cmd, cmdArgs, {
       cwd: ctx.workspaceRoot,
       env,
       timeout,
@@ -279,6 +346,16 @@ export function formatHookList(hooks: ReturnType<typeof listInstalledHooks>): st
 export function formatHookTrust(workspaceRoot: string): string {
   const hooks = listInstalledHooks(workspaceRoot);
   if (hooks.length === 0) return '';
+  if (!hooksExecutable()) {
+    return [
+      '⚠️ These hooks **cannot run on this system.** Codeep hooks are POSIX shell',
+      '(`.sh`) scripts, and no `sh` was found — on Windows this means Git Bash',
+      "isn't installed or isn't on your PATH.",
+      '',
+      'Install [Git for Windows](https://git-scm.com/download/win) (it provides',
+      '`sh.exe`) or add a POSIX shell to PATH. See the “Windows notes” in the README.',
+    ].join('\n');
+  }
   if (isHooksTrusted(workspaceRoot)) {
     return '✓ This workspace is **trusted** — its hooks will run. Use `/hooks untrust` to revoke.';
   }
@@ -296,6 +373,9 @@ export function summarizeHooks(workspaceRoot: string): string {
   const hooks = listInstalledHooks(workspaceRoot);
   if (hooks.length === 0) return '';
   const list = hooks.map(h => h.event).join(', ');
+  if (!hooksExecutable()) {
+    return `${hooks.length} hook${hooks.length === 1 ? '' : 's'} present but this system has no POSIX shell — they won't run (see README “Windows notes”) (${list})`;
+  }
   if (!isHooksTrusted(workspaceRoot)) {
     return `${hooks.length} hook${hooks.length === 1 ? '' : 's'} present but NOT trusted — run /hooks trust to enable (${list})`;
   }

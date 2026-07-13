@@ -53,6 +53,9 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'glm-5.2':              200_000,
   'glm-5-turbo':          202_752,
   // OpenAI
+  'gpt-5.6-sol':          1_050_000,
+  'gpt-5.6-terra':        1_050_000,
+  'gpt-5.6-luna':         1_050_000,
   'gpt-5.5':              1_200_000,
   'gpt-5.4':              1_050_000,
   'gpt-5.4-mini':         400_000,
@@ -68,6 +71,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Google
   'gemini-3.1-pro-preview':        1_048_576,
   'gemini-3.5-flash':              1_000_000,
+  'gemini-3.1-flash-lite':         1_048_576,
   'gemini-3-flash-preview':        1_000_000,
   // MiniMax
   'MiniMax-M3':             524_288,
@@ -78,6 +82,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'kimi-k2.5':                 262_144,
   'kimi-for-coding':           262_144,
   // Grok (xAI)
+  'grok-4.5':                  500_000,
   'grok-build-0.1':            256_000,
   'grok-4.3':                  1_000_000,
   'grok-code-fast-1':          256_000,
@@ -86,7 +91,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'qwen3-coder-plus':          262_144,
   'qwen3-coder-next':          262_144,
   'qwen3-coder-flash':         262_144,
-  'qwen3-max':                 262_144,
+  'qwen3.7-max':               1_000_000,
   'Qwen/Qwen3-Coder-480B-A35B-Instruct': 262_144,
 };
 
@@ -111,6 +116,9 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'glm-5.2':           { inputPer1M: 1.00,  outputPer1M: 3.20 },
   'glm-5-turbo':       { inputPer1M: 1.20,  outputPer1M: 4.00 },
   // OpenAI
+  'gpt-5.6-sol':   { inputPer1M: 5.00,  outputPer1M: 30.00 },
+  'gpt-5.6-terra': { inputPer1M: 2.50,  outputPer1M: 15.00 },
+  'gpt-5.6-luna':  { inputPer1M: 1.00,  outputPer1M: 6.00 },
   'gpt-5.5':      { inputPer1M: 5.00,  outputPer1M: 30.00 },
   'gpt-5.4':      { inputPer1M: 2.50,  outputPer1M: 15.00 },
   'gpt-5.4-mini': { inputPer1M: 0.75,  outputPer1M: 4.50 },
@@ -126,6 +134,7 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // Google
   'gemini-3.1-pro-preview':        { inputPer1M: 2.00, outputPer1M: 12.00 },
   'gemini-3.5-flash':              { inputPer1M: 1.50, outputPer1M: 9.00 },
+  'gemini-3.1-flash-lite':         { inputPer1M: 0.25, outputPer1M: 1.50 },
   'gemini-3-flash-preview':        { inputPer1M: 0.50, outputPer1M: 3.00 },
   // MiniMax
   'MiniMax-M3':             { inputPer1M: 0.60,  outputPer1M: 2.40 },
@@ -137,6 +146,7 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'kimi-k2.5':                 { inputPer1M: 0.40, outputPer1M: 1.90 },
   'kimi-for-coding':           { inputPer1M: 0.60, outputPer1M: 2.50 },
   // Grok (xAI)
+  'grok-4.5':                  { inputPer1M: 2.00, outputPer1M: 6.00 },
   'grok-build-0.1':            { inputPer1M: 1.00, outputPer1M: 2.00 },
   'grok-4.3':                  { inputPer1M: 1.25, outputPer1M: 2.50 },
   'grok-code-fast-1':          { inputPer1M: 0.20, outputPer1M: 1.50 },
@@ -146,7 +156,7 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'qwen3-coder-plus':          { inputPer1M: 0.28, outputPer1M: 1.65 },
   'qwen3-coder-next':          { inputPer1M: 0.28, outputPer1M: 1.65 },
   'qwen3-coder-flash':         { inputPer1M: 0.10, outputPer1M: 0.50 },
-  'qwen3-max':                 { inputPer1M: 1.20, outputPer1M: 6.00 },
+  'qwen3.7-max':               { inputPer1M: 2.50, outputPer1M: 7.50 },
   // ModelScope free tier — no per-token charge.
   'Qwen/Qwen3-Coder-480B-A35B-Instruct': { inputPer1M: 0, outputPer1M: 0 },
 };

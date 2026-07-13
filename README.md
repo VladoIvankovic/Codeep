@@ -23,27 +23,14 @@
   <a href="https://github.com/VladoIvankovic/Codeep"><img src="https://img.shields.io/github/stars/VladoIvankovic/Codeep?style=social" alt="GitHub stars"></a>
 </p>
 
-## Upgrading from 1.x to 2.0
+## Upgrading
 
-Most users **do not need to do anything** — `npm install -g codeep@latest`
-picks up the new version and everything carries over (config, saved
-profiles, project memory, MCP servers, skill bundles).
-
-Two breaking changes only affect a small audience:
-
-1. **MCP `clientInfo` version bumped from `1.4.0` → `2.0.0`.** If you
-   maintain a custom MCP server that allowlists Codeep by version
-   string, update your check.
-2. **`McpServer` protocol shape** in ACP now has `command?`, `args?`,
-   `url?`, `headers?` (transport-agnostic for stdio + Streamable HTTP).
-   The old required-`command` shape is still accepted — parser handles
-   both — but new clients should emit the optional shape.
-
-See [CHANGELOG.md](CHANGELOG.md#200--2026-05-18) for the full list of
-additions (full MCP support, OpenRouter provider with authoritative
-per-call cost, Claude-Code-compatible skill bundles + web marketplace,
-custom slash commands, lifecycle hooks, checkpoints, `/cost`,
-`/compact`, and more).
+Running `npm install -g codeep@latest` picks up the new version — config,
+saved profiles, project memory, MCP servers, and skill bundles all carry
+over. Breaking changes (if any) are listed at the top of each release in
+[CHANGELOG.md](CHANGELOG.md); the last breaking change was
+[2.0.0](CHANGELOG.md#200--2026-05-18) (MCP `clientInfo` version bump,
+transport-agnostic `McpServer` shape).
 
 ## Features
 
@@ -77,6 +64,7 @@ When started in a project directory, Codeep automatically:
 - **AI session titles** - Sessions auto-title themselves with an LLM one-liner ("OAuth2 migration for auth module") instead of a truncated first message. This makes one small background API call per session; turn it off with the `autoSessionTitle` setting (`/settings`) if you prefer zero unsolicited calls
 - **Search current session** - Find text in the open conversation with `/search`
 - **Cross-session recall** - `/recall <query>` searches across **all** saved sessions, ranked by relevance + recency. Add `--resume` to load the top match, or `--summarize` for an LLM recap of what you accomplished across matches
+- **Cross-device resume (`/cloud`)** - Sessions you run on one device (CLI, Mac app, VS Code) sync to `codeep.dev`. `/cloud` lists them and pulls the selected one back locally, so you can start a session on your desktop and continue on your laptop. Run `codeep account` once to link your devices; scoped to the current project when one is open.
 - **Export** - Save to Markdown, JSON, or plain text
 - `/cost` - Per-session token usage and estimated cost (per provider/model)
 - `/compact [keepN]` - AI-summarize older messages to free up context (keeps last N, default 4)
@@ -358,10 +346,11 @@ You write safe, reversible DB migrations…
 **Guaranteed review:** enable **Agent Auto-Review** in `/settings` (`agentAutoReview`) and after any run that changes files, Codeep automatically delegates to the `reviewer` and appends its findings — a review stage that always happens. Off by default.
 
 ### Project Rules
-Define project-specific instructions that the AI always follows. Create a rules file in your project root:
+Define project-specific instructions that the AI always follows. Create a rules file in your project root (first non-empty file wins):
 
 - **`.codeep/rules.md`** - Primary location (inside `.codeep/` folder)
 - **`CODEEP.md`** - Alternative location (project root, similar to `CLAUDE.md` or `.cursorrules`)
+- **`AGENTS.md`** - Cross-tool standard (works with Claude Code, Cursor, Kilo Code — no duplication needed)
 
 The rules file content is automatically included in every system prompt — both chat and agent mode. Use it to define:
 
@@ -469,11 +458,12 @@ Full spec coverage in 2.0.0 — stdio and Streamable HTTP transports,
 tools / resources / prompts / sampling, capability negotiation with
 `roots`, auto-restart on crash, mid-run catalog refresh.
 
-**Three ways to wire MCP servers** (all merge; project > global > ACP wins last):
+**Four ways to wire MCP servers** (all merge; project > `.mcp.json` > global > ACP wins last):
 
 1. **Project config** — `.codeep/mcp_servers.json` (committed with the repo)
-2. **Global config** — `~/.codeep/mcp_servers.json` (per machine)
-3. **ACP client config** — Zed / Claude Desktop pass `mcpServers` on `session/new`
+2. **`.mcp.json`** — cross-tool standard at the workspace root (works with Claude Code, Cursor, Kilo Code — point everyone at the same file)
+3. **Global config** — `~/.codeep/mcp_servers.json` (per machine)
+4. **ACP client config** — Zed / Claude Desktop pass `mcpServers` on `session/new`
 
 Two transports per entry, mutually exclusive:
 
@@ -572,6 +562,26 @@ cloned repo's hooks are **not** run until you approve the workspace. Run
 `/hooks untrust`); `/hooks` and the welcome banner show the trust state. Your
 own projects just need a one-time `/hooks trust`. Global `~/.codeep/hooks/` are
 never run for the same reason.
+
+#### Windows notes
+
+Lifecycle hooks are POSIX shell (`.sh`) scripts:
+
+- **macOS / Linux** — run directly (via the script's shebang). No setup.
+- **Windows** — a `.sh` needs a POSIX `sh`. Install [Git for Windows](https://git-scm.com/download/win)
+  (it ships `sh.exe`) and Codeep runs `.sh` hooks through it automatically — no
+  PATH tweaking needed if Git is installed to its default location. **Without a
+  POSIX shell**, `/hooks` and the welcome banner report an explicit
+  *"cannot run on this system"* state and hooks are skipped — they never block a
+  tool call or commit, and the rest of Codeep is unaffected. (`.ps1`/`.cmd` hooks
+  are not executed; keep hook logic in `.sh`.)
+
+Everything else is **Node-native and shell-independent on Windows**: project
+rules (`AGENTS.md` / `CODEEP.md` / `.codeep/rules.md`), custom slash commands
+(`.codeep/commands/*.md`), and skill bundles (`.codeep/skills/`) are Markdown;
+MCP config (`.mcp.json` / `.codeep/mcp_servers.json`) is JSON. MCP servers spawn
+via their configured `command` — `npx` resolves through `npx.cmd`, and a custom
+`command` like `python` just needs to be on your PATH.
 
 ### Skill Bundles (new in 2.0)
 Beyond the built-in skills and custom slash commands, Codeep now supports
@@ -1024,6 +1034,7 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 |---------|-------------|
 | `/sessions` | List and load saved sessions |
 | `/sessions delete <name>` | Delete a specific session |
+| `/cloud` | List and resume sessions synced from other devices |
 | `/rename <name>` | Rename current session |
 | `/search <term>` | Search through chat history |
 | `/export` | Export chat to MD/JSON/TXT format |

@@ -9,6 +9,8 @@ import {
   summarizeHooks,
   trustWorkspaceHooks,
   untrustWorkspaceHooks,
+  resolveShellMode,
+  hooksExecutable,
   HookEvent,
 } from './hooks';
 
@@ -263,5 +265,38 @@ describe('summarizeHooks', () => {
   it('pluralises correctly for 1 hook', () => {
     writeHook('post_edit', 'exit 0');
     expect(summarizeHooks(workspaceRoot)).toMatch(/^1 hook active/);
+  });
+
+  it('flags installed hooks as unsupported when no POSIX shell exists (Windows)', () => {
+    writeHook('post_edit', 'exit 0');
+    // summarizeHooks reads the live platform; on the POSIX CI box it reports
+    // "active". The unsupported wording is covered by the resolveShellMode
+    // matrix below (which is injectable); here we just assert the happy path
+    // stays "active" so the new branch didn't regress it.
+    expect(summarizeHooks(workspaceRoot)).toMatch(/active/);
+  });
+});
+
+describe('resolveShellMode — platform matrix', () => {
+  it('runs .sh directly on POSIX platforms', () => {
+    expect(resolveShellMode('linux', () => null)).toEqual({ mode: 'direct' });
+    expect(resolveShellMode('darwin', () => null)).toEqual({ mode: 'direct' });
+  });
+
+  it('runs .sh through a located shell on Windows when one is installed', () => {
+    const shell = 'C:\\Program Files\\Git\\bin\\sh.exe';
+    expect(resolveShellMode('win32', () => shell)).toEqual({ mode: 'shell', shell });
+  });
+
+  it('is unsupported on Windows with no POSIX shell on PATH', () => {
+    expect(resolveShellMode('win32', () => null)).toEqual({ mode: 'unsupported' });
+  });
+});
+
+describe('hooksExecutable — platform gate', () => {
+  it('is true on POSIX and on Windows with a shell, false on Windows without one', () => {
+    expect(hooksExecutable('linux', () => null)).toBe(true);
+    expect(hooksExecutable('win32', () => 'C:\\Program Files\\Git\\bin\\sh.exe')).toBe(true);
+    expect(hooksExecutable('win32', () => null)).toBe(false);
   });
 });

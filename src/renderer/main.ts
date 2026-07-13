@@ -68,7 +68,7 @@ let sessionDisplayName: string | null = null;
 const addedFiles: Map<string, { relativePath: string; content: string }> = new Map();
 
 /** Derive a short display name from a user message (first ~5 words, max 48 chars). */
-function deriveSessionName(message: string): string {
+export function deriveSessionName(message: string): string {
   const clean = message.replace(/\s+/g, ' ').trim();
   const words = clean.split(' ').slice(0, 5).join(' ');
   return words.length > 48 ? words.slice(0, 45) + '…' : words;
@@ -769,17 +769,54 @@ Commands (in chat):
   if (projectPath) {
     (async () => {
       try {
-        const { loadMcpServerConfig } = await import('../utils/mcpConfig');
+        const { loadMcpServerConfigSplit, isWorkspaceMcpTrusted, trustWorkspaceMcp } = await import('../utils/mcpConfig');
         const { registerSessionServers } = await import('../utils/mcpRegistry');
-        const servers = loadMcpServerConfig(projectPath);
-        if (servers.length === 0) return;
-        const { registered, errors } = await registerSessionServers('codeep-tui', servers, { workspaceRoot: projectPath });
-        if (registered.length > 0) {
-          app.notify(`MCP: ${registered.length} tool(s) from ${servers.length} server(s) ready. Type /mcp.`);
+        const { global: globalServers, workspace: workspaceServers } = loadMcpServerConfigSplit(projectPath);
+
+        const spawnServers = async (servers: typeof globalServers) => {
+          if (servers.length === 0) return;
+          const { registered, errors } = await registerSessionServers('codeep-tui', servers, { workspaceRoot: projectPath });
+          if (registered.length > 0) {
+            app.notify(`MCP: ${registered.length} tool(s) from ${servers.length} server(s) ready. Type /mcp.`);
+          }
+          for (const e of errors) {
+            app.notifyWarn(`MCP server "${e.server}" failed: ${e.error}`);
+          }
+        };
+
+        // ~/.codeep servers are the user's own machine-wide config — spawn.
+        await spawnServers(globalServers);
+
+        // Workspace files (.codeep/mcp_servers.json, .mcp.json) travel WITH
+        // the repo — a cloned project could otherwise execute arbitrary
+        // commands at startup. One-time per-workspace approval, mirroring
+        // the trustedHookProjects gate for hooks.
+        if (workspaceServers.length === 0) return;
+        if (isWorkspaceMcpTrusted(projectPath)) {
+          await spawnServers(workspaceServers);
+          return;
         }
-        for (const e of errors) {
-          app.notifyWarn(`MCP server "${e.server}" failed: ${e.error}`);
-        }
+        const preview = workspaceServers.slice(0, 5).map(s =>
+          `  ${s.name}: ${s.command ? [s.command, ...(s.args ?? [])].join(' ') : s.url ?? ''}`);
+        if (workspaceServers.length > 5) preview.push(`  …and ${workspaceServers.length - 5} more`);
+        app.showConfirm({
+          title: 'Trust workspace MCP servers?',
+          message: [
+            `This workspace defines ${workspaceServers.length} MCP server(s) that run as local processes:`,
+            ...preview,
+            '',
+            'Only start them if you trust this repo — they run with your permissions.',
+          ],
+          confirmLabel: 'Trust & start',
+          cancelLabel: 'Not now',
+          onConfirm: () => {
+            trustWorkspaceMcp(projectPath);
+            void spawnServers(workspaceServers);
+          },
+          onCancel: () => {
+            app.notify('Workspace MCP servers skipped. Run /mcp trust to enable them.');
+          },
+        });
       } catch {
         // Loading MCP must never block the TUI.
       }
