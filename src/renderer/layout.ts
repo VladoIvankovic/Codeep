@@ -39,6 +39,9 @@ export interface LayoutSnapshot {
   readonly settingsCount: number;
   readonly showAutocomplete: boolean;
   readonly autocompleteItemCount: number;
+  readonly hunkPickerOpen: boolean;
+  readonly mentionPickerOpen: boolean;
+  readonly mentionItemCount: number;
 }
 
 /**
@@ -65,6 +68,10 @@ export function bottomPanelHeight(s: LayoutSnapshot): number {
   }
   if (s.confirmOpen) {
     return s.confirmMessageCount + 5; // title + messages + buttons + padding
+  }
+  if (s.hunkPickerOpen) {
+    // Title + progress + path + header + up to 12 diff lines + more marker + legend.
+    return 18;
   }
   if (s.statusOpen) {
     return 16; // Status info panel
@@ -94,6 +101,12 @@ export function bottomPanelHeight(s: LayoutSnapshot): number {
   }
   if (s.showAutocomplete && s.autocompleteItemCount > 0) {
     return Math.min(s.autocompleteItemCount + 3, 12);
+  }
+  // `@`-mention picker: separator + title + up to 8 rows + footer. Without
+  // this branch the panel measured 0 while the picker still painted its rows,
+  // so it drew straight over the bottom of the chat transcript.
+  if (s.mentionPickerOpen && s.mentionItemCount > 0) {
+    return Math.min(s.mentionItemCount, 8) + 3;
   }
   return 0;
 }
@@ -317,6 +330,7 @@ export type ActivePanel =
   | 'login'
   | 'menu'
   | 'autocomplete'
+  | 'hunkPicker'
   | 'chat';
 
 export interface PanelState {
@@ -333,6 +347,7 @@ export interface PanelState {
   readonly loginOpen: boolean;
   readonly menuOpen: boolean;
   readonly showAutocomplete: boolean;
+  readonly hunkPickerOpen: boolean;
 }
 
 /**
@@ -353,6 +368,7 @@ export function activePanel(s: PanelState): ActivePanel {
   if (s.logoutOpen) return 'logout';
   if (s.loginOpen) return 'login';
   if (s.menuOpen) return 'menu';
+  if (s.hunkPickerOpen) return 'hunkPicker';
   if (s.showAutocomplete) return 'autocomplete';
   return 'chat';
 }

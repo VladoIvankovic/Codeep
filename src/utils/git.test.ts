@@ -12,6 +12,8 @@ import {
   createCommit,
   stageAll,
   formatDiffForDisplay,
+  getGitContent,
+  MAX_GIT_BYTES,
 } from './git';
 
 // Create a temp directory for git tests
@@ -241,6 +243,107 @@ describe('git utilities', () => {
       expect(result).toContain('line9');
       expect(result).not.toContain('line99');
       expect(result).toContain('90 more lines');
+    });
+  });
+
+  describe('getGitContent (@git mention resolver)', () => {
+    beforeEach(() => {
+      // Initial commit so HEAD exists.
+      writeFileSync(join(TEST_DIR, 'a.txt'), 'line1\nline2\nline3\n');
+      execSync('git add .', { cwd: TEST_DIR, stdio: 'ignore' });
+      execSync('git commit -m "initial"', { cwd: TEST_DIR, stdio: 'ignore' });
+    });
+
+    it('returns the unstaged diff for "diff"', () => {
+      writeFileSync(join(TEST_DIR, 'a.txt'), 'line1\nCHANGED\nline3\n');
+      const r = getGitContent('diff', TEST_DIR);
+      expect(r.success).toBe(true);
+      expect(r.content).toContain('CHANGED');
+      expect(r.label).toBe('diff (unstaged)');
+    });
+
+    it('returns the staged diff for "diff --staged"', () => {
+      writeFileSync(join(TEST_DIR, 'a.txt'), 'line1\nSTAGED\nline3\n');
+      execSync('git add a.txt', { cwd: TEST_DIR, stdio: 'ignore' });
+      const r = getGitContent('diff --staged', TEST_DIR);
+      expect(r.success).toBe(true);
+      expect(r.content).toContain('STAGED');
+      expect(r.label).toBe('diff (staged)');
+    });
+
+    it('accepts "staged" as an alias for staged diff', () => {
+      writeFileSync(join(TEST_DIR, 'a.txt'), 'staged2\n');
+      execSync('git add a.txt', { cwd: TEST_DIR, stdio: 'ignore' });
+      const r = getGitContent('staged', TEST_DIR);
+      expect(r.success).toBe(true);
+      expect(r.content).toContain('staged2');
+    });
+
+    it('returns the HEAD commit patch for "HEAD"', () => {
+      const r = getGitContent('HEAD', TEST_DIR);
+      expect(r.success).toBe(true);
+      expect(r.content).toContain('line1');
+      expect(r.label).toBe('HEAD');
+    });
+
+    it('returns a specific commit by short SHA', () => {
+      const sha = execSync('git rev-parse HEAD', { cwd: TEST_DIR, encoding: 'utf-8' }).trim();
+      const r = getGitContent(sha.slice(0, 7), TEST_DIR);
+      expect(r.success).toBe(true);
+      expect(r.content).toContain('line1');
+    });
+
+    it('returns a file at a ref with <ref>:<path> syntax', () => {
+      const r = getGitContent('HEAD:a.txt', TEST_DIR);
+      expect(r.success).toBe(true);
+      expect(r.content).toContain('line1');
+      expect(r.content).toContain('line2');
+    });
+
+    it('accepts "diff a..b" range syntax', () => {
+      // Modify and commit a second change.
+      writeFileSync(join(TEST_DIR, 'a.txt'), 'v2\n');
+      execSync('git add . && git commit -m "second"', { cwd: TEST_DIR, stdio: 'ignore' });
+      writeFileSync(join(TEST_DIR, 'a.txt'), 'v3\n');
+      execSync('git add . && git commit -m "third"', { cwd: TEST_DIR, stdio: 'ignore' });
+      const r = getGitContent('diff HEAD~2..HEAD', TEST_DIR);
+      expect(r.success).toBe(true);
+      // Should show the transition from line1 → v3.
+      expect(r.content).toMatch(/v3|line1/);
+    });
+
+    it('fails gracefully for an unknown ref', () => {
+      const r = getGitContent('nonexistent-branch-xyz', TEST_DIR);
+      expect(r.success).toBe(false);
+      expect(r.error).toContain('unknown git ref');
+    });
+
+    it('fails gracefully for an empty ref', () => {
+      const r = getGitContent('   ', TEST_DIR);
+      expect(r.success).toBe(false);
+      expect(r.error).toContain('empty');
+    });
+
+    it('fails for a non-git directory', () => {
+      const r = getGitContent('diff', NON_GIT_DIR);
+      expect(r.success).toBe(false);
+      expect(r.error).toContain('not a git repository');
+    });
+
+    it('truncates content above MAX_GIT_BYTES', () => {
+      // Create a large staged change so `git diff` (cached fallback)
+      // surfaces it. We add+commit an initial big.txt, then modify it
+      // hugely so `git diff` shows a large addition.
+      const initial = 'initial\n';
+      writeFileSync(join(TEST_DIR, 'big.txt'), initial);
+      execSync('git add big.txt', { cwd: TEST_DIR, stdio: 'ignore' });
+      // Modify in place — now unstaged diff shows the big change.
+      const big = 'x'.repeat(MAX_GIT_BYTES + 5000) + '\n';
+      writeFileSync(join(TEST_DIR, 'big.txt'), big);
+      const r = getGitContent('diff', TEST_DIR);
+      expect(r.success).toBe(true);
+      expect(r.content.length).toBeLessThan(MAX_GIT_BYTES + 1000);
+      expect(r.content).toContain('truncated');
     });
   });
 });

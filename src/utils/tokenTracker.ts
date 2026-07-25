@@ -61,7 +61,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gpt-5.4-mini':         400_000,
   // Anthropic
   'claude-fable-5':               1_000_000,
-  'claude-opus-4-8':              1_000_000,
+  'claude-opus-5':                1_000_000,
   'claude-sonnet-4-6':            1_000_000,
   'claude-sonnet-5':              1_000_000,
   'claude-haiku-4-5-20251001':    200_000,
@@ -75,7 +75,10 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gemini-3-flash-preview':        1_000_000,
   // MiniMax
   'MiniMax-M3':             524_288,
-  // Kimi (Moonshot) — 256K across the K2.x line
+  // Kimi (Moonshot) — 1M on the K3 line, 256K across K2.x
+  'kimi-k3-code':              1_000_000,
+  'kimi-k3-code-highspeed':    1_000_000,
+  'kimi-k3-thinking':          1_000_000,
   'kimi-k2.7-code':            262_144,
   'kimi-k2.7-code-highspeed':  262_144,
   'kimi-k2.6':                 262_144,
@@ -124,7 +127,7 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'gpt-5.4-mini': { inputPer1M: 0.75,  outputPer1M: 4.50 },
   // Anthropic
   'claude-fable-5':               { inputPer1M: 10.00, outputPer1M: 50.00 },
-  'claude-opus-4-8':              { inputPer1M: 5.00,  outputPer1M: 25.00 },
+  'claude-opus-5':                { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-sonnet-4-6':            { inputPer1M: 3.00,  outputPer1M: 15.00 },
   'claude-sonnet-5':              { inputPer1M: 3.00,  outputPer1M: 15.00 },
   'claude-haiku-4-5-20251001':    { inputPer1M: 1.00,  outputPer1M: 5.00 },
@@ -140,6 +143,9 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'MiniMax-M3':             { inputPer1M: 0.60,  outputPer1M: 2.40 },
   // Kimi (Moonshot) — pay-per-use cache-miss rates; `kimi-for-coding` is the
   // subscription alias (flat-fee in reality, priced notionally like K2.7 Code).
+  'kimi-k3-code':              { inputPer1M: 0.60, outputPer1M: 2.50 },
+  'kimi-k3-code-highspeed':    { inputPer1M: 0.60, outputPer1M: 2.50 },
+  'kimi-k3-thinking':          { inputPer1M: 0.60, outputPer1M: 2.50 },
   'kimi-k2.7-code':            { inputPer1M: 0.60, outputPer1M: 2.50 },
   'kimi-k2.7-code-highspeed':  { inputPer1M: 0.60, outputPer1M: 2.50 },
   'kimi-k2.6':                 { inputPer1M: 0.55, outputPer1M: 2.20 },

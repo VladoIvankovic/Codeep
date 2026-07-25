@@ -77,7 +77,7 @@ describe('extractAnthropicUsage', () => {
 describe('getModelContextWindow', () => {
   it('returns a known window for a listed model', () => {
     expect(getModelContextWindow('glm-5.2')).toBe(200_000);
-    expect(getModelContextWindow('claude-opus-4-8')).toBe(1_000_000);
+    expect(getModelContextWindow('claude-opus-5')).toBe(1_000_000);
   });
 
   it('falls back to 128K for unknown models', () => {
@@ -148,7 +148,7 @@ describe('recordTokenUsage + getSessionStats', () => {
 describe('getCostBreakdown', () => {
   it('groups by provider/model', () => {
     recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.2', 'z.ai');
-    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-4-8', 'anthropic');
+    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-5', 'anthropic');
     const breakdown = getCostBreakdown();
     expect(breakdown).toHaveLength(2);
     const glm = breakdown.find(b => b.model === 'glm-5.2');
@@ -165,11 +165,11 @@ describe('getCostBreakdown', () => {
     // per provider+model group. getCostBreakdown must accumulate them.
     recordTokenUsage(
       { promptTokens: 1000, completionTokens: 50, totalTokens: 1050, cacheCreationTokens: 400, cacheReadTokens: 300 },
-      'claude-opus-4-8', 'anthropic',
+      'claude-opus-5', 'anthropic',
     );
     recordTokenUsage(
       { promptTokens: 500, completionTokens: 20, totalTokens: 520, cacheCreationTokens: 100, cacheReadTokens: 600 },
-      'claude-opus-4-8', 'anthropic',
+      'claude-opus-5', 'anthropic',
     );
     const breakdown = getCostBreakdown();
     expect(breakdown).toHaveLength(1);
@@ -227,7 +227,7 @@ describe('getCostBreakdown', () => {
         cacheCreationTokens: 1_000,
         cacheReadTokens: 9_000,
       },
-      'claude-opus-4-8',
+      'claude-opus-5',
       'anthropic',
     );
     const breakdown = getCostBreakdown();
@@ -276,7 +276,7 @@ describe('getPricingTable', () => {
     const table = getPricingTable();
     const ids = table.map(e => e.model);
     expect(ids).toContain('glm-5.2');
-    expect(ids).toContain('claude-opus-4-8');
+    expect(ids).toContain('claude-opus-5');
     expect(ids).toContain('claude-sonnet-4-6');
   });
 
@@ -306,11 +306,11 @@ describe('formatCostReport', () => {
 
   it('includes a per-model table when multiple providers/models are used', () => {
     recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'glm-5.2', 'z.ai');
-    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-4-8', 'anthropic');
+    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-5', 'anthropic');
     const report = formatCostReport();
     expect(report).toMatch(/\| Provider \/ Model \| Input \| Output \| Cost \|/);
     expect(report).toMatch(/`z\.ai` \/ `glm-5\.2`/);
-    expect(report).toMatch(/`anthropic` \/ `claude-opus-4-8`/);
+    expect(report).toMatch(/`anthropic` \/ `claude-opus-5`/);
   });
 
   it('flags models that produced tokens but no priced cost', () => {
@@ -324,11 +324,11 @@ describe('formatCostReport', () => {
 describe('per-run reporting delta (finding cli-6)', () => {
   it('prices only records after the marker while cumulative totals survive', () => {
     // A prior chat turn.
-    recordTokenUsage({ promptTokens: 1000, completionTokens: 500, totalTokens: 1500 }, 'claude-opus-4-8', 'anthropic');
+    recordTokenUsage({ promptTokens: 1000, completionTokens: 500, totalTokens: 1500 }, 'claude-opus-5', 'anthropic');
     // Marker captured at the start of an agent run/prompt (was a destructive
     // resetTokenTracking() before the fix — which wiped the 1500 above).
     const marker = getRecordCount();
-    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-4-8', 'anthropic');
+    recordTokenUsage({ promptTokens: 200, completionTokens: 100, totalTokens: 300 }, 'claude-opus-5', 'anthropic');
 
     // Cloud telemetry gets ONLY this run's delta.
     const delta = getCostBreakdown(marker);
@@ -361,10 +361,10 @@ describe('runWithTokenScope isolation (finding cli-11 — concurrent ACP session
     const bRecorded = new Promise<void>((r) => { releaseB = r; });
 
     const sessionA = runWithTokenScope(scopeA, async () => {
-      recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'claude-opus-4-8', 'anthropic');
+      recordTokenUsage({ promptTokens: 100, completionTokens: 50, totalTokens: 150 }, 'claude-opus-5', 'anthropic');
       releaseA();
       await bRecorded;      // let B record (and reset its own scope) in between
-      recordTokenUsage({ promptTokens: 10, completionTokens: 5, totalTokens: 15 }, 'claude-opus-4-8', 'anthropic');
+      recordTokenUsage({ promptTokens: 10, completionTokens: 5, totalTokens: 15 }, 'claude-opus-5', 'anthropic');
       return getCostBreakdown();
     });
 
@@ -380,7 +380,7 @@ describe('runWithTokenScope isolation (finding cli-11 — concurrent ACP session
 
     // A sees only its two opus records (110/55), never B's glm usage.
     expect(a).toHaveLength(1);
-    expect(a[0]).toMatchObject({ provider: 'anthropic', model: 'claude-opus-4-8', promptTokens: 110, completionTokens: 55 });
+    expect(a[0]).toMatchObject({ provider: 'anthropic', model: 'claude-opus-5', promptTokens: 110, completionTokens: 55 });
 
     // B sees only its glm record.
     expect(b).toHaveLength(1);

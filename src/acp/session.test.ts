@@ -19,7 +19,7 @@
  * `toolExecution.test.ts`.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   buildProjectContext,
   toolCallMeta,
@@ -180,5 +180,43 @@ describe('buildRawOutput — error cases', () => {
   it('returns undefined on failure when no error string is present', () => {
     expect(buildRawOutput('write_file', {}, { success: false, output: '', error: undefined }))
       .toBeUndefined();
+  });
+});
+
+// ─── Mention expansion (smoke — confirms ACP uses the same expanders) ─────────
+//
+// `runAgentSession` imports `expandFileAndFolderMentions`,
+// `expandGitMentions`, and `expandWebMentions` dynamically. Rather than
+// mock the entire agent loop, we verify the expanders themselves resolve
+// `@file` / `@git` tokens — proving the ACP path inherits the same UX.
+import { expandFileAndFolderMentions, expandGitMentions } from '../utils/mentions';
+import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+describe('ACP mention expansion (parity with TUI)', () => {
+  let tmpRoot: string;
+  beforeAll(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'codeep-acp-mention-'));
+    writeFileSync(join(tmpRoot, 'hello.ts'), 'export const x = 1;\n');
+  });
+  afterAll(() => {
+    try { rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
+  });
+
+  it('expands @file mentions (ACP inherits TUI behavior)', () => {
+    const r = expandFileAndFolderMentions('review @hello.ts', { root: tmpRoot });
+    expect(r.loaded.length).toBe(1);
+    expect(r.enrichedPrompt).toContain('export const x');
+  });
+
+  it('expands @git mentions in a git repo (ACP inherits TUI behavior)', async () => {
+    // Only exercise the pure extraction path; full git resolution is
+    // covered by git.test.ts. Here we confirm the same entry point exists.
+    const gitResult = await expandGitMentions('@git HEAD', { root: tmpRoot });
+    // tmpRoot may not be a git repo — that's fine; we only assert the
+    // function runs and returns a structured result.
+    expect(typeof gitResult.enrichedPrompt).toBe('string');
+    expect(Array.isArray(gitResult.failures)).toBe(true);
   });
 });

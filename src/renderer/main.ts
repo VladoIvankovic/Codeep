@@ -47,6 +47,8 @@ import { getSessionStats, getCostBreakdown } from '../utils/tokenTracker';
 import { isGitRepository } from '../utils/git';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
 import { checkApiRateLimit } from '../utils/ratelimit';
+import { expandFileAndFolderMentions, expandGitMentions } from '../utils/mentions';
+import { expandWebMentions } from '../utils/webFetch';
 import { handleCommand as dispatchCommand, AppCommandContext } from './commands';
 import { logger, logAppError } from '../utils/logger';
 import {
@@ -213,11 +215,48 @@ async function handleSubmit(message: string): Promise<void> {
   try {
     app.startStreaming();
     const history = app.getChatHistory();
+
+    // Expand inline @-mentions (@src/file.ts) into the prompt's context.
+    // Done after history capture (mentions are per-message) but before
+    // deriveSessionName so the title reflects what the user typed, not the
+    // expanded path.
+    const mentionRoot = projectContext?.root || projectPath || process.cwd();
+    // Expand @folder and @file mentions in one pass, merged into a single
+    // [Attached files] block.
+    const { enrichedPrompt: fileExpanded, loaded: loadedMentions, failures: mentionFailures } =
+      expandFileAndFolderMentions(message, { root: mentionRoot });
+    if (loadedMentions.length > 0) {
+      app.notify(`Loaded ${loadedMentions.length} file(s) from @mentions/@folder`);
+    }
+    for (const f of mentionFailures) {
+      app.notify(`${f.mention}: ${f.reason}`);
+    }
+
+    // Expand @git <ref> mentions — resolve diffs / file-at-ref / commit
+    // patches into a [Git ref] block. Runs between file and web mentions
+    // so the prompt flows: [files] [git] [web] <text>.
+    const { enrichedPrompt: gitExpanded, failures: gitFailures } =
+      await expandGitMentions(fileExpanded, { root: mentionRoot });
+    for (const f of gitFailures) {
+      app.notify(`${f.mention}: ${f.reason}`);
+    }
+
+    // Expand @web <url> mentions — fetch each page and prepend its text.
+    // Runs after file mentions so the prompt flows: [files] [web] <text>.
+    const { enrichedPrompt: webExpanded, loaded: loadedPages, failures: webFailures } =
+      await expandWebMentions(gitExpanded);
+    if (loadedPages.length > 0) {
+      app.notify(`Fetched ${loadedPages.length} page(s) from @web`);
+    }
+    for (const f of webFailures) {
+      app.notify(`${f.mention}: ${f.reason}`);
+    }
+
     if (!sessionDisplayName && history.filter(m => m.role === 'user').length === 0) {
       sessionDisplayName = deriveSessionName(message);
     }
     const fileContext = formatAddedFilesContext();
-    const enrichedMessage = fileContext ? fileContext + message : message;
+    const enrichedMessage = fileContext ? fileContext + webExpanded : webExpanded;
     await chat(enrichedMessage, history, (chunk) => app.addStreamChunk(chunk), undefined, projectContext, undefined);
     app.endStreaming();
     autoSaveSession(app.getMessages(), projectPath);
@@ -681,6 +720,7 @@ Commands (in chat):
     getStatus,
     hasWriteAccess: () => hasWriteAccess,
     hasProjectContext: () => projectContext !== null,
+    getProjectRoot: () => projectContext?.root || projectPath || process.cwd(),
   });
 
   const provider = getCurrentProvider();

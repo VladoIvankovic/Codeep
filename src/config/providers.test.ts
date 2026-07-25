@@ -222,10 +222,10 @@ describe('providers', () => {
   });
 
   describe('anthropic provider', () => {
-    it('should include Claude Opus 4.8 as default model', () => {
-      expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-4-8');
+    it('should include Claude Opus 5 as default model', () => {
+      expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-5');
       const modelIds = PROVIDERS['anthropic'].models.map(m => m.id);
-      expect(modelIds).toContain('claude-opus-4-8');
+      expect(modelIds).toContain('claude-opus-5');
       expect(modelIds).toContain('claude-sonnet-5');
       expect(modelIds).toContain('claude-haiku-4-5-20251001');
       // Fable 5 is re-listed (available again) — Anthropic's most capable model.
@@ -236,10 +236,10 @@ describe('providers', () => {
 
     it('flags models that reject sampling params (Fable 5 / Opus 4.7+)', () => {
       expect(modelRejectsSamplingParams('claude-fable-5')).toBe(true);
-      expect(modelRejectsSamplingParams('claude-opus-4-8')).toBe(true);
+      expect(modelRejectsSamplingParams('claude-opus-5')).toBe(true);
       expect(modelRejectsSamplingParams('claude-opus-4-7')).toBe(true);
       // Dated variants of a flagged family are covered too
-      expect(modelRejectsSamplingParams('claude-opus-4-8-20260601')).toBe(true);
+      expect(modelRejectsSamplingParams('claude-opus-5-20260601')).toBe(true);
       // Older/other Claude models still accept temperature
       expect(modelRejectsSamplingParams('claude-opus-4-6')).toBe(false);
       expect(modelRejectsSamplingParams('claude-sonnet-4-6')).toBe(false);
@@ -350,8 +350,12 @@ describe('providers', () => {
 
   describe('canonicalModelId', () => {
     it('lowercases, strips vendor/ prefix, and normalizes dots to dashes', () => {
-      expect(canonicalModelId('Claude-Opus-4.8')).toBe('claude-opus-4-8');
-      expect(canonicalModelId('anthropic/claude-opus-4.8')).toBe('claude-opus-4-8');
+      expect(canonicalModelId('Claude-Opus-5')).toBe('claude-opus-5');
+      expect(canonicalModelId('anthropic/claude-opus-5')).toBe('claude-opus-5');
+      // Dotted ids still normalize — Opus 5 has no dot, so keep a dotted
+      // Anthropic id in the matrix or we'd stop covering that branch.
+      expect(canonicalModelId('Claude-Opus-4.7')).toBe('claude-opus-4-7');
+      expect(canonicalModelId('anthropic/claude-opus-4.7')).toBe('claude-opus-4-7');
       expect(canonicalModelId('glm-5.2')).toBe('glm-5-2');
       expect(canonicalModelId('GPT-5.5')).toBe('gpt-5-5');
     });
@@ -359,7 +363,7 @@ describe('providers', () => {
 
   describe('modelSupportsReasoningEffort', () => {
     it('supports capable Anthropic models, not Haiku or Sonnet 4.5', () => {
-      expect(modelSupportsReasoningEffort('anthropic', 'claude-opus-4-8')).toBe(true);
+      expect(modelSupportsReasoningEffort('anthropic', 'claude-opus-5')).toBe(true);
       expect(modelSupportsReasoningEffort('anthropic', 'claude-sonnet-4-6')).toBe(true);
       expect(modelSupportsReasoningEffort('anthropic', 'claude-haiku-4-5-20251001')).toBe(false);
       expect(modelSupportsReasoningEffort('anthropic', 'claude-sonnet-4-5')).toBe(false);
@@ -387,18 +391,18 @@ describe('providers', () => {
 
   describe('reasoningParamsFor', () => {
     it('returns {} for auto or unsupported models', () => {
-      expect(reasoningParamsFor('anthropic', 'claude-opus-4-8', 'auto')).toEqual({});
+      expect(reasoningParamsFor('anthropic', 'claude-opus-5', 'auto')).toEqual({});
       expect(reasoningParamsFor('anthropic', 'claude-haiku-4-5-20251001', 'high')).toEqual({});
       expect(reasoningParamsFor('ollama', 'llama3.2', 'max')).toEqual({});
     });
     it('returns {} (never effort:undefined) for a garbage/legacy tier value', () => {
       // Simulates an old config string that isn't one of the 5 tiers.
-      expect(reasoningParamsFor('anthropic', 'claude-opus-4-8', 'ultra' as never)).toEqual({});
+      expect(reasoningParamsFor('anthropic', 'claude-opus-5', 'ultra' as never)).toEqual({});
       expect(reasoningParamsFor('openai', 'gpt-5.5', undefined as never)).toEqual({});
     });
     it('Anthropic → output_config.effort, passed through 1:1', () => {
-      expect(reasoningParamsFor('anthropic', 'claude-opus-4-8', 'low')).toEqual({ output_config: { effort: 'low' } });
-      expect(reasoningParamsFor('anthropic', 'claude-opus-4-8', 'max')).toEqual({ output_config: { effort: 'max' } });
+      expect(reasoningParamsFor('anthropic', 'claude-opus-5', 'low')).toEqual({ output_config: { effort: 'low' } });
+      expect(reasoningParamsFor('anthropic', 'claude-opus-5', 'max')).toEqual({ output_config: { effort: 'max' } });
     });
     it('OpenAI → reasoning_effort, max maps to xhigh (no native max)', () => {
       expect(reasoningParamsFor('openai', 'gpt-5.5', 'medium')).toEqual({ reasoning_effort: 'medium' });
@@ -431,7 +435,7 @@ describe('providers', () => {
 
   describe('availableReasoningTiers', () => {
     it('lists only the levels each model distinguishes', () => {
-      expect(availableReasoningTiers('anthropic', 'claude-opus-4-8')).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+      expect(availableReasoningTiers('anthropic', 'claude-opus-5')).toEqual(['auto', 'low', 'medium', 'high', 'max']);
       expect(availableReasoningTiers('openai', 'gpt-5.5')).toEqual(['auto', 'low', 'medium', 'high', 'max']);
       expect(availableReasoningTiers('google', 'gemini-3.1-pro-preview')).toEqual(['auto', 'low', 'high']);
       expect(availableReasoningTiers('z.ai', 'glm-5.2')).toEqual(['auto', 'high', 'max']);
@@ -444,7 +448,7 @@ describe('providers', () => {
     });
     it('drift guard — every listed non-auto tier yields a DISTINCT param', () => {
       const cases = [
-        ['anthropic', 'claude-opus-4-8'], ['openai', 'gpt-5.5'],
+        ['anthropic', 'claude-opus-5'], ['openai', 'gpt-5.5'],
         ['google', 'gemini-3.1-pro-preview'], ['z.ai', 'glm-5.2'],
         ['deepseek', 'deepseek-v4-pro'], ['openrouter', 'openai/gpt-5.5'],
         ['grok', 'grok-4.3'],
@@ -468,7 +472,17 @@ describe('providers', () => {
       expect(PROVIDERS['kimi'].protocols.openai?.baseUrl).toBe('https://api.kimi.com/coding/v1');
       expect(PROVIDERS['kimi'].defaultModel).toBe('kimi-for-coding');
       expect(PROVIDERS['kimi-api'].protocols.openai?.baseUrl).toBe('https://api.moonshot.ai/v1');
-      expect(PROVIDERS['kimi-api'].defaultModel).toBe('kimi-k2.7-code');
+      expect(PROVIDERS['kimi-api'].defaultModel).toBe('kimi-k3-code');
+    });
+    it('Kimi K3 models are exposed on pay-per-use providers', () => {
+      const apiModels = PROVIDERS['kimi-api'].models.map(m => m.id);
+      expect(apiModels).toContain('kimi-k3-code');
+      expect(apiModels).toContain('kimi-k3-code-highspeed');
+      expect(apiModels).toContain('kimi-k3-thinking');
+      expect(PROVIDERS['kimi-api'].maxOutputTokens).toBe(65_536);
+      const cnModels = PROVIDERS['kimi-cn'].models.map(m => m.id);
+      expect(cnModels).toContain('kimi-k3-code');
+      expect(PROVIDERS['kimi-cn'].defaultModel).toBe('kimi-k3-code');
     });
     it('Qwen Coding Plan vs pay-per-use base URLs (mirrors z.ai pattern)', () => {
       expect(PROVIDERS['qwen'].protocols.openai?.baseUrl).toBe('https://coding-intl.dashscope.aliyuncs.com/v1');
@@ -489,9 +503,12 @@ describe('providers', () => {
       expect(providerNoStreamWithTools('openai')).toBe(false);
     });
     it('Kimi coding models reject custom sampling params (fixed temperature)', () => {
+      expect(modelRejectsSamplingParams('kimi-k3-code')).toBe(true);
+      expect(modelRejectsSamplingParams('kimi-k3-thinking')).toBe(true);
       expect(modelRejectsSamplingParams('kimi-k2.7-code')).toBe(true);
       expect(modelRejectsSamplingParams('kimi-for-coding')).toBe(true);
       expect(modelRejectsSamplingParams('kimi-k2.5')).toBe(false);
+      expect(modelRejectsSamplingParams('kimi-k3-code-highspeed')).toBe(true);
     });
     it('Grok supports graded reasoning_effort; Kimi/Qwen-coders do not', () => {
       expect(modelSupportsReasoningEffort('grok', 'grok-4.3')).toBe(true);
@@ -512,7 +529,7 @@ describe('providers', () => {
 
   describe('resolveReasoningTier', () => {
     it('passes through tiers the model distinguishes', () => {
-      expect(resolveReasoningTier('anthropic', 'claude-opus-4-8', 'low')).toBe('low');
+      expect(resolveReasoningTier('anthropic', 'claude-opus-5', 'low')).toBe('low');
       expect(resolveReasoningTier('z.ai', 'glm-5.2', 'max')).toBe('max');
     });
     it('collapses out-of-range tiers to the level the model actually runs', () => {

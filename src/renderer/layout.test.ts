@@ -37,6 +37,9 @@ function snapshot(overrides: Partial<LayoutSnapshot> = {}): LayoutSnapshot {
     settingsCount: 0,
     showAutocomplete: false,
     autocompleteItemCount: 0,
+    mentionPickerOpen: false,
+    mentionItemCount: 0,
+    hunkPickerOpen: false,
     ...overrides,
   };
 }
@@ -133,6 +136,10 @@ describe('bottomPanelHeight', () => {
     expect(
       bottomPanelHeight(snapshot({ pasteInfoOpen: true, pasteInfoPreviewLines: 1, isAgentRunning: true, permissionOpen: true })),
     ).toBe(7);
+  });
+
+  it('returns 18 for the hunk picker', () => {
+    expect(bottomPanelHeight(snapshot({ hunkPickerOpen: true }))).toBe(18);
   });
 });
 
@@ -533,6 +540,7 @@ function panels(overrides: Partial<PanelState> = {}): PanelState {
     loginOpen: false,
     menuOpen: false,
     showAutocomplete: false,
+    hunkPickerOpen: false,
     ...overrides,
   };
 }
@@ -555,6 +563,7 @@ describe('activePanel', () => {
     ['logout', 'logoutOpen'],
     ['login', 'loginOpen'],
     ['menu', 'menuOpen'],
+    ['hunkPicker', 'hunkPickerOpen'],
     ['autocomplete', 'showAutocomplete'],
   ] as const)('returns %s when only %s is open', (panel, flag) => {
     expect(activePanel(panels({ [flag]: true } as Partial<PanelState>))).toBe(panel);
@@ -736,5 +745,23 @@ describe('computeInputDisplay', () => {
     const d = computeInputDisplay(opts({ value: 'hello world', cursorPos: 11, width: 80 }));
     expect(d.cursorX).toBeGreaterThanOrEqual(d.promptSymbol.length);
     expect(d.cursorX).toBeLessThanOrEqual(80);
+  });
+});
+
+describe('bottomPanelHeight — @mention picker', () => {
+  // The picker paints a separator, a title, up to 8 rows and a footer. It was
+  // missing from the snapshot entirely, so the panel measured 0 while those
+  // rows were still drawn — straight over the bottom of the transcript.
+  it('reserves rows for the mention picker when it is open', () => {
+    expect(bottomPanelHeight(snapshot({ mentionPickerOpen: true, mentionItemCount: 5 }))).toBe(8);
+  });
+
+  it('caps at the 8 visible rows the renderer actually draws', () => {
+    expect(bottomPanelHeight(snapshot({ mentionPickerOpen: true, mentionItemCount: 50 }))).toBe(11);
+  });
+
+  it('reserves nothing when the picker is closed or empty', () => {
+    expect(bottomPanelHeight(snapshot({ mentionPickerOpen: false, mentionItemCount: 5 }))).toBe(0);
+    expect(bottomPanelHeight(snapshot({ mentionPickerOpen: true, mentionItemCount: 0 }))).toBe(0);
   });
 });

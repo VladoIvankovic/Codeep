@@ -278,18 +278,21 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       openai: { baseUrl: 'https://api.moonshot.ai/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     models: [
-      { id: 'kimi-k2.7-code',           name: 'Kimi K2.7 Code',            description: 'Flagship agentic coding model (256K context)' },
+      { id: 'kimi-k3-code',           name: 'Kimi K3 Code',            description: 'Newest flagship agentic coding model (1M context, deep reasoning)' },
+      { id: 'kimi-k3-code-highspeed', name: 'Kimi K3 Code (High-Speed)', description: 'Throughput-tuned K3 Code for latency-sensitive loops' },
+      { id: 'kimi-k3-thinking',       name: 'Kimi K3 Thinking',        description: 'K3 with explicit reasoning traces (highest quality, slower)' },
+      { id: 'kimi-k2.7-code',           name: 'Kimi K2.7 Code',            description: 'Previous-gen flagship agentic coding model (256K context)' },
       { id: 'kimi-k2.7-code-highspeed', name: 'Kimi K2.7 Code (High-Speed)', description: 'Throughput-tuned K2.7 Code for latency-sensitive loops' },
       { id: 'kimi-k2.6',                name: 'Kimi K2.6',                 description: 'Previous-gen multimodal reasoning model' },
       { id: 'kimi-k2.5',                name: 'Kimi K2.5',                 description: 'Older general-purpose model (cheaper)' },
     ],
-    defaultModel: 'kimi-k2.7-code',
+    defaultModel: 'kimi-k3-code',
     defaultProtocol: 'openai',
-    maxOutputTokens: 32_768,
+    maxOutputTokens: 65_536,
     envKey: 'MOONSHOT_API_KEY',
     subscribeUrl: 'https://platform.kimi.ai/console/api-keys',
     groupLabel: 'Kimi — API (pay-per-use)',
-    hint: 'Pay-per-use via Moonshot API key (platform.kimi.ai).',
+    hint: 'Pay-per-use via Moonshot API key (platform.kimi.ai). K3 models support 1M context and explicit reasoning.',
   },
   'kimi-cn': {
     name: 'Kimi China (Moonshot)',
@@ -298,18 +301,21 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       openai: { baseUrl: 'https://api.moonshot.cn/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     models: [
-      { id: 'kimi-k2.7-code',           name: 'Kimi K2.7 Code',            description: 'Flagship agentic coding model (256K context)' },
+      { id: 'kimi-k3-code',           name: 'Kimi K3 Code',            description: 'Newest flagship agentic coding model (1M context, deep reasoning)' },
+      { id: 'kimi-k3-code-highspeed', name: 'Kimi K3 Code (High-Speed)', description: 'Throughput-tuned K3 Code' },
+      { id: 'kimi-k3-thinking',       name: 'Kimi K3 Thinking',        description: 'K3 with explicit reasoning traces' },
+      { id: 'kimi-k2.7-code',           name: 'Kimi K2.7 Code',            description: 'Previous-gen flagship agentic coding model (256K context)' },
       { id: 'kimi-k2.7-code-highspeed', name: 'Kimi K2.7 Code (High-Speed)', description: 'Throughput-tuned K2.7 Code' },
       { id: 'kimi-k2.6',                name: 'Kimi K2.6',                 description: 'Previous-gen multimodal reasoning model' },
       { id: 'kimi-k2.5',                name: 'Kimi K2.5',                 description: 'Older general-purpose model' },
     ],
-    defaultModel: 'kimi-k2.7-code',
+    defaultModel: 'kimi-k3-code',
     defaultProtocol: 'openai',
-    maxOutputTokens: 32_768,
+    maxOutputTokens: 65_536,
     envKey: 'MOONSHOT_CN_API_KEY',
     subscribeUrl: 'https://platform.moonshot.cn/console/api-keys',
     groupLabel: 'Kimi China — API (pay-per-use)',
-    hint: 'Pay-per-use via Moonshot China API key (platform.moonshot.cn).',
+    hint: 'Pay-per-use via Moonshot China API key (platform.moonshot.cn). K3 models support 1M context.',
   },
   // ── Grok (xAI) ────────────────────────────────────────────────────
   // Pay-per-use today (console.x.ai key). The SuperGrok / X Premium+
@@ -479,11 +485,11 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     },
     models: [
       { id: 'claude-fable-5',            name: 'Claude Fable 5',        description: 'Most capable — hardest reasoning & long-horizon agentic work' },
-      { id: 'claude-opus-4-8',           name: 'Claude Opus 4.8',       description: 'Most capable Opus model' },
+      { id: 'claude-opus-5',             name: 'Claude Opus 5',         description: 'Complex agentic coding & deep reasoning — the Opus workhorse' },
       { id: 'claude-sonnet-5',           name: 'Claude Sonnet 5',       description: 'Best balance of speed and intelligence' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku',          description: 'Fastest and most affordable' },
     ],
-    defaultModel: 'claude-opus-4-8',
+    defaultModel: 'claude-opus-5',
     defaultProtocol: 'anthropic',
     envKey: 'ANTHROPIC_API_KEY',
     groupLabel: 'Anthropic',
@@ -721,8 +727,8 @@ export function providerNoStreamWithTools(providerId: string): boolean {
  * internally and 400 on any custom value, so they're here too.
  */
 const SAMPLING_PARAMS_REJECTED = [
-  'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5',
-  'kimi-k2.7-code', 'kimi-for-coding',
+  'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5',
+  'kimi-k3-code', 'kimi-k3-thinking', 'kimi-k2.7-code', 'kimi-for-coding',
 ];
 
 export function modelRejectsSamplingParams(model: string): boolean {
@@ -787,9 +793,9 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
   const id = canonicalModelId(model);
   switch (providerId) {
     case 'anthropic':
-      // Effort is GA on Opus 4.5+, Sonnet 4.6/5, Fable 5 — NOT Haiku or Sonnet 4.5.
+      // Effort is GA on Opus 5, Opus 4.5+, Sonnet 4.6/5, Fable 5 — NOT Haiku or Sonnet 4.5.
       if (idMatches(id, 'claude-haiku-4-5') || idMatches(id, 'claude-sonnet-4-5')) return false;
-      return /^claude-(opus-4-([5-9]|\d\d)|sonnet-(4-6|5)|fable-5)/.test(id);
+      return /^claude-(opus-5|opus-4-([5-9]|\d\d)|sonnet-(4-6|5)|fable-5)/.test(id);
     case 'openai':
       // GPT-5.x are reasoning models — reasoning_effort across the family (incl. mini).
       return id.startsWith('gpt-5');

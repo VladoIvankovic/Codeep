@@ -89,15 +89,19 @@ When started in a project directory, Codeep automatically:
 - Press Enter to send, Escape to cancel
 - Works reliably in all terminals (no Ctrl+V issues)
 
-### File Context (`/add`, `/drop`)
+### File Context (`/add`, `/drop`, `@mentions`)
 Explicitly add files to the conversation context:
 
 - **`/add <path>`** - Add one or more files to context
 - **`/add`** (no args) - Show currently added files
 - **`/drop <path>`** - Remove a specific file from context
 - **`/drop`** (no args) - Remove all files from context
+- **`@path/to/file`** - Inline mention: type `@` followed by a file path anywhere in your message and its contents are attached for that message only. Supports relative paths (`@src/index.ts`), absolute (`@/etc/hosts`), home (`@~/.codeep/profile.md`), and quoted paths with spaces (`@"my file.ts"`). In the CLI, typing `@` opens an autocomplete file picker — ↑↓ to navigate, Tab to insert.
+- **`@folder <path>`** (alias `@dir`) - Attach an entire directory: type `@folder src/components` and every source file under it is loaded recursively. Skips `node_modules`, `.git`, `dist`, binary extensions (images, archives, lockfiles), and files over the per-file size cap. Stops at a 200 KB total cap per mention (with a notification when it hits the limit). Quoted paths supported: `@folder "my components"`.
+- **`@web <url>`** - Inline web fetch: type `@web https://example.com/docs` (or `@web example.com/docs`) and the page is fetched, converted to readable text, and attached to the message. HTML is stripped; plain text and JSON pass through as-is. Capped at 32 KB, 12 s timeout. Successful fetches are cached for 30 min (per session, up to 50 entries) so repeated `@web` for the same URL is instant and free; use `/web-cache clear` to reset.
+- **`@git <ref>`** - Inline git context: type `@git diff`, `@git diff --staged`, `@git HEAD`, `@git <sha>`, `@git main:src/x.ts`, or `@git diff a..b` to inject that diff / commit / file-at-ref into the message as a `[Git ref]` block. Capped at 64 KB per mention (truncated with a marker). Unknown refs surface a friendly failure note.
 
-Added files are automatically attached to every message (both chat and agent mode) until dropped. Useful for giving the AI specific files to work with.
+Added files (via `/add`) are automatically attached to every message (both chat and agent mode) until dropped. `@mentions` are per-message — handy for one-off references without polluting the persistent context.
 
 ```
 > /add src/utils/api.ts src/types/index.ts
@@ -105,6 +109,10 @@ Added 2 file(s) to context (2 total)
 
 > refactor the API client to use async/await
 # AI sees both files attached to your message
+
+> review @src/auth/login.ts for security issues
+Loaded 1 file(s) from @mentions
+# AI sees login.ts attached for this message only
 
 > /drop
 Dropped all 2 file(s) from context
@@ -1043,7 +1051,8 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 
 | Command | Description |
 |---------|-------------|
-| `/apply` | Apply file changes from AI response |
+| `/apply` | Apply file changes from AI response (shows hunk counts; `--only file.ts:0,1` for selective apply, `--interactive`/`-i` for per-hunk review) |
+| `/web-cache` | Show `@web` fetch cache stats (alias `/web-cache clear` to reset) |
 | `/copy [n]` | Copy code block to clipboard (n = block number, -1 = last) |
 | `/paste` | Paste content from clipboard into chat |
 | `/add <path>` | Add file(s) to conversation context |

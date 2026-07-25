@@ -114,12 +114,34 @@ export function buildRawOutput(
 
 export async function runAgentSession(opts: AgentSessionOptions): Promise<void> {
   const projectContext = buildProjectContext(opts.workspaceRoot);
+
+  // Expand `@folder`/`@file`/`@git` mentions in the user prompt, the
+  // same way the TUI does (see src/renderer/main.ts). ACP clients
+  // (VS Code / Zed) get the same inline-context UX. `@web` is async
+  // and fetched here too.
+  let enrichedPrompt = opts.prompt;
+  try {
+    const { expandFileAndFolderMentions, expandGitMentions } = await import('../utils/mentions.js');
+    const { expandWebMentions } = await import('../utils/webFetch.js');
+    const fileResult = expandFileAndFolderMentions(enrichedPrompt, { root: opts.workspaceRoot });
+    const gitResult = await expandGitMentions(fileResult.enrichedPrompt, { root: opts.workspaceRoot });
+    const webResult = await expandWebMentions(gitResult.enrichedPrompt);
+    enrichedPrompt = webResult.enrichedPrompt;
+    // Surface failures as thoughts so the editor shows them.
+    const allFailures = [...fileResult.failures, ...gitResult.failures, ...webResult.failures];
+    if (allFailures.length > 0 && opts.onThought) {
+      opts.onThought(allFailures.map((f) => `${f.mention}: ${f.reason}`).join(' · '));
+    }
+  } catch {
+    // Mention expansion is best-effort — never block the agent run.
+  }
+
   let toolCallCounter = 0;
   // Maps tool call key → ACP toolCallId so onToolResult can emit finished/error status
   const toolCallIdMap = new Map<string, { toolCallId: string; kind: string; locations?: string[] }>();
 
   let chunksEmitted = 0;
-  const result = await runAgent(opts.prompt, projectContext, {
+  const result = await runAgent(enrichedPrompt, projectContext, {
     abortSignal: opts.abortSignal,
     onChunk: (text: string) => { chunksEmitted++; opts.onChunk(text); },
     onIteration: (_iteration: number, message: string) => {

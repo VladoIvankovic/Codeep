@@ -43,7 +43,8 @@ import { setProjectContext } from '../api/index';
 import { AppExecutionContext, runSkill, runCommandChain } from './agentExecution';
 import { loadProjectIntelligence, saveProjectIntelligence } from '../utils/projectIntelligence';
 import { ollamaModelHint } from './ollamaHint';
-import { buildSearchSnippets, parseKeepRecent, joinSessionName, parseTaskAddArgs, formatTaskList } from './commands/helpers';
+import { buildSearchSnippets, parseKeepRecent, joinSessionName, parseTaskAddArgs, formatTaskList, formatProfileList, formatMemoryList, formatStatsReport, extractCodeBlocks, resolveBlockIndex, extractFileChanges, formatApplyDiffLine, parsePromptArgs, formatMcpReloadReport, formatMcpResourcesList, formatMcpResourceRead, formatMcpPromptsList, formatMcpPromptResult, formatMcpServerList, parseInsightsDays, formatCloudSessionLabel, formatMeSyncReport, formatMeLearnResult, formatMeInitResult, formatSkillsShow, formatSkillsBrowseEmpty, formatSkillsPublishResult } from './commands/helpers';
+import { resolveCommand } from './commands/registry';
 
 // ─── Extended context for command handlers ────────────────────────────────────
 
@@ -67,14 +68,18 @@ export async function handleCommand(
   args: string[],
   ctx: AppCommandContext,
 ): Promise<void> {
+  // Resolve command aliases (e.g. `webcache` → `web-cache`) to their
+  // canonical name before dispatching.
+  const resolved = resolveCommand(command);
+  const canonical = resolved?.name ?? command;
   // Handle skill chaining (e.g., /commit+push)
-  if (command.includes('+')) {
-    const commands = command.split('+').filter(c => c.trim());
+  if (canonical.includes('+')) {
+    const commands = canonical.split('+').filter(c => c.trim());
     runCommandChain(commands, 0, ctx);
     return;
   }
 
-  switch (command) {
+  switch (canonical) {
     case 'version': {
       const version = getCurrentVersion();
       const provider = getCurrentProvider();
@@ -349,7 +354,7 @@ export async function handleCommand(
         if (sub === 'auto') {
           ctx.app.notify('Thinking effort: auto — each model uses its own default.');
         } else if (!supported) {
-          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 4.8, GPT-5.x, Gemini 3, DeepSeek V4, GLM-5.2).`);
+          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 5, GPT-5.x, Gemini 3, DeepSeek V4, GLM-5.2).`);
         } else {
           // Tell the user what THIS model will actually run (the tier may
           // collapse onto a level the model distinguishes, e.g. low→high on GLM).
@@ -454,18 +459,7 @@ export async function handleCommand(
 
     case 'insights': {
       const { formatInsights } = await import('../utils/insights');
-      // Parse `--days N` (default 7). Accept both `--days 30` and `--days=30`.
-      let days = 7;
-      for (let i = 0; i < args.length; i++) {
-        const a = args[i];
-        if (a === '--days' && args[i + 1]) {
-          const n = parseInt(args[i + 1], 10);
-          if (Number.isFinite(n)) days = n;
-        } else if (a.startsWith('--days=')) {
-          const n = parseInt(a.slice('--days='.length), 10);
-          if (Number.isFinite(n)) days = n;
-        }
-      }
+      const days = parseInsightsDays(args);
       ctx.app.addMessage({ role: 'system', content: formatInsights({ days }) });
       break;
     }
@@ -545,12 +539,7 @@ export async function handleCommand(
           break;
         }
         const file = scope === 'global' ? '~/.codeep/profile.learned.md' : '.codeep/profile.learned.md';
-        ctx.app.addMessage({
-          role: 'system',
-          content: res.updated
-            ? `Updated your ${scope} learned profile (\`${file}\`):\n\n${res.facts}\n\nClear it anytime with \`/me forget\`.`
-            : `No changes — your ${scope} learned profile already covers this:\n\n${res.facts}`,
-        });
+        ctx.app.addMessage({ role: 'system', content: formatMeLearnResult(scope, file, res) });
         break;
       }
       if (sub === 'forget') {
@@ -566,11 +555,7 @@ export async function handleCommand(
         ctx.app.notify('Syncing your profile with codeep.dev…');
         const pushed = await pushUserProfile();
         const pulled = await pullUserProfile();
-        const lines: string[] = [];
-        if (pushed) lines.push('✓ Profile pushed to the dashboard');
-        if (pulled === 1) lines.push('✓ Profile pulled to this machine');
-        if (lines.length === 0) lines.push('Nothing to sync yet — run `/me init` and fill in your profile first.');
-        ctx.app.addMessage({ role: 'system', content: `## Profile sync\n\n${lines.join('\n')}` });
+        ctx.app.addMessage({ role: 'system', content: formatMeSyncReport(pushed, pulled) });
         break;
       }
       if (sub === 'init') {
@@ -581,12 +566,7 @@ export async function handleCommand(
         }
         const res = scaffoldProfile(scope, ctx.projectPath);
         if (!res) { ctx.app.notify('Could not create the profile file.'); break; }
-        ctx.app.addMessage({
-          role: 'system',
-          content: res.created
-            ? `Created ${scope} profile: \`${res.path}\`\n\nEdit it in your editor — Codeep uses it automatically. View anytime with \`/me\`.`
-            : `${scope === 'global' ? 'Global' : 'Project'} profile already exists: \`${res.path}\`\n\nEdit it directly, or view it with \`/me\`.`,
-        });
+        ctx.app.addMessage({ role: 'system', content: formatMeInitResult(scope, res) });
         break;
       }
       // Default: show the profile view.
@@ -725,15 +705,8 @@ export async function handleCommand(
       // Non-null binding for the picker closure — TS can't carry the null
       // narrowing of a reassigned `let` into the callback.
       let sessionList = summaries;
-      // Render each row as: title · date · N msg · [project?]
-      // Mirrors the /sessions list layout so the picker feels familiar.
       const SHOW_ALL = 'Show all cloud sessions…';
-      const labels = summaries.map(s => {
-        const date = new Date(s.updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-        const title = s.sessionName || s.sessionId.slice(0, 8);
-        const projectTag = s.projectName ? ` · ${s.projectName}` : '';
-        return `${title}  ·  ${date} · ${s.messageCount} msg${projectTag}`;
-      });
+      const labels = summaries.map(formatCloudSessionLabel);
       if (scopedToProject) labels.push(SHOW_ALL);
       // Named so the "Show all" branch can re-present the picker with the
       // same handler (a const arrow can reference itself; the binding is
@@ -1199,15 +1172,10 @@ Format: use headers per category, only include categories where you found issues
     case 'copy': {
       const blockNum = args[0] ? parseInt(args[0], 10) : -1;
       const messages = ctx.app.getMessages();
-      const codeBlocks: string[] = [];
-      for (const msg of messages) {
-        for (const match of msg.content.matchAll(/```[\w]*\n([\s\S]*?)```/g)) {
-          codeBlocks.push(match[1]);
-        }
-      }
+      const codeBlocks = messages.flatMap(m => extractCodeBlocks(m.content));
       if (codeBlocks.length === 0) { ctx.app.notify('No code blocks found'); return; }
-      const index = blockNum === -1 ? codeBlocks.length - 1 : blockNum - 1;
-      if (Number.isNaN(index) || index < 0 || index >= codeBlocks.length) {
+      const index = resolveBlockIndex(blockNum, codeBlocks.length);
+      if (index === null) {
         ctx.app.notify(`Invalid block number. Available: 1-${codeBlocks.length}`);
         return;
       }
@@ -1239,74 +1207,161 @@ Format: use headers per category, only include categories where you found issues
       const messages = ctx.app.getMessages();
       const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
       if (!lastAssistant) { ctx.app.notify('No assistant response to apply'); return; }
-      const changes: Array<{ path: string; content: string }> = [];
-      const fenceFilePattern = /```\w*\s+([\w./\\-]+(?:\.\w+))\n([\s\S]*?)```/g;
-      let match: RegExpExecArray | null;
-      while ((match = fenceFilePattern.exec(lastAssistant.content)) !== null) {
-        const p = match[1].trim();
-        if (p.includes('.') && !p.includes(' ')) changes.push({ path: p, content: match[2] });
-      }
-      if (changes.length === 0) {
-        const commentPattern = /```(\w+)?\s*\n(?:\/\/|#|--|\/\*)\s*(?:File|Path|file|path):\s*([^\n*]+)\n([\s\S]*?)```/g;
-        while ((match = commentPattern.exec(lastAssistant.content)) !== null) {
-          changes.push({ path: match[2].trim(), content: match[3] });
-        }
-      }
+      const changes = extractFileChanges(lastAssistant.content);
       if (changes.length === 0) { ctx.app.notify('No file changes found in response'); return; }
       if (!ctx.hasWriteAccess) { ctx.app.notify('Write access required. Use /grant first.'); return; }
+      // Parse optional selective hunk spec: /apply --only file.ts:0,1 other.ts:2
+      // Without --only, all hunks are applied (existing behavior).
+      const selective = args.includes('--only') || args.includes('-o');
+      const interactive = args.includes('--interactive') || args.includes('-i');
+      const hunkSpecs = new Map<string, Set<number>>();
+      if (selective) {
+        for (const a of args) {
+          if (a === '--only' || a === '-o') continue;
+          const m = a.match(/^(.+):([\d,]+)$/);
+          if (m) {
+            const [, file, idxStr] = m;
+            const idxs = new Set(idxStr.split(',').map((n) => parseInt(n, 10)).filter((n) => !isNaN(n)));
+            hunkSpecs.set(file, idxs);
+          }
+        }
+        // A spec that parsed to nothing must NOT fall through to the
+        // apply-everything branch below — the user asked to restrict the
+        // apply, so writing every change is the opposite of the request.
+        if (hunkSpecs.size === 0) {
+          ctx.app.notify('Invalid --only spec. Expected `--only <file>:<hunk>[,<hunk>]` (e.g. --only src/a.ts:0,2). Nothing applied.');
+          return;
+        }
+      }
       import('fs').then(async (fs) => {
         import('path').then(async (pathModule) => {
+          const { createFileDiff, applyHunksToFiles, countChangeHunks } =
+            await import('../utils/diffPreview');
+          type FileDiff = import('../utils/diffPreview').FileDiff;
           const diffLines: string[] = [];
+          const fileDiffs: FileDiff[] = [];
           for (const change of changes) {
             const fullPath = pathModule.isAbsolute(change.path)
               ? change.path
               : pathModule.join(ctx.projectPath, change.path);
-            const shortPath = change.path.length > 40 ? '...' + change.path.slice(-37) : change.path;
             let existingContent = '';
             try { existingContent = await fs.promises.readFile(fullPath, 'utf-8'); } catch {}
-            if (!existingContent) {
-              diffLines.push(`+ CREATE: ${shortPath}`);
-              diffLines.push(`  (${change.content.split('\n').length} lines)`);
-            } else {
-              const oldLines = existingContent.split('\n').length;
-              const newLines = change.content.split('\n').length;
-              const lineDiff = newLines - oldLines;
-              diffLines.push(`~ MODIFY: ${shortPath}`);
-              diffLines.push(`  ${oldLines} → ${newLines} lines (${lineDiff >= 0 ? '+' : ''}${lineDiff})`);
+            const fd = createFileDiff(change.path, change.content, ctx.projectPath);
+            fileDiffs.push(fd);
+            const hunkCount = countChangeHunks(fd);
+            diffLines.push(...formatApplyDiffLine(change, existingContent));
+            if (hunkCount > 0) {
+              diffLines.push(`  ↳ ${hunkCount} hunk(s) — use /apply --only ${change.path}:0,1 to select`);
             }
           }
+          // Interactive mode: open the hunk picker (`git add -p` style).
+          if (interactive) {
+            type HunkPickerItem = import('./App').HunkPickerItem;
+            const items: HunkPickerItem[] = [];
+            for (const fd of fileDiffs) {
+              for (let hi = 0; hi < fd.hunks.length; hi++) {
+                const hunk = fd.hunks[hi];
+                // Skip pure-context hunks (no add/remove).
+                if (!hunk.lines.some((l) => l.type === 'add' || l.type === 'remove')) continue;
+                const header = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`;
+                const lines = hunk.lines.map((l) => {
+                  if (l.type === 'add') return `+${l.content}`;
+                  if (l.type === 'remove') return `-${l.content}`;
+                  return ` ${l.content}`;
+                });
+                items.push({ path: fd.path, hunkIndex: hi, header, lines });
+              }
+            }
+            if (items.length === 0) {
+              ctx.app.notify('No change hunks to review');
+              return;
+            }
+            ctx.app.showHunkPicker({
+              title: '🎯 Review hunks',
+              items,
+              onComplete: (accepted) => {
+                if (accepted.length === 0) {
+                  ctx.app.notify('No hunks applied');
+                  return;
+                }
+                (async () => {
+                  // Group accepted hunk indices by file path.
+                  const byPath = new Map<string, Set<number>>();
+                  for (const a of accepted) {
+                    let set = byPath.get(a.path);
+                    if (!set) { set = new Set(); byPath.set(a.path, set); }
+                    set.add(a.hunkIndex);
+                  }
+                  const results = applyHunksToFiles(fileDiffs, byPath);
+                  let applied = 0;
+                  for (const r of results) {
+                    try {
+                      const fullPath = pathModule.isAbsolute(r.path)
+                        ? r.path
+                        : pathModule.join(ctx.projectPath, r.path);
+                      await fs.promises.mkdir(pathModule.dirname(fullPath), { recursive: true });
+                      await fs.promises.writeFile(fullPath, r.content);
+                      applied++;
+                    } catch {}
+                  }
+                  ctx.app.notify(`Applied ${accepted.length} hunk(s) across ${applied} file(s)`);
+                })().catch((e) => ctx.app.notify(`Apply failed: ${e instanceof Error ? e.message : String(e)}`));
+              },
+            });
+            return;
+          }
+
+          const summary = selective && hunkSpecs.size > 0
+            ? `Selective apply (${hunkSpecs.size} file(s) with chosen hunks)`
+            : `Found ${changes.length} file(s) to apply`;
           ctx.app.showConfirm({
             title: '📝 Apply Changes',
             message: [
-              `Found ${changes.length} file(s) to apply:`,
+              summary,
               '',
-              ...diffLines.slice(0, 10),
-              ...(diffLines.length > 10 ? [`  ...and ${diffLines.length - 10} more`] : []),
+              ...diffLines.slice(0, 12),
+              ...(diffLines.length > 12 ? [`  ...and ${diffLines.length - 12} more`] : []),
               '',
-              'Apply these changes?',
+              selective && hunkSpecs.size > 0 ? 'Apply selected hunks?' : 'Apply these changes?',
             ],
             confirmLabel: 'Apply',
             cancelLabel: 'Cancel',
             onConfirm: () => {
               (async () => {
                 let applied = 0;
-                for (const change of changes) {
-                  try {
-                    const fullPath = pathModule.isAbsolute(change.path)
-                      ? change.path
-                      : pathModule.join(ctx.projectPath, change.path);
-                    await fs.promises.mkdir(pathModule.dirname(fullPath), { recursive: true });
-                    await fs.promises.writeFile(fullPath, change.content);
-                    applied++;
-                  } catch {}
+                if (selective && hunkSpecs.size > 0) {
+                  // Per-hunk selective apply.
+                  const results = applyHunksToFiles(fileDiffs, hunkSpecs);
+                  for (const r of results) {
+                    try {
+                      const fullPath = pathModule.isAbsolute(r.path)
+                        ? r.path
+                        : pathModule.join(ctx.projectPath, r.path);
+                      await fs.promises.mkdir(pathModule.dirname(fullPath), { recursive: true });
+                      await fs.promises.writeFile(fullPath, r.content);
+                      applied++;
+                    } catch {}
+                  }
+                } else {
+                  // All-or-nothing apply (original behavior).
+                  for (const change of changes) {
+                    try {
+                      const fullPath = pathModule.isAbsolute(change.path)
+                        ? change.path
+                        : pathModule.join(ctx.projectPath, change.path);
+                      await fs.promises.mkdir(pathModule.dirname(fullPath), { recursive: true });
+                      await fs.promises.writeFile(fullPath, change.content);
+                      applied++;
+                    } catch {}
+                  }
                 }
-                ctx.app.notify(`Applied ${applied}/${changes.length} file(s)`);
-              })();
+                ctx.app.notify(`Applied ${applied}/${selective ? hunkSpecs.size : changes.length} file(s)`);
+              })().catch((e) => ctx.app.notify(`Apply failed: ${e instanceof Error ? e.message : String(e)}`));
             },
             onCancel: () => ctx.app.notify('Apply cancelled'),
           });
         });
-      });
+      }).catch((e) => ctx.app.notify(`Apply failed: ${e instanceof Error ? e.message : String(e)}`));
       break;
     }
 
@@ -1732,10 +1787,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         const { findSkillBundle } = await import('../utils/skillBundles');
         const bundle = findSkillBundle(name, ctx.projectPath);
         if (!bundle) { ctx.app.notify(`Skill ${name} not found`); break; }
-        ctx.app.addMessage({
-          role: 'system',
-          content: `# ${bundle.name}\n_${bundle.description}_\n\n**Source:** ${bundle.source}\n\n---\n\n${bundle.body}`,
-        });
+        ctx.app.addMessage({ role: 'system', content: formatSkillsShow(bundle) });
         break;
       }
 
@@ -1748,10 +1800,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         const { publishBundle } = await import('../utils/skillBundlesCloud');
         const result = await publishBundle(ctx.projectPath, slug, { isPublic });
         if (!result.ok) { ctx.app.notify(`Publish failed: ${result.error}`); break; }
-        ctx.app.addMessage({
-          role: 'system',
-          content: `Published \`${slug}\` (${isPublic ? 'public' : 'private'}) to codeep.dev. Install elsewhere with \`/skills install ${result.skill?.owner_username ?? '<you>'}/${slug}\`.`,
-        });
+        ctx.app.addMessage({ role: 'system', content: formatSkillsPublishResult(slug, isPublic, result.skill?.owner_username) });
         break;
       }
 
@@ -1774,7 +1823,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         if (!result.ok) { ctx.app.notify(`Browse failed: ${result.error}`); break; }
         const skills = result.skills ?? [];
         if (skills.length === 0) {
-          ctx.app.addMessage({ role: 'system', content: query ? `_No public skills matching "${query}"._` : '_No public skills published yet._' });
+          ctx.app.addMessage({ role: 'system', content: formatSkillsBrowseEmpty(query) });
           break;
         }
         const lines = [`# ${query ? `Skills matching "${query}"` : 'Public skills'}`, ''];
@@ -1977,7 +2026,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         if (profiles.length === 0) {
           ctx.app.notify('No profiles saved. Use /profile save <name>');
         } else {
-          ctx.app.addMessage({ role: 'system', content: `## Profiles\n\n${profiles.map(p => `- ${p}`).join('\n')}\n\nUse /profile load <name> to apply.` } as Message);
+        ctx.app.addMessage({ role: 'system', content: formatProfileList(profiles) } as Message);
         }
         break;
       }
@@ -2106,55 +2155,15 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
     case 'stats': {
       const { getCostBreakdown, getSessionStats, formatTokenCount, getPricingTable, getCacheStats } = await import('../utils/tokenTracker');
       const stats = getSessionStats();
-      const lines: string[] = ['## Session Cost', ''];
-
-      if (stats.requestCount === 0) {
-        lines.push('*No API calls made yet this session.*');
-        lines.push('');
-      } else {
-        lines.push(`Requests: ${stats.requestCount}`);
-        lines.push(`Tokens: ${formatTokenCount(stats.totalTokens)} total (${formatTokenCount(stats.totalPromptTokens)} in / ${formatTokenCount(stats.totalCompletionTokens)} out)`);
-        const breakdown = getCostBreakdown();
-        if (breakdown.length > 0) {
-          lines.push('');
-          lines.push('### By model');
-          for (const b of breakdown) {
-            const isFree = b.provider === 'ollama';
-            const costStr = isFree ? 'free' : b.estimatedCost > 0 ? `~$${b.estimatedCost.toFixed(4)}` : '(no pricing data)';
-            lines.push(`- **${b.model}** (${b.provider}): ${formatTokenCount(b.promptTokens)} in / ${formatTokenCount(b.completionTokens)} out — ${costStr}`);
-          }
-          lines.push('');
-          const currentProvider = config.get('provider');
-          if (currentProvider === 'ollama') {
-            lines.push(`**Total: free · ${formatTokenCount(stats.totalTokens)} tokens**`);
-          } else if (stats.estimatedCost > 0) {
-            lines.push(`**Total: ~$${stats.estimatedCost.toFixed(4)}**`);
-          }
-        }
-        // Prompt caching — parity with /cost (the 2.0.2 caching section was
-        // only wired into formatCostReport). Shown only when caching landed.
-        const cache = getCacheStats();
-        if (cache.cacheReadTokens > 0 || cache.cacheCreationTokens > 0) {
-          lines.push('', '### Prompt caching');
-          lines.push(`Cache reads: ${formatTokenCount(cache.cacheReadTokens)} tokens (billed at 0.1× input rate)`);
-          if (cache.cacheCreationTokens > 0) {
-            lines.push(`Cache writes: ${formatTokenCount(cache.cacheCreationTokens)} tokens (billed at 1.25× input rate)`);
-          }
-          if (cache.estimatedSavingsUsd > 0) {
-            lines.push(`Estimated savings vs no caching: $${cache.estimatedSavingsUsd.toFixed(4)}`);
-          }
-        }
-        lines.push('');
-      }
-
-      lines.push('### Pricing (per 1M tokens)');
-      lines.push('| Model | Input | Output |');
-      lines.push('|---|---|---|');
-      for (const p of getPricingTable()) {
-        lines.push(`| ${p.model} | $${p.inputPer1M.toFixed(3)} | $${p.outputPer1M.toFixed(3)} |`);
-      }
-
-      ctx.app.addMessage({ role: 'system', content: lines.join('\n') } as Message);
+      const content = formatStatsReport({
+        totals: stats,
+        breakdown: getCostBreakdown(),
+        cache: getCacheStats(),
+        pricing: getPricingTable(),
+        currentProvider: config.get('provider'),
+        fmt: formatTokenCount,
+      });
+      ctx.app.addMessage({ role: 'system', content } as Message);
       break;
     }
 
@@ -2174,8 +2183,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         if (intelligence.notes.length === 0) {
           ctx.app.notify('No memory notes. Add one with: /memory <note>');
         } else {
-          const lines = intelligence.notes.map((n, i) => `  ${i + 1}. ${n}`).join('\n');
-          ctx.app.addMessage({ role: 'assistant', content: `**Project memory notes:**\n${lines}` });
+          ctx.app.addMessage({ role: 'assistant', content: formatMemoryList(intelligence.notes) });
         }
         break;
       }
@@ -2218,6 +2226,29 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
     case 'commands': {
       const { loadCustomCommands, formatCommandList } = await import('../utils/customCommands');
       ctx.app.addMessage({ role: 'system', content: formatCommandList(loadCustomCommands(ctx.projectPath)) });
+      break;
+    }
+
+    case 'web-cache': {
+      const sub = args[0]?.toLowerCase();
+      const { clearWebCache, webCacheStats } = await import('../utils/webFetch');
+      if (sub === 'clear' || sub === 'reset' || sub === 'flush') {
+        clearWebCache();
+        ctx.app.notify('Web cache cleared');
+      } else {
+        const stats = webCacheStats();
+        ctx.app.addMessage({
+          role: 'system',
+          content: [
+            '🌐 Web fetch cache',
+            '',
+            `  Entries: ${stats.entries}/${stats.maxEntries}`,
+            `  TTL:     ${stats.ttlMinutes} min`,
+            '',
+            'Usage: /web-cache clear',
+          ].join('\n'),
+        });
+      }
       break;
     }
 
@@ -2375,12 +2406,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         ctx.app.notify('Reloading MCP server config…');
         const merged = loadMcpServerConfig(projectPath!);
         const { registered, errors } = await registerSessionServers(TUI_SESSION, merged, { workspaceRoot: projectPath });
-        const lines = [`## MCP reloaded`, '', `**${registered.length}** tool${registered.length === 1 ? '' : 's'} from **${merged.length}** server${merged.length === 1 ? '' : 's'}.`];
-        if (errors.length > 0) {
-          lines.push('', '### Failed servers');
-          for (const e of errors) lines.push(`- **${e.server}** — \`${e.error}\``);
-        }
-        ctx.app.addMessage({ role: 'system', content: lines.join('\n') });
+        ctx.app.addMessage({ role: 'system', content: formatMcpReloadReport(registered.length, merged.length, errors) });
         break;
       }
 
@@ -2388,22 +2414,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         const { getSessionResources, awaitSessionReady } = await import('../utils/mcpRegistry');
         await awaitSessionReady(TUI_SESSION);
         const groups = await getSessionResources(TUI_SESSION);
-        if (groups.length === 0) {
-          ctx.app.addMessage({ role: 'system', content: '_No MCP server in this session exposes resources._' });
-          break;
-        }
-        const lines = ['## MCP resources', ''];
-        for (const g of groups) {
-          lines.push(`**${g.serverName}** — ${g.resources.length} resource${g.resources.length === 1 ? '' : 's'}`);
-          for (const r of g.resources) {
-            const label = r.name ? `${r.name} — ` : '';
-            const mime = r.mimeType ? ` (${r.mimeType})` : '';
-            lines.push(`- ${label}\`${r.uri}\`${mime}${r.description ? ` — ${r.description}` : ''}`);
-          }
-          lines.push('');
-        }
-        lines.push('Read one with `/mcp read <uri>`.');
-        ctx.app.addMessage({ role: 'system', content: lines.join('\n').trim() });
+        ctx.app.addMessage({ role: 'system', content: formatMcpResourcesList(groups) });
         break;
       }
 
@@ -2413,22 +2424,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         const { readSessionResource } = await import('../utils/mcpRegistry');
         try {
           const contents = await readSessionResource(TUI_SESSION, uri);
-          if (contents.length === 0) {
-            ctx.app.addMessage({ role: 'system', content: `_No content returned for \`${uri}\`._` });
-            break;
-          }
-          const lines: string[] = [`## Resource: \`${uri}\``, ''];
-          for (const c of contents) {
-            if (c.text !== undefined) {
-              const fence = c.mimeType?.includes('json') ? 'json' : c.mimeType?.includes('markdown') ? 'markdown' : '';
-              lines.push('```' + fence);
-              lines.push(c.text);
-              lines.push('```');
-            } else if (c.blob) {
-              lines.push(`_(${c.mimeType ?? 'binary'} blob, ${c.blob.length} base64 chars — not rendered)_`);
-            }
-          }
-          ctx.app.addMessage({ role: 'system', content: lines.join('\n') });
+          ctx.app.addMessage({ role: 'system', content: formatMcpResourceRead(uri, contents) });
         } catch (err) {
           ctx.app.addMessage({ role: 'system', content: `Failed to read \`${uri}\`: ${(err as Error).message}` });
         }
@@ -2439,23 +2435,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         const { getSessionPrompts, awaitSessionReady } = await import('../utils/mcpRegistry');
         await awaitSessionReady(TUI_SESSION);
         const groups = await getSessionPrompts(TUI_SESSION);
-        if (groups.length === 0) {
-          ctx.app.addMessage({ role: 'system', content: '_No MCP server in this session exposes prompt templates._' });
-          break;
-        }
-        const lines = ['## MCP prompt templates', ''];
-        for (const g of groups) {
-          lines.push(`**${g.serverName}** — ${g.prompts.length} prompt${g.prompts.length === 1 ? '' : 's'}`);
-          for (const p of g.prompts) {
-            const argList = p.arguments?.length
-              ? ` (${p.arguments.map(a => a.required ? a.name : `[${a.name}]`).join(', ')})`
-              : '';
-            lines.push(`- \`${p.name}\`${argList}${p.description ? ` — ${p.description}` : ''}`);
-          }
-          lines.push('');
-        }
-        lines.push('Materialise one with `/mcp prompt <server> <name> [key=value...]`.');
-        ctx.app.addMessage({ role: 'system', content: lines.join('\n').trim() });
+        ctx.app.addMessage({ role: 'system', content: formatMcpPromptsList(groups) });
         break;
       }
 
@@ -2466,23 +2446,11 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
           ctx.app.addMessage({ role: 'system', content: 'Usage: `/mcp prompt <server> <name> [key=value ...]`' });
           break;
         }
-        const promptArgs: Record<string, string> = {};
-        for (const tok of args.slice(3)) {
-          const eq = tok.indexOf('=');
-          if (eq > 0) promptArgs[tok.slice(0, eq)] = tok.slice(eq + 1);
-        }
+        const promptArgs = parsePromptArgs(args.slice(3));
         const { getSessionPrompt } = await import('../utils/mcpRegistry');
         try {
           const { description, messages } = await getSessionPrompt(TUI_SESSION, serverName, name, promptArgs);
-          const lines: string[] = [`## Prompt \`${serverName}/${name}\``];
-          if (description) lines.push(`_${description}_`);
-          lines.push('');
-          for (const m of messages) {
-            const text = typeof m.content?.text === 'string' ? m.content.text : JSON.stringify(m.content);
-            lines.push(`**${m.role}:** ${text}`);
-            lines.push('');
-          }
-          ctx.app.addMessage({ role: 'system', content: lines.join('\n').trim() });
+          ctx.app.addMessage({ role: 'system', content: formatMcpPromptResult(serverName, name, description, messages) });
         } catch (err) {
           ctx.app.addMessage({ role: 'system', content: `Failed to materialise prompt: ${(err as Error).message}` });
         }
@@ -2494,41 +2462,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       await awaitSessionReady(TUI_SESSION);
       const tools = await getSessionTools(TUI_SESSION);
       const mcpErrors = getSessionRegistrationErrors(TUI_SESSION);
-
-      if (tools.length === 0 && mcpErrors.length === 0) {
-        ctx.app.addMessage({
-          role: 'system',
-          content: [
-            '_No MCP servers connected to this session._',
-            '',
-            'Add one with `/mcp add <name> <command> [args...]` — it persists to `.codeep/mcp_servers.json`.',
-            'Or browse the marketplace with `/mcp browse` and install with `/mcp install <id>`.',
-          ].join('\n'),
-        });
-        break;
-      }
-
-      const lines: string[] = ['## MCP servers', ''];
-      if (tools.length > 0) {
-        const byServer = new Map<string, typeof tools>();
-        for (const t of tools) {
-          if (!byServer.has(t.serverName)) byServer.set(t.serverName, []);
-          byServer.get(t.serverName)!.push(t);
-        }
-        for (const [serverName, serverTools] of byServer) {
-          lines.push(`**${serverName}** — ${serverTools.length} tool${serverTools.length === 1 ? '' : 's'}`);
-          for (const t of serverTools) {
-            const desc = t.description ? ` — ${t.description}` : '';
-            lines.push(`- \`${t.agentName}\`${desc}`);
-          }
-          lines.push('');
-        }
-      }
-      if (mcpErrors.length > 0) {
-        lines.push('### Failed servers');
-        for (const e of mcpErrors) lines.push(`- **${e.server}** — \`${e.error}\``);
-      }
-      ctx.app.addMessage({ role: 'system', content: lines.join('\n').trim() });
+      ctx.app.addMessage({ role: 'system', content: formatMcpServerList(tools, mcpErrors) });
       break;
     }
 

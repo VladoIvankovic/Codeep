@@ -1,4 +1,4 @@
-import { execSync, spawnSync } from 'child_process';
+import { execSync, execFileSync, spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { ActionLog } from './tools';
@@ -484,4 +484,132 @@ export function createBranchAndCommit(
     branch: branchName,
     hash: commitResult.hash,
   };
+}
+
+// ─── @git mention support ────────────────────────────────────────────────────
+
+/**
+ * Result of resolving a `@git <ref>` mention.
+ */
+export interface GitContentResult {
+  success: boolean;
+  /** Raw output from git (diff text, file content, or commit metadata). */
+  content: string;
+  /** A short label for the [Attached files]-style block header. */
+  label: string;
+  error?: string;
+}
+
+/** Max bytes we'll inline from a single `@git` mention. */
+export const MAX_GIT_BYTES = 64 * 1024;
+
+/**
+ * Characters a git ref/pathspec may contain for `@git` mentions. Deliberately
+ * conservative: word chars plus the punctuation real refs use
+ * (`main..feature`, `HEAD~3`, `v1.2.0^{}`, `main:src/x.ts`, `origin/main`).
+ * A leading `-` is rejected separately so a ref can never be read as a flag.
+ */
+const SAFE_GIT_REF = /^[A-Za-z0-9._/:~^@{}-]+$/;
+
+export function isSafeGitRef(token: string): boolean {
+  return token.length > 0 && !token.startsWith('-') && SAFE_GIT_REF.test(token);
+}
+
+/**
+ * The only flags `@git diff …` may pass through. An allowlist rather than a
+ * deny-list because several git flags write files or run commands
+ * (`--output=`, `--ext-diff`), which would turn a mention into a side effect.
+ */
+const GIT_DIFF_FLAG_ALLOWLIST = new Set([
+  '--staged', '--cached', '--stat', '--numstat', '--shortstat',
+  '--name-only', '--name-status', '--patch', '-p', '--no-color',
+]);
+
+/**
+ * Resolve a `@git <ref>` mention to inline content. The `ref` can be:
+ *
+ * - `diff`           — unstaged changes (`git diff`)
+ * - `diff --staged`  — staged changes (`git diff --cached`)
+ * - `diff a..b`      — diff between two refs (`git diff a..b`)
+ * - `HEAD`           — the latest commit's full diff vs its parent
+ * - `<sha>`          — a specific commit's patch (`git show <sha>`)
+ * - `<ref>:<path>`   — a file at a ref (`git show main:src/x.ts`)
+ * - `<ref>`          — any other git ref → `git show`
+ *
+ * Sync (spawn-based) so it slots into the mention-expansion pipeline.
+ */
+export function getGitContent(ref: string, cwd: string = process.cwd()): GitContentResult {
+  if (!isGitRepository(cwd)) {
+    return { success: false, content: '', label: ref, error: 'not a git repository' };
+  }
+
+  const trimmed = ref.trim();
+  if (!trimmed) {
+    return { success: false, content: '', label: ref, error: 'empty git ref' };
+  }
+
+  // Pick the git subcommand based on the ref shape. NOTE: the ref comes from
+  // free-form prompt text (`@git <ref>`), which may be pasted from an issue,
+  // a log, or model output — so it is UNTRUSTED. We therefore (a) build an
+  // argv array and spawn git directly with `execFileSync` (no `/bin/sh`, so
+  // `;`, `|`, backticks and friends are inert), and (b) validate every token,
+  // because argv alone doesn't stop *argument* injection — a ref that starts
+  // with `-` would still be read by git as a flag (e.g. `--output=…` writes a
+  // file). Anything unrecognized is rejected rather than guessed at.
+  let args: string[];
+  let label: string;
+
+  if (trimmed === 'diff') {
+    args = ['diff'];
+    label = 'diff (unstaged)';
+  } else if (trimmed === 'diff --staged' || trimmed === 'diff --cached' || trimmed === 'staged') {
+    args = ['diff', '--cached'];
+    label = 'diff (staged)';
+  } else if (trimmed.startsWith('diff ')) {
+    // e.g. `diff main..feature` or `diff HEAD~3` or `diff --stat`
+    const rest = trimmed.slice('diff '.length).trim();
+    const tokens = rest.split(/\s+/).filter(Boolean);
+    const bad = tokens.find(t => !(isSafeGitRef(t) || GIT_DIFF_FLAG_ALLOWLIST.has(t)));
+    if (bad) {
+      return { success: false, content: '', label: ref, error: `unsupported git argument: ${bad}` };
+    }
+    args = ['diff', ...tokens];
+    label = `diff (${rest})`;
+  } else if (trimmed === 'HEAD' || trimmed === '@') {
+    // Show the latest commit's patch.
+    args = ['show', 'HEAD'];
+    label = 'HEAD';
+  } else {
+    // Any other ref → `git show`. Works for SHAs, tags, branches, and
+    // `<ref>:<path>` (file-at-ref) forms.
+    if (!isSafeGitRef(trimmed)) {
+      return { success: false, content: '', label: ref, error: `unsupported git ref: ${trimmed}` };
+    }
+    args = ['show', trimmed];
+    label = trimmed;
+  }
+
+  try {
+    const out = execFileSync('git', args, {
+      cwd,
+      encoding: 'utf-8',
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    const content = (out ?? '').trimEnd();
+    if (!content) {
+      return { success: false, content: '', label, error: 'empty result (no changes / unknown ref)' };
+    }
+    // Truncate to the cap so a massive diff can't blow the context.
+    const capped = content.length > MAX_GIT_BYTES
+      ? content.slice(0, MAX_GIT_BYTES) + `\n\n… (truncated at ${MAX_GIT_BYTES / 1024}KB)`
+      : content;
+    return { success: true, content: capped, label };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    // git show exits non-zero on unknown refs; surface a friendly reason.
+    const reason = /unknown revision|bad revision|ambiguous argument/i.test(msg)
+      ? `unknown git ref: ${trimmed}`
+      : msg;
+    return { success: false, content: '', label, error: reason };
+  }
 }

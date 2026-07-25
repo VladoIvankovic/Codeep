@@ -500,3 +500,115 @@ export function getDiffStats(diffs: FileDiff[]): DiffPreviewResult {
     totalFiles: diffs.length,
   };
 }
+
+// ─── Selective apply (per-hunk accept/reject) ───────────────────────────────
+
+/**
+ * Apply a subset of a file diff's hunks to the original content.
+ *
+ * Hunk indices in `acceptedHunks` refer to positions in `diff.hunks`
+ * (0-based). Hunks not in the set are skipped — their original lines
+ * stay, their additions are dropped.
+ *
+ * Returns the resulting file content. The caller writes it to disk.
+ *
+ * For `type === 'create'`, the whole file is either accepted (any hunk
+ * accepted) or rejected (empty set) — there's no original to merge
+ * against. For `type === 'delete'`, accepting any hunk deletes the file.
+ */
+export function applyHunks(
+  diff: FileDiff,
+  acceptedHunks: Set<number>,
+): string {
+  // Create: accept-all-or-nothing — there's no original content to
+  // selectively merge into.
+  if (diff.type === 'create') {
+    return acceptedHunks.size > 0 ? (diff.newContent ?? '') : (diff.oldContent ?? '');
+  }
+
+  const oldLines = (diff.oldContent ?? '').split('\n');
+
+  // No accepted hunks → original content unchanged.
+  if (acceptedHunks.size === 0) {
+    return oldLines.join('\n');
+  }
+
+  const acceptedHunkList = diff.hunks
+    .map((h, i) => ({ hunk: h, index: i }))
+    .filter(({ index }) => acceptedHunks.has(index));
+
+  // Per-original-line union model.
+  //
+  // The obvious implementation — walk the hunks in order, copying original
+  // lines between them and replaying each hunk's line list — is wrong for
+  // hunks that sit close together, because unified-diff context OVERLAPS:
+  // hunk N's trailing context is hunk N+1's leading context, so the shared
+  // lines get emitted twice. Worse, with a small gap a later hunk's `remove`
+  // can fall *inside* an earlier hunk's already-emitted context, so the
+  // deletion is silently lost. Both corrupt the user's file on `/apply`.
+  //
+  // Instead reduce every accepted hunk to two facts per original line — is it
+  // removed, and what is inserted after it — then rebuild the file once.
+  // Overlap becomes a set union rather than double emission, and the result
+  // is independent of hunk order.
+  const removed = new Set<number>();               // old line numbers deleted
+  const insertAfter = new Map<number, string[]>(); // old line number → inserted lines (0 = file head)
+
+  for (const { hunk } of acceptedHunkList) {
+    // Adds before any context in this hunk belong right before its start,
+    // not at the top of the file.
+    let anchor = Math.max(0, hunk.oldStart - 1);
+    for (const line of hunk.lines) {
+      if (line.type === 'add') {
+        const at = insertAfter.get(anchor);
+        if (at) at.push(line.content);
+        else insertAfter.set(anchor, [line.content]);
+        continue;
+      }
+      if (line.oldLineNum === undefined) continue;
+      anchor = line.oldLineNum;
+      if (line.type === 'remove') removed.add(line.oldLineNum);
+    }
+  }
+
+  const result: string[] = [];
+  for (const head of insertAfter.get(0) ?? []) result.push(head);
+  for (let n = 1; n <= oldLines.length; n++) {
+    if (!removed.has(n)) result.push(oldLines[n - 1]);
+    const added = insertAfter.get(n);
+    if (added) for (const line of added) result.push(line);
+  }
+
+  return result.join('\n');
+}
+
+/**
+ * Apply accepted hunks across multiple file diffs and return the
+ * resulting content for each. The caller writes the files to disk.
+ *
+ * `accepted` maps file path → set of accepted hunk indices. Files not
+ * in the map are skipped entirely.
+ */
+export function applyHunksToFiles(
+  diffs: FileDiff[],
+  accepted: Map<string, Set<number>>,
+): Array<{ path: string; content: string; type: FileDiff['type'] }> {
+  const results: Array<{ path: string; content: string; type: FileDiff['type'] }> = [];
+  for (const diff of diffs) {
+    const acceptedSet = accepted.get(diff.path);
+    if (!acceptedSet) continue;
+    const content = applyHunks(diff, acceptedSet);
+    results.push({ path: diff.path, content, type: diff.type });
+  }
+  return results;
+}
+
+/**
+ * Count how many hunks in a diff contain actual changes (not just
+ * context). Used to label hunks in the UI ("hunk 2/5").
+ */
+export function countChangeHunks(diff: FileDiff): number {
+  return diff.hunks.filter(
+    (h) => h.lines.some((l) => l.type === 'add' || l.type === 'remove'),
+  ).length;
+}

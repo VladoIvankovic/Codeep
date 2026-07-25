@@ -11,7 +11,8 @@ import { PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES, LOGO_HEIGHT } from './compon
 import { bottomPanelHeight, chatLayout, messageOffsets, scrollOffsetForTarget, scrollWindow, formatTokenCount, statusBarRightHint, activePanel, computeInputDisplay, agentProgressBar, truncateNotification, shouldShowPasteDialog, buildPasteInfo, type LayoutSnapshot } from './layout';
 import { parseCommandInput } from './inputParsing';
 import { formatWelcomeMessage } from './components/WelcomeFormatter';
-import { filterCommands } from './components/Autocomplete';
+import { filterCommands, detectMentionQuery } from './components/Autocomplete';
+import { suggestMentions } from '../utils/mentions';
 import {
   handleInlineStatusKey,
   handleInlineHelpKey,
@@ -63,6 +64,36 @@ export interface ConfirmOptions {
   onCancel?: () => void;
 }
 
+/**
+ * One hunk in the interactive `/apply --interactive` picker.
+ * `lines` are already-formatted diff lines (e.g. `+ added`, `- removed`).
+ */
+export interface HunkPickerItem {
+  /** File path this hunk belongs to. */
+  path: string;
+  /** 0-based hunk index within the file diff. */
+  hunkIndex: number;
+  /** Human-readable hunk header, e.g. `@@ -12,3 +12,5 @@`. */
+  header: string;
+  /** Pre-formatted diff lines to display. */
+  lines: string[];
+}
+
+/**
+ * Options for the interactive hunk picker. The picker walks the user
+ * through `items` one at a time; for each they accept (`y`/Enter) or
+ * skip (`n`). `a` accepts all remaining, `q`/Esc quits.
+ *
+ * `onComplete` fires once with the set of accepted `[path, hunkIndex]`
+ * pairs (possibly empty) so the caller can apply them via
+ * `applyHunksToFiles`.
+ */
+export interface HunkPickerOptions {
+  title: string;
+  items: HunkPickerItem[];
+  onComplete: (accepted: Array<{ path: string; hunkIndex: number }>) => void;
+}
+
 export interface AppOptions {
   onSubmit: (message: string) => Promise<void>;
   onCommand: (command: string, args: string[]) => void;
@@ -72,6 +103,8 @@ export interface AppOptions {
   getStatus: () => StatusInfo;
   hasWriteAccess?: () => boolean;
   hasProjectContext?: () => boolean;
+  /** Project root for `@mention` autocomplete suggestions. Falls back to cwd. */
+  getProjectRoot?: () => string;
 }
 
 export class App {
@@ -133,11 +166,29 @@ export class App {
   private showAutocomplete = false;
   private autocompleteIndex = 0;
   private autocompleteItems: string[] = [];
+
+  // `@mention` autocomplete state — separate from the `/command` picker
+  // because mentions appear mid-sentence (not just at the start) and
+  // insert a file path (not a slash command). `mentionAtStart` is the
+  // index of the `@` in the editor value, used to replace `@query` with
+  // `@selectedPath` on Tab/Enter.
+  private showMentionAutocomplete = false;
+  private mentionIndex = 0;
+  private mentionItems: import('../utils/mentions').MentionSuggestion[] = [];
+  private mentionAtStart = 0;
+  /** Project root for resolving `suggestMentions`. Cached per update. */
+  private mentionRoot = '';
   
   // Inline confirmation dialog state
   private confirmOpen = false;
   private confirmOptions: ConfirmOptions | null = null;
   private confirmSelection: 'yes' | 'no' | 'extra' = 'no';
+
+  // Inline hunk-picker state (`/apply --interactive`)
+  private hunkPickerOpen = false;
+  private hunkPickerOptions: HunkPickerOptions | null = null;
+  private hunkPickerIndex = 0;
+  private hunkPickerAccepted: Array<{ path: string; hunkIndex: number }> = [];
   
   // Inline menu state (renders below input/status)
   private menuOpen = false;
@@ -616,6 +667,18 @@ export class App {
     this.confirmOpen = true;
     this.scheduleRender();
   }
+
+  /**
+   * Show the interactive hunk picker (`/apply --interactive`).
+   * The caller passes pre-built items + an `onComplete` callback.
+   */
+  showHunkPicker(options: HunkPickerOptions): void {
+    this.hunkPickerOptions = options;
+    this.hunkPickerIndex = 0;
+    this.hunkPickerAccepted = [];
+    this.hunkPickerOpen = true;
+    this.scheduleRender();
+  }
   
   /**
    * Show permission dialog (inline, below status bar)
@@ -863,6 +926,7 @@ export class App {
       loginOpen: this.loginOpen,
       menuOpen: this.menuOpen,
       showAutocomplete: this.showAutocomplete,
+      hunkPickerOpen: this.hunkPickerOpen,
     })) {
       case 'pasteInfo':      this.handlePasteInfoKey(event); return;
       case 'permission':     this.handleInlinePermissionKey(event); return;
@@ -876,6 +940,7 @@ export class App {
       case 'logout':         this.handleLogoutKey(event); return;
       case 'login':          this.handleLoginKey(event); return;
       case 'menu':           this.handleMenuKey(event); return;
+      case 'hunkPicker':     this.handleHunkPickerKey(event); return;
     }
 
     // If intro is playing, skip on any key.
@@ -886,6 +951,11 @@ export class App {
 
     // Escape to cancel streaming/loading/agent or close autocomplete
     if (event.key === 'escape') {
+      if (this.showMentionAutocomplete) {
+        this.showMentionAutocomplete = false;
+        this.scheduleRender();
+        return;
+      }
       if (this.showAutocomplete) {
         this.showAutocomplete = false;
         this.scheduleRender();
@@ -908,7 +978,7 @@ export class App {
       return;
     }
     
-    // Handle autocomplete navigation
+    // Handle autocomplete navigation (`/command` picker)
     if (this.showAutocomplete) {
       if (event.key === 'up') {
         this.autocompleteIndex = Math.max(0, this.autocompleteIndex - 1);
@@ -926,6 +996,29 @@ export class App {
           const selected = this.autocompleteItems[this.autocompleteIndex];
           this.editor.setValue('/' + selected + ' ');
           this.showAutocomplete = false;
+          this.scheduleRender();
+          return;
+        }
+      }
+    }
+
+    // Handle `@mention` autocomplete navigation
+    if (this.showMentionAutocomplete) {
+      if (event.key === 'up') {
+        this.mentionIndex = Math.max(0, this.mentionIndex - 1);
+        this.scheduleRender();
+        return;
+      }
+      if (event.key === 'down') {
+        this.mentionIndex = Math.min(this.mentionItems.length - 1, this.mentionIndex + 1);
+        this.scheduleRender();
+        return;
+      }
+      if (event.key === 'tab') {
+        // Replace `@query` with `@selectedPath` in the editor.
+        if (this.mentionItems.length > 0) {
+          this.applyMentionSelection();
+          this.showMentionAutocomplete = false;
           this.scheduleRender();
           return;
         }
@@ -1085,7 +1178,12 @@ export class App {
    * Update autocomplete suggestions
    */
   private updateAutocomplete(): void {
-    const result = filterCommands(this.editor.getValue(), App.COMMANDS);
+    const value = this.editor.getValue();
+    const cursorPos = this.editor.getCursorPos();
+
+    // `/command` picker — only when the input starts with `/` and the
+    // cursor is in the command-name segment (no space yet).
+    const result = filterCommands(value, App.COMMANDS);
     if (result === null) {
       this.showAutocomplete = false;
       this.autocompleteItems = [];
@@ -1094,6 +1192,46 @@ export class App {
       this.showAutocomplete = result.items.length > 0;
       this.autocompleteIndex = result.index;
     }
+
+    // `@mention` picker — detect an in-progress mention at the cursor.
+    // Independent of the `/` picker so the two never compete.
+    const mention = detectMentionQuery(value, cursorPos);
+    if (mention) {
+      const root = this.options.getProjectRoot?.() ?? process.cwd();
+      this.mentionRoot = root;
+      this.mentionAtStart = mention.atStart;
+      this.mentionItems = suggestMentions({ root, query: mention.query, limit: 10 });
+      this.showMentionAutocomplete = this.mentionItems.length > 0;
+      this.mentionIndex = 0;
+    } else {
+      this.showMentionAutocomplete = false;
+      this.mentionItems = [];
+    }
+  }
+
+  /**
+   * Replace the in-progress `@query` (from `mentionAtStart` to the
+   * cursor) with the selected mention's path. Keeps the `@` prefix and
+   * positions the cursor right after the inserted path so the user can
+   * keep typing the rest of the message.
+   */
+  private applyMentionSelection(): void {
+    if (this.mentionItems.length === 0) return;
+    const selected = this.mentionItems[this.mentionIndex];
+    const value = this.editor.getValue();
+    const cursor = this.editor.getCursorPos();
+    if (this.mentionAtStart >= value.length) return;
+    // `mentionAtStart` is the index OF the `@`, so this slice EXCLUDES it —
+    // re-add the sigil or the completed path is no longer a mention and the
+    // file never gets attached.
+    const before = value.slice(0, this.mentionAtStart) + '@';
+    const after = value.slice(cursor);
+    const next = before + selected.insertPath + ' ' + after;
+    this.editor.setValue(next);
+    const newCursor = (before + selected.insertPath + ' ').length;
+    this.editor.setCursorPos(newCursor);
+    // The picker may still have matches for the new prefix — refresh.
+    this.updateAutocomplete();
   }
   
   /**
@@ -1323,6 +1461,86 @@ export class App {
       render: () => this.scheduleRender(),
     });
   }
+
+  /**
+   * Handle keys in the interactive hunk picker.
+   *   y / Enter / →  accept this hunk, advance
+   *   n / ←         skip this hunk, advance
+   *   a             accept this + all remaining, finish
+   *   q / Esc       finish without accepting this hunk
+   *   ↑ / ↓         navigate (preview only — no decision)
+   */
+  private handleHunkPickerKey(event: KeyEvent): void {
+    const opts = this.hunkPickerOptions;
+    if (!opts) {
+      this.hunkPickerOpen = false;
+      this.scheduleRender();
+      return;
+    }
+    const finish = () => {
+      const accepted = this.hunkPickerAccepted;
+      const cb = opts.onComplete;
+      this.hunkPickerOptions = null;
+      this.hunkPickerOpen = false;
+      this.hunkPickerAccepted = [];
+      this.hunkPickerIndex = 0;
+      cb(accepted);
+      this.scheduleRender();
+    };
+    const advance = () => {
+      if (this.hunkPickerIndex >= opts.items.length - 1) {
+        finish();
+      } else {
+        this.hunkPickerIndex++;
+        this.scheduleRender();
+      }
+    };
+    const acceptCurrent = () => {
+      const item = opts.items[this.hunkPickerIndex];
+      if (item) {
+        this.hunkPickerAccepted.push({ path: item.path, hunkIndex: item.hunkIndex });
+      }
+      advance();
+    };
+
+    switch (event.key) {
+      case 'y':
+      case 'enter':
+      case 'right':
+        acceptCurrent();
+        return;
+      case 'n':
+      case 'left':
+        advance();
+        return;
+      case 'a':
+        // Accept current + all remaining.
+        for (let i = this.hunkPickerIndex; i < opts.items.length; i++) {
+          const item = opts.items[i];
+          this.hunkPickerAccepted.push({ path: item.path, hunkIndex: item.hunkIndex });
+        }
+        finish();
+        return;
+      case 'q':
+      case 'escape':
+        finish();
+        return;
+      case 'up':
+        if (this.hunkPickerIndex > 0) {
+          this.hunkPickerIndex--;
+          this.scheduleRender();
+        }
+        return;
+      case 'down':
+        if (this.hunkPickerIndex < opts.items.length - 1) {
+          this.hunkPickerIndex++;
+          this.scheduleRender();
+        }
+        return;
+      default:
+        return;
+    }
+  }
   
   /**
    * Submit the current input buffer (used by Enter and Escape-in-multiline)
@@ -1436,6 +1654,7 @@ export class App {
       pasteInfoPreviewLines: this.pasteInfo ? this.pasteInfo.preview.split('\n').length : 0,
       isAgentRunning: this.isAgentRunning,
       confirmOpen: this.confirmOpen && !!this.confirmOptions,
+      hunkPickerOpen: this.hunkPickerOpen && !!this.hunkPickerOptions,
       permissionOpen: this.permissionOpen,
       sessionPickerOpen: this.sessionPickerOpen,
       sessionPickerItemCount: this.sessionPickerItems.length,
@@ -1456,6 +1675,8 @@ export class App {
       settingsCount: SETTINGS.length,
       showAutocomplete: this.showAutocomplete,
       autocompleteItemCount: this.autocompleteItems.length,
+      mentionPickerOpen: this.showMentionAutocomplete,
+      mentionItemCount: this.mentionItems.length,
     } satisfies LayoutSnapshot);
     const layout = chatLayout(height, panelHeight);
     const mainHeight = layout.mainHeight;
@@ -1536,10 +1757,17 @@ export class App {
     if (this.confirmOpen && this.confirmOptions) {
       this.renderInlineConfirm(statusLine + 1, width);
     }
+
+    // Inline hunk picker renders BELOW status bar
+    if (this.hunkPickerOpen && this.hunkPickerOptions) {
+      this.renderInlineHunkPicker(statusLine + 1, width);
+    }
     
     // Inline autocomplete renders BELOW status bar
     if (this.showAutocomplete && this.autocompleteItems.length > 0 && !this.menuOpen && !this.settingsOpen && !this.helpOpen && !this.confirmOpen && !this.permissionOpen && !this.sessionPickerOpen) {
       this.renderInlineAutocomplete(statusLine + 1, width);
+    } else if (this.showMentionAutocomplete && this.mentionItems.length > 0 && !this.menuOpen && !this.settingsOpen && !this.helpOpen && !this.confirmOpen && !this.permissionOpen && !this.sessionPickerOpen) {
+      this.renderInlineMentionPicker(statusLine + 1, width);
     }
     
     // Inline permission renders BELOW status bar
@@ -1609,6 +1837,56 @@ export class App {
 
     // Footer
     this.screen.writeLine(y, '←/→ select • y/n quick • Enter confirm • Esc cancel', fg.gray);
+  }
+
+  /**
+   * Render inline hunk picker (`/apply --interactive`).
+   * Shows the current hunk's diff + the y/n/a/q key legend.
+   */
+  private renderInlineHunkPicker(startY: number, width: number): void {
+    const opts = this.hunkPickerOptions;
+    if (!opts) return;
+    const item = opts.items[this.hunkPickerIndex];
+
+    let y = startY;
+    this.screen.horizontalLine(y++, '─', PRIMARY_COLOR);
+
+    // Title + progress
+    const progress = opts.items.length > 0
+      ? ` (${this.hunkPickerIndex + 1}/${opts.items.length})`
+      : '';
+    this.screen.writeLine(y++, `${opts.title}${progress}`, PRIMARY_COLOR + style.bold);
+
+    if (!item) {
+      this.screen.writeLine(y++, 'No hunks to review.', fg.gray);
+      this.screen.writeLine(y, 'Press any key to close.', fg.gray);
+      return;
+    }
+
+    // File path + hunk header
+    this.screen.writeLine(y++, `File: ${item.path}`, fg.cyan);
+    this.screen.writeLine(y++, `Hunk: ${item.header}`, fg.gray);
+
+    // Diff lines (capped to available vertical space; show up to 12)
+    const maxDiffLines = 12;
+    const lines = item.lines.slice(0, maxDiffLines);
+    for (const line of lines) {
+      const prefix = line.charAt(0);
+      let color = fg.white;
+      if (prefix === '+') color = fg.green;
+      else if (prefix === '-') color = fg.red;
+      else if (prefix === '@') color = fg.cyan;
+      // Truncate long lines to terminal width.
+      const truncated = line.length > width - 2 ? line.slice(0, width - 5) + '...' : line;
+      this.screen.writeLine(y++, `  ${truncated}`, color);
+    }
+    if (item.lines.length > maxDiffLines) {
+      this.screen.writeLine(y++, `  … (${item.lines.length - maxDiffLines} more lines)`, fg.gray);
+    }
+
+    y++;
+    // Key legend
+    this.screen.writeLine(y, 'y/Enter accept • n skip • a accept all • q/Esc quit • ↑/↓ navigate', fg.gray);
   }
   
   /**
@@ -2025,6 +2303,54 @@ export class App {
     // Footer
     const scrollInfo = items.length > maxVisible ? ` (${visibleStart + 1}-${visibleStart + visibleItems.length}/${items.length})` : '';
     this.screen.writeLine(y, `↑↓ navigate • Tab/Enter select • Esc cancel${scrollInfo}`, fg.gray);
+  }
+
+  /**
+   * Render inline `@mention` file picker below the status bar.
+   *
+   * Mirrors the layout of `renderInlineAutocomplete` (separator → title →
+   * items → footer) but shows file paths with their parent directory as
+   * the description, and a `@` prefix instead of `/`.
+   */
+  private renderInlineMentionPicker(startY: number, width: number): void {
+    const items = this.mentionItems;
+    const maxVisible = Math.min(items.length, 8);
+
+    let y = startY;
+
+    // Separator line
+    this.screen.horizontalLine(y++, '─', PRIMARY_COLOR);
+
+    // Title
+    this.screen.writeLine(y++, 'Add file to context (@mention)', PRIMARY_COLOR + style.bold);
+
+    // Items: `path` + directory detail
+    const visibleStart = Math.max(0, this.mentionIndex - maxVisible + 1);
+    const visibleItems = items.slice(visibleStart, visibleStart + maxVisible);
+
+    for (let i = 0; i < visibleItems.length; i++) {
+      const item = visibleItems[i];
+      const actualIndex = visibleStart + i;
+      const isSelected = actualIndex === this.mentionIndex;
+
+      const prefix = isSelected ? '► ' : '  ';
+      const pathText = ('@' + item.label).padEnd(40);
+
+      if (isSelected) {
+        this.screen.write(0, y, prefix, PRIMARY_COLOR);
+        this.screen.write(prefix.length, y, pathText, PRIMARY_COLOR + style.bold);
+        this.screen.write(prefix.length + pathText.length, y, item.detail, fg.white);
+      } else {
+        this.screen.write(0, y, prefix, '');
+        this.screen.write(prefix.length, y, pathText, fg.cyan);
+        this.screen.write(prefix.length + pathText.length, y, item.detail, fg.gray);
+      }
+      y++;
+    }
+
+    // Footer
+    const scrollInfo = items.length > maxVisible ? ` (${visibleStart + 1}-${visibleStart + visibleItems.length}/${items.length})` : '';
+    this.screen.writeLine(y, `↑↓ navigate • Tab select • Esc cancel${scrollInfo}`, fg.gray);
   }
   
   /**

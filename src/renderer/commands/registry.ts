@@ -176,7 +176,7 @@ export const COMMANDS: CommandDef[] = [
   { name: 'copy', description: 'Copy code block to clipboard', category: 'code', usage: ['[n]'] },
   { name: 'paste', description: 'Paste from clipboard', category: 'code' },
   { name: 'apply', description: 'Apply file changes from AI', category: 'code' },
-  { name: 'add', description: 'Add file to context', category: 'code', usage: ['<path>'] },
+  { name: 'add', description: 'Add file to context (or type @path inline)', category: 'code', usage: ['<path>'] },
   { name: 'drop', description: 'Remove file (or all) from context', category: 'code', usage: ['[path]'] },
   { name: 'multiline', description: 'Toggle multi-line input mode', category: 'code' },
 
@@ -251,6 +251,7 @@ export const COMMANDS: CommandDef[] = [
   },
   { name: 'hooks', description: 'List installed lifecycle hooks (.codeep/hooks/<event>.sh)', category: 'extensions' },
   { name: 'commands', description: 'List custom slash commands in .codeep/commands/*.md', category: 'extensions' },
+  { name: 'web-cache', aliases: ['webcache'], description: 'Show @web fetch cache stats (alias: /web-cache clear)', category: 'extensions' },
 
   // ── cloud & account ────────────────────────────────────────────────────────
   { name: 'account', description: 'Link this machine to your codeep.dev account', category: 'cloud' },

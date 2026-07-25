@@ -11,6 +11,263 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.16.0] — 2026-07-25
+
+> `@mentions` inline file context — type `@src/file.ts` anywhere in your message and the file's contents are attached to that message. No more `/add` + `/drop` dance for one-off file references.
+
+### Added
+
+- **Kimi K3** (Moonshot) joins the pay-per-use rosters — `kimi-k3-code` (the
+  new default), `kimi-k3-code-highspeed`, and `kimi-k3-thinking`, on the
+  international and China endpoints. K3 carries a **1M** context window (vs
+  256K on K2.x) and the thinking variant returns explicit reasoning traces;
+  both K3 code models are in the sampling-params guard since they fix
+  temperature internally. The `tokenTracker` context and pricing tables list
+  all three, so the context gauge and cost readout are right — without the
+  entries they fell back to a 128K window, which would have shown the gauge
+  as nearly full at ~1/8 of the real budget and triggered compaction far too
+  early. Pricing follows the Kimi family rate ($0.60/$2.50 per MTok); adjust
+  if Moonshot publishes a different K3 rate.
+- **Claude Opus 5** replaces Claude Opus 4.8 in the Anthropic model list and
+  becomes the default. Same $5/$25 per-MTok pricing and 1M context, with the
+  full `low`→`max` effort ladder. The reasoning-effort gate, the
+  sampling-parameter guard, and the `tokenTracker` context/pricing tables were
+  all updated in lockstep, so `/thinking` and the cost readout are correct for
+  it. (Opus 4.8 still routes correctly if a saved session pins it.)
+
+
+- **`@mentions` inline file context (CLI + Mac).** Type `@path/to/file`
+  anywhere in your message and its contents are loaded as an
+  `[Attached files]` block for that message only — no need to `/add`
+  and remember to `/drop` afterwards. Works alongside the existing
+  `/add` (persistent) and pinned-files (Mac) mechanisms.
+  - Forms: `@src/file.ts` (relative to project root), `@./local.ts`
+    (relative to cwd), `@/abs/path` (absolute), `@~/path` (home),
+    `@"file with space.ts"` / `@'...'` (quoted).
+  - GitHub handles (`@octocat`) and emails (`user@host`) are left
+    untouched — only paths containing `/`, `.`, `_`, or `-` are
+    treated as mentions.
+  - Files over 100 KB are skipped with a warning (same cap as `/add`);
+    binaries (NUL-byte detection) are rejected.
+  - Failures surface inline (`@missing.ts: file not found`) without
+    aborting the message — the agent still sees the rest.
+  - **CLI:** `src/utils/mentions.ts` (+36 tests) — pure parser,
+    integrated into `handleSubmit` in `main.ts`.
+  - **Mac:** `CodeepCore/Agent/MentionExpander.swift` (+14 tests) —
+    byte-for-byte parity with the CLI, integrated into
+    `ChatView.send(agent:)`.
+- **`@mention` autocomplete picker (CLI).** Typing `@` mid-sentence now
+  opens a file picker below the input — arrow keys navigate, Tab
+  inserts the selected path. Skips `node_modules`, `.git`, binaries.
+  Cached per-root (5 s TTL) so keystrokes stay snappy on large repos.
+  - `detectMentionQuery` in `components/Autocomplete.ts` (+11 tests)
+    tracks the cursor inside an in-progress mention.
+  - `suggestMentions` in `utils/mentions.ts` powers the picker; the
+    `/command` and `@mention` pickers never compete (one opens at a
+    time depending on cursor position).
+- **`@web <url>` inline web context (CLI + Mac).** Type
+  `@web https://example.com/docs` (or `@web example.com/docs`) and the
+  page is fetched, converted to readable text, and attached to the
+  message — same `[Web pages]` block shape as file mentions.
+  - Forms: full URLs (`@web https://…`, `@web http://…`) and bare hosts
+    (`@web docs.example.com/api`, auto-`https://`).
+  - HTML is stripped to text (scripts/styles removed, links kept as
+    `text (url)`); plain-text and JSON responses pass through as-is.
+  - Output capped at 32 KB; 12 s fetch timeout; binary/PDF content
+    types rejected with a clear reason.
+  - **CLI:** `src/utils/webFetch.ts` (+33 tests), integrated into
+    `handleSubmit` in `main.ts`.
+  - **Mac:** `CodeepCore/Agent/WebMentionExpander.swift` (+14 tests),
+    integrated into `ChatView.send(agent:)` (now `async`).
+- **`@folder <path>` inline directory context (CLI + Mac).** Type
+  `@folder src/components` (or `@dir …`) and every source file under the
+  directory is loaded recursively into a single `[Attached files]` block,
+  merged with `@file` mentions. Same ignore rules as the autocomplete
+  scanner (`node_modules`, `.git`, binary extensions, dotfiles). 200 KB
+  total cap per mention, 6-level depth limit, deduplicated across
+  overlapping folders. Quoted paths supported: `@folder "my dir"`.
+  - **CLI:** `expandFolderMentions` + `expandFileAndFolderMentions`
+    (merged single-block output) in `utils/mentions.ts` (+21 tests);
+    `main.ts` now calls the combined expander.
+  - **Mac:** `CodeepCore/Agent/FolderMentionExpander.swift` (+13 tests),
+    wired into `ChatView.send` ahead of `@file`/`@web`.
+- **Selective per-hunk apply (CLI + Mac).** The diff pipeline now
+  supports applying a subset of a file diff's hunks, leaving rejected
+  hunks' original lines intact (`git add -p`-style granularity).
+  - **CLI:** `applyHunks` / `applyHunksToFiles` / `countChangeHunks` in
+    `utils/diffPreview.ts` (+17 tests). `/apply` now shows per-file hunk
+    counts and accepts `--only file.ts:0,1 other.ts:2` to apply only
+    the chosen hunks. Without `--only` the original all-or-nothing
+    behavior is unchanged.
+  - **Mac:** `CodeepCore/Agent/HunkApplier.swift` (+11 tests) — same
+    algorithm, Swift-native `FileDiff`/`DiffHunk`/`DiffLine` types.
+    (UI integration — SwiftUI hunk-picker modal — to follow.)
+- **`@git <ref>` inline context (CLI + Mac).** New `@git` mention
+  injects git diffs, commit patches, and file-at-ref content into the
+  prompt as a `[Git ref]` block — same UX family as `@folder`/`@file`/
+  `@web`. Supported forms: `@git diff`, `@git diff --staged` (or
+  `staged`), `@git HEAD` / `@`, `@git <sha>`, `@git main:src/x.ts`
+  (file at ref), `@git diff a..b` (range), or any quoted ref
+  (`@git "diff HEAD~3"`). Capped at 64 KB/mention (truncated with a
+  marker); unknown refs surface a friendly failure note.
+  - **CLI:** `getGitContent` in `utils/git.ts` (+12 tests),
+    `expandGitMentions`/`extractGitMentions` in `utils/mentions.ts`
+    (+11 tests), wired into `main.ts` between `@file`/`@folder` and
+    `@web`.
+  - **Mac:** `CodeepCore/Agent/GitMentionExpander.swift` (+10 tests),
+    wired into `ChatView.send` in the same order.
+- **Interactive hunk picker (`/apply --interactive`).** A `git add -p`-style
+  review modal walks you through each change hunk one at a time. Keys:
+  `y`/Enter accept, `n` skip, `a` accept all remaining, `q`/Esc quit,
+  `↑`/↓ navigate. The chosen hunks are applied via the existing per-hunk
+  apply pipeline. Reuses the modal/state plumbing of the inline
+  `showConfirm` dialog. CLI only (Mac UI modal to follow).
+- **Session web cache (`@web`).** Successful `@web` fetches are now
+  cached for 30 minutes (per session, max 50 entries, LRU eviction)
+  so a second `@web` for the same URL is instant and free. Failures
+  are never cached. New `/web-cache` command (alias `/webcache`) shows
+  stats and `/web-cache clear` resets. URL keys are normalized
+  (lowercased host, trailing slash stripped, fragment dropped) so
+  `example.com/path` and `https://example.com/path/` share an entry.
+- **ACP mention parity (VS Code / Zed).** The ACP path
+  (`src/acp/session.ts`) now expands `@file`/`@folder`/`@git`/`@web`
+  mentions the same way the TUI does — previously ACP sent the raw
+  prompt with no inline-context resolution. Failures surface as
+  thoughts in the editor. (+2 smoke tests in `session.test.ts`.)
+- **Command alias resolution.** `handleCommand` now resolves aliases
+  via the registry's `resolveCommand` before dispatching, so e.g.
+  `/webcache` reaches the `web-cache` handler without a duplicate
+  case label.
+- **Mac: SwiftUI hunk picker sheet.** `HunkPickerSheet` (CodeepCore)
+  is the Mac counterpart to the CLI's `/apply --interactive`: walks
+  the user through each change hunk, toggling accept/skip, with
+  keyboard shortcuts (y accept, a accept all, arrows navigate).
+  Built on the existing `HunkApplier.FileDiff`. (+6 unit tests for
+  the pure `items(from:)` builder + header formatting.)
+- **Mac: session web cache (`@web`).** `WebMentionExpander` now
+  caches successful fetches for 30 min (per session, max 50 entries,
+  LRU) — full parity with the CLI's `webCache`. Failures are not
+  cached. URL keys are normalized (lowercased host, trailing slash
+  stripped, fragment dropped). New public API: `clearCache()`,
+  `cacheStats()`. (+5 Swift tests.)
+- **Mac: clipboard image paste.** The composer now accepts Cmd+V
+  with an image on the pasteboard (alongside the existing file
+  picker attach). Images are downscaled + JPEG-compressed through
+  the same `ImageResize` pipeline, gated by `supportsVision`.
+- **Mac: hunk picker wired into ConfirmationSheet.** `edit_file` /
+  `write_file` confirmation prompts now offer a "Review hunks" button
+  that opens `HunkPickerSheet` over the call's diff. New
+  `HunkApplier.diffFromEditCall` / `diffFromWriteCall` builders
+  derive a `FileDiff` from tool-call arguments. (+5 Swift tests.)
+- **Mac: `/web-cache` slash command.** Parity with the CLI —
+  `/web-cache` shows session cache stats, `/web-cache clear` wipes
+  it. Aliases: `/webcache`, `reset`, `flush`. (+6 Swift tests.)
+- **Mac: drag & drop image onto composer.** Dropping an image file
+  onto the input bar attaches it (same resize/JPEG pipeline as paste
+  and the file picker), with a brand-tinted drop affordance ring.
+- **Mac: `/usage` slash command.** Pops the toolbar's token + cost
+  breakdown popover from the composer — parity with the CLI's
+  `/usage`. Aliases: `/stats`, `/cost`. (+2 Swift tests.)
+- **Mac: dock icon unread badge.** When the app is in the background
+  and an agent finishes a turn, the conversation's unread counter
+  bumps and the dock icon shows the total. Clicking the app to bring
+  it frontmost, or selecting the conversation, clears its badge.
+  `Conversation.unreadCount` is session-only (never persisted — no
+  phantom badges across launches). (+3 Swift tests.)
+- **Mac: slash-command autocomplete popover.** Typing `/` in the
+  composer opens a filtered list of commands; ↑/↓ navigate, Tab/Return
+  accept, Escape closes. New `SlashCommandHandler.catalog` + pure
+  `suggestions(for:)` filter (boundary-aware — ignores `/` inside
+  URLs, suppresses after a space when the user is in the argument).
+  (+10 Swift tests.)
+- **Mac: Conversation menu bar group.** Mirrors the slash commands in
+  the menu bar (Scan, Plan Mode, Show Usage, Show/Clear Web Cache, New
+  Chat) with shortcuts. Wired through a new
+  `.codeepRunSlashCommand` notification so menu items reuse the
+  composer's dispatch path.
+- **Mac: App Intents for Plan / Usage / Web Cache.** Spotlight +
+  Shortcuts + Siri phrases for "Codeep Plan Mode", "Show Usage",
+  "Clear Web Cache". Reuses a new `.slashCommand(raw:)` case on
+  `PendingIntentAction` so intents route through the same slash
+  dispatch as typing the command. (+3 CodeepCore tests.)
+- **Mac: Settings refactored into tabs.** The 1450-line monolithic
+  Form is now four focused tabs — **General** (appearance, accent,
+  response language, system prompt, About Me), **Model & Agent**
+  (confirmation, self-verify, model parameters, limits, hooks),
+  **Providers** (API keys, endpoints, Ollama, OpenRouter), and
+  **Tools & Privacy** (privacy/cloud, tool permissions, MCP, skills).
+  Active tab persists across sheet re-opens.
+- **Mac: Keyboard Shortcuts cheat sheet.** `Help → Keyboard Shortcuts…`
+  (⌘?) opens a catalog of every shortcut in the app, grouped by
+  surface (App, Conversations, Composer, Chat & tools, Slash commands).
+  Static `ShortcutCategory` catalog is the single source of truth.
+  (+5 Swift tests.)
+- **Mac: custom accent colors.** Settings → General → Accent lets you
+  pick from 9 preset colors (Codeep Red default + Orange, Amber, Green,
+  Teal, Blue, Indigo, Purple, Pink). Applies live to `.tint()` across
+  the whole app via a reactive `@AppStorage`. New `AccentChoice` enum.
+  (+7 Swift tests.)
+- **Mac: Quick Agent pinned prompts.** The ⌥Space panel now shows a
+  horizontally-scrolling strip of pinned one-click starters (seeded
+  with sensible defaults on first launch). Right-click to remove; a
+  "Pin" button appears when there's draft text to save. New
+  `QuickPromptStore` (UserDefaults-backed, `@Observable`) + pin sheet.
+  (+14 Swift tests.)
+
+### Security
+
+- **`@git <ref>` no longer executes shell commands.** The ref was interpolated
+  into a string run through `/bin/sh`, so prompt text containing
+  `@git HEAD; <command>` ran that command — reachable from anything pasted into
+  a prompt (an issue body, a log, model output routed over ACP). git is now
+  spawned via argv with no shell, and refs are validated; `@git diff` flags are
+  allow-listed so a ref can't be smuggled in as `--output=…` either.
+- **Mentions no longer auto-inline secret files.** `@.env`, `@~/.aws/credentials`,
+  `*.pem`, `id_rsa` and friends are refused with a pointer to `/add`, so a
+  pasted mention can't ship credentials to the provider.
+- **`@web` won't follow a redirect into your private network.** A public URL
+  that redirects to loopback/RFC1918/link-local (including the cloud-metadata
+  endpoint) is refused. Directly typing `@web http://localhost:3000` still
+  works — that's the documented dev-server case. The fetch timeout now covers
+  the response *body* (a slow-drip reply could hang the chat forever), the body
+  is read with a hard byte cap instead of being buffered whole, and the timer
+  can no longer leak on failure.
+
+### Fixed
+
+- **The `@`-mention picker no longer draws over the chat.** It was missing
+  from the layout snapshot entirely, so the bottom panel measured zero rows
+  while the picker still painted up to eleven — straight over the end of the
+  transcript.
+- **The suggestion scan is bounded.** It ran on the first `@` keystroke with
+  no file cap and a `statSync` per entry, so opening the picker in a large
+  monorepo blocked the render loop for seconds. Capped at 20k entries and
+  switched to `readdirSync(withFileTypes)`, which drops a syscall per file.
+- **`@~name` resolves correctly.** Only `~/` is treated as a home reference;
+  a bare `@~foo/bar.ts` used to become `$HOME/oo/bar.ts` and report a
+  confusing "file not found".
+
+- **`/apply` no longer corrupts files whose changes are close together.**
+  Unified-diff context overlaps between adjacent hunks; the applier replayed
+  each hunk in sequence, so shared context lines were written twice — and with
+  a small gap a later hunk's deletion landed inside an earlier hunk's context
+  and was silently dropped. Rebuilt as a per-line union, with a regression test
+  sweeping the hunk gap.
+- **`/apply --only` with a malformed spec applied *everything*.** The selective
+  branch fell through to the apply-all path, doing the opposite of what was
+  asked. It now reports the bad spec and applies nothing.
+- **Tab-completing an `@`-mention dropped the `@`**, so the completed path was
+  no longer a mention and the file was never attached — the picker broke the
+  feature it exists to serve. The picker's boundary rule is now shared with the
+  expander so the two can't drift apart again.
+- **Every `@`-mention attached its file twice**, doubling the token cost of
+  each mention: the merged file+folder path stripped its own attachment block
+  back out with a lazy regex that removed only the header.
+- **`/apply` on a very large file no longer crashes the CLI** — a spread-based
+  `Math.min` over the hunk's line numbers blew the argument limit and surfaced
+  as an unhandled rejection. The apply paths also report failures as a toast
+  instead of dying.
+
 ## [2.15.0] — 2026-07-13
 
 > Cross-tool rules + MCP config parity: Codeep now reads `AGENTS.md` (Claude Code / Cursor / Kilo Code standard) as a third project-rules source, and `.mcp.json` at the workspace root as a fourth MCP config source — so users coming from those tools don't have to duplicate config.
@@ -189,6 +446,106 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
   binary. Bumped the `version` field and all four platform archive URLs
   (darwin-aarch64, darwin-x86_64, linux-x86_64, linux-aarch64) to the
   `v2.14.0` GitHub release.
+
+- **Mac: ProviderChoice + Conversation computed-property test coverage; +199 tests total.**
+  Added two pure test files (no `AppState` instance needed):
+  - `ProviderChoiceTests.swift` (17 tests) — exhaustive coverage of the
+    `ProviderChoice` enum's pure API: `displayName`, `isKeyless`,
+    `from(providerID:)` round-trip for every case (including the
+    `z.ai` / `minimax-api` / `qwen-cn-api` hyphenated-id cases that a
+    naive `rawValue` match would miss), `keychainKeyID` uniqueness,
+    `makeProvider().id` ↔ `keychainKeyID` consistency, and `CaseIterable`
+    completeness.
+  - `ConversationDisplayTests.swift` (13 tests) — coverage for the
+    sidebar's two computed invariants: `title` (custom-wins, derived
+    from first user message, 40-char trim, whitespace-only fallback to
+    "New chat") and `updatedAt` (last message timestamp, createdAt
+    fallback), plus `snapshot()` round-trip assertions (customSystem
+    vs resolved system separation, identity preservation, message
+    inclusion).
+  Total Mac tests: 169 → 199 (+30 this round).
+
+- **Web: key validation + provider metadata extraction; +228 tests total.**
+  Extracted `validateKey` and the `PROVIDERS` list from
+  `app/dashboard/KeysSection.tsx` (287→239 LoC) into a new
+  `src/lib/keyValidation.ts` (63 LoC, 18 tests). The component also now
+  uses the shared `maskKey` from `lib/format.ts` instead of a local
+  `mask()` duplicate. Tests cover all five prefix rules (openai,
+  anthropic, google, openrouter, deepseek), the empty/whitespace/length
+  guards, and the PROVIDERS array integrity.
+
+- **Web: review-analytics + project-page stats extraction; +210 tests total.**
+  Extracted two more pure data-transform layers:
+  - `src/lib/reviewStats.ts` (206 LoC, 25 tests) from
+    `app/dashboard/reviews/page.tsx` (404→366 LoC):
+    `readJson`, `buildHotspotsAndCategories`, `shapeTrendRows`,
+    `shapeRepoRows`, `shapeRecentRows`, `shapeTotals`.
+  - `src/lib/projectStats.ts` (50 LoC, 16 tests) from
+    `app/dashboard/projects/[name]/page.tsx` (317→309 LoC):
+    `buildProjectCostByModel`, `sumTokens`, `parseCost`.
+    Also removed a duplicate `COLORS`/`colorFor` palette that was
+    shadowing the one in `lib/format.ts`.
+
+- **Web: dashboard stats pipeline extraction; +169 tests total.**
+  Extracted the pure data-transform layer from `app/dashboard/page.tsx`
+  (933→883 LoC) into a new `src/lib/stats.ts` (209 LoC, 26 tests):
+  - `buildModelStats` — merge live model rows with the snapshot table,
+    sort/cap/colour. 8 tests.
+  - `buildProviderStats` — shape provider GROUP BY rows with pct + colour. 4 tests.
+  - `buildCostByModel` — merge live cost-by-model with snapshot, handling
+    the snapshot's missing cache columns. 5 tests.
+  - `computeCacheStats` — the cache-savings ($3/1M × 0.9) and hit-ratio
+    roll-up. 4 tests.
+  - `buildDailyCost` — parse MySQL string costs to numbers. 5 tests.
+  The page now imports these instead of inlining ~60 lines of merge logic.
+
+- **CLI: commands.ts refactoring round 4 — insights, cloud, me, skills extraction; +2239 tests total.**
+  Extracted 8 more helpers covering the remaining mid-sized cases:
+  - `parseInsightsDays` — the `--days`/`--days=` flag parser from `/insights`. 10 tests.
+  - `formatCloudSessionLabel` — the `/cloud` picker row formatter
+    (title · date · N msg · [project]). 6 tests.
+  - `formatMeSyncReport` — the `/me sync` push/pull result list. 5 tests.
+  - `formatMeLearnResult` — the `/me learn` updated/no-changes renderer. 2 tests.
+  - `formatMeInitResult` — the `/me init` created/exists renderer. 3 tests.
+  - `formatSkillsShow` — the `/skills show` detail view. 1 test.
+  - `formatSkillsBrowseEmpty` — the `/skills browse` empty-state message. 2 tests.
+  - `formatSkillsPublishResult` — the `/skills publish` success message. 3 tests.
+  `commands.ts` is now down to **2350 LoC** (−138 from the original 2488).
+
+- **CLI: commands.ts refactoring round 3 — full /mcp subcommand extraction; +2207 tests total.**
+  Decomposed the entire `/mcp` case (the last big monolith in `commands.ts`,
+  originally ~200 lines) by extracting 9 helpers into
+  `renderer/commands/helpers.ts` (now 514 LoC, 146 tests):
+  - `parsePromptArgs` — the `key=value` token parser from `/mcp prompt`. 8 tests.
+  - `pluralTools` / `groupToolsByServer` — shared pluraliser and tool-by-server
+    grouper used across `/mcp`, `/mcp reload`, and install reports. 7 tests.
+  - `formatMcpServerList` — the default `/mcp` server/tool listing (with
+    empty-state and failed-servers sections). 5 tests.
+  - `formatMcpReloadReport` — the `/mcp reload` summary. 4 tests.
+  - `formatMcpResourcesList` — the `/mcp resources` listing. 3 tests.
+  - `formatMcpResourceRead` — the `/mcp read` content renderer (text fences,
+    json/markdown detection, blob notes). 6 tests.
+  - `formatMcpPromptsList` — the `/mcp prompts` listing with arg annotations. 4 tests.
+  - `formatMcpPromptResult` — the `/mcp prompt` materialised-output renderer. 4 tests.
+  All eight `/mcp` subcommand branches now delegate to these helpers,
+  shrinking each by 5–34 lines. `commands.ts` is down to **2388 LoC**
+  (−100 from the original 2488).
+
+- **CLI: commands.ts refactoring round 2 — stats, copy, apply extraction; +2166 tests total.**
+  Continued decomposing `commands.ts` by extracting three more groups of
+  pure helpers into `renderer/commands/helpers.ts` (now 346 LoC, 105 tests):
+  - `formatStatsReport` + `formatModelCost` — the full `/stats` Markdown
+    report (per-model breakdown, totals, prompt-cache summary, pricing
+    table). Token formatter is injected so the module stays pure. 15 tests.
+  - `formatProfileList` / `formatMemoryList` — list renderers for
+    `/profile list` and `/memory list`. 8 tests.
+  - `extractCodeBlocks` / `resolveBlockIndex` — the code-block extractor
+    and 1-based index validator from `/copy`. 14 tests.
+  - `extractFileChanges` / `formatApplyDiffLine` / `shortPathForDisplay` —
+    the fence/comment-pattern file-change extractor and diff-line
+    formatter from `/apply`. 21 tests.
+  The `/stats`, `/copy`, and `/apply` cases now delegate to these helpers,
+  shrinking each by 40 / 5 / 22 lines respectively.
 
 - **CLI: commands.ts refactoring — extracted helpers module, 2 bugs fixed, +2082 tests total.**
   Decomposed `commands.ts` (2488 → **2448 LoC**, −40) by extracting pure
