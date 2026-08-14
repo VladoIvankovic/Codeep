@@ -93,6 +93,20 @@ try {
 console.log(`\nBumping package.json and tagging…`);
 execSync(`npm version ${next} -m "%s"`, { cwd: repoRoot, stdio: 'inherit' });
 
+// The `version` lifecycle script regenerates src/version.ts and stages it, so
+// it rides along in the commit npm just made. Verify that actually happened —
+// step 4 tested the tree while it still said the OLD version, so a stale
+// version.ts is invisible until CI runs on the tag and the release fails.
+const bakedVersion = readFileSync(join(repoRoot, 'src', 'version.ts'), 'utf8').match(/'([^']+)'/)?.[1];
+if (bakedVersion !== next) {
+  console.error(
+    `\n✗ src/version.ts says ${bakedVersion}, expected ${next}.\n` +
+    `  The commit and tag v${next} exist locally but were NOT pushed.\n` +
+    `  Fix, then: git tag -d v${next} && git reset --hard HEAD~1 and re-run.`,
+  );
+  process.exit(1);
+}
+
 // ── 6. Push commit and tag ─────────────────────────────────────────────────
 console.log('\nPushing commit…');
 execSync('git push', { cwd: repoRoot, stdio: 'inherit' });
