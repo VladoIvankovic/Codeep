@@ -154,7 +154,7 @@ describe('handleSetMode', () => {
 describe('applyConfigOption', () => {
   beforeEach(() => {
     config.set('provider', 'z.ai');
-    config.set('model', 'glm-5.2');
+    config.set('model', 'glm-5.1');
   });
 
   it('switches provider + model when value is "providerId/modelId"', () => {
@@ -400,15 +400,17 @@ describe('buildProviderList', () => {
     expect(zai!.models.some(m => m.id.startsWith('glm'))).toBe(true);
   });
 
-  it('flags dynamicModels for open-ended providers (OpenRouter, Ollama, custom)', () => {
+  it('flags dynamicModels for open-ended providers (OpenRouter, ModelScope, Ollama, custom)', () => {
     const list = buildProviderList();
-    // These three are expected to expose dynamicModels: true so clients
+    // These providers expose dynamicModels: true so clients
     // offer free-text model entry instead of a fixed dropdown.
     const openEnded = list.filter(p => p.dynamicModels);
     const ids = openEnded.map(p => p.id);
     // The exact set may evolve, but at least the well-known ones should be present.
     expect(ids).toContain('openrouter');
+    expect(ids).toContain('modelscope');
     expect(ids).toContain('ollama');
+    expect(ids).toContain('custom');
   });
 });
 

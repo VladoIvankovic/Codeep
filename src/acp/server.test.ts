@@ -290,7 +290,7 @@ describe('buildConfigOptions', () => {
   beforeEach(() => {
     // Pin known config values so assertions are stable across environments.
     config.set('provider', 'z.ai');
-    config.set('model', 'glm-5.2');
+    config.set('model', 'glm-5.1');
     config.set('language', 'en');
   });
 

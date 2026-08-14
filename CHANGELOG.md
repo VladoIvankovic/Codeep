@@ -11,6 +11,82 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.17.0] — 2026-08-14
+
+> A redesigned agent view: a live PLAN → READ → EDIT → VERIFY timeline with changed files and checks in a side rail, a persistent header, and energy/water estimates beside cost. Plus a self-migrating model catalogue.
+
+### Added
+
+- **Agent timeline TUI.** While the agent runs, the screen is now a staged
+  timeline — `PLAN → READ → EDIT → VERIFY → SUMMARY` — with the active stage
+  highlighted, a per-stage one-line summary, the current tool target, and a
+  progress bar against the iteration budget. On terminals ≥132 columns a
+  context rail on the right lists the files touched (`A`/`M`/`D`), the
+  verification commands and their pass/fail state, and the project + branch.
+  Terminals below that width get the same timeline without the rail.
+- **Persistent header.** Version, session, model, provider, project and git
+  branch now sit on a fixed top line instead of only being reachable through
+  `/status`. Segments drop out progressively as the terminal narrows, so the
+  line never wraps.
+- **Resource-impact estimates.** `/cost`, `/stats` and the wide status bar now
+  show an estimated energy and water range for the session's token count
+  (`src/utils/resourceImpact.ts`). These are explicitly labelled ranges
+  derived from published inference benchmarks — 0.3–1.5 J/token and
+  0.27–1.08 L/kWh — never presented as provider measurements.
+- **Live ModelScope catalogue in `/model`.** Selecting the ModelScope provider
+  fetches its free-tier catalogue for your token instead of showing a single
+  hardcoded id, falling back to the built-in entry if the fetch fails.
+- **Graded reasoning effort on Kimi K3.** `/thinking` now offers
+  `low · high · max` on K3; the global `medium` tier collapses to `high`, and
+  the status chip shows the level the model will actually run.
+
+### Changed
+
+- **Model catalogue refresh.**
+  - New **Qwen Token Plan** provider (`qwen-token-plan`) for `sk-sp-…`
+    subscription keys, defaulting to `qwen3.8-max-preview`.
+  - Qwen's hosted line moves to **3.5–3.8**: `qwen3.8-max-preview`,
+    `qwen3.7-max`, `qwen3.7-plus`, `qwen3.6-plus`, `qwen3.6-flash`,
+    `qwen3.5-plus` — replacing the `qwen3-coder-*` aliases.
+  - **Kimi K3 consolidates to a single `kimi-k3` id** on the pay-per-use
+    endpoints (the `-code`, `-code-highspeed` and `-thinking` splits are gone);
+    the Kimi Code subscription keeps `k3` / `k3-256k`.
+  - **Gemini 3.5 / 3.6 Flash** (plus 3.5 Flash Lite) replace the 3.1 Flash
+    entries.
+  - OpenRouter now defaults to **`openrouter/auto`**.
+  - Context-window and pricing tables were refreshed in lockstep, and
+    `providers.test.ts` now enforces that every curated model has both a
+    context entry and a pricing row (or a documented exemption).
+- **Retired model ids migrate automatically.** GPT-5.4 / 5.4-mini / 5.5, the
+  Grok `grok-code-fast-1` and `grok-4-fast-reasoning` aliases, the Kimi K3
+  variants, GLM-5 / 5.1 and the `qwen3-coder-*` ids are rewritten to their
+  supported replacements on first launch — and now also when you load a saved
+  profile with `/profile load`. Dynamic OpenRouter, Ollama and custom ids are
+  never rewritten.
+
+### Fixed
+
+- **Cloud stats double-counted tokens.** Every prompt reported the *cumulative*
+  session totals to the append-only dashboard endpoint, so a three-prompt
+  session was stored as 1× + 2× + 3× its real usage; shutdown then reported the
+  whole session once more. Each turn now reports only its own delta, and the
+  shutdown re-report is gone. Dashboard token counts and costs are accurate
+  again.
+- The status bar dropped the **`Esc to stop`** hint on wide terminals, because
+  the resource-impact estimate and the hint shared one slot and the estimate
+  always won. The hint now owns the right edge and the estimate uses whatever
+  gap is left. The reasoning-effort chip is shown in the wide footer too.
+- The header's `branch:` segment rendered nothing at all whenever the branch
+  name was long enough to need truncating — the truncation budget didn't
+  account for the separator and label, so the segment always failed its own
+  fit check.
+- Long CJK / emoji text in the agent timeline overflowed its pane by up to 2×
+  and broke the divider: width budgeting measured `String.length` while the
+  screen advances by display columns.
+- `--version`, `--help` and `account` no longer spawn git subprocesses at
+  startup; the header branch is resolved on first use and re-read after an
+  agent run, so it no longer goes stale when the agent switches branches.
+
 ## [2.16.0] — 2026-07-25
 
 > `@mentions` inline file context — type `@src/file.ts` anywhere in your message and the file's contents are attached to that message. No more `/add` + `/drop` dance for one-off file references.

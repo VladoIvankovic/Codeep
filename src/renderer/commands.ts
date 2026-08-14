@@ -207,6 +207,26 @@ export async function handleCommand(
           });
           break;
         }
+        if (providerId === 'modelscope') {
+          ctx.app.notify('Fetching ModelScope catalog…');
+          const { fetchOpenAiCompatibleModels, getApiKey: _getKey } = await import('../config/index');
+          const base = 'https://api-inference.modelscope.cn/v1';
+          const models = await fetchOpenAiCompatibleModels(base, _getKey('modelscope') || undefined);
+          const fallback = getModelsForCurrentProvider();
+          const available = models && models.length > 0
+            ? models
+            : Object.keys(fallback).map(id => ({ id, name: id, description: 'Built-in fallback' }));
+          if (!models || models.length === 0) {
+            ctx.app.notify('Could not fetch the ModelScope catalog. Using the built-in fallback model.');
+          }
+          const modelItems = available.map(m => ({ key: m.id, label: m.name, description: m.description }));
+          const currentModel = config.get('model');
+          ctx.app.showSelect(`Select ModelScope Model (${available.length})`, modelItems, currentModel, (item) => {
+            config.set('model', item.key);
+            ctx.app.notify(`Model: ${item.key}`);
+          });
+          break;
+        }
         if (providerId === 'custom') {
           const base = config.get('customBaseUrl') || 'http://localhost:8000/v1';
           ctx.app.notify(`Fetching models from ${base}…`);
@@ -345,7 +365,7 @@ export async function handleCommand(
       const providerId = config.get('provider');
       const model = config.get('model');
       const supported = modelSupportsReasoningEffort(providerId, model);
-      // Tiers THIS model actually distinguishes (e.g. GLM-5.2 → auto/high/max).
+      // Tiers THIS model actually distinguishes (e.g. Kimi K3 → auto/low/high/max).
       const available = availableReasoningTiers(providerId, model);
       const sub = args[0]?.toLowerCase();
 
@@ -354,10 +374,10 @@ export async function handleCommand(
         if (sub === 'auto') {
           ctx.app.notify('Thinking effort: auto — each model uses its own default.');
         } else if (!supported) {
-          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 5, GPT-5.x, Gemini 3, DeepSeek V4, GLM-5.2).`);
+          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 5, GPT-5.x, Gemini 3, DeepSeek V4, Kimi K3).`);
         } else {
           // Tell the user what THIS model will actually run (the tier may
-          // collapse onto a level the model distinguishes, e.g. low→high on GLM).
+          // collapse onto a level the model distinguishes, e.g. medium→high on Kimi K3).
           const resolved = resolveReasoningTier(providerId, model, sub as ReasoningTier);
           const note = resolved === sub ? '' : ` (${model} runs this as "${resolved}")`;
           ctx.app.notify(`Thinking effort: ${sub}${note} — sending ${JSON.stringify(reasoningParamsFor(providerId, model, sub as ReasoningTier))}.`);
@@ -384,7 +404,7 @@ export async function handleCommand(
       }
       if (supported) tLines.push(`**Available**  ${available.join(' · ')}`);
       tLines.push('');
-      tLines.push('Sets how hard the model reasons. Each model offers only the levels it distinguishes (GLM-5.2 / DeepSeek → high · max; Gemini → low · high; Opus/Sonnet & GPT-5.x → the full set). The setting is global and clamps to the active model, so it never sends a value the API rejects. `/effort` is an alias.');
+      tLines.push('Sets how hard the model reasons. Each model offers only the levels it distinguishes (DeepSeek → high · max; Kimi K3 → low · high · max; Gemini → low · high; Opus/Sonnet & GPT-5.x → the full set). The setting is global and clamps to the active model, so it never sends a value the API rejects. `/effort` is an alias.');
       ctx.app.addMessage({ role: 'system', content: tLines.join('\n') } as Message);
       break;
     }
@@ -2154,6 +2174,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
     // case no longer also claims 'cost' (which always hit the handler above).
     case 'stats': {
       const { getCostBreakdown, getSessionStats, formatTokenCount, getPricingTable, getCacheStats } = await import('../utils/tokenTracker');
+      const { formatResourceImpactReport } = await import('../utils/resourceImpact');
       const stats = getSessionStats();
       const content = formatStatsReport({
         totals: stats,
@@ -2162,6 +2183,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         pricing: getPricingTable(),
         currentProvider: config.get('provider'),
         fmt: formatTokenCount,
+        impactLines: formatResourceImpactReport(stats.totalTokens),
       });
       ctx.app.addMessage({ role: 'system', content } as Message);
       break;

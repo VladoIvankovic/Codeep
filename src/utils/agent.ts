@@ -281,7 +281,7 @@ export function buildPausedResult(
 }
 
 const DEFAULT_OPTIONS: AgentOptions = {
-  // Modern models (GLM-5.1, Claude 4.5, GPT-4.1) complete typical coding tasks in
+  // Modern models (GLM-5.2, Claude 5, GPT-5.x) complete typical coding tasks in
   // 3–8 iterations. The old cap of 100 mostly let broken loops wander for minutes
   // before giving up. 25 is still generous — covers multi-file refactors — without
   // turning small fixes into marathons. Users can still raise this via /settings.

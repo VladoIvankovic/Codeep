@@ -298,7 +298,7 @@ export function buildProviderList() {
     // Model metadata so ACP clients (e.g. the VS Code model picker) can
     // offer a provider → model selector without hardcoding a catalog.
     // `dynamicModels` flags providers whose model list is open-ended
-    // (OpenRouter, Ollama, custom endpoints) — clients should let the
+    // (OpenRouter, ModelScope, Ollama, custom endpoints) — clients should let the
     // user type a model id rather than only pick from `models`.
     models: p.models.map((m) => ({ id: m.id, name: m.name })),
     defaultModel: p.defaultModel,

@@ -43,8 +43,8 @@ import {
 } from '../utils/project';
 import { getCurrentVersion, checkForUpdates, getUpdateInstructions } from '../utils/update';
 import { getProviderList, isNoApiKeyProvider, resolveReasoningTier } from '../config/providers';
-import { getSessionStats, getCostBreakdown } from '../utils/tokenTracker';
-import { isGitRepository } from '../utils/git';
+import { getSessionStats, getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
+import { getGitStatus, isGitRepository } from '../utils/git';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
 import { checkApiRateLimit } from '../utils/ratelimit';
 import { expandFileAndFolderMentions, expandGitMentions } from '../utils/mentions';
@@ -60,6 +60,9 @@ import {
 // ─── Global state ─────────────────────────────────────────────────────────────
 
 let projectPath = process.cwd();
+/** Cached header branch. Resolved on first use so `--version`/`--help` never
+ *  shell out to git, and cached because getStatus runs on every render frame. */
+let gitBranchCache: { path: string; branch?: string } | null = null;
 let projectContext: ProjectContext | null = null;
 let hasWriteAccess = false;
 let sessionId = getCurrentSessionId();
@@ -68,6 +71,15 @@ let app: App;
 let sessionDisplayName: string | null = null;
 
 const addedFiles: Map<string, { relativePath: string; content: string }> = new Map();
+
+/** Branch shown in the persistent header, re-read whenever the project moved
+ *  or an agent run finished (an agent can check out a different branch). */
+function getHeaderBranch(): string | undefined {
+  if (!gitBranchCache || gitBranchCache.path !== projectPath) {
+    gitBranchCache = { path: projectPath, branch: getGitStatus(projectPath).branch };
+  }
+  return gitBranchCache.branch;
+}
 
 /** Derive a short display name from a user message (first ~5 words, max 48 chars). */
 export function deriveSessionName(message: string): string {
@@ -93,7 +105,9 @@ function makeCtx(): AppCommandContext {
     sessionDisplayName: sessionDisplayName ?? undefined,
     abortController: agentAbortController,
     isAgentRunning: () => isAgentRunningFlag,
-    setAgentRunning: (v) => { isAgentRunningFlag = v; },
+    // A finished run may have switched branches — drop the cache so the next
+    // header render re-reads it.
+    setAgentRunning: (v) => { isAgentRunningFlag = v; if (!v) gitBranchCache = null; },
     setAbortController: (ctrl) => { agentAbortController = ctrl; },
     formatAddedFilesContext,
     handleCommand: (cmd, args) => dispatchCommand(cmd, args, makeCtx()),
@@ -116,7 +130,7 @@ function getStatus(): StatusInfo {
   const stats = getSessionStats();
   // Show the thinking-effort tier beside the model. Resolve the (global) tier
   // to what THIS model actually runs — e.g. a global 'low' shows as 'high' on
-  // GLM-5.2, which only grades high|max. 'auto'/unsupported → hidden.
+  // Kimi K3, where the global medium tier resolves to high. 'auto'/unsupported → hidden.
   const resolved = resolveReasoningTier(provider.id, config.get('model'), config.get('reasoningEffort'));
   const reasoningEffort = resolved !== 'auto' ? resolved : undefined;
   return {
@@ -126,6 +140,7 @@ function getStatus(): StatusInfo {
     agentMode: config.get('agentMode') || 'off',
     reasoningEffort,
     projectPath,
+    branch: getHeaderBranch(),
     hasWriteAccess,
     sessionId,
     messageCount: app ? app.getMessages().length : 0,
@@ -134,6 +149,7 @@ function getStatus(): StatusInfo {
       promptTokens: stats.totalPromptTokens,
       completionTokens: stats.totalCompletionTokens,
       requestCount: stats.requestCount,
+      estimatedCost: stats.estimatedCost,
     },
   };
 }
@@ -212,6 +228,49 @@ async function handleSubmit(message: string): Promise<void> {
     return;
   }
 
+  // Captured before the turn starts so the delta can be reported from both the
+  // success path and the catch. An aborted or failed turn has still burned
+  // tokens, and gracefulShutdown no longer sends a cumulative catch-all that
+  // would have swept them up later.
+  const tokenReportStart = getRecordCount();
+
+  // Cloud stats are append-only events, so report only this prompt's delta.
+  // Sending the full session accumulator after every prompt makes totals grow
+  // 1× + 2× + 3× and is the source of the inflated dashboard token count.
+  // pingWhenEmpty sends a bare session event when nothing was spent — wanted on
+  // the success path, not when the turn failed before reaching the model.
+  const reportTurnStats = (pingWhenEmpty: boolean) => {
+    const sharedFields = {
+      sessionId,
+      sessionName: sessionDisplayName || sessionId,
+      messageCount: app.getMessages().length,
+      cliVersion: getCurrentVersion(),
+      projectName: projectContext?.name,
+      projectId: projectPath ? generateProjectId(projectPath) : undefined,
+      language: projectContext?.type,
+      isGit: isGitRepository(process.cwd()),
+    };
+    const costBreakdown = getCostBreakdown(tokenReportStart);
+    if (costBreakdown.length === 0) {
+      if (pingWhenEmpty) {
+        reportStats({ ...sharedFields, model: config.get('model'), provider: config.get('provider') });
+      }
+      return;
+    }
+    for (const entry of costBreakdown) {
+      reportStats({
+        ...sharedFields,
+        model: entry.model,
+        provider: entry.provider,
+        inputTokens: entry.promptTokens || undefined,
+        outputTokens: entry.completionTokens || undefined,
+        cacheCreationTokens: entry.cacheCreationTokens || undefined,
+        cacheReadTokens: entry.cacheReadTokens || undefined,
+        estimatedCost: entry.estimatedCost || undefined,
+      });
+    }
+  };
+
   try {
     app.startStreaming();
     const history = app.getChatHistory();
@@ -284,7 +343,10 @@ async function handleSubmit(message: string): Promise<void> {
       language: projectContext?.type,
       isGit: isGitRepository(process.cwd()),
     };
-    const costBreakdown = getCostBreakdown();
+    // Cloud stats are append-only events, so report only this prompt's delta.
+    // Sending the full session accumulator after every prompt makes totals grow
+    // 1× + 2× + 3× and is the source of the inflated dashboard token count.
+    const costBreakdown = getCostBreakdown(tokenReportStart);
     if (costBreakdown.length > 0) {
       for (const entry of costBreakdown) {
         reportStats({
@@ -999,31 +1061,18 @@ async function gracefulShutdown() {
   const messages = app.getMessages();
   autoSaveSession(messages, projectPath);
 
-  const { syncSessionAsync, reportStatsAsync, generateProjectId } = require('../utils/codeepCloud.js');
-  const tokenStats = getSessionStats();
+  const { syncSessionAsync, generateProjectId } = require('../utils/codeepCloud.js');
   const projectId = projectPath ? generateProjectId(projectPath) : undefined;
-  await Promise.all([
-    syncSessionAsync({
-      sessionId,
-      sessionName: sessionId,
-      projectName: projectContext?.name,
-      messages,
-    }),
-    reportStatsAsync({
-      model: config.get('model'),
-      provider: config.get('provider'),
-      sessionId,
-      sessionName: sessionId,
-      messageCount: messages.length,
-      projectName: projectContext?.name,
-      projectId,
-      inputTokens: tokenStats.totalPromptTokens || undefined,
-      outputTokens: tokenStats.totalCompletionTokens || undefined,
-      cacheCreationTokens: tokenStats.totalCacheCreationTokens || undefined,
-      cacheReadTokens: tokenStats.totalCacheReadTokens || undefined,
-      estimatedCost: tokenStats.estimatedCost || undefined,
-    }),
-  ]);
+  // Successful manual and agent turns report their token deltas immediately.
+  // Re-sending the cumulative session total here would count every token a
+  // second time when the append-only dashboard endpoint stores this event.
+  await syncSessionAsync({
+    sessionId,
+    sessionName: sessionDisplayName || sessionId,
+    projectName: projectContext?.name,
+    projectId,
+    messages,
+  });
 }
 
 // ─── Last-resort crash handlers ───────────────────────────────────────────────

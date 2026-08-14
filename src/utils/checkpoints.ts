@@ -27,7 +27,7 @@
  *   "createdAt": "...",
  *   "sessionId": "session-2026-05-18-...",
  *   "provider": "z.ai",
- *   "model": "glm-5.1",
+ *   "model": "glm-5.2",
  *   "messages": [ ... ],
  *   "filesTouched": ["src/a.ts", "src/b.ts"],
  *   "gitHead": "abcdef0"        // optional, recorded only if cwd is a git repo

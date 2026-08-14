@@ -16,6 +16,7 @@ export interface StatusInfo {
    *  when non-auto AND the active model supports a graded knob; undefined hides it. */
   reasoningEffort?: string;
   projectPath: string;
+  branch?: string;
   hasWriteAccess: boolean;
   sessionId: string;
   messageCount: number;
@@ -24,6 +25,7 @@ export interface StatusInfo {
     promptTokens: number;
     completionTokens: number;
     requestCount: number;
+    estimatedCost?: number;
   };
 }
 

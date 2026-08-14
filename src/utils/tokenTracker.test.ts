@@ -76,8 +76,12 @@ describe('extractAnthropicUsage', () => {
 
 describe('getModelContextWindow', () => {
   it('returns a known window for a listed model', () => {
-    expect(getModelContextWindow('glm-5.2')).toBe(200_000);
+    expect(getModelContextWindow('glm-5.2')).toBe(1_000_000);
     expect(getModelContextWindow('claude-opus-5')).toBe(1_000_000);
+    expect(getModelContextWindow('MiniMax-M3')).toBe(1_000_000);
+    expect(getModelContextWindow('gemini-3.5-flash')).toBe(1_048_576);
+    expect(getModelContextWindow('k3-256k')).toBe(262_144);
+    expect(getModelContextWindow('qwen3.8-max-preview')).toBe(1_000_000);
   });
 
   it('falls back to 128K for unknown models', () => {
@@ -122,9 +126,9 @@ describe('recordTokenUsage + getSessionStats', () => {
     expect(stats.totalCompletionTokens).toBe(150);
     expect(stats.totalTokens).toBe(450);
     expect(stats.requestCount).toBe(2);
-    // glm-5.2: 1.00 input, 3.20 output per 1M tokens
-    // (300/1M * 1) + (150/1M * 3.20) = 0.0003 + 0.00048 = 0.00078
-    expect(stats.estimatedCost).toBeCloseTo(0.00078, 6);
+    // glm-5.2: 1.40 input, 4.40 output per 1M tokens
+    // (300/1M * 1.4) + (150/1M * 4.4) = 0.00042 + 0.00066 = 0.00108
+    expect(stats.estimatedCost).toBeCloseTo(0.00108, 6);
   });
 
   it('aggregates Anthropic cache tokens into session totals', () => {
@@ -213,8 +217,8 @@ describe('getCostBreakdown', () => {
       'z.ai',
     );
     const breakdown = getCostBreakdown();
-    // glm-5.2 pricing: 1.00 USD per 1M input tokens.
-    expect(breakdown[0].estimatedCost).toBeCloseTo(1.0, 6);
+    // glm-5.2 pricing: 1.40 USD per 1M input tokens.
+    expect(breakdown[0].estimatedCost).toBeCloseTo(1.4, 6);
   });
 
   it('applies Anthropic cache pricing (read 0.1×, write 1.25×)', () => {
@@ -253,10 +257,10 @@ describe('getCostBreakdown', () => {
     const breakdown = getCostBreakdown();
     expect(breakdown).toHaveLength(2);
     const total = breakdown.reduce((s, b) => s + b.estimatedCost, 0);
-    // glm-5.2: (100/1M * 1) + (50/1M * 3.20) = 0.0001 + 0.00016 = 0.00026
+    // glm-5.2: (100/1M * 1.4) + (50/1M * 4.4) = 0.00014 + 0.00022 = 0.00036
     // openrouter: 0.025 (reported)
-    // total ≈ 0.02526
-    expect(total).toBeCloseTo(0.02526, 5);
+    // total ≈ 0.02536
+    expect(total).toBeCloseTo(0.02536, 5);
   });
 });
 
@@ -278,6 +282,13 @@ describe('getPricingTable', () => {
     expect(ids).toContain('glm-5.2');
     expect(ids).toContain('claude-opus-5');
     expect(ids).toContain('claude-sonnet-4-6');
+  });
+
+  it('uses current OpenAI and Gemini list prices', () => {
+    const byModel = new Map(getPricingTable().map(entry => [entry.model, entry]));
+    expect(byModel.get('gpt-5.6-terra')).toMatchObject({ inputPer1M: 2, outputPer1M: 12 });
+    expect(byModel.get('gpt-5.6-luna')).toMatchObject({ inputPer1M: 0.2, outputPer1M: 1.2 });
+    expect(byModel.get('gemini-3.5-flash')).toMatchObject({ inputPer1M: 1.5, outputPer1M: 9 });
   });
 
   it('only contains models that also have context-window entries', () => {

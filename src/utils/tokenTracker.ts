@@ -3,6 +3,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { formatResourceImpactReport } from './resourceImpact';
 
 export interface TokenUsage {
   promptTokens: number;
@@ -44,13 +45,13 @@ interface TokenRecord {
   actualCostUsd?: number;
 }
 
-// Context window sizes per model (in tokens).
-// Keep this table in lockstep with `providers.ts` — entries for models that
-// aren't in the provider catalogue only show up if a user types an id by hand
-// and produce phantom estimates against the wrong context size.
+// Context window sizes per model (in tokens). Primarily mirrors providers.ts;
+// retired aliases remain only where restored historical sessions still need a
+// meaningful context/cost display.
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Z.AI / ZhipuAI
-  'glm-5.2':              200_000,
+  'glm-5.2':            1_000_000,
+  'glm-5.1':              200_000,
   'glm-5-turbo':          202_752,
   // OpenAI
   'gpt-5.6-sol':          1_050_000,
@@ -70,31 +71,34 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'deepseek-v4-flash':    1_000_000,
   // Google
   'gemini-3.1-pro-preview':        1_048_576,
-  'gemini-3.5-flash':              1_000_000,
-  'gemini-3.1-flash-lite':         1_048_576,
+  'gemini-3.6-flash':              1_048_576,
+  'gemini-3.5-flash':              1_048_576,
+  'gemini-3.5-flash-lite':         1_048_576,
   'gemini-3-flash-preview':        1_000_000,
   // MiniMax
-  'MiniMax-M3':             524_288,
-  // Kimi (Moonshot) — 1M on the K3 line, 256K across K2.x
-  'kimi-k3-code':              1_000_000,
-  'kimi-k3-code-highspeed':    1_000_000,
-  'kimi-k3-thinking':          1_000_000,
+  'MiniMax-M3':           1_000_000,
+  // Kimi (Moonshot) — 1M on K3, 256K across K2.x
+  'kimi-k3':                   1_000_000,
   'kimi-k2.7-code':            262_144,
   'kimi-k2.7-code-highspeed':  262_144,
   'kimi-k2.6':                 262_144,
-  'kimi-k2.5':                 262_144,
   'kimi-for-coding':           262_144,
+  'kimi-for-coding-highspeed': 262_144,
+  'k3':                      1_000_000,
+  'k3-256k':                   262_144,
   // Grok (xAI)
   'grok-4.5':                  500_000,
   'grok-build-0.1':            256_000,
   'grok-4.3':                  1_000_000,
   'grok-code-fast-1':          256_000,
   'grok-4-fast-reasoning':     2_000_000,
-  // Qwen (Alibaba) — 256K native (1M with extrapolation)
-  'qwen3-coder-plus':          262_144,
-  'qwen3-coder-next':          262_144,
-  'qwen3-coder-flash':         262_144,
+  // Qwen (Alibaba) — current hosted generation
   'qwen3.7-max':               1_000_000,
+  'qwen3.8-max-preview':       1_000_000,
+  'qwen3.7-plus':              1_000_000,
+  'qwen3.6-plus':              1_000_000,
+  'qwen3.5-plus':              1_000_000,
+  'qwen3.6-flash':             1_000_000,
   'Qwen/Qwen3-Coder-480B-A35B-Instruct': 262_144,
 };
 
@@ -108,20 +112,18 @@ export function getModelContextWindow(model: string): number {
 }
 
 // Pricing table — USD per 1M tokens. Same rule as MODEL_CONTEXT_WINDOWS:
-// only list model ids that exist in `providers.ts`, otherwise typing an id
-// by hand can produce phantom cost estimates against stale rates.
+// Primarily mirrors `providers.ts`. A few retired aliases remain so restored
+// historical sessions still show the rate that applied when they were created.
 const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }> = {
   // Z.AI / ZhipuAI
-  // GLM-5.2 per-token pricing isn't published yet — mirror GLM-5.1 (same tier,
-  // its successor) provisionally so /cost stays sane; update when z.ai posts it.
-  // Note: on the GLM Coding Plan (the default `z.ai` provider) billing is a flat
-  // subscription, so this only affects the pay-per-use estimate.
-  'glm-5.2':           { inputPer1M: 1.00,  outputPer1M: 3.20 },
+  // Coding Plan is flat-fee; these official rates apply to pay-per-use.
+  'glm-5.2':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
+  'glm-5.1':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
   'glm-5-turbo':       { inputPer1M: 1.20,  outputPer1M: 4.00 },
   // OpenAI
   'gpt-5.6-sol':   { inputPer1M: 5.00,  outputPer1M: 30.00 },
-  'gpt-5.6-terra': { inputPer1M: 2.50,  outputPer1M: 15.00 },
-  'gpt-5.6-luna':  { inputPer1M: 1.00,  outputPer1M: 6.00 },
+  'gpt-5.6-terra': { inputPer1M: 2.00,  outputPer1M: 12.00 },
+  'gpt-5.6-luna':  { inputPer1M: 0.20,  outputPer1M: 1.20 },
   'gpt-5.5':      { inputPer1M: 5.00,  outputPer1M: 30.00 },
   'gpt-5.4':      { inputPer1M: 2.50,  outputPer1M: 15.00 },
   'gpt-5.4-mini': { inputPer1M: 0.75,  outputPer1M: 4.50 },
@@ -132,37 +134,43 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'claude-sonnet-5':              { inputPer1M: 3.00,  outputPer1M: 15.00 },
   'claude-haiku-4-5-20251001':    { inputPer1M: 1.00,  outputPer1M: 5.00 },
   // DeepSeek (cache-miss input pricing)
-  'deepseek-v4-pro':   { inputPer1M: 1.74,  outputPer1M: 3.48 },
+  'deepseek-v4-pro':   { inputPer1M: 0.435, outputPer1M: 0.87 },
   'deepseek-v4-flash': { inputPer1M: 0.14,  outputPer1M: 0.28 },
   // Google
   'gemini-3.1-pro-preview':        { inputPer1M: 2.00, outputPer1M: 12.00 },
+  'gemini-3.6-flash':              { inputPer1M: 1.50, outputPer1M: 7.50 },
   'gemini-3.5-flash':              { inputPer1M: 1.50, outputPer1M: 9.00 },
-  'gemini-3.1-flash-lite':         { inputPer1M: 0.25, outputPer1M: 1.50 },
+  'gemini-3.5-flash-lite':         { inputPer1M: 0.30, outputPer1M: 2.50 },
   'gemini-3-flash-preview':        { inputPer1M: 0.50, outputPer1M: 3.00 },
   // MiniMax
   'MiniMax-M3':             { inputPer1M: 0.60,  outputPer1M: 2.40 },
   // Kimi (Moonshot) — pay-per-use cache-miss rates; `kimi-for-coding` is the
   // subscription alias (flat-fee in reality, priced notionally like K2.7 Code).
-  'kimi-k3-code':              { inputPer1M: 0.60, outputPer1M: 2.50 },
-  'kimi-k3-code-highspeed':    { inputPer1M: 0.60, outputPer1M: 2.50 },
-  'kimi-k3-thinking':          { inputPer1M: 0.60, outputPer1M: 2.50 },
-  'kimi-k2.7-code':            { inputPer1M: 0.60, outputPer1M: 2.50 },
-  'kimi-k2.7-code-highspeed':  { inputPer1M: 0.60, outputPer1M: 2.50 },
-  'kimi-k2.6':                 { inputPer1M: 0.55, outputPer1M: 2.20 },
-  'kimi-k2.5':                 { inputPer1M: 0.40, outputPer1M: 1.90 },
-  'kimi-for-coding':           { inputPer1M: 0.60, outputPer1M: 2.50 },
+  'kimi-k3':                   { inputPer1M: 3.00, outputPer1M: 15.00 },
+  'kimi-k2.7-code':            { inputPer1M: 0.95, outputPer1M: 4.00 },
+  // Kimi doesn't publish a distinct high-speed price in its main table.
+  // Leave that variant unpriced rather than presenting an invented estimate.
+  'kimi-k2.6':                 { inputPer1M: 0.95, outputPer1M: 4.00 },
+  'kimi-for-coding':           { inputPer1M: 0.95, outputPer1M: 4.00 },
+  'kimi-for-coding-highspeed': { inputPer1M: 0.95, outputPer1M: 4.00 },
+  'k3':                        { inputPer1M: 3.00, outputPer1M: 15.00 },
+  'k3-256k':                   { inputPer1M: 3.00, outputPer1M: 15.00 },
   // Grok (xAI)
   'grok-4.5':                  { inputPer1M: 2.00, outputPer1M: 6.00 },
   'grok-build-0.1':            { inputPer1M: 1.00, outputPer1M: 2.00 },
   'grok-4.3':                  { inputPer1M: 1.25, outputPer1M: 2.50 },
   'grok-code-fast-1':          { inputPer1M: 0.20, outputPer1M: 1.50 },
   'grok-4-fast-reasoning':     { inputPer1M: 0.20, outputPer1M: 0.50 },
-  // Qwen (Alibaba) — qwen3-coder-* 0–256K tier; the Coding Plan is flat-fee so
-  // this only affects the pay-per-use estimate.
-  'qwen3-coder-plus':          { inputPer1M: 0.28, outputPer1M: 1.65 },
-  'qwen3-coder-next':          { inputPer1M: 0.28, outputPer1M: 1.65 },
-  'qwen3-coder-flash':         { inputPer1M: 0.10, outputPer1M: 0.50 },
+  // Qwen (Alibaba) — list prices for the first context tier. Coding Plan
+  // variants are flat-fee; these rates describe pay-per-use calls.
+  // `qwen3.8-max-preview` is Token-Plan-only (credit-metered, promotional
+  // preview rate); Alibaba publishes no pay-per-use per-token price for it.
+  // Leave it unpriced rather than borrowing the GA qwen3.8-max rate.
   'qwen3.7-max':               { inputPer1M: 2.50, outputPer1M: 7.50 },
+  'qwen3.7-plus':              { inputPer1M: 0.40, outputPer1M: 1.60 },
+  'qwen3.6-plus':              { inputPer1M: 0.40, outputPer1M: 2.40 },
+  'qwen3.5-plus':              { inputPer1M: 0.40, outputPer1M: 2.40 },
+  'qwen3.6-flash':             { inputPer1M: 0.25, outputPer1M: 1.50 },
   // ModelScope free tier — no per-token charge.
   'Qwen/Qwen3-Coder-480B-A35B-Instruct': { inputPer1M: 0, outputPer1M: 0 },
 };
@@ -480,6 +488,8 @@ export function formatCostReport(): string {
       lines.push(`**Estimated savings vs no caching:** $${cache.estimatedSavingsUsd.toFixed(4)}`);
     }
   }
+
+  lines.push('', ...formatResourceImpactReport(stats.totalTokens));
 
   // Models with no pricing entry don't contribute to cost — flag so users
   // aren't surprised the total looks low.

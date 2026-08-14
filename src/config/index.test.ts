@@ -3,10 +3,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
+  applyProfile,
+  config,
   hasStandardProjectMarkers,
   initializeAsProject,
   isManuallyInitializedProject,
   isProjectDirectory,
+  type Profile,
 } from './index';
 
 let root: string;
@@ -132,5 +135,42 @@ describe('isProjectDirectory', () => {
   it('returns false for an unrelated file', () => {
     writeFileSync(join(root, 'notes.txt'), 'hi');
     expect(isProjectDirectory(root)).toBe(false);
+  });
+});
+
+describe('applyProfile', () => {
+  function profileWith(provider: string, model: string): Profile {
+    return {
+      name: 'test',
+      createdAt: new Date().toISOString(),
+      provider,
+      model,
+      protocol: 'openai',
+      temperature: 0.7,
+      maxTokens: 32768,
+      language: 'auto',
+      agentMode: 'off',
+      agentConfirmation: 'dangerous',
+      agentAutoCommit: false,
+    };
+  }
+
+  it('migrates a retired model id the same way the startup migration does', () => {
+    applyProfile(profileWith('openai', 'gpt-5.5'));
+    expect(config.get('model')).toBe('gpt-5.6-sol');
+
+    applyProfile(profileWith('qwen-api', 'qwen3-coder-flash'));
+    expect(config.get('model')).toBe('qwen3.6-flash');
+  });
+
+  it('leaves current and dynamic model ids untouched', () => {
+    applyProfile(profileWith('openai', 'gpt-5.6-terra'));
+    expect(config.get('model')).toBe('gpt-5.6-terra');
+
+    applyProfile(profileWith('openrouter', 'openai/gpt-5.5'));
+    expect(config.get('model')).toBe('openai/gpt-5.5');
+
+    applyProfile(profileWith('ollama', 'qwen3-coder-plus:latest'));
+    expect(config.get('model')).toBe('qwen3-coder-plus:latest');
   });
 });

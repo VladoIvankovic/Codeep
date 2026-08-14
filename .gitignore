@@ -50,3 +50,9 @@ acp-registry/
 codeep-zed/
 Codeep-MacOs/
 Codeep-iOS/
+
+# Local scratch — audit runs, design-QA notes, and rendered promo media.
+# promo/sources/ stays tracked: README.md embeds promo/sources/tui-current.png.
+.codex-audit/
+design-qa.md
+promo/exports/

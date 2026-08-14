@@ -64,11 +64,12 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest GLM model, available to all users' },
+      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant, available to all users' },
     ],
     defaultModel: 'glm-5.2',
     defaultProtocol: 'openai',
+    maxOutputTokens: 131_072,
     envKey: 'ZAI_API_KEY',
     subscribeUrl: 'https://z.ai/subscribe?ic=NXYNXZOV14',
     groupLabel: 'Z.AI — Subscription (GLM Coding Plan)',
@@ -90,11 +91,12 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest GLM model' },
+      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant' },
     ],
     defaultModel: 'glm-5.2',
     defaultProtocol: 'openai',
+    maxOutputTokens: 131_072,
     envKey: 'ZAI_API_KEY',
     subscribeUrl: 'https://api.z.ai',
     groupLabel: 'Z.AI — API (pay-per-use)',
@@ -116,11 +118,12 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest GLM model, available to all users' },
+      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant, available to all users' },
     ],
     defaultModel: 'glm-5.2',
     defaultProtocol: 'openai',
+    maxOutputTokens: 131_072,
     envKey: 'ZAI_CN_API_KEY',
     subscribeUrl: 'https://open.bigmodel.cn/glm-coding',
     groupLabel: 'Z.AI China — Subscription (GLM Coding Plan)',
@@ -142,11 +145,12 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest GLM model' },
+      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant' },
     ],
     defaultModel: 'glm-5.2',
     defaultProtocol: 'openai',
+    maxOutputTokens: 131_072,
     envKey: 'ZAI_CN_API_KEY',
     subscribeUrl: 'https://open.bigmodel.cn',
     groupLabel: 'Z.AI China — API (pay-per-use)',
@@ -251,9 +255,9 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
   },
   // ── Kimi (Moonshot AI) ────────────────────────────────────────────
   // Subscription (Kimi Code) mirrors the Z.AI GLM-Coding-Plan shape: a
-  // dedicated coding base URL + a separate key, model id ALWAYS
-  // `kimi-for-coding` (a backend alias). OpenAI-compatible is the
-  // battle-tested path so we don't expose the Anthropic surface here.
+  // dedicated coding base URL + a separate key. Model availability depends
+  // on the user's plan, so the picker labels the restricted K3/high-speed ids
+  // instead of pretending every subscription includes them.
   'kimi': {
     name: 'Kimi (Moonshot) — Coding Plan',
     description: 'Kimi Code subscription',
@@ -261,7 +265,10 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       openai: { baseUrl: 'https://api.kimi.com/coding/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     models: [
-      { id: 'kimi-for-coding', name: 'Kimi Code', description: 'Subscription alias — auto-maps to the latest Kimi coding model (K2.7 Code)' },
+      { id: 'kimi-for-coding', name: 'Kimi Code', description: 'Available on every Kimi Code plan — maps to K2.7 Code' },
+      { id: 'k3', name: 'Kimi K3', description: '1M-context flagship — Moderato plan or higher' },
+      { id: 'k3-256k', name: 'Kimi K3 (256K)', description: 'K3 with a smaller context window — Moderato plan or higher' },
+      { id: 'kimi-for-coding-highspeed', name: 'Kimi Code (High-Speed)', description: 'Low-latency K2.7 Code — Allegretto plan or higher' },
     ],
     defaultModel: 'kimi-for-coding',
     defaultProtocol: 'openai',
@@ -278,21 +285,18 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       openai: { baseUrl: 'https://api.moonshot.ai/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     models: [
-      { id: 'kimi-k3-code',           name: 'Kimi K3 Code',            description: 'Newest flagship agentic coding model (1M context, deep reasoning)' },
-      { id: 'kimi-k3-code-highspeed', name: 'Kimi K3 Code (High-Speed)', description: 'Throughput-tuned K3 Code for latency-sensitive loops' },
-      { id: 'kimi-k3-thinking',       name: 'Kimi K3 Thinking',        description: 'K3 with explicit reasoning traces (highest quality, slower)' },
-      { id: 'kimi-k2.7-code',           name: 'Kimi K2.7 Code',            description: 'Previous-gen flagship agentic coding model (256K context)' },
+      { id: 'kimi-k3',                   name: 'Kimi K3',                   description: 'Latest flagship for software engineering and deep reasoning (1M context)' },
+      { id: 'kimi-k2.7-code',           name: 'Kimi K2.7 Code',           description: 'Coding-specialized model (256K context)' },
       { id: 'kimi-k2.7-code-highspeed', name: 'Kimi K2.7 Code (High-Speed)', description: 'Throughput-tuned K2.7 Code for latency-sensitive loops' },
-      { id: 'kimi-k2.6',                name: 'Kimi K2.6',                 description: 'Previous-gen multimodal reasoning model' },
-      { id: 'kimi-k2.5',                name: 'Kimi K2.5',                 description: 'Older general-purpose model (cheaper)' },
+      { id: 'kimi-k2.6',                name: 'Kimi K2.6',                description: 'General-purpose multimodal reasoning model' },
     ],
-    defaultModel: 'kimi-k3-code',
+    defaultModel: 'kimi-k3',
     defaultProtocol: 'openai',
-    maxOutputTokens: 65_536,
+    maxOutputTokens: 131_072,
     envKey: 'MOONSHOT_API_KEY',
     subscribeUrl: 'https://platform.kimi.ai/console/api-keys',
     groupLabel: 'Kimi — API (pay-per-use)',
-    hint: 'Pay-per-use via Moonshot API key (platform.kimi.ai). K3 models support 1M context and explicit reasoning.',
+    hint: 'Pay-per-use via Moonshot API key (platform.kimi.ai). Kimi K3 supports 1M context and graded reasoning.',
   },
   'kimi-cn': {
     name: 'Kimi China (Moonshot)',
@@ -301,21 +305,18 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       openai: { baseUrl: 'https://api.moonshot.cn/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     models: [
-      { id: 'kimi-k3-code',           name: 'Kimi K3 Code',            description: 'Newest flagship agentic coding model (1M context, deep reasoning)' },
-      { id: 'kimi-k3-code-highspeed', name: 'Kimi K3 Code (High-Speed)', description: 'Throughput-tuned K3 Code' },
-      { id: 'kimi-k3-thinking',       name: 'Kimi K3 Thinking',        description: 'K3 with explicit reasoning traces' },
-      { id: 'kimi-k2.7-code',           name: 'Kimi K2.7 Code',            description: 'Previous-gen flagship agentic coding model (256K context)' },
+      { id: 'kimi-k3',                   name: 'Kimi K3',                   description: 'Latest flagship for software engineering and deep reasoning (1M context)' },
+      { id: 'kimi-k2.7-code',           name: 'Kimi K2.7 Code',           description: 'Coding-specialized model (256K context)' },
       { id: 'kimi-k2.7-code-highspeed', name: 'Kimi K2.7 Code (High-Speed)', description: 'Throughput-tuned K2.7 Code' },
-      { id: 'kimi-k2.6',                name: 'Kimi K2.6',                 description: 'Previous-gen multimodal reasoning model' },
-      { id: 'kimi-k2.5',                name: 'Kimi K2.5',                 description: 'Older general-purpose model' },
+      { id: 'kimi-k2.6',                name: 'Kimi K2.6',                description: 'General-purpose multimodal reasoning model' },
     ],
-    defaultModel: 'kimi-k3-code',
+    defaultModel: 'kimi-k3',
     defaultProtocol: 'openai',
-    maxOutputTokens: 65_536,
+    maxOutputTokens: 131_072,
     envKey: 'MOONSHOT_CN_API_KEY',
     subscribeUrl: 'https://platform.moonshot.cn/console/api-keys',
     groupLabel: 'Kimi China — API (pay-per-use)',
-    hint: 'Pay-per-use via Moonshot China API key (platform.moonshot.cn). K3 models support 1M context.',
+    hint: 'Pay-per-use via Moonshot China API key (platform.moonshot.cn). Kimi K3 supports 1M context.',
   },
   // ── Grok (xAI) ────────────────────────────────────────────────────
   // Pay-per-use today (console.x.ai key). The SuperGrok / X Premium+
@@ -331,8 +332,6 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       { id: 'grok-4.5',              name: 'Grok 4.5',              description: 'Flagship reasoning model — highest quality, 500K context' },
       { id: 'grok-build-0.1',        name: 'Grok Build 0.1',        description: 'Agentic coding model — fast, 256K context' },
       { id: 'grok-4.3',              name: 'Grok 4.3',              description: 'Previous flagship, 1M context' },
-      { id: 'grok-code-fast-1',      name: 'Grok Code Fast 1',      description: 'Low-cost speed-first coder (alias of Build 0.1)' },
-      { id: 'grok-4-fast-reasoning', name: 'Grok 4 Fast (reasoning)', description: 'Cheap reasoning model, very large context' },
     ],
     defaultModel: 'grok-build-0.1',
     defaultProtocol: 'openai',
@@ -353,11 +352,11 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       openai: { baseUrl: 'https://coding-intl.dashscope.aliyuncs.com/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     models: [
-      { id: 'qwen3-coder-plus', name: 'Qwen3-Coder Plus', description: 'Flagship coding model — best quality' },
-      { id: 'qwen3-coder-next', name: 'Qwen3-Coder Next', description: 'Balanced quality/speed/cost' },
-      { id: 'qwen3.7-max',        name: 'Qwen3.7-Max',        description: 'Flagship general model (code + reasoning)' },
+      { id: 'qwen3.7-plus', name: 'Qwen3.7-Plus', description: 'Recommended current model for coding, reasoning, and vision' },
+      { id: 'qwen3.6-plus', name: 'Qwen3.6-Plus', description: 'Fast multimodal model with a 1M context window' },
+      { id: 'qwen3.5-plus', name: 'Qwen3.5-Plus', description: 'Efficient general-purpose Coding Plan model' },
     ],
-    defaultModel: 'qwen3-coder-plus',
+    defaultModel: 'qwen3.7-plus',
     defaultProtocol: 'openai',
     maxOutputTokens: 65_536,
     noStreamWithTools: true,
@@ -373,12 +372,11 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       openai: { baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     models: [
-      { id: 'qwen3-coder-plus',  name: 'Qwen3-Coder Plus',  description: 'Flagship coding model (256K, up to 1M)' },
-      { id: 'qwen3-coder-next',  name: 'Qwen3-Coder Next',  description: 'Balanced quality/speed/cost' },
-      { id: 'qwen3-coder-flash', name: 'Qwen3-Coder Flash', description: 'Fast/cheap coder' },
-      { id: 'qwen3.7-max',         name: 'Qwen3.7-Max',         description: 'Flagship general model' },
+      { id: 'qwen3.7-max',   name: 'Qwen3.7-Max',   description: 'Latest flagship for complex coding and reasoning' },
+      { id: 'qwen3.7-plus',  name: 'Qwen3.7-Plus',  description: 'Balanced quality, speed, and price (1M context)' },
+      { id: 'qwen3.6-flash', name: 'Qwen3.6-Flash', description: 'Low-latency, low-cost multimodal model' },
     ],
-    defaultModel: 'qwen3-coder-plus',
+    defaultModel: 'qwen3.7-max',
     defaultProtocol: 'openai',
     maxOutputTokens: 65_536,
     noStreamWithTools: true,
@@ -387,6 +385,28 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     groupLabel: 'Qwen — API (pay-per-use)',
     hint: 'Pay-per-use via Alibaba Model Studio key (DASHSCOPE_API_KEY).',
   },
+  'qwen-token-plan': {
+    name: 'Qwen (Alibaba) — Token Plan',
+    description: 'Qwen Token Plan subscription (international)',
+    protocols: {
+      openai: { baseUrl: 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1', authHeader: 'Bearer', supportsNativeTools: true },
+    },
+    models: [
+      { id: 'qwen3.8-max-preview', name: 'Qwen3.8-Max Preview', description: 'Newest Token Plan flagship for complex agentic work' },
+      { id: 'qwen3.7-max',         name: 'Qwen3.7-Max',         description: 'Production flagship for complex coding and reasoning' },
+      { id: 'qwen3.7-plus',        name: 'Qwen3.7-Plus',        description: 'Balanced quality and throughput' },
+      { id: 'qwen3.6-plus',        name: 'Qwen3.6-Plus',        description: 'Fast multimodal model with a 1M context window' },
+      { id: 'qwen3.6-flash',       name: 'Qwen3.6-Flash',       description: 'Low-latency, credit-efficient model' },
+    ],
+    defaultModel: 'qwen3.8-max-preview',
+    defaultProtocol: 'openai',
+    maxOutputTokens: 131_072,
+    noStreamWithTools: true,
+    envKey: 'BAILIAN_TOKEN_PLAN_API_KEY',
+    subscribeUrl: 'https://modelstudio.console.alibabacloud.com/',
+    groupLabel: 'Qwen — Subscription (Token Plan)',
+    hint: 'Uses monthly Token Plan credits. Requires a separate sk-sp-… Token Plan key.',
+  },
   'qwen-cn': {
     name: 'Qwen China — Coding Plan',
     description: 'Qwen Coding Plan subscription (China)',
@@ -394,11 +414,11 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       openai: { baseUrl: 'https://coding.dashscope.aliyuncs.com/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     models: [
-      { id: 'qwen3-coder-plus', name: 'Qwen3-Coder Plus', description: 'Flagship coding model — best quality' },
-      { id: 'qwen3-coder-next', name: 'Qwen3-Coder Next', description: 'Balanced quality/speed/cost' },
-      { id: 'qwen3.7-max',        name: 'Qwen3.7-Max',        description: 'Flagship general model' },
+      { id: 'qwen3.7-plus', name: 'Qwen3.7-Plus', description: 'Recommended current model for coding, reasoning, and vision' },
+      { id: 'qwen3.6-plus', name: 'Qwen3.6-Plus', description: 'Fast multimodal model with a 1M context window' },
+      { id: 'qwen3.5-plus', name: 'Qwen3.5-Plus', description: 'Efficient general-purpose Coding Plan model' },
     ],
-    defaultModel: 'qwen3-coder-plus',
+    defaultModel: 'qwen3.7-plus',
     defaultProtocol: 'openai',
     maxOutputTokens: 65_536,
     noStreamWithTools: true,
@@ -414,12 +434,11 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       openai: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     models: [
-      { id: 'qwen3-coder-plus',  name: 'Qwen3-Coder Plus',  description: 'Flagship coding model' },
-      { id: 'qwen3-coder-next',  name: 'Qwen3-Coder Next',  description: 'Balanced quality/speed/cost' },
-      { id: 'qwen3-coder-flash', name: 'Qwen3-Coder Flash', description: 'Fast/cheap coder' },
-      { id: 'qwen3.7-max',         name: 'Qwen3.7-Max',         description: 'Flagship general model' },
+      { id: 'qwen3.7-max',   name: 'Qwen3.7-Max',   description: 'Latest flagship for complex coding and reasoning' },
+      { id: 'qwen3.7-plus',  name: 'Qwen3.7-Plus',  description: 'Balanced quality, speed, and price (1M context)' },
+      { id: 'qwen3.6-flash', name: 'Qwen3.6-Flash', description: 'Low-latency, low-cost multimodal model' },
     ],
-    defaultModel: 'qwen3-coder-plus',
+    defaultModel: 'qwen3.7-max',
     defaultProtocol: 'openai',
     maxOutputTokens: 65_536,
     noStreamWithTools: true,
@@ -430,21 +449,22 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
   },
   'modelscope': {
     name: 'ModelScope (free Qwen)',
-    description: 'Free Qwen3-Coder inference via ModelScope',
+    description: 'Live free-model catalog via ModelScope',
     protocols: {
       openai: { baseUrl: 'https://api-inference.modelscope.cn/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     models: [
-      { id: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', name: 'Qwen3-Coder 480B', description: 'Open MoE coder — free tier (~2000 req/day)' },
+      { id: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', name: 'Qwen3-Coder 480B', description: 'Fallback model shown until the live catalog loads' },
     ],
     defaultModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct',
     defaultProtocol: 'openai',
     maxOutputTokens: 65_536,
     noStreamWithTools: true,
+    dynamicModels: true,
     envKey: 'MODELSCOPE_API_KEY',
     subscribeUrl: 'https://modelscope.cn/my/myaccesstoken',
     groupLabel: 'ModelScope — Free (Qwen)',
-    hint: 'Free tier (~2000 req/day) via ModelScope token (modelscope.cn). Needs a bound Aliyun account.',
+    hint: 'Fetches the live free catalog for your ModelScope token; availability and limits vary by account.',
   },
   'openai': {
     name: 'OpenAI',
@@ -460,9 +480,6 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       { id: 'gpt-5.6-sol',   name: 'GPT-5.6 Sol',   description: 'Most capable GPT — best for coding & agentic work' },
       { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', description: 'Balanced — GPT-5.5 quality at about half the price' },
       { id: 'gpt-5.6-luna',  name: 'GPT-5.6 Luna',  description: 'Fast and cheap — high-volume workloads' },
-      { id: 'gpt-5.5',       name: 'GPT-5.5',       description: 'Previous flagship GPT' },
-      { id: 'gpt-5.4',       name: 'GPT-5.4',       description: 'Older generation GPT' },
-      { id: 'gpt-5.4-mini',  name: 'GPT-5.4 Mini',  description: 'Faster and cheaper GPT-5.4' },
     ],
     defaultModel: 'gpt-5.6-sol',
     defaultProtocol: 'openai',
@@ -507,8 +524,9 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     },
     models: [
       { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro',        description: 'Most capable Gemini model' },
-      { id: 'gemini-3.5-flash',       name: 'Gemini 3.5 Flash',      description: 'Pro-level intelligence at Flash speed' },
-      { id: 'gemini-3.1-flash-lite',  name: 'Gemini 3.1 Flash-Lite', description: 'Low-latency, low-cost workhorse (1M context)' },
+      { id: 'gemini-3.6-flash',       name: 'Gemini 3.6 Flash',      description: 'Latest production Flash model' },
+      { id: 'gemini-3.5-flash',       name: 'Gemini 3.5 Flash',      description: 'Stable frontier Flash model for coding and long agentic tasks' },
+      { id: 'gemini-3.5-flash-lite',  name: 'Gemini 3.5 Flash-Lite', description: 'Latest low-latency, low-cost workhorse' },
     ],
     defaultModel: 'gemini-3.1-pro-preview',
     defaultProtocol: 'openai',
@@ -534,19 +552,17 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     models: [
       { id: 'openrouter/auto',                  name: 'Auto-route',         description: 'OpenRouter picks the best model for the task' },
       { id: 'anthropic/claude-fable-5',         name: 'Claude Fable 5',     description: 'Anthropic — most capable' },
-      { id: 'anthropic/claude-opus-4',          name: 'Claude Opus 4',      description: 'Anthropic — Opus tier' },
+      { id: 'anthropic/claude-opus-5',          name: 'Claude Opus 5',      description: 'Anthropic — flagship Opus tier' },
       { id: 'anthropic/claude-sonnet-5',        name: 'Claude Sonnet 5',    description: 'Anthropic — balanced' },
       { id: 'openai/gpt-5.6-sol',               name: 'GPT-5.6 Sol',        description: 'OpenAI — flagship' },
-      { id: 'openai/gpt-5.4-mini',              name: 'GPT-5.4 Mini',       description: 'OpenAI — fast/cheap' },
-      { id: 'google/gemini-3.1-pro',            name: 'Gemini 3.1 Pro',     description: 'Google — multimodal' },
-      { id: 'meta-llama/llama-3.1-405b-instruct', name: 'Llama 3.1 405B',   description: 'Meta — open weights, largest' },
-      { id: 'meta-llama/llama-3.1-70b-instruct',  name: 'Llama 3.1 70B',    description: 'Meta — open weights, fast' },
-      { id: 'deepseek/deepseek-v4',             name: 'DeepSeek V4',        description: 'DeepSeek via OpenRouter' },
-      { id: 'mistralai/mistral-large',          name: 'Mistral Large',      description: 'Mistral — flagship' },
-      { id: 'qwen/qwen-2.5-coder-32b-instruct', name: 'Qwen 2.5 Coder 32B', description: 'Alibaba — coding-tuned' },
+      { id: 'openai/gpt-5.6-luna',              name: 'GPT-5.6 Luna',       description: 'OpenAI — fast/efficient' },
+      { id: 'google/gemini-3.6-flash',          name: 'Gemini 3.6 Flash',   description: 'Google — latest production Flash' },
+      { id: 'deepseek/deepseek-v4-pro',         name: 'DeepSeek V4 Pro',    description: 'DeepSeek — flagship agentic model' },
+      { id: 'moonshotai/kimi-k3',               name: 'Kimi K3',            description: 'Moonshot — long-horizon coding' },
+      { id: 'qwen/qwen3.8-max',                 name: 'Qwen 3.8 Max',       description: 'Alibaba — latest flagship' },
       { id: 'x-ai/grok-4.5',                    name: 'Grok 4.5',           description: 'xAI — flagship reasoning' },
     ],
-    defaultModel: 'anthropic/claude-opus-4',
+    defaultModel: 'openrouter/auto',
     defaultProtocol: 'openai',
     envKey: 'OPENROUTER_API_KEY',
     subscribeUrl: 'https://openrouter.ai/keys',
@@ -601,6 +617,67 @@ export function getProvider(id: string): ProviderConfig | null {
 }
 
 /**
+ * Exact migrations for curated model ids that vendors replaced.
+ *
+ * Keep this deliberately narrower than the provider catalogue. Dynamic
+ * OpenRouter/Ollama/custom ids are user-controlled and must never be rewritten.
+ */
+const RETIRED_MODEL_REPLACEMENTS: Record<string, Record<string, string>> = {
+  'z.ai':        { 'glm-5.1': 'glm-5.2', 'glm-5': 'glm-5.2' },
+  'z.ai-api':    { 'glm-5.1': 'glm-5.2', 'glm-5': 'glm-5.2' },
+  'z.ai-cn':     { 'glm-5.1': 'glm-5.2', 'glm-5': 'glm-5.2' },
+  'z.ai-cn-api': { 'glm-5.1': 'glm-5.2', 'glm-5': 'glm-5.2' },
+  google: {
+    'gemini-3.1-flash-lite': 'gemini-3.5-flash-lite',
+  },
+  grok: {
+    'grok-code-fast-1': 'grok-build-0.1',
+    'grok-4-fast-reasoning': 'grok-4.3',
+  },
+  openai: {
+    'gpt-5.5': 'gpt-5.6-sol',
+    'gpt-5.4': 'gpt-5.6-terra',
+    'gpt-5.4-mini': 'gpt-5.6-luna',
+  },
+  'kimi-api': {
+    'kimi-k3-code': 'kimi-k3',
+    'kimi-k3-code-highspeed': 'kimi-k3',
+    'kimi-k3-thinking': 'kimi-k3',
+    'kimi-k2.5': 'kimi-k2.6',
+  },
+  'kimi-cn': {
+    'kimi-k3-code': 'kimi-k3',
+    'kimi-k3-code-highspeed': 'kimi-k3',
+    'kimi-k3-thinking': 'kimi-k3',
+    'kimi-k2.5': 'kimi-k2.6',
+  },
+  qwen: {
+    'qwen3-coder-plus': 'qwen3.7-plus',
+    'qwen3-coder-next': 'qwen3.7-plus',
+    'qwen3.7-max': 'qwen3.7-plus',
+  },
+  'qwen-api': {
+    'qwen3-coder-plus': 'qwen3.7-max',
+    'qwen3-coder-next': 'qwen3.7-max',
+    'qwen3-coder-flash': 'qwen3.6-flash',
+  },
+  'qwen-cn': {
+    'qwen3-coder-plus': 'qwen3.7-plus',
+    'qwen3-coder-next': 'qwen3.7-plus',
+    'qwen3.7-max': 'qwen3.7-plus',
+  },
+  'qwen-cn-api': {
+    'qwen3-coder-plus': 'qwen3.7-max',
+    'qwen3-coder-next': 'qwen3.7-max',
+    'qwen3-coder-flash': 'qwen3.6-flash',
+  },
+};
+
+export function replacementModelFor(providerId: string, modelId: string): string | undefined {
+  return RETIRED_MODEL_REPLACEMENTS[providerId]?.[modelId];
+}
+
+/**
  * Curated display order for the first-run login flow + `/provider` /
  * `/login` pickers. Headline / popular providers float to the top so
  * brand-new users see them first; regional + parameter-variant entries
@@ -617,6 +694,7 @@ const DISPLAY_ORDER: string[] = [
   'kimi',
   'kimi-api',
   'qwen',
+  'qwen-token-plan',
   'qwen-api',
   'grok',
   'deepseek',
@@ -728,7 +806,7 @@ export function providerNoStreamWithTools(providerId: string): boolean {
  */
 const SAMPLING_PARAMS_REJECTED = [
   'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5',
-  'kimi-k3-code', 'kimi-k3-thinking', 'kimi-k2.7-code', 'kimi-for-coding',
+  'kimi-k3', 'kimi-k2.7-code', 'kimi-for-coding', 'k3',
 ];
 
 export function modelRejectsSamplingParams(model: string): boolean {
@@ -805,9 +883,12 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
     case 'deepseek':
       return id.startsWith('deepseek-v4');
     case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
-      // GLM-5.2 added graded High/Max effort. glm-5-turbo is a plain thinking
-      // toggle (no graded levels) so it stays out.
+      // GLM-5.2 exposes graded High/Max effort; Turbo is a plain toggle.
       return idMatches(id, 'glm-5-2');
+    case 'kimi':
+      return idMatches(id, 'k3');
+    case 'kimi-api': case 'kimi-cn':
+      return idMatches(id, 'kimi-k3');
     case 'grok':
       // Grok reasoning models accept reasoning_effort (none/low/medium/high).
       // The coders (grok-code-fast, grok-build — the default) are NON-reasoning
@@ -816,8 +897,7 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
       // alongside the explicit *-non-reasoning variants.
       if (id.startsWith('grok-build') || id.startsWith('grok-code')) return false;
       return id.startsWith('grok') && !id.includes('non-reasoning');
-    // Kimi (thinking on/off, not graded) and Qwen coders (non-thinking) have
-    // no graded knob → fall through to default false.
+    // GLM Turbo and Qwen coders expose thinking on/off, not a graded knob.
     case 'openrouter':
       // OpenRouter normalizes a unified `reasoning` field and silently ignores
       // it for non-reasoning models, so the control is always safe to expose.
@@ -858,6 +938,9 @@ export function reasoningParamsFor(
     case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
       // Graded thinking depth: high (default) or max. Lower tiers collapse to high.
       return { reasoning_effort: tier === 'max' ? 'max' : 'high' };
+    case 'kimi': case 'kimi-api': case 'kimi-cn':
+      // Kimi K3 accepts low/high/max; collapse our medium tier to high.
+      return { reasoning_effort: tier === 'low' ? 'low' : tier === 'max' ? 'max' : 'high' };
     case 'grok':
       // none/low/medium/high — no "max"; map our Max → high (the ceiling).
       return { reasoning_effort: tier === 'max' ? 'high' : tier };
@@ -891,6 +974,8 @@ export function availableReasoningTiers(providerId: string, model: string): Reas
     case 'deepseek':
     case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
       return ['auto', 'high', 'max'];
+    case 'kimi': case 'kimi-api': case 'kimi-cn':
+      return ['auto', 'low', 'high', 'max'];
     case 'grok':
       return ['auto', 'low', 'medium', 'high'];
     case 'openrouter':
@@ -903,8 +988,8 @@ export function availableReasoningTiers(providerId: string, model: string): Reas
 /**
  * Map a (possibly out-of-range) tier to the tier this model actually distinguishes,
  * for display — the chip + the checked menu row. The effort setting is global, so
- * a tier picked on Opus ('low') may not exist on GLM-5.2; we show the level GLM
- * will really run (its 'low' clamps to 'high'). Picks the available tier whose
+ * a tier picked on Opus ('medium') may not exist on Kimi K3; we show the level
+ * Kimi will really run (its 'medium' clamps to 'high'). Picks the tier whose
  * effective param equals the requested one. 'auto' (or unsupported) → 'auto'.
  */
 export function resolveReasoningTier(providerId: string, model: string, tier: ReasoningTier): ReasoningTier {

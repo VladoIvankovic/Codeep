@@ -218,8 +218,9 @@ export function formatStatsReport(args: {
   pricing: PricingRow[];
   currentProvider: string;
   fmt: TokenFormatter;
+  impactLines?: string[];
 }): string {
-  const { totals, breakdown, cache, pricing, currentProvider, fmt } = args;
+  const { totals, breakdown, cache, pricing, currentProvider, fmt, impactLines = [] } = args;
   const lines: string[] = ['## Session Cost', ''];
 
   if (totals.requestCount === 0) {
@@ -249,6 +250,9 @@ export function formatStatsReport(args: {
       if (cache.estimatedSavingsUsd > 0) {
         lines.push(`Estimated savings vs no caching: $${cache.estimatedSavingsUsd.toFixed(4)}`);
       }
+    }
+    if (impactLines.length > 0) {
+      lines.push('', ...impactLines);
     }
     lines.push('');
   }

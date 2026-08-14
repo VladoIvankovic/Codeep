@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlink
 import { join, dirname } from 'path';
 import { randomUUID } from 'crypto';
 
-import { PROVIDERS, getProvider, getProviderBaseUrl } from './providers';
+import { PROVIDERS, getProvider, getProviderBaseUrl, replacementModelFor } from './providers';
 import { logSession } from '../utils/logger';
 import { createSecureStorage, type SecureStorage } from '../utils/keychain';
 
@@ -437,8 +437,9 @@ if ((config.get('agentMode') as string) === 'auto') {
 // affected sliders were effectively lies). Each migration now runs exactly
 // once per config, recorded via `migrationVersion`; after that, whatever the
 // user sets sticks. Bump MIGRATION_VERSION when adding a new one.
-const MIGRATION_VERSION = 1;
-if ((config.get('migrationVersion') ?? 0) < 1) {
+const MIGRATION_VERSION = 4;
+const currentMigrationVersion = config.get('migrationVersion') ?? 0;
+if (currentMigrationVersion < 1) {
   // Migrate the old runaway default (10000 iterations) down to a sane
   // ceiling, and old conservative defaults up to the current ones.
   if (config.get('agentMaxIterations') >= 10000) {
@@ -459,6 +460,19 @@ if ((config.get('migrationVersion') ?? 0) < 1) {
   if (config.get('rateLimitCommands') <= 100) {
     config.set('rateLimitCommands', 10000);
   }
+}
+
+if (currentMigrationVersion < 4) {
+  // Vendor aliases below were removed from Codeep's curated catalogue after
+  // their replacements became available. Migrate only exact known aliases:
+  // OpenRouter/Ollama/custom model ids remain user-controlled.
+  const provider = config.get('provider');
+  const model = config.get('model');
+  const replacement = replacementModelFor(provider, model);
+  if (replacement) config.set('model', replacement);
+}
+
+if (currentMigrationVersion < MIGRATION_VERSION) {
   config.set('migrationVersion', MIGRATION_VERSION);
 }
 
@@ -1475,7 +1489,10 @@ export function loadProfile(name: string): Profile | null {
 
 export function applyProfile(profile: Profile): void {
   config.set('provider', profile.provider);
-  config.set('model', profile.model);
+  // A profile saved before a vendor retired a model would otherwise restore an
+  // id the picker no longer offers. Normalize it exactly like the startup
+  // migration does — dynamic OpenRouter/Ollama/custom ids are never rewritten.
+  config.set('model', replacementModelFor(profile.provider, profile.model) ?? profile.model);
   config.set('protocol', profile.protocol);
   config.set('temperature', profile.temperature);
   config.set('maxTokens', profile.maxTokens);

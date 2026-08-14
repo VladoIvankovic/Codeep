@@ -19,6 +19,7 @@ export class Screen {
   private cursorY = 0;
   private cursorVisible = true;
   private resizeCallback: (() => void) | null = null;
+  private readonly resizeHandler: () => void;
   
   constructor() {
     this.width = process.stdout.columns || 80;
@@ -26,8 +27,9 @@ export class Screen {
     this.buffer = this.createEmptyBuffer();
     this.rendered = this.createEmptyBuffer();
     
-    // Handle resize
-    process.stdout.on('resize', () => {
+    // Keep the exact handler so cleanup can detach it. This matters for
+    // embedders/tests that create more than one Screen in the same process.
+    this.resizeHandler = () => {
       this.width = process.stdout.columns || 80;
       this.height = process.stdout.rows || 24;
       this.buffer = this.createEmptyBuffer();
@@ -37,7 +39,8 @@ export class Screen {
       if (this.resizeCallback) {
         this.resizeCallback();
       }
-    });
+    };
+    process.stdout.on('resize', this.resizeHandler);
   }
   
   /**
@@ -356,6 +359,8 @@ export class Screen {
    * Cleanup (show cursor, clear)
    */
   cleanup(): void {
+    process.stdout.removeListener('resize', this.resizeHandler);
+    this.resizeCallback = null;
     process.stdout.write(style.reset + screen.clear + cursor.home + cursor.show);
   }
 }

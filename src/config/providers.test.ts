@@ -14,9 +14,11 @@ import {
   availableReasoningTiers,
   resolveReasoningTier,
   providerNoStreamWithTools,
+  replacementModelFor,
+  isDynamicModelsProvider,
   REASONING_TIERS,
 } from './providers';
-import { getModelContextWindow } from '../utils/tokenTracker';
+import { getModelContextWindow, getPricingTable } from '../utils/tokenTracker';
 
 describe('providers', () => {
   describe('PROVIDERS constant', () => {
@@ -142,11 +144,12 @@ describe('providers', () => {
       expect(models.length).toBe(0);
     });
 
-    it('should include glm-5.2 for z.ai', () => {
+    it('should include current GLM models for z.ai', () => {
       const models = getProviderModels('z.ai');
       const ids = models.map(m => m.id);
       expect(ids).toContain('glm-5.2');
       expect(ids).toContain('glm-5-turbo');
+      expect(ids).not.toContain('glm-5.1');
     });
   });
 
@@ -272,9 +275,9 @@ describe('providers', () => {
       expect(modelIds).toContain('gpt-5.6-sol');
       expect(modelIds).toContain('gpt-5.6-terra');
       expect(modelIds).toContain('gpt-5.6-luna');
-      // Previous generation stays available in the picker.
-      expect(modelIds).toContain('gpt-5.5');
-      expect(modelIds).toContain('gpt-5.4');
+      expect(modelIds).not.toContain('gpt-5.5');
+      expect(modelIds).not.toContain('gpt-5.4');
+      expect(modelIds).not.toContain('gpt-5.4-mini');
     });
   });
 
@@ -284,21 +287,77 @@ describe('providers', () => {
       // Grok 4.5 is a reasoning model → graded effort supported.
       expect(modelSupportsReasoningEffort('grok', 'grok-4.5')).toBe(true);
     });
-    it('lists Gemini 3.1 Flash-Lite under google', () => {
-      expect(getProvider('google')!.models.map(m => m.id)).toContain('gemini-3.1-flash-lite');
-      expect(modelSupportsReasoningEffort('google', 'gemini-3.1-flash-lite')).toBe(true);
+    it('lists current Gemini Flash models under google', () => {
+      expect(getProvider('google')!.models.map(m => m.id)).toContain('gemini-3.6-flash');
+      expect(getProvider('google')!.models.map(m => m.id)).toContain('gemini-3.5-flash');
+      expect(getProvider('google')!.models.map(m => m.id)).toContain('gemini-3.5-flash-lite');
+      expect(modelSupportsReasoningEffort('google', 'gemini-3.5-flash-lite')).toBe(true);
     });
-    it('replaces qwen3-max with qwen3.7-max across every Qwen variant', () => {
-      for (const id of ['qwen', 'qwen-api', 'qwen-cn', 'qwen-cn-api']) {
+    it('uses Qwen 3.7 replacements instead of retiring coder aliases', () => {
+      for (const id of ['qwen', 'qwen-cn']) {
+        const ids = getProvider(id)!.models.map(m => m.id);
+        expect(ids).toContain('qwen3.7-plus');
+        expect(ids).not.toContain('qwen3-coder-plus');
+        expect(ids).not.toContain('qwen3-coder-next');
+      }
+      for (const id of ['qwen-api', 'qwen-cn-api']) {
         const ids = getProvider(id)!.models.map(m => m.id);
         expect(ids).toContain('qwen3.7-max');
-        expect(ids).not.toContain('qwen3-max');
+        expect(ids).toContain('qwen3.7-plus');
+        expect(ids).not.toContain('qwen3-coder-plus');
       }
     });
-    it('prices and sizes the new models (pricing/context lockstep holds)', () => {
-      for (const id of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'grok-4.5', 'gemini-3.1-flash-lite', 'qwen3.7-max']) {
-        expect(getModelContextWindow(id)).not.toBe(128_000); // 128k is the unknown-fallback
+    it('prices and sizes every curated model (pricing/context lockstep holds)', () => {
+      // Models that deliberately carry a context window but no pricing row.
+      // Each needs a matching comment in tokenTracker.ts saying why.
+      const UNPRICED_BY_DESIGN = new Set([
+        'kimi-k2.7-code-highspeed', // Moonshot publishes no distinct high-speed rate
+        'qwen3.8-max-preview',      // Token-Plan credits only; no pay-per-use rate published
+      ]);
+      const priced = new Set(getPricingTable().map(entry => entry.model));
+
+      // The exemptions must stay exemptions: if a rate is ever added, delete the
+      // entry here rather than leaving a dead suppression that hides the next gap.
+      for (const id of UNPRICED_BY_DESIGN) {
+        expect(priced.has(id), `${id} is now priced — drop it from UNPRICED_BY_DESIGN`).toBe(false);
       }
+
+      const missingContext: string[] = [];
+      const missingPricing: string[] = [];
+      for (const [providerId, provider] of Object.entries(PROVIDERS)) {
+        // Dynamic catalogues are user-controlled and their ids are namespaced
+        // (openrouter), HF-style (modelscope) or local (ollama/custom), so they
+        // resolve upstream rather than through our tables. Four providers, not
+        // three — modelscope carries a curated fallback id and is exempt too.
+        if (isDynamicModelsProvider(providerId)) continue;
+        for (const model of provider.models) {
+          // 128k is the unknown-fallback, so it doubles as "no entry".
+          if (getModelContextWindow(model.id) === 128_000) missingContext.push(`${providerId}/${model.id}`);
+          if (!priced.has(model.id) && !UNPRICED_BY_DESIGN.has(model.id)) missingPricing.push(`${providerId}/${model.id}`);
+        }
+      }
+      expect(missingContext).toEqual([]);
+      expect(missingPricing).toEqual([]);
+    });
+  });
+
+  describe('retired model migrations', () => {
+    it('maps exact curated aliases to their supported replacements', () => {
+      expect(replacementModelFor('z.ai', 'glm-5.1')).toBe('glm-5.2');
+      expect(replacementModelFor('z.ai-api', 'glm-5')).toBe('glm-5.2');
+      expect(replacementModelFor('openai', 'gpt-5.5')).toBe('gpt-5.6-sol');
+      expect(replacementModelFor('google', 'gemini-3.5-flash')).toBeUndefined();
+      expect(replacementModelFor('grok', 'grok-code-fast-1')).toBe('grok-build-0.1');
+      expect(replacementModelFor('grok', 'grok-4-fast-reasoning')).toBe('grok-4.3');
+      expect(replacementModelFor('kimi-api', 'kimi-k3-code')).toBe('kimi-k3');
+      expect(replacementModelFor('qwen', 'qwen3-coder-plus')).toBe('qwen3.7-plus');
+      expect(replacementModelFor('qwen-api', 'qwen3-coder-flash')).toBe('qwen3.6-flash');
+    });
+
+    it('never rewrites dynamic or unknown model ids', () => {
+      expect(replacementModelFor('openrouter', 'openai/gpt-5.5')).toBeUndefined();
+      expect(replacementModelFor('ollama', 'qwen3-coder-plus:latest')).toBeUndefined();
+      expect(replacementModelFor('custom', 'company/private-model')).toBeUndefined();
     });
   });
 
@@ -344,7 +403,9 @@ describe('providers', () => {
       expect(provider!.subscribeUrl).toBe('https://aistudio.google.com/apikey');
       const modelIds = provider!.models.map(m => m.id);
       expect(modelIds).toContain('gemini-3.1-pro-preview');
+      expect(modelIds).toContain('gemini-3.6-flash');
       expect(modelIds).toContain('gemini-3.5-flash');
+      expect(modelIds).toContain('gemini-3.5-flash-lite');
     });
   });
 
@@ -419,13 +480,18 @@ describe('providers', () => {
       expect(reasoningParamsFor('z.ai', 'glm-5.2', 'high')).toEqual({ reasoning_effort: 'high' });
       expect(reasoningParamsFor('z.ai', 'glm-5.2', 'max')).toEqual({ reasoning_effort: 'max' });
     });
+    it('Kimi K3 → reasoning_effort low|high|max', () => {
+      expect(reasoningParamsFor('kimi-api', 'kimi-k3', 'low')).toEqual({ reasoning_effort: 'low' });
+      expect(reasoningParamsFor('kimi-api', 'kimi-k3', 'medium')).toEqual({ reasoning_effort: 'high' });
+      expect(reasoningParamsFor('kimi-api', 'kimi-k3', 'max')).toEqual({ reasoning_effort: 'max' });
+    });
     it('OpenRouter → reasoning.effort, max capped at high', () => {
       expect(reasoningParamsFor('openrouter', 'openai/gpt-5.5', 'medium')).toEqual({ reasoning: { effort: 'medium' } });
       expect(reasoningParamsFor('openrouter', 'openai/gpt-5.5', 'max')).toEqual({ reasoning: { effort: 'high' } });
     });
     it('never emits a value Gemini/OpenAI reject across all tiers', () => {
       for (const tier of REASONING_TIERS) {
-        const g = reasoningParamsFor('google', 'gemini-3.5-flash', tier) as { reasoning_effort?: string };
+        const g = reasoningParamsFor('google', 'gemini-3.6-flash', tier) as { reasoning_effort?: string };
         if (g.reasoning_effort) expect(['low', 'high']).toContain(g.reasoning_effort);
         const o = reasoningParamsFor('openai', 'gpt-5.5', tier) as { reasoning_effort?: string };
         if (o.reasoning_effort) expect(['none', 'low', 'medium', 'high', 'xhigh']).toContain(o.reasoning_effort);
@@ -440,6 +506,7 @@ describe('providers', () => {
       expect(availableReasoningTiers('google', 'gemini-3.1-pro-preview')).toEqual(['auto', 'low', 'high']);
       expect(availableReasoningTiers('z.ai', 'glm-5.2')).toEqual(['auto', 'high', 'max']);
       expect(availableReasoningTiers('deepseek', 'deepseek-v4-pro')).toEqual(['auto', 'high', 'max']);
+      expect(availableReasoningTiers('kimi-api', 'kimi-k3')).toEqual(['auto', 'low', 'high', 'max']);
       expect(availableReasoningTiers('openrouter', 'openai/gpt-5.5')).toEqual(['auto', 'low', 'medium', 'high']);
     });
     it('returns [] for unsupported models', () => {
@@ -449,7 +516,7 @@ describe('providers', () => {
     it('drift guard — every listed non-auto tier yields a DISTINCT param', () => {
       const cases = [
         ['anthropic', 'claude-opus-5'], ['openai', 'gpt-5.5'],
-        ['google', 'gemini-3.1-pro-preview'], ['z.ai', 'glm-5.2'],
+        ['google', 'gemini-3.1-pro-preview'], ['z.ai', 'glm-5.2'], ['kimi-api', 'kimi-k3'],
         ['deepseek', 'deepseek-v4-pro'], ['openrouter', 'openai/gpt-5.5'],
         ['grok', 'grok-4.3'],
       ];
@@ -464,30 +531,47 @@ describe('providers', () => {
 
   describe('new providers — Kimi / Grok / Qwen', () => {
     it('registers the subscription + pay-per-use + CN variants', () => {
-      for (const id of ['kimi', 'kimi-api', 'kimi-cn', 'grok', 'qwen', 'qwen-api', 'qwen-cn', 'qwen-cn-api', 'modelscope']) {
+      for (const id of ['kimi', 'kimi-api', 'kimi-cn', 'grok', 'qwen', 'qwen-token-plan', 'qwen-api', 'qwen-cn', 'qwen-cn-api', 'modelscope']) {
         expect(PROVIDERS[id], id).toBeDefined();
       }
     });
     it('Kimi Code subscription uses the coding base URL + kimi-for-coding alias', () => {
       expect(PROVIDERS['kimi'].protocols.openai?.baseUrl).toBe('https://api.kimi.com/coding/v1');
       expect(PROVIDERS['kimi'].defaultModel).toBe('kimi-for-coding');
+      expect(PROVIDERS['kimi'].models.map(m => m.id)).toEqual([
+        'kimi-for-coding', 'k3', 'k3-256k', 'kimi-for-coding-highspeed',
+      ]);
       expect(PROVIDERS['kimi-api'].protocols.openai?.baseUrl).toBe('https://api.moonshot.ai/v1');
-      expect(PROVIDERS['kimi-api'].defaultModel).toBe('kimi-k3-code');
+      expect(PROVIDERS['kimi-api'].defaultModel).toBe('kimi-k3');
     });
-    it('Kimi K3 models are exposed on pay-per-use providers', () => {
+    it('Kimi K3 is exposed on pay-per-use providers', () => {
       const apiModels = PROVIDERS['kimi-api'].models.map(m => m.id);
-      expect(apiModels).toContain('kimi-k3-code');
-      expect(apiModels).toContain('kimi-k3-code-highspeed');
-      expect(apiModels).toContain('kimi-k3-thinking');
-      expect(PROVIDERS['kimi-api'].maxOutputTokens).toBe(65_536);
+      expect(apiModels).toContain('kimi-k3');
+      expect(apiModels).not.toContain('kimi-k2.5');
+      expect(PROVIDERS['kimi-api'].maxOutputTokens).toBe(131_072);
       const cnModels = PROVIDERS['kimi-cn'].models.map(m => m.id);
-      expect(cnModels).toContain('kimi-k3-code');
-      expect(PROVIDERS['kimi-cn'].defaultModel).toBe('kimi-k3-code');
+      expect(cnModels).toContain('kimi-k3');
+      expect(PROVIDERS['kimi-cn'].defaultModel).toBe('kimi-k3');
     });
     it('Qwen Coding Plan vs pay-per-use base URLs (mirrors z.ai pattern)', () => {
       expect(PROVIDERS['qwen'].protocols.openai?.baseUrl).toBe('https://coding-intl.dashscope.aliyuncs.com/v1');
       expect(PROVIDERS['qwen-api'].protocols.openai?.baseUrl).toBe('https://dashscope-intl.aliyuncs.com/compatible-mode/v1');
-      expect(PROVIDERS['qwen'].defaultModel).toBe('qwen3-coder-plus');
+      expect(PROVIDERS['qwen'].defaultModel).toBe('qwen3.7-plus');
+      expect(PROVIDERS['qwen'].models.map(m => m.id)).toEqual([
+        'qwen3.7-plus',
+        'qwen3.6-plus',
+        'qwen3.5-plus',
+      ]);
+      expect(PROVIDERS['qwen-api'].defaultModel).toBe('qwen3.7-max');
+      expect(PROVIDERS['qwen-api'].models.map(m => m.id)).not.toContain('qwen3-coder-plus');
+    });
+    it('keeps Qwen Token Plan isolated from Coding Plan and pay-per-use', () => {
+      const tokenPlan = PROVIDERS['qwen-token-plan'];
+      expect(tokenPlan.protocols.openai?.baseUrl).toBe('https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1');
+      expect(tokenPlan.envKey).toBe('BAILIAN_TOKEN_PLAN_API_KEY');
+      expect(tokenPlan.defaultModel).toBe('qwen3.8-max-preview');
+      expect(tokenPlan.models.map(m => m.id)).toContain('qwen3.8-max-preview');
+      expect(tokenPlan.noStreamWithTools).toBe(true);
     });
     it('Grok uses api.x.ai + max_completion_tokens (reasoning models)', () => {
       expect(PROVIDERS['grok'].protocols.openai?.baseUrl).toBe('https://api.x.ai/v1');
@@ -497,20 +581,21 @@ describe('providers', () => {
     it('Qwen + ModelScope set noStreamWithTools; others do not', () => {
       expect(providerNoStreamWithTools('qwen')).toBe(true);
       expect(providerNoStreamWithTools('qwen-api')).toBe(true);
+      expect(providerNoStreamWithTools('qwen-token-plan')).toBe(true);
       expect(providerNoStreamWithTools('modelscope')).toBe(true);
       expect(providerNoStreamWithTools('grok')).toBe(false);
       expect(providerNoStreamWithTools('kimi')).toBe(false);
       expect(providerNoStreamWithTools('openai')).toBe(false);
     });
     it('Kimi coding models reject custom sampling params (fixed temperature)', () => {
-      expect(modelRejectsSamplingParams('kimi-k3-code')).toBe(true);
-      expect(modelRejectsSamplingParams('kimi-k3-thinking')).toBe(true);
+      expect(modelRejectsSamplingParams('kimi-k3')).toBe(true);
       expect(modelRejectsSamplingParams('kimi-k2.7-code')).toBe(true);
       expect(modelRejectsSamplingParams('kimi-for-coding')).toBe(true);
-      expect(modelRejectsSamplingParams('kimi-k2.5')).toBe(false);
-      expect(modelRejectsSamplingParams('kimi-k3-code-highspeed')).toBe(true);
+      expect(modelRejectsSamplingParams('kimi-for-coding-highspeed')).toBe(true);
+      expect(modelRejectsSamplingParams('k3-256k')).toBe(true);
+      expect(modelRejectsSamplingParams('kimi-k2.6')).toBe(false);
     });
-    it('Grok supports graded reasoning_effort; Kimi/Qwen-coders do not', () => {
+    it('Grok and Kimi K3 support graded reasoning_effort; aliases/Qwen do not', () => {
       expect(modelSupportsReasoningEffort('grok', 'grok-4.3')).toBe(true);
       // Coders (grok-build, grok-code-fast) are non-reasoning — reasoning_effort
       // 400s on them, which would silently drop the turn into the text-tool fallback.
@@ -518,7 +603,10 @@ describe('providers', () => {
       expect(modelSupportsReasoningEffort('grok', 'grok-code-fast-1')).toBe(false);
       expect(modelSupportsReasoningEffort('grok', 'grok-4-fast-non-reasoning')).toBe(false);
       expect(modelSupportsReasoningEffort('kimi', 'kimi-for-coding')).toBe(false);
-      expect(modelSupportsReasoningEffort('qwen', 'qwen3-coder-plus')).toBe(false);
+      expect(modelSupportsReasoningEffort('kimi', 'k3')).toBe(true);
+      expect(modelSupportsReasoningEffort('kimi', 'k3-256k')).toBe(true);
+      expect(modelSupportsReasoningEffort('kimi-api', 'kimi-k3')).toBe(true);
+      expect(modelSupportsReasoningEffort('qwen', 'qwen3.7-plus')).toBe(false);
     });
     it('Grok reasoning_effort: none/low/medium/high, Max → high', () => {
       expect(reasoningParamsFor('grok', 'grok-4.3', 'medium')).toEqual({ reasoning_effort: 'medium' });
@@ -531,8 +619,11 @@ describe('providers', () => {
     it('passes through tiers the model distinguishes', () => {
       expect(resolveReasoningTier('anthropic', 'claude-opus-5', 'low')).toBe('low');
       expect(resolveReasoningTier('z.ai', 'glm-5.2', 'max')).toBe('max');
+      expect(resolveReasoningTier('kimi-api', 'kimi-k3', 'max')).toBe('max');
     });
     it('collapses out-of-range tiers to the level the model actually runs', () => {
+      // Kimi K3 has low|high|max — medium runs as high.
+      expect(resolveReasoningTier('kimi-api', 'kimi-k3', 'medium')).toBe('high');
       // GLM-5.2 grades only high|max — low/medium run as high.
       expect(resolveReasoningTier('z.ai', 'glm-5.2', 'low')).toBe('high');
       expect(resolveReasoningTier('z.ai', 'glm-5.2', 'medium')).toBe('high');
@@ -546,4 +637,3 @@ describe('providers', () => {
     });
   });
 });
-

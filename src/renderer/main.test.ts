@@ -1,5 +1,21 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// Loading main.ts must not shell out to git: `--version`, `--help` and
+// `account` all import this module and would otherwise pay for 3–4 git
+// subprocesses they never use.
+vi.mock('../utils/git', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/git')>();
+  return { ...actual, getGitStatus: vi.fn(actual.getGitStatus) };
+});
+
 import { deriveSessionName } from './main';
+import { getGitStatus } from '../utils/git';
+
+describe('module load', () => {
+  it('does not resolve the git branch at import time', () => {
+    expect(getGitStatus).not.toHaveBeenCalled();
+  });
+});
 
 describe('deriveSessionName', () => {
   it('returns an empty string for blank input', () => {

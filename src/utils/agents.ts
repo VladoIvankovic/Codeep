@@ -18,7 +18,7 @@
  *   name: reviewer
  *   description: Reviews a diff for correctness & security
  *   tools: [read_file, search_code, execute_command]   # allowlist; omit = all
- *   model: glm-5.1            # optional provider/model or model override
+ *   model: glm-5.2            # optional provider/model or model override
  *   personality: security     # optional — reuse a personality preset
  *   maxIterations: 15         # optional budget
  *   ---

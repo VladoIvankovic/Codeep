@@ -9,6 +9,12 @@ import { fg, style } from './ansi';
 import { getActionColor, formatActionTarget, getActionLabel } from './components/ActionFormatting';
 import { PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES, LOGO_HEIGHT } from './components/uiConstants';
 import { bottomPanelHeight, chatLayout, messageOffsets, scrollOffsetForTarget, scrollWindow, formatTokenCount, statusBarRightHint, activePanel, computeInputDisplay, agentProgressBar, truncateNotification, shouldShowPasteDialog, buildPasteInfo, type LayoutSnapshot } from './layout';
+import {
+  buildAgentTimelineModel,
+  formatElapsed,
+  truncateMiddle,
+  type TimelineStageStatus,
+} from './components/AgentTimeline';
 import { parseCommandInput } from './inputParsing';
 import { formatWelcomeMessage } from './components/WelcomeFormatter';
 import { filterCommands, detectMentionQuery } from './components/Autocomplete';
@@ -25,6 +31,7 @@ import {
 import clipboardy from 'clipboardy';
 import { readImageFromClipboard } from '../utils/clipboard.js';
 import { spawn } from 'child_process';
+import { estimateResourceImpact, formatResourceImpact } from '../utils/resourceImpact';
 
 // (PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES, LOGO_HEIGHT moved to
 // ./components/uiConstants — imported above.)
@@ -139,6 +146,10 @@ export class App {
   private agentThinking = '';
   private agentWaitingForAI = false;
   private agentLog: string[] = [];
+  /** Process uptime shown in the persistent footer. */
+  private appStartedAt = Date.now();
+  /** Start of the current agent run; unlike app uptime, resets per task. */
+  private agentStartedAt: number | null = null;
   
   // Paste detection state
   private pasteInfo: { chars: number; lines: number; preview: string; fullText: string } | null = null;
@@ -446,8 +457,10 @@ export class App {
    * Set agent running state
    */
   setAgentRunning(running: boolean): void {
+    const wasRunning = this.isAgentRunning;
     this.isAgentRunning = running;
     if (running) {
+      if (!wasRunning) this.agentStartedAt = Date.now();
       this.agentIteration = 0;
       this.agentMaxIterations = 0;
       this.agentActions = [];
@@ -457,6 +470,7 @@ export class App {
       this.isLoading = false; // Clear loading state when agent takes over
       this.startSpinner();
     } else {
+      this.agentStartedAt = null;
       this.isLoading = false; // Ensure loading is cleared when agent finishes
       this.stopSpinner();
     }
@@ -1646,6 +1660,11 @@ export class App {
     }
 
     this.screen.clear();
+
+    if (this.shouldRenderAgentTimeline(width, height)) {
+      this.renderAgentTimelineScreen(width, height);
+      return;
+    }
     
     // If menu or settings is open, reserve space for it at bottom
     const panelHeight = bottomPanelHeight({
@@ -1680,11 +1699,16 @@ export class App {
     } satisfies LayoutSnapshot);
     const layout = chatLayout(height, panelHeight);
     const mainHeight = layout.mainHeight;
-    const messagesStart = layout.messagesStart;
+    const headerHeight = width >= 60 && height >= 16 ? 2 : 0;
+    const messagesStart = Math.min(layout.messagesEnd, headerHeight);
     const messagesEnd = layout.messagesEnd;
     const separatorLine = layout.separatorLine;
     const inputLine = layout.inputLine;
     const statusLine = layout.statusLine;
+
+    if (headerHeight > 0) {
+      this.renderPersistentHeader(width);
+    }
 
     // Messages
     const messagesHeight = Math.max(1, messagesEnd - messagesStart + 1);
@@ -1791,6 +1815,328 @@ export class App {
     }
     
     this.screen.render();
+  }
+
+  private shouldRenderAgentTimeline(width: number, height: number): boolean {
+    if (!this.isAgentRunning || width < 92 || height < 26) return false;
+    return !(
+      this.pasteInfoOpen ||
+      this.permissionOpen ||
+      this.sessionPickerOpen ||
+      this.confirmOpen ||
+      this.hunkPickerOpen ||
+      this.statusOpen ||
+      this.helpOpen ||
+      this.settingsOpen ||
+      this.searchOpen ||
+      this.exportOpen ||
+      this.logoutOpen ||
+      this.loginOpen ||
+      this.menuOpen ||
+      this.showAutocomplete ||
+      this.showMentionAutocomplete
+    );
+  }
+
+  private renderPersistentHeader(width: number): void {
+    const status = this.options.getStatus();
+    const project = status.projectPath.split('/').filter(Boolean).pop() || status.projectPath || 'no project';
+    const session = status.sessionId ? status.sessionId.slice(0, 8) : 'new';
+    const branch = status.branch || '';
+
+    this.screen.writeLine(0, '');
+    let x = 1;
+    const writeSegment = (label: string, value: string, valueStyle = fg.white): boolean => {
+      const separator = x > 1 ? ' │ ' : '';
+      const required = separator.length + label.length + value.length;
+      if (x + required >= width - 1) return false;
+      if (separator) {
+        this.screen.write(x, 0, separator, fg.gray);
+        x += separator.length;
+      }
+      this.screen.write(x, 0, label, fg.gray);
+      x += label.length;
+      this.screen.write(x, 0, value, valueStyle);
+      x += value.length;
+      return true;
+    };
+
+    const wordmark = 'CODEEP';
+    this.screen.write(x, 0, wordmark, PRIMARY_COLOR + style.bold);
+    x += wordmark.length;
+    writeSegment('', `v${status.version}`);
+    if (width >= 86) writeSegment('session: ', session);
+    writeSegment('model: ', truncateMiddle(status.model || 'unknown', 22));
+    if (width >= 112) writeSegment('provider: ', truncateMiddle(status.provider, 14));
+    if (width >= 128) writeSegment('project: ', truncateMiddle(project, 18));
+    if (width >= 148 && branch) {
+      // Budget the separator and label before truncating. Sizing the value off
+      // `width - x` alone always overshoots writeSegment's fit guard, so a
+      // branch long enough to need truncating used to render nothing at all.
+      const branchBudget = width - x - ' │ '.length - 'branch: '.length - 2;
+      if (branchBudget >= 10) {
+        writeSegment('branch: ', truncateMiddle(branch, branchBudget), PRIMARY_COLOR);
+      }
+    }
+    this.screen.horizontalLine(1, '─', PRIMARY_COLOR);
+  }
+
+  private renderAgentTimelineScreen(width: number, height: number): void {
+    this.screen.clear();
+    this.renderPersistentHeader(width);
+
+    const inputY = height - 4;
+    const hintsY = height - 3;
+    const footerDividerY = height - 2;
+    const statusY = height - 1;
+    const workspaceTop = 2;
+    const workspaceBottom = inputY - 2;
+    const railWidth = width >= 132 ? Math.min(44, Math.floor(width * 0.28)) : 0;
+    const dividerX = railWidth > 0 ? width - railWidth : width;
+    const leftWidth = railWidth > 0 ? dividerX - 1 : width;
+
+    const timeline = buildAgentTimelineModel({
+      actions: this.agentActions,
+      thinking: this.agentThinking,
+      waitingForAI: this.agentWaitingForAI,
+      iteration: this.agentIteration,
+      maxIterations: this.agentMaxIterations,
+    });
+    const task = this.currentAgentTask();
+
+    this.screen.writeLine(workspaceTop, '');
+    this.screen.write(1, workspaceTop, 'YOU', PRIMARY_COLOR + style.bold);
+    this.screen.write(7, workspaceTop, 'Task:', PRIMARY_COLOR + style.bold);
+    this.screen.write(
+      13,
+      workspaceTop,
+      truncateMiddle(task, Math.max(8, leftWidth - 15)),
+      fg.white,
+    );
+    this.screen.horizontalLine(workspaceTop + 1, '─', fg.gray);
+
+    this.screen.writeLine(workspaceTop + 2, '');
+    this.screen.write(1, workspaceTop + 2, 'AGENT', PRIMARY_COLOR + style.bold);
+    const runLabel = this.agentWaitingForAI ? 'Choosing the next step' : 'Executing a tool';
+    this.screen.write(9, workspaceTop + 2, runLabel, fg.white);
+    const stepLabel = this.agentMaxIterations > 0
+      ? `step ${this.agentIteration}/${this.agentMaxIterations}`
+      : `step ${this.agentIteration}`;
+    if (stepLabel.length + 2 < leftWidth) {
+      this.screen.write(leftWidth - stepLabel.length - 1, workspaceTop + 2, stepLabel, fg.gray);
+    }
+
+    const expandedTimeline = workspaceBottom - workspaceTop >= 30;
+    let y = workspaceTop + 4;
+    if (expandedTimeline) {
+      this.screen.write(4, y, 'PLAN (HIGH LEVEL)', PRIMARY_COLOR + style.bold);
+      this.screen.write(22, y++, 'Inspect the relevant project context', fg.white);
+      this.screen.write(22, y++, 'Apply focused changes with permission checks', fg.white);
+      this.screen.write(22, y++, 'Run verification and summarize the result', fg.white);
+      this.screen.write(4, y, '─'.repeat(Math.max(8, leftWidth - 6)), fg.gray);
+      y += 2;
+    }
+
+    for (const stage of timeline.stages) {
+      if (y + 1 > workspaceBottom) break;
+      const marker = stage.status === 'done' ? '●' : stage.status === 'active' ? '◆' : '○';
+      const markerStyle = this.timelineStatusStyle(stage.status);
+      this.screen.write(1, y, marker, markerStyle);
+      this.screen.write(2, y + 1, '│', stage.status === 'pending' ? fg.gray : markerStyle);
+      if (expandedTimeline && y + 2 <= workspaceBottom) {
+        this.screen.write(2, y + 2, '│', stage.status === 'pending' ? fg.gray : markerStyle);
+      }
+      this.screen.write(4, y, stage.id.padEnd(8), markerStyle + (stage.status === 'active' ? style.bold : ''));
+      this.screen.write(
+        13,
+        y,
+        truncateMiddle(stage.summary, Math.max(8, leftWidth - 24)),
+        stage.status === 'pending' ? fg.gray : fg.white,
+      );
+      const stateLabel = stage.status === 'done' ? 'done' : stage.status === 'active' ? 'active' : 'pending';
+      if (leftWidth > 50) {
+        this.screen.write(leftWidth - stateLabel.length - 1, y, stateLabel, markerStyle);
+      }
+      this.screen.write(
+        13,
+        y + 1,
+        truncateMiddle(stage.detail, Math.max(8, leftWidth - 16)),
+        fg.gray,
+      );
+      y += expandedTimeline ? 3 : 2;
+
+      if (stage.status === 'active' && y + 2 <= workspaceBottom) {
+        if (timeline.currentTarget) {
+          const actionType = this.currentActionType();
+          const actionLabel = actionType ? getActionLabel(actionType) : 'Working';
+          this.screen.write(13, y, `${actionLabel}:`, PRIMARY_COLOR);
+          this.screen.write(
+            13 + actionLabel.length + 2,
+            y,
+            formatActionTarget(timeline.currentTarget, Math.max(12, leftWidth - actionLabel.length - 18)),
+            fg.white,
+          );
+          y++;
+        }
+        if (this.agentMaxIterations > 0) {
+          const barWidth = Math.max(8, Math.min(36, leftWidth - 28));
+          const bar = agentProgressBar(this.agentIteration, this.agentMaxIterations, barWidth);
+          const percent = `${Math.round(timeline.progress * 100)}%`;
+          this.screen.write(13, y, percent.padStart(4), PRIMARY_COLOR);
+          this.screen.write(19, y, bar, PRIMARY_COLOR);
+          y++;
+        }
+        if (expandedTimeline && y + 3 <= workspaceBottom) {
+          this.screen.write(13, y, 'RECENT ACTIVITY', PRIMARY_COLOR + style.bold);
+          this.screen.write(
+            29,
+            y,
+            '─'.repeat(Math.max(4, leftWidth - 31)),
+            fg.gray,
+          );
+          y++;
+
+          const recentActivity = this.agentLog.slice(-3);
+          if (recentActivity.length === 0) {
+            this.screen.write(13, y++, 'Waiting for the first completed action', fg.gray);
+          } else {
+            for (const entry of recentActivity) {
+              if (y > workspaceBottom) break;
+              const isError = entry.startsWith('✗') || entry.startsWith('!');
+              const isActive = entry.startsWith('◆');
+              const entryStyle = isError ? fg.red : isActive ? PRIMARY_COLOR : fg.green;
+              this.screen.write(13, y, entry.slice(0, 1), entryStyle + style.bold);
+              this.screen.write(
+                15,
+                y++,
+                truncateMiddle(entry.slice(2), Math.max(8, leftWidth - 17)),
+                isActive ? fg.white : fg.gray,
+              );
+            }
+          }
+          y++;
+        }
+      }
+    }
+
+    if (railWidth > 0) {
+      this.renderAgentContextRail(dividerX, workspaceTop, workspaceBottom, railWidth, timeline);
+    }
+
+    this.screen.horizontalLine(inputY - 1, '─', PRIMARY_COLOR);
+    this.renderInput(inputY, width, false);
+    this.renderAgentKeyHints(hintsY, width);
+    this.screen.horizontalLine(footerDividerY, '─', fg.gray);
+    this.renderStatusBar(statusY, width);
+    this.screen.render();
+  }
+
+  private renderAgentContextRail(
+    dividerX: number,
+    top: number,
+    bottom: number,
+    railWidth: number,
+    timeline: ReturnType<typeof buildAgentTimelineModel>,
+  ): void {
+    for (let y = top; y <= bottom; y++) {
+      this.screen.write(dividerX, y, '│', PRIMARY_COLOR);
+    }
+
+    const x = dividerX + 2;
+    const contentWidth = Math.max(8, railWidth - 3);
+    let y = top + 1;
+    this.screen.write(x, y++, `CURRENT: ${timeline.currentStage}`, PRIMARY_COLOR + style.bold);
+    y++;
+
+    this.screen.write(x, y++, `FILES (${timeline.files.length})`, PRIMARY_COLOR + style.bold);
+    if (timeline.files.length === 0) {
+      this.screen.write(x, y++, 'No file changes yet', fg.gray);
+    } else {
+      for (const file of timeline.files.slice(-6)) {
+        if (y > bottom - 7) break;
+        const marker = file.type === 'delete' ? 'D' : file.type === 'write' ? 'A' : 'M';
+        const color = file.result === 'error' ? fg.red : getActionColor(file.type);
+        this.screen.write(x, y, marker, color + style.bold);
+        this.screen.write(
+          x + 2,
+          y++,
+          formatActionTarget(file.target, contentWidth - 2),
+          file.result === 'error' ? fg.red : fg.white,
+        );
+      }
+    }
+
+    y++;
+    if (y <= bottom - 5) {
+      this.screen.write(x, y++, 'CHECKS', PRIMARY_COLOR + style.bold);
+      if (timeline.checks.length === 0) {
+        const activeCheck = timeline.currentStage === 'VERIFY' && timeline.currentTarget
+          ? formatActionTarget(timeline.currentTarget, contentWidth)
+          : 'Pending';
+        this.screen.write(x, y++, activeCheck, timeline.currentStage === 'VERIFY' ? fg.yellow : fg.gray);
+      } else {
+        for (const check of timeline.checks.slice(-3)) {
+          if (y > bottom - 3) break;
+          const symbol = check.result === 'success' ? '✓' : '!';
+          const color = check.result === 'success' ? fg.green : fg.red;
+          this.screen.write(x, y, symbol, color + style.bold);
+          this.screen.write(x + 2, y++, formatActionTarget(check.target, contentWidth - 2), fg.white);
+        }
+      }
+    }
+
+    const status = this.options.getStatus();
+    const contextY = Math.max(y + 1, bottom - 3);
+    if (contextY <= bottom) {
+      this.screen.write(x, contextY, 'CONTEXT', PRIMARY_COLOR + style.bold);
+      if (contextY + 1 <= bottom) {
+        const project = status.projectPath.split('/').filter(Boolean).pop() || status.projectPath;
+        this.screen.write(x, contextY + 1, truncateMiddle(project, contentWidth), fg.white);
+      }
+      if (contextY + 2 <= bottom) {
+        const branch = status.branch ? `branch ${status.branch}` : `${status.provider} · ${status.model}`;
+        this.screen.write(x, contextY + 2, truncateMiddle(branch, contentWidth), fg.gray);
+      }
+    }
+  }
+
+  private renderAgentKeyHints(y: number, width: number): void {
+    this.screen.writeLine(y, '');
+    const left = 'Keys: Enter reply · / commands · Esc stop · ↑↓ history';
+    const runStartedAt = this.agentStartedAt ?? Date.now();
+    const right = `agent: working · ${formatElapsed(Date.now() - runStartedAt)}`;
+    this.screen.write(1, y, truncateMiddle(left, Math.max(12, width - right.length - 4)), fg.gray);
+    if (right.length + 2 < width) {
+      this.screen.write(width - right.length - 1, y, right, fg.gray);
+    }
+  }
+
+  private timelineStatusStyle(status: TimelineStageStatus): string {
+    if (status === 'done') return fg.green;
+    if (status === 'active') return PRIMARY_COLOR;
+    return fg.gray;
+  }
+
+  private currentActionType(): string {
+    const separator = this.agentThinking.indexOf(':');
+    if (separator < 0) return '';
+    const type = this.agentThinking.slice(0, separator).trim().toLowerCase();
+    return ['read', 'search', 'list', 'fetch', 'write', 'edit', 'delete', 'mkdir', 'command'].includes(type)
+      ? type
+      : '';
+  }
+
+  private currentAgentTask(): string {
+    for (let index = this.messages.length - 1; index >= 0; index--) {
+      const message = this.messages[index];
+      if (message.role !== 'user') continue;
+      const task = message.content
+        .replace(/^\[DRY RUN]\s*/i, '')
+        .replace(/^\[AGENT]\s*/i, '')
+        .trim();
+      if (task) return task;
+    }
+    return 'Autonomous coding task';
   }
   
   /**
@@ -1966,12 +2312,12 @@ export class App {
       return;
     }
     
-    // Agent running state - show special prompt with gradient
+    // Keep the composer available while the agent works so the user can steer
+    // the run without losing context or waiting for the current tool to finish.
     if (this.isAgentRunning) {
+      const promptSymbol = '❯ ';
+      const maxInputWidth = Math.max(1, width - promptSymbol.length - 1);
       if (inputValue) {
-        // User is typing a reply — show their input with a prompt
-        const promptSymbol = '❯ ';
-        const maxInputWidth = width - promptSymbol.length - 1;
         const displayInput = inputValue.length <= maxInputWidth ? inputValue : '…' + inputValue.slice(-(maxInputWidth - 1));
         this.screen.write(0, y, promptSymbol, PRIMARY_COLOR);
         this.screen.write(promptSymbol.length, y, displayInput + ' ');
@@ -1981,13 +2327,12 @@ export class App {
           this.screen.showCursor(true);
         }
       } else {
-        const spinner = SPINNER_FRAMES[this.spinnerFrame];
-        const stepLabel = this.agentMaxIterations > 0
-          ? `step ${this.agentIteration}/${this.agentMaxIterations}`
-          : `step ${this.agentIteration}`;
-        const agentText = `${spinner} Agent working... ${stepLabel} | ${this.agentActions.length} actions (Esc · or type to reply)`;
-        this.screen.write(0, y, PRIMARY_COLOR + style.bold + agentText + style.reset);
-        this.screen.showCursor(false);
+        this.screen.write(0, y, promptSymbol, PRIMARY_COLOR + style.bold);
+        this.screen.write(promptSymbol.length, y, 'Reply to agent…', fg.gray);
+        if (!hideCursor) {
+          this.screen.setCursor(promptSymbol.length, y);
+          this.screen.showCursor(true);
+        }
       }
       return;
     }
@@ -2654,8 +2999,62 @@ export class App {
 
     const status = this.options.getStatus();
     const stats = status.tokenStats;
+    const rightText = statusBarRightHint({
+      scrollOffset: this.scrollOffset,
+      unseenWhileScrolled: this.unseenWhileScrolled,
+      isStreaming: this.isStreaming,
+      isLoading: this.isLoading,
+    });
 
-    // Left: model (gradient) · msg count · token count
+    if (this.scrollOffset > 0 && this.unseenWhileScrolled > 0) {
+      this.screen.write(width - rightText.length, y, rightText, PRIMARY_COLOR);
+      return;
+    }
+
+    // Wide terminals get an operational footer: elapsed time and honest,
+    // explicitly-labelled resource ranges. These are estimates, never implied
+    // to be provider measurements.
+    if (width >= 110 && stats) {
+      const totalTokens = Math.max(0, stats.totalTokens);
+      const elapsed = formatElapsed(Date.now() - this.appStartedAt);
+      const leftParts = [
+        `runtime ${elapsed}`,
+        `tokens ${formatTokenCount(totalTokens)}`,
+      ];
+      if (typeof stats.estimatedCost === 'number' && stats.estimatedCost > 0) {
+        leftParts.push(`cost $${stats.estimatedCost < 0.01 ? stats.estimatedCost.toFixed(4) : stats.estimatedCost.toFixed(2)}`);
+      }
+      // Thinking-effort tier, same chip the compact fallback shows beside the
+      // model. Only present when set + supported — see getStatus.
+      if (status.reasoningEffort) {
+        leftParts.push(`effort ${status.reasoningEffort}`);
+      }
+      const leftText = leftParts.join(' · ');
+      this.screen.write(1, y, leftText, fg.gray);
+
+      // The right edge belongs to the hint: while streaming it reads
+      // "Esc to stop", the only on-screen affordance for interrupting a run.
+      // Claim it first, then spend whatever gap is left on the (decorative)
+      // resource estimate — never the other way around.
+      // Same right-edge column as the compact fallback and the scroll badge, so
+      // the hint doesn't shift by one when the terminal crosses 110 columns.
+      let rightEdge = width;
+      if (rightText && width - rightText.length > leftText.length + 3) {
+        rightEdge = width - rightText.length;
+        this.screen.write(rightEdge, y, rightText, fg.gray);
+      }
+      if (totalTokens > 0 && width >= 138) {
+        const impact = formatResourceImpact(estimateResourceImpact(totalTokens));
+        const impactText = `energy ${impact.energy} est · water ${impact.water} est`;
+        const impactX = rightEdge - impactText.length - 3;
+        if (impactX > leftText.length + 3) {
+          this.screen.write(impactX, y, impactText, fg.gray);
+        }
+      }
+      return;
+    }
+
+    // Compact fallback: model · messages · token count.
     const modelName = status.model || '';
     const msgCount = `${this.messages.length} msg`;
     const tokenStr = stats && stats.totalTokens > 0
@@ -2684,19 +3083,6 @@ export class App {
       this.screen.write(leftX + 3, y, tokenStr, fg.gray);
     }
 
-    // Right: context-sensitive hints. While scrolled up, the "new
-    // messages below" badge takes priority — it's the only signal that
-    // the conversation moved on (addMessage no longer yanks the view).
-    const rightText = statusBarRightHint({
-      scrollOffset: this.scrollOffset,
-      unseenWhileScrolled: this.unseenWhileScrolled,
-      isStreaming: this.isStreaming,
-      isLoading: this.isLoading,
-    });
-    if (this.scrollOffset > 0 && this.unseenWhileScrolled > 0) {
-      this.screen.write(width - rightText.length, y, rightText, PRIMARY_COLOR);
-      return;
-    }
     this.screen.write(width - rightText.length, y, rightText, fg.gray);
   }
   
@@ -2706,20 +3092,6 @@ export class App {
   private getVisibleMessages(height: number, width: number): Array<{ text: string; style: string; raw?: boolean }> {
     const allLines: Array<{ text: string; style: string; raw?: boolean }> = [];
     this.codeBlockCounter.current = 0; // Reset block counter for each render pass
-
-    // Logo at the top, scrolls with content
-    if (height >= 20) {
-      const logoWidth = LOGO_LINES[0].length;
-      const logoX = Math.max(0, Math.floor((width - logoWidth) / 2));
-      const pad = ' '.repeat(logoX);
-      for (const line of LOGO_LINES) {
-        allLines.push({ text: pad + line, style: PRIMARY_COLOR, raw: false });
-      }
-      allLines.push({ text: '', style: '' });
-    } else {
-      allLines.push({ text: ' Codeep', style: PRIMARY_COLOR, raw: false });
-      allLines.push({ text: '', style: '' });
-    }
 
     for (let i = 0; i < this.messages.length; i++) {
       const msg = this.messages[i];

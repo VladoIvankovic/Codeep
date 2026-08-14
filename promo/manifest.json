@@ -1,0 +1,88 @@
+{
+  "campaign": "Codeep — Code with clarity",
+  "generatedAt": "2026-08-09T19:34:27+02:00",
+  "durationSeconds": 9.1,
+  "fps": 24,
+  "codec": "H.264",
+  "audio": false,
+  "exports": [
+    {
+      "channel": "web",
+      "video": "exports/codeep-promo-web-1920x1080.mp4",
+      "poster": "exports/codeep-promo-web-1920x1080.png",
+      "width": 1920,
+      "height": 1080,
+      "videoSha256": "dd30a7ba831a23ab31a13b679a7ab651e6f1899e56612ee795ada91269d11091",
+      "posterSha256": "a0e3075fd44aaeeb992543a35497cdb3e1a2fb4627f4b0aba83a48e7f788372b"
+    },
+    {
+      "channel": "social-feed",
+      "video": "exports/codeep-promo-social-1080x1350.mp4",
+      "poster": "exports/codeep-promo-social-1080x1350.png",
+      "width": 1080,
+      "height": 1350,
+      "videoSha256": "e8a66875f2191c15f8ece4b127df698d6e2726ee243271de2dbc4bc944793d92",
+      "posterSha256": "ba1cd6e97df9a7daf6291e0606463a7661c14aa6f4bd9afc7b91a03e6125c1b1"
+    },
+    {
+      "channel": "reels-stories-shorts",
+      "video": "exports/codeep-promo-reel-1080x1920.mp4",
+      "poster": "exports/codeep-promo-reel-1080x1920.png",
+      "width": 1080,
+      "height": 1920,
+      "videoSha256": "07f3c0c4ae7a6811ac2cbd5154feb959d9153bff6e7e8d26783e436bb36ad50e",
+      "posterSha256": "921387294dac6ed2574d2ca05dc2926e196482c7d145211aee29473a7a675cdd"
+    }
+  ],
+  "copy": [
+    {
+      "kicker": "AGENT WORK, MADE VISIBLE",
+      "headline": "SEE THE WHOLE RUN",
+      "detail": "Codeep turns agent work into a clear execution timeline."
+    },
+    {
+      "kicker": "DASHBOARD",
+      "headline": "TRACK EVERY SESSION",
+      "detail": "Tokens, cost and resource estimates in one place."
+    },
+    {
+      "kicker": "TERMINAL",
+      "headline": "STAY IN THE FLOW",
+      "detail": "Plan → Read → Edit → Verify → Summary."
+    },
+    {
+      "kicker": "MACOS",
+      "headline": "A NATIVE WORKBENCH",
+      "detail": "Conversation, files and checks — side by side."
+    },
+    {
+      "kicker": "VS CODE",
+      "headline": "BUILT INTO YOUR EDITOR",
+      "detail": "Live activity, controls and run summary."
+    },
+    {
+      "kicker": "CODEEP",
+      "headline": "CODE WITH CLARITY",
+      "detail": "Dashboard · Terminal · macOS · VS Code"
+    }
+  ],
+  "sources": [
+    {
+      "path": "promo/sources/dashboard-desktop.png",
+      "sha256": "9b757d8bb500a8a43704581577babb942d23f53a4d88d1f90c51e2d3eef6acda"
+    },
+    {
+      "path": "promo/sources/tui-current.png",
+      "sha256": "1e0eba50a0a410c67ca38d520d68ebe4be462c12675a9d94671e64bb8cb66886"
+    },
+    {
+      "path": "promo/sources/macos-workbench.png",
+      "sha256": "8069a835f326640a25b881a4e786fa43bd9232d6a498ddddc40af5adbc58b321"
+    },
+    {
+      "path": "promo/sources/vscode-410.png",
+      "sha256": "abccdbf048edbcd2ec7c6656d40b8dfed2d4f1b6d5ed7977f2ca0e59e3a849c5"
+    }
+  ],
+  "generator": "promo/generate-promo.swift"
+}

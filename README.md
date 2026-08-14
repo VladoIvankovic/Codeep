@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="Codeep.gif" alt="Codeep demo" width="700">
+  <img src="promo/sources/tui-current.png" alt="Codeep terminal UI with agent timeline, changed files, checks, and resource estimates" width="1000">
 </p>
 
 <p align="center">
@@ -22,6 +22,16 @@
   <a href="https://github.com/VladoIvankovic/Codeep/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/codeep.svg" alt="license"></a>
   <a href="https://github.com/VladoIvankovic/Codeep"><img src="https://img.shields.io/github/stars/VladoIvankovic/Codeep?style=social" alt="GitHub stars"></a>
 </p>
+
+## One agent, every surface
+
+Codeep keeps the same project context, provider configuration, sessions, and
+agent workflow wherever you work:
+
+- **[Terminal / TUI](https://codeep.dev/docs/installation)** — the primary CLI experience, with Plan → Read → Edit → Verify → Summary, live file changes, checks, token cost, and estimated energy and cooling-water impact.
+- **[macOS app](https://codeep.dev/docs/mac)** — a native SwiftUI workbench with project conversations and Run Inspector.
+- **[VS Code extension](https://github.com/VladoIvankovic/Codeep-vscode)** — the same agent over ACP, directly inside the editor. Also available on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=VladoIvankovic.codeep).
+- **[Web dashboard](https://codeep.dev/dashboard)** — synced sessions, usage, costs, tasks, and project activity.
 
 ## Upgrading
 
@@ -1029,11 +1039,11 @@ After installation, `codeep` is available globally in your terminal. Simply run 
 > /profile save fast
 
 > /provider      # switch to openai
-> /model gpt-4.1
+> /model gpt-5.6-sol
 > /profile save work
 
 > /model fast    # instantly switch to z.ai / glm-5.2
-> /model work    # instantly switch to openai / gpt-4.1
+> /model work    # instantly switch to openai / gpt-5.6-sol
 ```
 
 ### Session Management
@@ -1265,6 +1275,17 @@ With write access enabled:
 | `GOOGLE_API_KEY` | Google AI (Gemini) API key |
 | `MINIMAX_API_KEY` | MiniMax (international) API key |
 | `MINIMAX_CN_API_KEY` | MiniMax China API key |
+| `KIMI_CODE_API_KEY` | Kimi Code subscription key |
+| `MOONSHOT_API_KEY` | Kimi international pay-per-use key |
+| `MOONSHOT_CN_API_KEY` | Kimi China pay-per-use key |
+| `XAI_API_KEY` | Grok (xAI) API key |
+| `BAILIAN_CODING_PLAN_API_KEY` | Qwen international Coding Plan key |
+| `BAILIAN_TOKEN_PLAN_API_KEY` | Qwen international Token Plan key |
+| `DASHSCOPE_API_KEY` | Qwen international pay-per-use key |
+| `BAILIAN_CODING_PLAN_CN_API_KEY` | Qwen China Coding Plan key |
+| `DASHSCOPE_CN_API_KEY` | Qwen China pay-per-use key |
+| `MODELSCOPE_API_KEY` | ModelScope token for its live model catalog |
+| `OPENROUTER_API_KEY` | OpenRouter API key |
 
 ### Settings (`/settings`)
 
@@ -1365,6 +1386,10 @@ Contributions are welcome! Before opening a PR, please read the
 (npm is the canonical package manager), the test/build loop, code style, and
 how to propose a change. For provider integrations specifically, the guide
 walks through the files you need to touch.
+
+The active-product scope, model source index, replacement rules, telemetry
+contract, and recurring review checklist live in the
+[**model maintenance policy**](./docs/MODEL_MAINTENANCE.md).
 
 Quick version: `npm install` → `npm test` → `npx tsc --noEmit` clean → open a
 PR against `main`. To report a security issue, see
@@ -1473,7 +1498,7 @@ The chat sidebar now surfaces two extra ACP signals that previously only the TUI
 ### Editor-native actions (new in 2.2)
 
 - **Code Actions (lightbulb)** — select code and press `Ctrl+.` for **Explain**, **Improve / refactor**, **Add tests**, and **Add doc comment**. On a line with an error/warning, a **Fix this problem** quick-fix sends the diagnostic plus the code to Codeep. Everything routes through the chat, so the full agent (file edits via the diff preview, MCP tools) is available.
-- **Model picker in the status bar** — click `Codeep · <model>` (or run **Codeep: Select Provider & Model**) to switch provider + model from a quick-pick. Providers with open-ended catalogs (OpenRouter, Ollama, custom endpoints) let you type a model id.
+- **Model picker in the status bar** — click `Codeep · <model>` (or run **Codeep: Select Provider & Model**) to switch provider + model from a quick-pick. Providers with open-ended catalogs (OpenRouter, ModelScope, Ollama, custom endpoints) let you type a model id.
 - **Self-hosted endpoints from settings** — point the extension at vLLM / LiteLLM / LM Studio / text-generation-webui with `codeep.baseUrl` (e.g. `http://localhost:8000/v1`), plus `codeep.provider` (`custom` or `openai`) and `codeep.model`. The `codeep.provider` / `codeep.model` settings are applied on every connect, so they stay authoritative.
 - **Get Started walkthrough** — a native VS Code walkthrough (Help → Get Started) covering CLI install, opening the chat, editor actions, and choosing a model.
 
