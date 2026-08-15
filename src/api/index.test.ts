@@ -72,7 +72,7 @@ vi.mock('../utils/tokenTracker', () => ({
 // ─── Import after mocks ───────────────────────────────────────────────────────
 import { chat, validateApiKey, setProjectContext } from './index';
 import { config, getApiKey, resolveBaseUrl } from '../config/index';
-import { getProviderBaseUrl, getProviderAuthHeader, getProvider } from '../config/providers';
+import { getProviderBaseUrl, getProviderAuthHeader, getProvider, modelRejectsSamplingParams } from '../config/providers';
 import { withRetry } from '../utils/retry';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from '../utils/tokenTracker';
 
@@ -82,6 +82,7 @@ const mockGetProviderBaseUrl = getProviderBaseUrl as ReturnType<typeof vi.fn>;
 const mockResolveBaseUrl = resolveBaseUrl as ReturnType<typeof vi.fn>;
 const mockGetProviderAuthHeader = getProviderAuthHeader as ReturnType<typeof vi.fn>;
 const mockGetProvider = getProvider as ReturnType<typeof vi.fn>;
+const mockModelRejectsSamplingParams = modelRejectsSamplingParams as ReturnType<typeof vi.fn>;
 const mockWithRetry = withRetry as ReturnType<typeof vi.fn>;
 const mockRecordTokenUsage = recordTokenUsage as ReturnType<typeof vi.fn>;
 const mockExtractOpenAIUsage = extractOpenAIUsage as ReturnType<typeof vi.fn>;
@@ -153,6 +154,42 @@ describe('chat() — OpenAI protocol', () => {
   it('throws if API key is missing', async () => {
     mockGetApiKey.mockReturnValue('');
     await expect(chat('hello')).rejects.toThrow('API key not configured');
+  });
+
+  // Google removed temperature/top_p/top_k in the Gemini 3.7 generation, and
+  // Google is served over THIS path, not the Anthropic one — so gating the
+  // omission on the provider-level requiresDefaultTemperature flag alone let
+  // the parameter through to a model that rejects it.
+  it('omits temperature for a model whose generation removed it', async () => {
+    mockConfig.get.mockImplementation((key: string) => ({
+      protocol: 'openai', model: 'gemini-3.7-flash', provider: 'google',
+      language: 'en', apiTimeout: 30000, temperature: 0.7, maxTokens: 4096,
+    } as Record<string, unknown>)[key]);
+    // The real catalogue lists this model; what is under test is whether this
+    // request path consults that rule at all, so drive the mock directly.
+    mockModelRejectsSamplingParams.mockImplementation((m: string) => m === 'gemini-3.7-flash');
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      makeResponse({ choices: [{ message: { content: 'ok' } }] }),
+    );
+
+    await chat('hi');
+
+    const [, opts] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const sent = JSON.parse((opts as RequestInit).body as string);
+    expect(sent.model).toBe('gemini-3.7-flash');
+    expect(sent).not.toHaveProperty('temperature');
+  });
+
+  it('still sends temperature for a model that accepts it', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      makeResponse({ choices: [{ message: { content: 'ok' } }] }),
+    );
+
+    await chat('hi');
+
+    const [, opts] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const sent = JSON.parse((opts as RequestInit).body as string);
+    expect(sent.temperature).toBe(0.7);
   });
 
   it('calls /chat/completions with correct headers and returns content', async () => {

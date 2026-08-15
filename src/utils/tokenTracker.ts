@@ -3,6 +3,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { isFlatFeeProvider } from '../config/providers';
 import { formatResourceImpactReport } from './resourceImpact';
 
 export interface TokenUsage {
@@ -24,6 +25,12 @@ export interface SessionTokenStats {
   totalTokens: number;
   requestCount: number;
   estimatedCost: number;
+  /** `estimatedCost` minus every flat-fee entry — the only figure we may show
+   *  as a dollar total, since flat-fee tokens carry no per-token charge. */
+  billableCost: number;
+  /** True when at least one entry came from a flat-fee provider, so callers can
+   *  say "included in plan" instead of silently dropping that usage. */
+  hasFlatFeeUsage: boolean;
   /** Anthropic prompt caching: total tokens written to cache this session. */
   totalCacheCreationTokens: number;
   /** Anthropic prompt caching: total tokens read from cache this session. */
@@ -50,6 +57,7 @@ interface TokenRecord {
 // meaningful context/cost display.
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Z.AI / ZhipuAI
+  'glm-5.3':            1_000_000,
   'glm-5.2':            1_000_000,
   'glm-5.1':              200_000,
   'glm-5-turbo':          202_752,
@@ -71,6 +79,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'deepseek-v4-flash':    1_000_000,
   // Google
   'gemini-3.1-pro-preview':        1_048_576,
+  'gemini-3.7-flash':              1_048_576,
   'gemini-3.6-flash':              1_048_576,
   'gemini-3.5-flash':              1_048_576,
   'gemini-3.5-flash-lite':         1_048_576,
@@ -87,6 +96,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'k3':                      1_000_000,
   'k3-256k':                   262_144,
   // Grok (xAI)
+  'grok-4.6':                  500_000,
   'grok-4.5':                  500_000,
   'grok-build-0.1':            256_000,
   'grok-4.3':                  1_000_000,
@@ -117,6 +127,9 @@ export function getModelContextWindow(model: string): number {
 const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }> = {
   // Z.AI / ZhipuAI
   // Coding Plan is flat-fee; these official rates apply to pay-per-use.
+  // `glm-5.3` is GLM Coding Plan only — Z.AI publishes no per-token rate for it
+  // (the standalone model API is still "coming soon"), so it stays unpriced
+  // rather than borrowing GLM-5.2's.
   'glm-5.2':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
   'glm-5.1':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
   'glm-5-turbo':       { inputPer1M: 1.20,  outputPer1M: 4.00 },
@@ -137,8 +150,11 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'deepseek-v4-pro':   { inputPer1M: 0.435, outputPer1M: 0.87 },
   'deepseek-v4-flash': { inputPer1M: 0.14,  outputPer1M: 0.28 },
   // Google
+  // Gemini 3.6/3.7 Flash carry PROMOTIONAL rates that run through 2026-12-31 and
+  // step up to 1.50/7.50 on 2027-01-01 — revisit both rows on that date.
   'gemini-3.1-pro-preview':        { inputPer1M: 2.00, outputPer1M: 12.00 },
-  'gemini-3.6-flash':              { inputPer1M: 1.50, outputPer1M: 7.50 },
+  'gemini-3.7-flash':              { inputPer1M: 0.75, outputPer1M: 3.75 },
+  'gemini-3.6-flash':              { inputPer1M: 0.75, outputPer1M: 3.75 },
   'gemini-3.5-flash':              { inputPer1M: 1.50, outputPer1M: 9.00 },
   'gemini-3.5-flash-lite':         { inputPer1M: 0.30, outputPer1M: 2.50 },
   'gemini-3-flash-preview':        { inputPer1M: 0.50, outputPer1M: 3.00 },
@@ -155,7 +171,9 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'kimi-for-coding-highspeed': { inputPer1M: 0.95, outputPer1M: 4.00 },
   'k3':                        { inputPer1M: 3.00, outputPer1M: 15.00 },
   'k3-256k':                   { inputPer1M: 3.00, outputPer1M: 15.00 },
-  // Grok (xAI)
+  // Grok (xAI) — base-tier rates. xAI doubles Grok 4.5/4.6 at prompts ≥200K;
+  // this table stores one flat rate per model, so the base tier is what we show.
+  'grok-4.6':                  { inputPer1M: 2.00, outputPer1M: 6.00 },
   'grok-4.5':                  { inputPer1M: 2.00, outputPer1M: 6.00 },
   'grok-build-0.1':            { inputPer1M: 1.00, outputPer1M: 2.00 },
   'grok-4.3':                  { inputPer1M: 1.25, outputPer1M: 2.50 },
@@ -398,7 +416,12 @@ export function getSessionStats(): SessionTokenStats {
     totalCacheReadTokens += record.cacheReadTokens ?? 0;
   }
 
-  const estimatedCost = getCostBreakdown().reduce((s, b) => s + b.estimatedCost, 0);
+  const breakdown = getCostBreakdown();
+  const estimatedCost = breakdown.reduce((s, b) => s + b.estimatedCost, 0);
+  const billableCost = breakdown
+    .filter(b => !isFlatFeeProvider(b.provider))
+    .reduce((s, b) => s + b.estimatedCost, 0);
+  const hasFlatFeeUsage = breakdown.some(b => isFlatFeeProvider(b.provider));
 
   return {
     totalPromptTokens,
@@ -406,6 +429,8 @@ export function getSessionStats(): SessionTokenStats {
     totalTokens,
     requestCount: currentRecords().length,
     estimatedCost,
+    billableCost,
+    hasFlatFeeUsage,
     totalCacheCreationTokens,
     totalCacheReadTokens,
   };
@@ -460,19 +485,27 @@ export function formatCostReport(): string {
   }
 
   const breakdown = getCostBreakdown();
+  // Flat-fee providers (subscriptions / free tiers) bill nothing per token, so
+  // their notional cost is never shown and never folded into the total. A
+  // session can mix them with pay-per-use models, so decide per entry.
+  const planEntries = breakdown.filter(b => isFlatFeeProvider(b.provider));
+  const costLine = planEntries.length === breakdown.length
+    ? '**Estimated cost:** included in plan'
+    : `**Estimated cost:** $${stats.billableCost.toFixed(4)}${planEntries.length > 0 ? ' + usage included in plan' : ''}`;
   const lines: string[] = [
     '## Session Cost',
     '',
     `**Requests:** ${stats.requestCount}  ·  **Input:** ${formatTokenCount(stats.totalPromptTokens)}  ·  **Output:** ${formatTokenCount(stats.totalCompletionTokens)}  ·  **Total:** ${formatTokenCount(stats.totalTokens)}`,
-    `**Estimated cost:** $${stats.estimatedCost.toFixed(4)}`,
+    costLine,
     '',
   ];
 
-  if (breakdown.length > 1 || (breakdown.length === 1 && breakdown[0].estimatedCost > 0)) {
+  if (breakdown.length > 1 || (breakdown.length === 1 && (breakdown[0].estimatedCost > 0 || planEntries.length > 0))) {
     lines.push('| Provider / Model | Input | Output | Cost |');
     lines.push('|---|---:|---:|---:|');
     for (const b of breakdown) {
-      lines.push(`| \`${b.provider}\` / \`${b.model}\` | ${formatTokenCount(b.promptTokens)} | ${formatTokenCount(b.completionTokens)} | $${b.estimatedCost.toFixed(4)} |`);
+      const cost = isFlatFeeProvider(b.provider) ? 'included in plan' : `$${b.estimatedCost.toFixed(4)}`;
+      lines.push(`| \`${b.provider}\` / \`${b.model}\` | ${formatTokenCount(b.promptTokens)} | ${formatTokenCount(b.completionTokens)} | ${cost} |`);
     }
   }
 
@@ -493,7 +526,7 @@ export function formatCostReport(): string {
 
   // Models with no pricing entry don't contribute to cost — flag so users
   // aren't surprised the total looks low.
-  const untracked = breakdown.filter(b => b.estimatedCost === 0 && (b.promptTokens + b.completionTokens) > 0);
+  const untracked = breakdown.filter(b => b.estimatedCost === 0 && (b.promptTokens + b.completionTokens) > 0 && !isFlatFeeProvider(b.provider));
   if (untracked.length > 0) {
     lines.push('', `_Note: ${untracked.length} model${untracked.length === 1 ? '' : 's'} (${untracked.map(u => `\`${u.model}\``).join(', ')}) have no pricing entry — token counts are tracked but not priced._`);
   }

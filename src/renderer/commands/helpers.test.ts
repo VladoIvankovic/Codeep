@@ -353,6 +353,14 @@ describe('formatModelCost', () => {
   it('rounds to 4 decimal places', () => {
     expect(formatModelCost('x', 0.123456)).toBe('~$0.1235');
   });
+
+  it('says "included in plan" for flat-fee providers instead of a dollar figure', () => {
+    expect(formatModelCost('z.ai', 0.0031)).toBe('included in plan');
+    expect(formatModelCost('kimi', 0.0029)).toBe('included in plan');
+    expect(formatModelCost('modelscope', 0)).toBe('included in plan');
+    // The pay-per-use twins keep their price.
+    expect(formatModelCost('z.ai-api', 0.0031)).toBe('~$0.0031');
+  });
 });
 
 // ─── formatStatsReport ────────────────────────────────────────────────────────
@@ -440,6 +448,39 @@ describe('formatStatsReport', () => {
     expect(out).toContain('### By model');
     expect(out).toContain('**gpt-4** (openai): 100 in / 50 out — ~$0.0200');
     expect(out).toContain('**Total: ~$0.0200**');
+  });
+
+  it('totals only the pay-per-use rows when a session mixes billing models', () => {
+    const breakdown: StatsModelRow[] = [
+      { model: 'glm-5.2', provider: 'z.ai', promptTokens: 1000, completionTokens: 500, estimatedCost: 0.0036 },
+      { model: 'gpt-4', provider: 'openai', promptTokens: 100, completionTokens: 50, estimatedCost: 0.02 },
+    ];
+    const out = formatStatsReport({
+      // totals.estimatedCost still carries the raw sum — the report must not use it.
+      totals: { requestCount: 2, totalTokens: 1650, totalPromptTokens: 1100, totalCompletionTokens: 550, estimatedCost: 0.0236 },
+      breakdown,
+      cache: emptyCache,
+      pricing: [],
+      currentProvider: 'openai',
+      fmt: idFmt,
+    });
+    expect(out).toContain('**glm-5.2** (z.ai): 1000 in / 500 out — included in plan');
+    expect(out).toContain('**gpt-4** (openai): 100 in / 50 out — ~$0.0200');
+    expect(out).toContain('**Total: ~$0.0200 + usage included in plan**');
+    expect(out).not.toContain('0.0236');
+  });
+
+  it('shows a plan total when every row is flat-fee', () => {
+    const out = formatStatsReport({
+      totals: { requestCount: 1, totalTokens: 1500, totalPromptTokens: 1000, totalCompletionTokens: 500, estimatedCost: 0.0036 },
+      breakdown: [{ model: 'glm-5.2', provider: 'z.ai', promptTokens: 1000, completionTokens: 500, estimatedCost: 0.0036 }],
+      cache: emptyCache,
+      pricing: [],
+      currentProvider: 'z.ai',
+      fmt: idFmt,
+    });
+    expect(out).toContain('**Total: included in plan · 1500 tokens**');
+    expect(out).not.toContain('0.0036');
   });
 
   it('shows "free" total for ollama provider', () => {

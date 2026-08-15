@@ -3021,8 +3021,13 @@ export class App {
         `runtime ${elapsed}`,
         `tokens ${formatTokenCount(totalTokens)}`,
       ];
-      if (typeof stats.estimatedCost === 'number' && stats.estimatedCost > 0) {
-        leftParts.push(`cost $${stats.estimatedCost < 0.01 ? stats.estimatedCost.toFixed(4) : stats.estimatedCost.toFixed(2)}`);
+      // Only pay-per-use tokens carry a real price; flat-fee providers get the
+      // short "in plan" wording so the segment can't crowd the right-edge hint.
+      const billable = typeof stats.billableCost === 'number' ? stats.billableCost : (stats.estimatedCost ?? 0);
+      if (billable > 0) {
+        leftParts.push(`cost $${billable < 0.01 ? billable.toFixed(4) : billable.toFixed(2)}${stats.hasFlatFeeUsage ? ' + in plan' : ''}`);
+      } else if (stats.hasFlatFeeUsage) {
+        leftParts.push('cost in plan');
       }
       // Thinking-effort tier, same chip the compact fallback shows beside the
       // model. Only present when set + supported — see getStatus.

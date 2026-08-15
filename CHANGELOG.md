@@ -11,6 +11,49 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.18.0] — 2026-08-15
+
+> Subscription plans stop inventing dollar amounts — GLM Coding Plan, MiniMax, Kimi and Qwen now read "included in plan". Adds Grok 4.6, Gemini 3.7 Flash and GLM-5.3, and halves a Gemini rate stored at double.
+
+### Added
+
+- **Grok 4.6** (`grok-4.6`) — xAI's flagship reasoning model, 500K context,
+  recommended for code. The xAI default deliberately stays on
+  `grok-build-0.1`: 4.6 bills 2× input and 3× output, so it is opt-in via
+  `/model` rather than a silent upgrade for everyone.
+- **Gemini 3.7 Flash** (`gemini-3.7-flash`) — 1M context, Google's current
+  workhorse for coding and agents.
+- **GLM-5.3** (`glm-5.3`) — 1M context, on the GLM Coding Plan. Z.AI publishes
+  no per-token rate and its standalone API is still "coming soon", so the model
+  carries no price at all rather than borrowing GLM-5.2's.
+- **Gemini gains its medium thinking tier.** `/thinking` now offers
+  low · medium · high on Gemini instead of collapsing medium into high. Medium
+  is Gemini 3.7 Flash's own default and the level Google recommends for agentic
+  coding; it used to be dropped because Gemini 3 *Preview* rejected it, which
+  has since been fixed.
+
+### Changed
+
+- **Subscription providers no longer quote a price.** Z.AI's GLM Coding Plan,
+  MiniMax, Kimi's Coding Plan, Qwen's plans and the free ModelScope tier bill a
+  flat fee or nothing, yet their tokens were priced at pay-per-use rates.
+  `/cost`, `/stats` and the status bar now read "included in plan"; a session
+  mixing both shows the metered figure plus a note. Token counts, context and
+  the energy/water estimates are unchanged — those are measured.
+
+### Fixed
+
+- **Gemini estimates were double.** `gemini-3.6-flash` was stored at the
+  post-promotional 1.50/7.50 rather than the 0.75/3.75 actually charged through
+  2026-12-31, so every Gemini cost read 2× high. Both tiers step back up on
+  2027-01-01; the table names the date.
+- **Gemini 3.7 Flash was sent `temperature`.** That generation removed the
+  sampling parameters, and the rule that omits them was only consulted on the
+  Anthropic request path — Google is served over the OpenAI-compatible one, so
+  the guard never ran. The same fix closes a related gap where namespaced
+  OpenRouter ids (`google/gemini-3.7-flash`, `anthropic/claude-opus-4.8`)
+  slipped past it entirely.
+
 ## [2.17.0] — 2026-08-14
 
 > A redesigned agent view: a live PLAN → READ → EDIT → VERIFY timeline with changed files and checks in a side rail, a persistent header, and energy/water estimates beside cost. Plus a self-migrating model catalogue.

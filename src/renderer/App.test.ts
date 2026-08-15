@@ -56,6 +56,8 @@ describe('renderStatusBar', () => {
     completionTokens: 11_580,
     requestCount: 9,
     estimatedCost: 0.2846,
+    billableCost: 0.2846,
+    hasFlatFeeUsage: false,
   };
 
   it('keeps "Esc to stop" on a wide terminal that also shows resource estimates', () => {
@@ -66,6 +68,46 @@ describe('renderStatusBar', () => {
 
   it('drops the resource estimate before the hint when space is tight', () => {
     const row = renderRow('renderStatusBar', { tokenStats: stats }, 120, streaming);
+    expect(row).toContain('Esc to stop');
+  });
+
+  it('shows "in plan" instead of a price when all usage is flat-fee', () => {
+    const row = renderRow(
+      'renderStatusBar',
+      { tokenStats: { ...stats, estimatedCost: 0.2846, billableCost: 0, hasFlatFeeUsage: true } },
+      140,
+      streaming,
+    );
+    expect(row).toContain('cost in plan');
+    expect(row).not.toContain('0.28');
+    expect(row).toContain('Esc to stop');
+  });
+
+  it('keeps the price and flags the plan usage in a mixed session', () => {
+    const row = renderRow(
+      'renderStatusBar',
+      { tokenStats: { ...stats, estimatedCost: 0.2846, billableCost: 0.19, hasFlatFeeUsage: true } },
+      140,
+      streaming,
+    );
+    expect(row).toContain('cost $0.19 + in plan');
+    expect(row).toContain('Esc to stop');
+  });
+
+  it('keeps "Esc to stop" at the narrow end of the wide footer with the longest cost segment', () => {
+    // Worst case for the left segment: a sub-cent billable amount (4 decimals)
+    // plus the "+ in plan" suffix plus the effort chip, at the 110-column
+    // threshold where the wide footer kicks in.
+    const row = renderRow(
+      'renderStatusBar',
+      {
+        tokenStats: { ...stats, billableCost: 0.0028, hasFlatFeeUsage: true },
+        reasoningEffort: 'max',
+      },
+      110,
+      streaming,
+    );
+    expect(row).toContain('cost $0.0028 + in plan');
     expect(row).toContain('Esc to stop');
   });
 

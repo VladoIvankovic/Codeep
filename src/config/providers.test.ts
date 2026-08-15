@@ -16,6 +16,7 @@ import {
   providerNoStreamWithTools,
   replacementModelFor,
   isDynamicModelsProvider,
+  isFlatFeeProvider,
   REASONING_TIERS,
 } from './providers';
 import { getModelContextWindow, getPricingTable } from '../utils/tokenTracker';
@@ -282,10 +283,50 @@ describe('providers', () => {
   });
 
   describe('newly added models (this release)', () => {
-    it('lists Grok 4.5 (flagship reasoning) under grok', () => {
-      expect(getProvider('grok')!.models.map(m => m.id)).toContain('grok-4.5');
-      // Grok 4.5 is a reasoning model → graded effort supported.
+    it('lists Grok 4.6 as the grok default and keeps 4.5 available', () => {
+      const ids = getProvider('grok')!.models.map(m => m.id);
+      expect(ids).toContain('grok-4.6');
+      expect(ids).toContain('grok-4.5');
+      // 4.6 supersedes 4.5 on the same price/context and xAI recommends it for code.
+      // Deliberately NOT the new flagship: grok-4.6 bills 2x input / 3x output
+      // against the agentic coder, so it is opt-in rather than a silent upgrade.
+      expect(getProvider('grok')!.defaultModel).toBe('grok-build-0.1');
+      // Both are reasoning models → graded effort supported.
+      expect(modelSupportsReasoningEffort('grok', 'grok-4.6')).toBe(true);
       expect(modelSupportsReasoningEffort('grok', 'grok-4.5')).toBe(true);
+    });
+    it('lists Gemini 3.7 Flash and rejects its removed sampling params', () => {
+      expect(getProvider('google')!.models.map(m => m.id)).toContain('gemini-3.7-flash');
+      // Google removed temperature/top_p/top_k in this generation.
+      expect(modelRejectsSamplingParams('gemini-3.7-flash')).toBe(true);
+      expect(modelRejectsSamplingParams('gemini-3.6-flash')).toBe(false);
+      expect(modelSupportsReasoningEffort('google', 'gemini-3.7-flash')).toBe(true);
+    });
+    it('lists GLM-5.3 on the Coding Plan provider ONLY (never pay-per-use)', () => {
+      // Z.AI's standalone model API does not accept glm-5.3 yet, so leaking it
+      // into a pay-per-use roster would hand users a guaranteed 4xx.
+      expect(getProvider('z.ai')!.models.map(m => m.id)).toContain('glm-5.3');
+      expect(getProvider('z.ai')!.defaultModel).toBe('glm-5.3');
+      for (const id of ['z.ai-api', 'z.ai-cn', 'z.ai-cn-api']) {
+        expect(getProvider(id)!.models.map(m => m.id), id).not.toContain('glm-5.3');
+      }
+    });
+    it('grades GLM-5.3 effort low/high/max and never disables thinking', () => {
+      expect(modelSupportsReasoningEffort('z.ai', 'glm-5.3')).toBe(true);
+      expect(availableReasoningTiers('z.ai', 'glm-5.3')).toEqual(['auto', 'low', 'high', 'max']);
+      expect(reasoningParamsFor('z.ai', 'glm-5.3', 'low')).toEqual({ reasoning_effort: 'low' });
+      expect(reasoningParamsFor('z.ai', 'glm-5.3', 'medium')).toEqual({ reasoning_effort: 'high' });
+      expect(reasoningParamsFor('z.ai', 'glm-5.3', 'max')).toEqual({ reasoning_effort: 'max' });
+      // GLM-5.2 keeps its narrower high|max grading.
+      expect(availableReasoningTiers('z.ai', 'glm-5.2')).toEqual(['auto', 'high', 'max']);
+      expect(reasoningParamsFor('z.ai', 'glm-5.2', 'low')).toEqual({ reasoning_effort: 'high' });
+    });
+    it('refreshes the OpenRouter fallback with the ids OpenRouter actually carries', () => {
+      const ids = getProvider('openrouter')!.models.map(m => m.id);
+      expect(ids).toContain('x-ai/grok-4.6');
+      expect(ids).toContain('google/gemini-3.7-flash');
+      // OpenRouter does not carry GLM-5.3 (Coding-Plan only).
+      expect(ids.some(id => id.includes('glm-5.3'))).toBe(false);
     });
     it('lists current Gemini Flash models under google', () => {
       expect(getProvider('google')!.models.map(m => m.id)).toContain('gemini-3.6-flash');
@@ -313,6 +354,7 @@ describe('providers', () => {
       const UNPRICED_BY_DESIGN = new Set([
         'kimi-k2.7-code-highspeed', // Moonshot publishes no distinct high-speed rate
         'qwen3.8-max-preview',      // Token-Plan credits only; no pay-per-use rate published
+        'glm-5.3',                  // GLM Coding Plan only; Z.AI publishes no per-token rate
       ]);
       const priced = new Set(getPricingTable().map(entry => entry.model));
 
@@ -338,6 +380,34 @@ describe('providers', () => {
       }
       expect(missingContext).toEqual([]);
       expect(missingPricing).toEqual([]);
+    });
+  });
+
+  describe('flat-fee providers', () => {
+    // The `hint` is what the user reads; `flatFee` is what the cost surfaces
+    // read. They describe the same fact, so they must name the same providers —
+    // a hint that advertises a subscription / plan / free tier means no
+    // per-token charges.
+    const FLAT_FEE_HINT = /subscription|coding plan|token plan|free catalog/i;
+
+    it('flags exactly the providers whose hint advertises a plan or free tier', () => {
+      const flagged = Object.keys(PROVIDERS).filter(id => isFlatFeeProvider(id)).sort();
+      const advertised = Object.entries(PROVIDERS)
+        .filter(([, cfg]) => FLAT_FEE_HINT.test(cfg.hint ?? ''))
+        .map(([id]) => id)
+        .sort();
+      expect(flagged).toEqual(advertised);
+      expect(flagged).toEqual([
+        'kimi', 'minimax', 'minimax-cn', 'modelscope',
+        'qwen', 'qwen-cn', 'qwen-token-plan', 'z.ai', 'z.ai-cn',
+      ]);
+    });
+
+    it('leaves pay-per-use providers unflagged', () => {
+      for (const id of ['anthropic', 'openai', 'z.ai-api', 'kimi-api', 'qwen-api', 'openrouter', 'ollama']) {
+        expect(isFlatFeeProvider(id), id).toBe(false);
+      }
+      expect(isFlatFeeProvider('nope')).toBe(false);
     });
   });
 
@@ -469,10 +539,16 @@ describe('providers', () => {
       expect(reasoningParamsFor('openai', 'gpt-5.5', 'medium')).toEqual({ reasoning_effort: 'medium' });
       expect(reasoningParamsFor('openai', 'gpt-5.5', 'max')).toEqual({ reasoning_effort: 'xhigh' });
     });
-    it('Gemini → reasoning_effort clamped to low/high (never medium → would 400)', () => {
+    // Medium used to be collapsed to high because Gemini 3 Preview 400'd on it.
+    // That was a preview-era bug; Google's OpenAI-compat mapping table now
+    // documents low|medium|high, and medium is 3.7 Flash's own default.
+    it('Gemini → reasoning_effort low|medium|high, max capped at high', () => {
       expect(reasoningParamsFor('google', 'gemini-3.1-pro-preview', 'low')).toEqual({ reasoning_effort: 'low' });
-      expect(reasoningParamsFor('google', 'gemini-3.1-pro-preview', 'medium')).toEqual({ reasoning_effort: 'high' });
+      expect(reasoningParamsFor('google', 'gemini-3.1-pro-preview', 'medium')).toEqual({ reasoning_effort: 'medium' });
+      expect(reasoningParamsFor('google', 'gemini-3.1-pro-preview', 'high')).toEqual({ reasoning_effort: 'high' });
+      // Gemini has no tier above high, so 'max' tops out rather than 400ing.
       expect(reasoningParamsFor('google', 'gemini-3.1-pro-preview', 'max')).toEqual({ reasoning_effort: 'high' });
+      expect(reasoningParamsFor('google', 'gemini-3.7-flash', 'medium')).toEqual({ reasoning_effort: 'medium' });
     });
     it('DeepSeek / GLM-5.2 → reasoning_effort high|max', () => {
       expect(reasoningParamsFor('deepseek', 'deepseek-v4-pro', 'low')).toEqual({ reasoning_effort: 'high' });
@@ -492,7 +568,8 @@ describe('providers', () => {
     it('never emits a value Gemini/OpenAI reject across all tiers', () => {
       for (const tier of REASONING_TIERS) {
         const g = reasoningParamsFor('google', 'gemini-3.6-flash', tier) as { reasoning_effort?: string };
-        if (g.reasoning_effort) expect(['low', 'high']).toContain(g.reasoning_effort);
+        // 'minimal' is never emitted — gemini-3.7-flash rejects it outright.
+        if (g.reasoning_effort) expect(['low', 'medium', 'high']).toContain(g.reasoning_effort);
         const o = reasoningParamsFor('openai', 'gpt-5.5', tier) as { reasoning_effort?: string };
         if (o.reasoning_effort) expect(['none', 'low', 'medium', 'high', 'xhigh']).toContain(o.reasoning_effort);
       }
@@ -503,7 +580,7 @@ describe('providers', () => {
     it('lists only the levels each model distinguishes', () => {
       expect(availableReasoningTiers('anthropic', 'claude-opus-5')).toEqual(['auto', 'low', 'medium', 'high', 'max']);
       expect(availableReasoningTiers('openai', 'gpt-5.5')).toEqual(['auto', 'low', 'medium', 'high', 'max']);
-      expect(availableReasoningTiers('google', 'gemini-3.1-pro-preview')).toEqual(['auto', 'low', 'high']);
+      expect(availableReasoningTiers('google', 'gemini-3.1-pro-preview')).toEqual(['auto', 'low', 'medium', 'high']);
       expect(availableReasoningTiers('z.ai', 'glm-5.2')).toEqual(['auto', 'high', 'max']);
       expect(availableReasoningTiers('deepseek', 'deepseek-v4-pro')).toEqual(['auto', 'high', 'max']);
       expect(availableReasoningTiers('kimi-api', 'kimi-k3')).toEqual(['auto', 'low', 'high', 'max']);
@@ -516,7 +593,8 @@ describe('providers', () => {
     it('drift guard — every listed non-auto tier yields a DISTINCT param', () => {
       const cases = [
         ['anthropic', 'claude-opus-5'], ['openai', 'gpt-5.5'],
-        ['google', 'gemini-3.1-pro-preview'], ['z.ai', 'glm-5.2'], ['kimi-api', 'kimi-k3'],
+        ['google', 'gemini-3.1-pro-preview'], ['z.ai', 'glm-5.2'], ['z.ai', 'glm-5.3'],
+        ['kimi-api', 'kimi-k3'],
         ['deepseek', 'deepseek-v4-pro'], ['openrouter', 'openai/gpt-5.5'],
         ['grok', 'grok-4.3'],
       ];
@@ -627,9 +705,11 @@ describe('providers', () => {
       // GLM-5.2 grades only high|max — low/medium run as high.
       expect(resolveReasoningTier('z.ai', 'glm-5.2', 'low')).toBe('high');
       expect(resolveReasoningTier('z.ai', 'glm-5.2', 'medium')).toBe('high');
-      // Gemini (OpenAI-compat) has only low|high — medium/max run as high.
-      expect(resolveReasoningTier('google', 'gemini-3.1-pro-preview', 'medium')).toBe('high');
+      // Gemini grades low|medium|high — medium is its own tier now, and only
+      // 'max' (which Gemini has no equivalent for) collapses.
+      expect(resolveReasoningTier('google', 'gemini-3.1-pro-preview', 'medium')).toBe('medium');
       expect(resolveReasoningTier('google', 'gemini-3.1-pro-preview', 'max')).toBe('high');
+      expect(resolveReasoningTier('google', 'gemini-3.7-flash', 'medium')).toBe('medium');
     });
     it('returns auto for auto or unsupported models', () => {
       expect(resolveReasoningTier('z.ai', 'glm-5.2', 'auto')).toBe('auto');

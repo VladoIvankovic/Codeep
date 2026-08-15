@@ -150,6 +150,8 @@ function getStatus(): StatusInfo {
       completionTokens: stats.totalCompletionTokens,
       requestCount: stats.requestCount,
       estimatedCost: stats.estimatedCost,
+      billableCost: stats.billableCost,
+      hasFlatFeeUsage: stats.hasFlatFeeUsage,
     },
   };
 }

@@ -1,6 +1,6 @@
 # Model catalogue and maintenance policy
 
-Last full review: **2026-08-09**
+Last full review: **2026-08-15**
 
 ## Product scope
 

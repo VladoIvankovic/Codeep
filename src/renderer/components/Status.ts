@@ -26,6 +26,12 @@ export interface StatusInfo {
     completionTokens: number;
     requestCount: number;
     estimatedCost?: number;
+    /** `estimatedCost` minus flat-fee entries — the only spend we may show in
+     *  dollars (see providers.flatFee). */
+    billableCost?: number;
+    /** At least one entry came from a flat-fee provider, so the footer says
+     *  "in plan" instead of pricing those tokens. */
+    hasFlatFeeUsage?: boolean;
   };
 }
 

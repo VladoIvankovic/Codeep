@@ -82,6 +82,9 @@ describe('getModelContextWindow', () => {
     expect(getModelContextWindow('gemini-3.5-flash')).toBe(1_048_576);
     expect(getModelContextWindow('k3-256k')).toBe(262_144);
     expect(getModelContextWindow('qwen3.8-max-preview')).toBe(1_000_000);
+    expect(getModelContextWindow('glm-5.3')).toBe(1_000_000);
+    expect(getModelContextWindow('gemini-3.7-flash')).toBe(1_048_576);
+    expect(getModelContextWindow('grok-4.6')).toBe(500_000);
   });
 
   it('falls back to 128K for unknown models', () => {
@@ -113,6 +116,8 @@ describe('recordTokenUsage + getSessionStats', () => {
       totalTokens: 0,
       requestCount: 0,
       estimatedCost: 0,
+      billableCost: 0,
+      hasFlatFeeUsage: false,
       totalCacheCreationTokens: 0,
       totalCacheReadTokens: 0,
     });
@@ -289,6 +294,17 @@ describe('getPricingTable', () => {
     expect(byModel.get('gpt-5.6-terra')).toMatchObject({ inputPer1M: 2, outputPer1M: 12 });
     expect(byModel.get('gpt-5.6-luna')).toMatchObject({ inputPer1M: 0.2, outputPer1M: 1.2 });
     expect(byModel.get('gemini-3.5-flash')).toMatchObject({ inputPer1M: 1.5, outputPer1M: 9 });
+    // Gemini 3.6/3.7 Flash bill the promotional rate that runs to 2026-12-31 —
+    // storing the post-promotional 1.50/7.50 doubled every Gemini estimate.
+    expect(byModel.get('gemini-3.7-flash')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 3.75 });
+    expect(byModel.get('gemini-3.6-flash')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 3.75 });
+    // Grok 4.6 inherits 4.5's base-tier rate.
+    expect(byModel.get('grok-4.6')).toMatchObject({ inputPer1M: 2, outputPer1M: 6 });
+  });
+
+  it('leaves GLM-5.3 unpriced — Z.AI publishes no per-token rate', () => {
+    const ids = getPricingTable().map(e => e.model);
+    expect(ids).not.toContain('glm-5.3');
   });
 
   it('only contains models that also have context-window entries', () => {
@@ -307,12 +323,32 @@ describe('formatCostReport', () => {
   });
 
   it('renders requests, tokens, and total cost', () => {
-    recordTokenUsage({ promptTokens: 1_000, completionTokens: 500, totalTokens: 1_500 }, 'glm-5.2', 'z.ai');
+    recordTokenUsage({ promptTokens: 1_000, completionTokens: 500, totalTokens: 1_500 }, 'claude-opus-5', 'anthropic');
     const report = formatCostReport();
     expect(report).toMatch(/## Session Cost/);
     expect(report).toMatch(/\*\*Requests:\*\* 1/);
     expect(report).toMatch(/1\.0K/);  // prompt 1000 → "1.0K"
     expect(report).toMatch(/\*\*Estimated cost:\*\* \$0\./);
+  });
+
+  it('never prices a flat-fee provider — tokens stay, dollars do not', () => {
+    recordTokenUsage({ promptTokens: 1_000, completionTokens: 500, totalTokens: 1_500 }, 'glm-5.2', 'z.ai');
+    const report = formatCostReport();
+    expect(report).toContain('**Estimated cost:** included in plan');
+    expect(report).not.toMatch(/\$\d/);
+    expect(report).toMatch(/1\.0K/);  // token counts are measured, not priced
+  });
+
+  it('totals only the pay-per-use entries in a mixed session, and says so', () => {
+    // Flat-fee (Kimi Code subscription) + pay-per-use (Anthropic) in one session.
+    recordTokenUsage({ promptTokens: 1_000, completionTokens: 500, totalTokens: 1_500 }, 'kimi-for-coding', 'kimi');
+    recordTokenUsage({ promptTokens: 1_000, completionTokens: 500, totalTokens: 1_500 }, 'claude-opus-5', 'anthropic');
+    const report = formatCostReport();
+    // Anthropic only: (1000/1M * 5) + (500/1M * 25) = 0.0175 — the Kimi tokens
+    // would have added ~0.0029 at its notional rate.
+    expect(report).toContain('**Estimated cost:** $0.0175 + usage included in plan');
+    expect(report).toMatch(/`kimi` \/ `kimi-for-coding` \|.*\| included in plan \|/);
+    expect(report).toMatch(/`anthropic` \/ `claude-opus-5` \|.*\| \$0\.0175 \|/);
   });
 
   it('includes a per-model table when multiple providers/models are used', () => {

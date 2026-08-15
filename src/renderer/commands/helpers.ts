@@ -8,6 +8,8 @@
  * coverage.
  */
 
+import { isFlatFeeProvider } from '../../config/providers';
+
 // ─── Search snippet extraction ────────────────────────────────────────────────
 //
 // `/search` builds a preview snippet around each match. The window is
@@ -183,6 +185,8 @@ export interface StatsTotals {
   totalTokens: number;
   totalPromptTokens: number;
   totalCompletionTokens: number;
+  /** Raw sum across every entry. The report's total is derived from the
+   *  breakdown instead, so flat-fee rows don't contribute dollars. */
   estimatedCost: number;
 }
 
@@ -204,6 +208,9 @@ export type TokenFormatter = (n: number) => string;
 /** Format a single model-row's cost string, mirroring the inline logic. */
 export function formatModelCost(provider: string, estimatedCost: number): string {
   if (provider === 'ollama') return 'free';
+  // Flat-fee providers meter real tokens but charge nothing per token — the
+  // dollar figure our pricing table computes for them is invented.
+  if (isFlatFeeProvider(provider)) return 'included in plan';
   return estimatedCost > 0 ? `~$${estimatedCost.toFixed(4)}` : '(no pricing data)';
 }
 
@@ -235,10 +242,18 @@ export function formatStatsReport(args: {
         lines.push(`- **${b.model}** (${b.provider}): ${fmt(b.promptTokens)} in / ${fmt(b.completionTokens)} out — ${costStr}`);
       }
       lines.push('');
+      // The total prices only pay-per-use rows; flat-fee rows are called out
+      // rather than folded in (or quietly dropped) — see formatModelCost.
+      const planRows = breakdown.filter(b => isFlatFeeProvider(b.provider));
+      const billable = breakdown
+        .filter(b => !isFlatFeeProvider(b.provider))
+        .reduce((s, b) => s + b.estimatedCost, 0);
       if (currentProvider === 'ollama') {
         lines.push(`**Total: free · ${fmt(totals.totalTokens)} tokens**`);
-      } else if (totals.estimatedCost > 0) {
-        lines.push(`**Total: ~$${totals.estimatedCost.toFixed(4)}**`);
+      } else if (planRows.length === breakdown.length) {
+        lines.push(`**Total: included in plan · ${fmt(totals.totalTokens)} tokens**`);
+      } else if (billable > 0) {
+        lines.push(`**Total: ~$${billable.toFixed(4)}${planRows.length > 0 ? ' + usage included in plan' : ''}**`);
       }
     }
     if (cache.cacheReadTokens > 0 || cache.cacheCreationTokens > 0) {

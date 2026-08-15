@@ -35,6 +35,10 @@ export interface ProviderConfig {
   subscribeUrl?: string; // URL to get API key
   noApiKey?: boolean; // Provider doesn't require an API key (e.g. Ollama)
   dynamicModels?: boolean; // Models are fetched dynamically at runtime
+  /** Billed as a flat subscription (or free) — token counts are real, per-token
+   *  cost is not. Cost surfaces must say "included in plan" instead of pricing
+   *  these tokens at the provider's pay-per-use rates. */
+  flatFee?: boolean;
   // UI metadata exposed to ACP clients (Codeep VS Code extension, etc.) so
   // they don't have to hardcode their own copy of the provider list. Keep these
   // strings short and human-readable — they show up in dropdowns and hints.
@@ -64,15 +68,19 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest flagship for project-scale engineering (1M context)' },
+      // GLM-5.3 is Coding-Plan only — the standalone pay-per-use API does not
+      // accept it yet, so it must NOT be copied into `z.ai-api`.
+      { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
+      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant, available to all users' },
     ],
-    defaultModel: 'glm-5.2',
+    defaultModel: 'glm-5.3',
     defaultProtocol: 'openai',
     maxOutputTokens: 131_072,
     envKey: 'ZAI_API_KEY',
     subscribeUrl: 'https://z.ai/subscribe?ic=NXYNXZOV14',
     groupLabel: 'Z.AI — Subscription (GLM Coding Plan)',
+    flatFee: true,
     hint: 'Uses your Z.AI subscription — no per-token charges.',
     mcpEndpoints: {
       webSearch: 'https://api.z.ai/api/mcp/web_search_prime/mcp',
@@ -127,6 +135,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'ZAI_CN_API_KEY',
     subscribeUrl: 'https://open.bigmodel.cn/glm-coding',
     groupLabel: 'Z.AI China — Subscription (GLM Coding Plan)',
+    flatFee: true,
     hint: 'Uses your ZhipuAI China subscription.',
     mcpEndpoints: {
       webSearch: 'https://open.bigmodel.cn/api/mcp/web_search_prime/mcp',
@@ -179,6 +188,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'MINIMAX_API_KEY',
     subscribeUrl: 'https://platform.minimax.io/subscribe/coding-plan?code=2lWvoWUhrp&source=link',
     groupLabel: 'MiniMax — Subscription',
+    flatFee: true,
     hint: 'Uses your MiniMax subscription — no per-token charges.',
   },
   'minimax-api': {
@@ -224,6 +234,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'MINIMAX_CN_API_KEY',
     subscribeUrl: 'https://platform.minimaxi.com',
     groupLabel: 'MiniMax China — Subscription',
+    flatFee: true,
     hint: 'Uses your MiniMax China subscription.',
   },
   'deepseek': {
@@ -276,6 +287,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'KIMI_CODE_API_KEY',
     subscribeUrl: 'https://www.kimi.com/code',
     groupLabel: 'Kimi — Subscription (Kimi Code)',
+    flatFee: true,
     hint: 'Uses your Kimi Code subscription — no per-token charges. Key from kimi.com/code/console.',
   },
   'kimi-api': {
@@ -329,10 +341,15 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       openai: { baseUrl: 'https://api.x.ai/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     models: [
-      { id: 'grok-4.5',              name: 'Grok 4.5',              description: 'Flagship reasoning model — highest quality, 500K context' },
+      { id: 'grok-4.6',              name: 'Grok 4.6',              description: 'Flagship reasoning model — xAI recommends it for code, 500K context' },
+      { id: 'grok-4.5',              name: 'Grok 4.5',              description: 'Previous flagship reasoning model, 500K context' },
       { id: 'grok-build-0.1',        name: 'Grok Build 0.1',        description: 'Agentic coding model — fast, 256K context' },
-      { id: 'grok-4.3',              name: 'Grok 4.3',              description: 'Previous flagship, 1M context' },
+      { id: 'grok-4.3',              name: 'Grok 4.3',              description: 'Older flagship, 1M context' },
     ],
+    // Stays on the agentic coder, not the new flagship. grok-4.6 is the better
+    // model and xAI recommends it for code, but it bills 2x input and 3x output
+    // against grok-build-0.1 — moving every unpinned user onto it silently is
+    // not ours to decide. It is one `/model` away for anyone who wants it.
     defaultModel: 'grok-build-0.1',
     defaultProtocol: 'openai',
     useMaxCompletionTokens: true, // reasoning models reject max_tokens
@@ -363,6 +380,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'BAILIAN_CODING_PLAN_API_KEY',
     subscribeUrl: 'https://www.alibabacloud.com/help/en/model-studio/qwen-code-coding-plan',
     groupLabel: 'Qwen — Subscription (Coding Plan)',
+    flatFee: true,
     hint: 'Uses your Qwen Coding Plan — no per-token charges. sk-sp-… key from Model Studio. Interactive coding use only.',
   },
   'qwen-api': {
@@ -405,6 +423,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'BAILIAN_TOKEN_PLAN_API_KEY',
     subscribeUrl: 'https://modelstudio.console.alibabacloud.com/',
     groupLabel: 'Qwen — Subscription (Token Plan)',
+    flatFee: true,
     hint: 'Uses monthly Token Plan credits. Requires a separate sk-sp-… Token Plan key.',
   },
   'qwen-cn': {
@@ -425,6 +444,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'BAILIAN_CODING_PLAN_CN_API_KEY',
     subscribeUrl: 'https://bailian.console.aliyun.com/',
     groupLabel: 'Qwen China — Subscription (Coding Plan)',
+    flatFee: true,
     hint: 'Uses your Qwen Coding Plan (China). sk-sp-… key from Bailian.',
   },
   'qwen-cn-api': {
@@ -464,6 +484,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     envKey: 'MODELSCOPE_API_KEY',
     subscribeUrl: 'https://modelscope.cn/my/myaccesstoken',
     groupLabel: 'ModelScope — Free (Qwen)',
+    flatFee: true,
     hint: 'Fetches the live free catalog for your ModelScope token; availability and limits vary by account.',
   },
   'openai': {
@@ -524,7 +545,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     },
     models: [
       { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro',        description: 'Most capable Gemini model' },
-      { id: 'gemini-3.6-flash',       name: 'Gemini 3.6 Flash',      description: 'Latest production Flash model' },
+      { id: 'gemini-3.7-flash',       name: 'Gemini 3.7 Flash',      description: 'Latest production Flash model — adjustable thinking, 64K output' },
+      { id: 'gemini-3.6-flash',       name: 'Gemini 3.6 Flash',      description: 'Previous production Flash model' },
       { id: 'gemini-3.5-flash',       name: 'Gemini 3.5 Flash',      description: 'Stable frontier Flash model for coding and long agentic tasks' },
       { id: 'gemini-3.5-flash-lite',  name: 'Gemini 3.5 Flash-Lite', description: 'Latest low-latency, low-cost workhorse' },
     ],
@@ -556,11 +578,11 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       { id: 'anthropic/claude-sonnet-5',        name: 'Claude Sonnet 5',    description: 'Anthropic — balanced' },
       { id: 'openai/gpt-5.6-sol',               name: 'GPT-5.6 Sol',        description: 'OpenAI — flagship' },
       { id: 'openai/gpt-5.6-luna',              name: 'GPT-5.6 Luna',       description: 'OpenAI — fast/efficient' },
-      { id: 'google/gemini-3.6-flash',          name: 'Gemini 3.6 Flash',   description: 'Google — latest production Flash' },
+      { id: 'google/gemini-3.7-flash',          name: 'Gemini 3.7 Flash',   description: 'Google — latest production Flash' },
       { id: 'deepseek/deepseek-v4-pro',         name: 'DeepSeek V4 Pro',    description: 'DeepSeek — flagship agentic model' },
       { id: 'moonshotai/kimi-k3',               name: 'Kimi K3',            description: 'Moonshot — long-horizon coding' },
       { id: 'qwen/qwen3.8-max',                 name: 'Qwen 3.8 Max',       description: 'Alibaba — latest flagship' },
-      { id: 'x-ai/grok-4.5',                    name: 'Grok 4.5',           description: 'xAI — flagship reasoning' },
+      { id: 'x-ai/grok-4.6',                    name: 'Grok 4.6',           description: 'xAI — flagship reasoning' },
     ],
     defaultModel: 'openrouter/auto',
     defaultProtocol: 'openai',
@@ -748,6 +770,14 @@ export function isDynamicModelsProvider(providerId: string): boolean {
   return PROVIDERS[providerId]?.dynamicModels === true;
 }
 
+/**
+ * Returns true if the provider bills a flat subscription (or is free), so any
+ * per-token dollar figure we compute for it is invented — see `flatFee`.
+ */
+export function isFlatFeeProvider(providerId: string): boolean {
+  return PROVIDERS[providerId]?.flatFee === true;
+}
+
 export function getProviderBaseUrl(providerId: string, protocol: 'openai' | 'anthropic'): string | null {
   const provider = PROVIDERS[providerId];
   if (!provider) return null;
@@ -802,15 +832,24 @@ export function providerNoStreamWithTools(providerId: string): boolean {
  * MODEL-level check, not a provider-level one (requiresDefaultTemperature
  * can't express it). Omitting the field is always safe — the API treats
  * omission as default. Kimi K2.x code/thinking models fix temperature
- * internally and 400 on any custom value, so they're here too.
+ * internally and 400 on any custom value, so they're here too. Google removed
+ * the deprecated sampling parameters outright in the Gemini 3.7 generation.
  */
 const SAMPLING_PARAMS_REJECTED = [
   'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5',
   'kimi-k3', 'kimi-k2.7-code', 'kimi-for-coding', 'k3',
+  'gemini-3.7-flash',
 ];
 
 export function modelRejectsSamplingParams(model: string): boolean {
-  return SAMPLING_PARAMS_REJECTED.some(id => model === id || model.startsWith(`${id}-`));
+  // Canonicalize both sides. OpenRouter routes these as `google/gemini-3.7-flash`
+  // and `anthropic/claude-opus-4.8`, which a raw comparison misses — so the model
+  // gets a temperature it rejects, on the one path where the id is namespaced.
+  const id = canonicalModelId(model);
+  return SAMPLING_PARAMS_REJECTED.some(entry => {
+    const canonical = canonicalModelId(entry);
+    return id === canonical || id.startsWith(`${canonical}-`);
+  });
 }
 
 /**
@@ -883,8 +922,9 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
     case 'deepseek':
       return id.startsWith('deepseek-v4');
     case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
-      // GLM-5.2 exposes graded High/Max effort; Turbo is a plain toggle.
-      return idMatches(id, 'glm-5-2');
+      // GLM-5.2 exposes graded High/Max effort; GLM-5.3 adds a distinct Low.
+      // Turbo is a plain toggle.
+      return idMatches(id, 'glm-5-2') || idMatches(id, 'glm-5-3');
     case 'kimi':
       return idMatches(id, 'k3');
     case 'kimi-api': case 'kimi-cn':
@@ -932,11 +972,22 @@ export function reasoningParamsFor(
       // none/low/medium/high/xhigh — no "max"; map our Max → xhigh (the ceiling).
       return { reasoning_effort: tier === 'max' ? 'xhigh' : tier };
     case 'google':
-      // Gemini 3 (OpenAI-compat) accepts ONLY low/high — "medium" 400s.
-      return { reasoning_effort: tier === 'low' ? 'low' : 'high' };
+      // Gemini's OpenAI-compat layer maps reasoning_effort onto thinking_level
+      // and documents low | medium | high. (Medium 400'd on Gemini 3 Preview,
+      // which is why this used to collapse it — that was a preview-era bug and
+      // is fixed.) 'max' has no Gemini equivalent, so it tops out at high.
+      // 'minimal' is deliberately not emitted: 3.7 Flash rejects it outright.
+      return { reasoning_effort: tier === 'max' ? 'high' : tier };
     case 'deepseek':
-    case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
       // Graded thinking depth: high (default) or max. Lower tiers collapse to high.
+      return { reasoning_effort: tier === 'max' ? 'max' : 'high' };
+    case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
+      // GLM-5.3 accepts low/high/max; GLM-5.2 grades only high|max, so lower
+      // tiers collapse to high there. Either way we always send an effort and
+      // never a disabled thinking block — GLM-5.3 rejects "disabled" outright.
+      if (idMatches(canonicalModelId(model), 'glm-5-3')) {
+        return { reasoning_effort: tier === 'low' ? 'low' : tier === 'max' ? 'max' : 'high' };
+      }
       return { reasoning_effort: tier === 'max' ? 'max' : 'high' };
     case 'kimi': case 'kimi-api': case 'kimi-cn':
       // Kimi K3 accepts low/high/max; collapse our medium tier to high.
@@ -969,11 +1020,17 @@ export function availableReasoningTiers(providerId: string, model: string): Reas
     case 'openai':
       return ['auto', 'low', 'medium', 'high', 'max'];
     case 'google':
-      // OpenAI-compat layer accepts only low/high — "medium" 400s.
-      return ['auto', 'low', 'high'];
+      // low | medium | high, per Gemini's OpenAI-compat mapping table. Medium
+      // is 3.7 Flash's own default and the tier Google recommends for agentic
+      // coding, so collapsing it hid the setting most users want.
+      return ['auto', 'low', 'medium', 'high'];
     case 'deepseek':
-    case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
       return ['auto', 'high', 'max'];
+    case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
+      // GLM-5.3 distinguishes a Low tier; GLM-5.2 grades only high|max.
+      return idMatches(canonicalModelId(model), 'glm-5-3')
+        ? ['auto', 'low', 'high', 'max']
+        : ['auto', 'high', 'max'];
     case 'kimi': case 'kimi-api': case 'kimi-cn':
       return ['auto', 'low', 'high', 'max'];
     case 'grok':

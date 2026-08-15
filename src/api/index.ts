@@ -400,7 +400,13 @@ async function chatOpenAI(
   let baseUrl = resolveBaseUrl(providerId, 'openai');
   const authHeader = getProviderAuthHeader(providerId, 'openai');
   const useCompletionTokens = usesMaxCompletionTokens(providerId);
-  const omitTemperature = requiresDefaultTemperature(providerId);
+  // Two independent reasons to leave temperature out, and both must be checked
+  // here: the provider-level flag (endpoints that only accept the default) and
+  // the per-model one (generations that removed the sampling params outright,
+  // e.g. gemini-3.7-flash). Testing only the provider flag let a rejecting
+  // model through, because every model this rule covers is served over the
+  // OpenAI-compatible path, not the Anthropic one.
+  const omitTemperature = requiresDefaultTemperature(providerId) || modelRejectsSamplingParams(model);
 
   if (!baseUrl) {
     throw new Error(`Provider ${providerId} does not support OpenAI protocol`);
