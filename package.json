@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "version": "node scripts/gen-version.js && git add src/version.ts",
+    "export:catalogue": "node --import tsx scripts/export-catalogue.ts",
     "release": "node scripts/release.js"
   },
   "repository": {

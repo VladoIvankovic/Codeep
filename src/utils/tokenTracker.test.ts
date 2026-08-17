@@ -14,6 +14,7 @@ import {
   getRecordCount,
   createTokenScope,
   runWithTokenScope,
+  getCacheStats,
 } from './tokenTracker';
 
 beforeEach(() => {
@@ -435,5 +436,53 @@ describe('runWithTokenScope isolation (finding cli-11 — concurrent ACP session
 
     // The default (out-of-scope) buffer is untouched by either session.
     expect(getCostBreakdown()).toHaveLength(0);
+  });
+});
+
+describe('prompt-caching savings vs flat-fee plans', () => {
+  // A plan bills a flat fee, so cached tokens save latency but not money.
+  // Pricing them would invent a dollar figure — the same class of bug the
+  // per-model cost lines were fixed for.
+  const cached = { promptTokens: 1_000_000, completionTokens: 1_000, totalTokens: 1_001_000,
+                   cacheCreationTokens: 100_000, cacheReadTokens: 900_000 };
+
+  it('counts plan cache tokens but prices none of them', () => {
+    recordTokenUsage(cached, 'glm-5.2', 'z.ai');       // Coding Plan → flat fee
+    const cache = getCacheStats();
+    expect(cache.cacheReadTokens).toBe(900_000);       // measured, still reported
+    expect(cache.cacheCreationTokens).toBe(100_000);
+    expect(cache.estimatedSavingsUsd).toBe(0);         // no invented dollars
+    expect(cache.isEntirelyFlatFeeCache).toBe(true);
+
+    const report = formatCostReport();
+    expect(report).toContain('caching saves latency, not money');
+    expect(report).not.toMatch(/Estimated savings vs no caching:\s*\$[1-9]/);
+    // The billing multipliers describe a metered account and must not appear.
+    expect(report).not.toContain('billed at 0.1');
+  });
+
+  it('prices only the pay-per-use half of a mixed session, and says so', () => {
+    recordTokenUsage(cached, 'glm-5.2', 'z.ai');        // plan
+    recordTokenUsage(cached, 'claude-opus-5', 'anthropic'); // metered
+    const cache = getCacheStats();
+    expect(cache.cacheReadTokens).toBe(1_800_000);      // both sides counted
+    expect(cache.hasFlatFeeCacheUsage).toBe(true);
+    expect(cache.isEntirelyFlatFeeCache).toBe(false);
+    // Anthropic alone: 0.9M read x $5/1M x 0.9 - 0.1M write x $5 x 0.25 = 3.925
+    expect(cache.estimatedSavingsUsd).toBeCloseTo(3.925, 3);
+
+    const report = formatCostReport();
+    expect(report).toContain('(pay-per-use models only)');
+    expect(report).toContain('billed at 0.1');          // metered usage exists
+  });
+
+  it('leaves an all-metered session exactly as it was', () => {
+    recordTokenUsage(cached, 'claude-opus-5', 'anthropic');
+    const cache = getCacheStats();
+    expect(cache.hasFlatFeeCacheUsage).toBe(false);
+    expect(cache.estimatedSavingsUsd).toBeCloseTo(3.925, 3);
+    const report = formatCostReport();
+    expect(report).toContain('Estimated savings vs no caching:');
+    expect(report).not.toContain('pay-per-use models only');
   });
 });

@@ -147,6 +147,12 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'claude-sonnet-5':              { inputPer1M: 3.00,  outputPer1M: 15.00 },
   'claude-haiku-4-5-20251001':    { inputPer1M: 1.00,  outputPer1M: 5.00 },
   // DeepSeek (cache-miss input pricing)
+  // DeepSeek moved to peak / off-peak billing on 2026-08-16, with off-peak at
+  // half these rates. This table holds one rate per model and has no notion of
+  // wall-clock time, so it keeps the PEAK figures: an over-estimate is the
+  // honest direction for a cost estimate, and rule 5 of the catalogue policy
+  // allows a clearly-labelled conservative approximation but never an invented
+  // number. Cache-miss input; cache hits are ~1/50th and not modelled here.
   'deepseek-v4-pro':   { inputPer1M: 0.435, outputPer1M: 0.87 },
   'deepseek-v4-flash': { inputPer1M: 0.14,  outputPer1M: 0.28 },
   // Google
@@ -374,17 +380,35 @@ export function getCostBreakdown(startIndex = 0): ProviderCostBreakdown[] {
 export interface CacheStats {
   cacheCreationTokens: number;
   cacheReadTokens: number;
-  /** Sum of estimatedSavings across all Anthropic-priced records. */
+  /** Sum of estimatedSavings across pay-per-use records only. */
   estimatedSavingsUsd: number;
+  /** True when some cached tokens came from a flat-fee plan, whose "savings"
+   *  are not a dollar amount at all. Lets the report say so instead of quoting
+   *  a figure that silently covers only part of the session. */
+  hasFlatFeeCacheUsage: boolean;
+  /** True when EVERY cached token came from a flat-fee plan — there is no
+   *  metered spend to have saved against. */
+  isEntirelyFlatFeeCache: boolean;
 }
 
 export function getCacheStats(): CacheStats {
   let cacheCreate = 0;
   let cacheRead = 0;
   let savings = 0;
+  let flatFeeCached = 0;
+  let meteredCached = 0;
   for (const record of currentRecords()) {
+    const cached = (record.cacheCreationTokens ?? 0) + (record.cacheReadTokens ?? 0);
     cacheCreate += record.cacheCreationTokens ?? 0;
     cacheRead += record.cacheReadTokens ?? 0;
+    // A plan bills a flat fee, so caching saves latency but not money — pricing
+    // its cached tokens would invent a dollar figure the same way the per-model
+    // cost lines used to. Count the tokens (measured), skip the arithmetic.
+    if (isFlatFeeProvider(record.provider)) {
+      flatFeeCached += cached;
+      continue;
+    }
+    meteredCached += cached;
     // Savings = what cache-read tokens would have cost at full input rate,
     // minus what they actually cost at 0.1×. (Cache creation is a slight
     // *penalty* of 0.25× — netted in for honest reporting.)
@@ -395,7 +419,13 @@ export function getCacheStats(): CacheStats {
       savings += cReadSaved - cCreateCost;
     }
   }
-  return { cacheCreationTokens: cacheCreate, cacheReadTokens: cacheRead, estimatedSavingsUsd: Math.max(0, savings) };
+  return {
+    cacheCreationTokens: cacheCreate,
+    cacheReadTokens: cacheRead,
+    estimatedSavingsUsd: Math.max(0, savings),
+    hasFlatFeeCacheUsage: flatFeeCached > 0,
+    isEntirelyFlatFeeCache: flatFeeCached > 0 && meteredCached === 0,
+  };
 }
 
 /**
@@ -513,12 +543,21 @@ export function formatCostReport(): string {
   const cache = getCacheStats();
   if (cache.cacheReadTokens > 0 || cache.cacheCreationTokens > 0) {
     lines.push('', '### Prompt caching');
-    lines.push(`**Cache reads:** ${formatTokenCount(cache.cacheReadTokens)} tokens (billed at 0.1× input rate)`);
+    // The billing multipliers only describe a metered account. On a plan
+    // nothing is billed per token, so quoting a rate there would be as invented
+    // as the per-model prices this report already refuses to show.
+    const readNote = cache.isEntirelyFlatFeeCache ? '' : ' (billed at 0.1× input rate)';
+    const writeNote = cache.isEntirelyFlatFeeCache ? '' : ' (billed at 1.25× input rate)';
+    lines.push(`**Cache reads:** ${formatTokenCount(cache.cacheReadTokens)} tokens${readNote}`);
     if (cache.cacheCreationTokens > 0) {
-      lines.push(`**Cache writes:** ${formatTokenCount(cache.cacheCreationTokens)} tokens (billed at 1.25× input rate)`);
+      lines.push(`**Cache writes:** ${formatTokenCount(cache.cacheCreationTokens)} tokens${writeNote}`);
     }
-    if (cache.estimatedSavingsUsd > 0) {
-      lines.push(`**Estimated savings vs no caching:** $${cache.estimatedSavingsUsd.toFixed(4)}`);
+    if (cache.isEntirelyFlatFeeCache) {
+      lines.push('**Savings:** caching saves latency, not money — this session is on a plan');
+    } else if (cache.estimatedSavingsUsd > 0) {
+      // Name the partial coverage rather than letting one figure look total.
+      const scope = cache.hasFlatFeeCacheUsage ? ' (pay-per-use models only)' : '';
+      lines.push(`**Estimated savings vs no caching:** $${cache.estimatedSavingsUsd.toFixed(4)}${scope}`);
     }
   }
 

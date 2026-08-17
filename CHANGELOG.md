@@ -11,6 +11,29 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.18.1] — 2026-08-15
+
+> The last place `/cost` still priced plan usage: the prompt-caching savings line quoted dollars for subscription providers that bill a flat fee.
+
+### Added
+
+- **`npm run export:catalogue`** writes the shipped model catalogue to
+  `Codeep-web/src/data/catalogue.json` straight from `PROVIDERS` and the
+  context/pricing tables, so codeep.dev renders what the client actually
+  offers instead of a hand-kept list that had drifted to 4 models against a
+  catalogue of 72.
+
+### Fixed
+
+- **Prompt-caching "savings" no longer invents money on a plan.** `/cost`
+  priced cached tokens at the provider's pay-per-use input rate even on Z.AI's
+  Coding Plan, MiniMax, Kimi and Qwen — where caching saves latency, not money,
+  because nothing is billed per token. The cache read/write counts stay (they
+  are measured); the dollar figure now covers pay-per-use models only and says
+  so when a session mixes both, and a plan-only session reads "caching saves
+  latency, not money" instead. The `billed at 0.1× / 1.25× input rate` notes are
+  likewise dropped where no per-token billing applies.
+
 ## [2.18.0] — 2026-08-15
 
 > Subscription plans stop inventing dollar amounts — GLM Coding Plan, MiniMax, Kimi and Qwen now read "included in plan". Adds Grok 4.6, Gemini 3.7 Flash and GLM-5.3, and halves a Gemini rate stored at double.

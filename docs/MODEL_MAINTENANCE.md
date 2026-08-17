@@ -44,6 +44,11 @@ Last full review: **2026-08-15**
 - Update the OpenRouter fallback in both clients.
 - Update the public provider matrix in
   `Codeep-web/src/app/docs/providers/page.tsx`.
+- Regenerate the site's model list — `npm run export:catalogue` in this repo.
+  It writes `Codeep-web/src/data/catalogue.json` straight from `PROVIDERS`, the
+  context table and the pricing table, so /docs/providers can only ever show
+  what the client actually offers. Commit the JSON; the site must build without
+  this repo present.
 - Run:
   - `npm test`, `npx tsc --noEmit`, and `npm run build` in the root.
   - `swift test --package-path Packages/CodeepCore` plus a macOS Debug build.
@@ -51,6 +56,17 @@ Last full review: **2026-08-15**
     `npm run build` in `Codeep-web`.
 - Verify a migrated config, a new install, model selection, one real response,
   `/cost`, `/stats`, Mac Usage, Mac Insights, and the web dashboard.
+
+## Known pricing quirks
+
+- **DeepSeek moved to peak / off-peak billing on 2026-08-16**, off-peak at half
+  the peak rate. `MODEL_PRICING` holds one rate per model, so it carries the
+  peak figures — an over-estimate, deliberately, per rule 5.
+- **Gemini 3.6 / 3.7 Flash run a promotional $0.75/$3.75 through 2026-12-31**,
+  stepping back to $1.50/$7.50 on 2027-01-01. Revisit both together.
+- **GLM-5.3 has no published per-token rate** — Coding Plan only, standalone API
+  still "coming soon". It is exempted in the CLI's pricing/context lockstep test
+  rather than given a borrowed price.
 
 ## Official source index
 
