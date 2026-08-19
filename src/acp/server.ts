@@ -16,6 +16,9 @@ import {
   SessionModeState, SessionConfigOption,
   JsonRpcRequest, JsonRpcNotification,
   RequestPermissionResult,
+  ListPersonalitiesParams, ListPersonalitiesResult,
+  SetPersonalityParams, SetPersonalityResult,
+  SyncPersonalitiesParams, SyncPersonalitiesResult,
   TerminalCreateResult, TerminalOutputResult, TerminalWaitForExitResult,
   McpServer,
 } from './protocol.js';
@@ -40,10 +43,11 @@ import { autoSaveSession, config, getApiKey, getConfiguredProviders } from '../c
 import { ApiError } from '../api/index.js';
 import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
-import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud.js';
+import { reportStats, syncSession, generateProjectId, pullPersonalities } from '../utils/codeepCloud.js';
 import { getCostBreakdown, getRecordCount, createTokenScope, runWithTokenScope, type TokenScope } from '../utils/tokenTracker.js';
 import { isGitRepository } from '../utils/git.js';
 import { getProjectContext } from '../utils/project.js';
+import { findPersonality, isPersonalityAvailable, loadAllPersonalities, type Personality } from '../utils/personalities.js';
 
 // ─── Slash commands advertised to Zed ────────────────────────────────────────
 
@@ -83,7 +87,7 @@ const AVAILABLE_COMMANDS = [
   { name: 'plan',      description: 'Generate a numbered plan for a task — review before /go executes', input: { hint: '<task>' } },
   { name: 'go',        description: 'Execute the pending plan from /plan' },
   // Personalities + insights (2.0.3)
-  { name: 'personality', description: 'List or switch agent tone preset', input: { hint: '[name | off]' } },
+  { name: 'personality', description: 'List or switch a personality or structured custom bot', input: { hint: '[name | off]' } },
   { name: 'me',        description: 'Your user profile — adapts the agent to you (reply language, style, stack)', input: { hint: '[init [project] | on | off | learn [on|off|project] | forget | sync]' } },
   { name: 'agents',    description: 'List sub-agents the agent can delegate self-contained tasks to' },
   { name: 'insights',  description: 'Activity summary over the last N days (default 7)', input: { hint: '[--days N]' } },
@@ -390,6 +394,35 @@ export function buildConfigOptions(): SessionConfigOption[] {
   ];
 }
 
+/** Build the stable Codeep ACP personality extension payload for a workspace. */
+export function buildPersonalityListResult(workspaceRoot: string): ListPersonalitiesResult {
+  const personalities = loadAllPersonalities(workspaceRoot).map(personality => ({
+    name: personality.name,
+    displayName: personality.displayName,
+    description: personality.description,
+    structured: personality.structured === true,
+    restrictTools: personality.restrictTools === true,
+    scope: personality.scope,
+    model: personality.structured ? (personality.modelPreference ?? 'automatic') : 'automatic',
+    tools: personality.structured ? (personality.tools ?? []) : [],
+    projectScope: personality.projectScope ?? 'unspecified',
+    projects: personality.projects ?? [],
+    available: isPersonalityAvailable(personality, workspaceRoot),
+  }));
+  const configuredActive = (config.get('activePersonality') as string | null | undefined) ?? null;
+  const activePersonality = configuredActive && personalities.some(personality => personality.name === configuredActive && personality.available)
+    ? configuredActive
+    : null;
+  return { personalities, activePersonality };
+}
+
+/** Resolve an ACP selection using the same scope/model availability gate as list. */
+export function resolvePersonalitySelection(personalityId: unknown, workspaceRoot: string): Personality | null {
+  if (typeof personalityId !== 'string') return null;
+  const personality = findPersonality(personalityId, workspaceRoot);
+  return personality && isPersonalityAvailable(personality, workspaceRoot) ? personality : null;
+}
+
 // ─── Server ───────────────────────────────────────────────────────────────────
 
 export function startAcpServer(): Promise<void> {
@@ -445,6 +478,9 @@ export function startAcpServer(): Promise<void> {
       case 'session/list':             handleSessionList(req);          break;
       case 'session/delete':           handleSessionDelete(req);        break;
       case 'session/list_providers':   handleListProviders(req);        break;
+      case 'session/list_personalities': handleListPersonalities(req);  break;
+      case 'session/set_personality':    handleSetPersonality(req);     break;
+      case 'session/sync_personalities': handleSyncPersonalities(req);  break;
       default:
         process.stderr.write(`[codeep-acp] Unknown method: ${req.method}\n`);
         transport.error(req.id, -32601, `Method not found: ${req.method}`);
@@ -833,6 +869,67 @@ export function startAcpServer(): Promise<void> {
   // adding new fields is fine, removing/renaming would break existing clients.
   function handleListProviders(msg: JsonRpcRequest): void {
     handleListProvidersExternal(msg, handlerDeps);
+  }
+
+  // ── Codeep personality extensions ─────────────────────────────────────────
+  // These methods are intentionally additive to ACP v1. VS Code can render a
+  // native picker without scraping markdown from `/personality`; clients that
+  // do not know the extension continue using the slash command unchanged.
+
+  function personalityListResult(sessionId: string): ListPersonalitiesResult | null {
+    const session = sessions.get(sessionId);
+    if (!session) return null;
+    return buildPersonalityListResult(session.workspaceRoot);
+  }
+
+  function handleListPersonalities(msg: JsonRpcRequest): void {
+    const params = (msg.params ?? {}) as ListPersonalitiesParams;
+    const result = personalityListResult(params.sessionId);
+    if (!result) {
+      transport.error(msg.id, -32602, `Unknown sessionId: ${params.sessionId}`);
+      return;
+    }
+    transport.respond(msg.id, result);
+  }
+
+  function handleSetPersonality(msg: JsonRpcRequest): void {
+    const params = (msg.params ?? {}) as SetPersonalityParams;
+    const session = sessions.get(params.sessionId);
+    if (!session) {
+      transport.error(msg.id, -32602, `Unknown sessionId: ${params.sessionId}`);
+      return;
+    }
+    if (params.personalityId === null) {
+      config.set('activePersonality', null);
+      const result: SetPersonalityResult = { activePersonality: null };
+      transport.respond(msg.id, result);
+      return;
+    }
+    const selected = resolvePersonalitySelection(params.personalityId, session.workspaceRoot);
+    if (!selected) {
+      transport.error(msg.id, -32602, `Personality is unknown or unavailable here: ${String(params.personalityId)}`);
+      return;
+    }
+    const personalityId = params.personalityId.toLowerCase();
+    config.set('activePersonality', personalityId);
+    const result: SetPersonalityResult = { activePersonality: personalityId };
+    transport.respond(msg.id, result);
+  }
+
+  async function handleSyncPersonalities(msg: JsonRpcRequest): Promise<void> {
+    const params = (msg.params ?? {}) as SyncPersonalitiesParams;
+    if (!sessions.has(params.sessionId)) {
+      transport.error(msg.id, -32602, `Unknown sessionId: ${params.sessionId}`);
+      return;
+    }
+    const updated = await pullPersonalities();
+    if (updated === null) {
+      transport.error(msg.id, -32001, 'Personality sync failed or this device is not linked to codeep.dev.');
+      return;
+    }
+    const list = personalityListResult(params.sessionId)!;
+    const result: SyncPersonalitiesResult = { updated, ...list };
+    transport.respond(msg.id, result);
   }
 
   // ── session/prompt ──────────────────────────────────────────────────────────

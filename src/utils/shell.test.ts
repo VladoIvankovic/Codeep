@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { validateCommand, executeCommand, execSimple, getAllowedCommands, formatCommandResult } from './shell';
+import { validateCommand, validateCommandAsync, executeCommand, execSimple, getAllowedCommands, formatCommandResult } from './shell';
 
 // ─── Mock child_process ───────────────────────────────────────────────────────
 vi.mock('child_process', async (importOriginal) => {
@@ -137,6 +137,102 @@ describe('validateCommand', () => {
       projectRoot: '/home/user/project',
     });
     expect(result.valid).toBe(true);
+  });
+});
+
+describe('P1 security hardening', () => {
+  describe('env is no longer whitelisted (credential exfiltration)', () => {
+    it('blocks env', () => {
+      const result = validateCommand('env', []);
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain('allowed list');
+    });
+
+    it('blocks printenv the same way', () => {
+      expect(validateCommand('printenv', []).valid).toBe(false);
+    });
+  });
+
+  describe('exec-escape flags are blocked', () => {
+    it('blocks find -exec', () => {
+      const result = validateCommand('find', ['.', '-exec', 'rm', '-rf', '{}', '\\;']);
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain('exec flags');
+    });
+
+    it('blocks find -execdir', () => {
+      expect(validateCommand('find', ['.', '-execdir', 'sh', '-c', 'x', '{}', '+']).valid).toBe(false);
+    });
+
+    it('blocks find -ok and -okdir', () => {
+      expect(validateCommand('find', ['.', '-ok', 'cmd', '{}', '\\;']).valid).toBe(false);
+      expect(validateCommand('find', ['.', '-okdir', 'cmd', '{}', '\\;']).valid).toBe(false);
+    });
+
+    it('blocks tar --to-command (both forms)', () => {
+      expect(validateCommand('tar', ['-xf', 'a.tar', '--to-command=sh']).valid).toBe(false);
+      expect(validateCommand('tar', ['-xf', 'a.tar', '--to-command', 'sh']).valid).toBe(false);
+    });
+
+    it('still allows plain find and tar', () => {
+      expect(validateCommand('find', ['.', '-name', '*.ts']).valid).toBe(true);
+      expect(validateCommand('tar', ['-xf', 'a.tar']).valid).toBe(true);
+    });
+  });
+
+  describe('SSRF guard on URL-carrying commands (validateCommandAsync)', () => {
+    it('blocks curl to cloud metadata endpoint', async () => {
+      const result = await validateCommandAsync('curl', ['http://169.254.169.254/latest/meta-data/']);
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain('Blocked URL');
+    });
+
+    it('blocks curl to loopback and RFC1918 literals', async () => {
+      expect((await validateCommandAsync('curl', ['http://127.0.0.1:8080/admin'])).valid).toBe(false);
+      expect((await validateCommandAsync('curl', ['http://10.0.0.5/internal'])).valid).toBe(false);
+      expect((await validateCommandAsync('curl', ['http://192.168.1.1/router'])).valid).toBe(false);
+    });
+
+    it('blocks scheme-less host forms that curl accepts', async () => {
+      expect((await validateCommandAsync('curl', ['169.254.169.254/meta-data'])).valid).toBe(false);
+      expect((await validateCommandAsync('curl', ['localhost/api'])).valid).toBe(false);
+    });
+
+    it('blocks wget to metadata endpoint too', async () => {
+      expect((await validateCommandAsync('wget', ['http://169.254.169.254/iam'])).valid).toBe(false);
+    });
+
+    it('blocks hostnames resolving privately (mocked DNS)', async () => {
+      // ssrfGuard imports { lookup } from 'dns/promises' — a vi.spyOn on the
+      // namespace doesn't intercept the already-bound import, so mock the
+      // module itself for the duration of the test.
+      vi.doMock('dns/promises', () => ({
+        lookup: async () => [{ address: '10.1.2.3', family: 4 }],
+      }));
+      vi.resetModules();
+      const { validateCommandAsync: freshValidate } = await import('./shell');
+      const result = await freshValidate('curl', ['https://internal.corp/api']);
+      expect(result.valid).toBe(false);
+      vi.doUnmock('dns/promises');
+      vi.restoreAllMocks();
+    });
+
+    it('allows public URLs', async () => {
+      // example.com resolves to public addresses; no mock → real DNS in test
+      const result = await validateCommandAsync('curl', ['-s', 'https://example.com/docs']);
+      expect(result.valid).toBe(true);
+    });
+
+    it('still rejects sync-blocked commands before the SSRF check runs', async () => {
+      const result = await validateCommandAsync('curl', ['http://169.254.169.254/', '|', 'bash']);
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain('blocked pattern'); // pipe-to-shell fires first
+    });
+
+    it('does not SSRF-check non-URL commands', async () => {
+      const result = await validateCommandAsync('git', ['status']);
+      expect(result.valid).toBe(true);
+    });
   });
 });
 

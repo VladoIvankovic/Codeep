@@ -20,12 +20,10 @@ import {
   setProjectPermission,
   hasWritePermission,
   hasReadPermission,
-  isTelemetryEnabled,
-  telemetryForcedOffByEnv,
-  isKeySyncEnabled,
-  keySyncForcedOffByEnv,
 } from '../config/index.js';
 import { getProviderList, getProvider } from '../config/providers.js';
+import { telemetryCommand } from '../commands/core/telemetry.js';
+import { keysyncCommand } from '../commands/core/keysync.js';
 import { getProjectContext } from '../utils/project.js';
 import { loadCustomCommands } from '../utils/customCommands.js';
 import { summarizeHooks } from '../utils/hooks.js';
@@ -300,59 +298,15 @@ export async function handleCommand(
     }
 
     case 'telemetry': {
-      const sub = args[0]?.toLowerCase();
-      const envOff = telemetryForcedOffByEnv();
-      if (sub === 'on' || sub === 'off') {
-        if (envOff) {
-          return { handled: true, response: 'Telemetry is forced **off** by the `CODEEP_NO_TELEMETRY` / `DO_NOT_TRACK` env var — unset it to change this. The config flag can\'t override an env var.' };
-        }
-        config.set('telemetry', sub === 'on');
-        return {
-          handled: true,
-          response: sub === 'on'
-            ? 'Telemetry **on** — usage stats, session transcripts, progress and memory notes sync to codeep.dev.'
-            : 'Telemetry **off** — no automatic cloud uploads. Explicit `/account push` still works.',
-        };
-      }
-      if (sub && sub !== 'status') {
-        return { handled: true, response: 'Usage: `/telemetry` · `/telemetry on` · `/telemetry off`' };
-      }
-      const flag = config.get('telemetry') !== false;
-      const lines = [
-        `**Telemetry:** ${isTelemetryEnabled() ? 'on' : 'off'}`,
-        `- Config flag \`telemetry\`: ${flag}`,
-      ];
-      if (envOff) lines.push('- Forced **off** by `CODEEP_NO_TELEMETRY` / `DO_NOT_TRACK` (env overrides the flag).');
-      lines.push('', 'Toggle with `/telemetry on` | `/telemetry off`. Controls automatic uploads of usage stats, session transcripts, progress, and memory notes.');
-      return { handled: true, response: lines.join('\n') };
+      // Core semantics in commands/core/telemetry.ts — this surface only renders.
+      const result = telemetryCommand(args);
+      return { handled: true, response: result.message };
     }
 
     case 'keysync': {
-      const sub = args[0]?.toLowerCase();
-      const envOff = keySyncForcedOffByEnv();
-      if (sub === 'on' || sub === 'off') {
-        if (envOff) {
-          return { handled: true, response: 'Cloud key sync is forced **off** by the `CODEEP_NO_KEY_SYNC` env var — unset it to change this. The config flag can\'t override an env var.' };
-        }
-        config.set('syncKeysToCloud', sub === 'on');
-        return {
-          handled: true,
-          response: sub === 'on'
-            ? 'Cloud key sync **on** — `codeep account push`/`sync` will now upload/download API keys. Note: synced keys are stored server-readable on codeep.dev.'
-            : 'Cloud key sync **off** — API keys stay in your OS keychain only. (`codeep account purge-keys` wipes any keys already on the server.)',
-        };
-      }
-      if (sub && sub !== 'status') {
-        return { handled: true, response: 'Usage: `/keysync` · `/keysync on` · `/keysync off`' };
-      }
-      const flag = config.get('syncKeysToCloud') === true;
-      const lines = [
-        `**Cloud key sync:** ${isKeySyncEnabled() ? 'on' : 'off'}`,
-        `- Config flag \`syncKeysToCloud\`: ${flag}`,
-      ];
-      if (envOff) lines.push('- Forced **off** by `CODEEP_NO_KEY_SYNC` (env overrides the flag).');
-      lines.push('', 'OFF by default — API keys live only in your OS keychain unless enabled. When on, `codeep account push`/`sync` move keys, stored **server-readable** on codeep.dev.');
-      return { handled: true, response: lines.join('\n') };
+      // Core semantics in commands/core/keysync.ts — this surface only renders.
+      const result = keysyncCommand(args);
+      return { handled: true, response: result.message };
     }
 
     case 'login': {
@@ -768,7 +722,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
     // ─── Personalities + insights (2.0.3) ─────────────────────────────────────
 
     case 'personality': {
-      const { formatPersonalityList, findPersonality } = await import('../utils/personalities.js');
+      const { formatPersonalityList, findPersonality, formatPersonalityActivation } = await import('../utils/personalities.js');
       const sub = args[0]?.toLowerCase();
       if (!sub) {
         return { handled: true, response: formatPersonalityList(session.workspaceRoot) };
@@ -784,7 +738,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       config.set('activePersonality', p.name);
       return {
         handled: true,
-        response: `Active personality: **${p.displayName}** (\`${p.name}\`, ${p.scope})\n\n_${p.description}_\n\nClear with \`/personality off\`.`,
+        response: formatPersonalityActivation(p),
       };
     }
 

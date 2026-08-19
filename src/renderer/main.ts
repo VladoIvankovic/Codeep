@@ -46,7 +46,6 @@ import { getProviderList, isNoApiKeyProvider, resolveReasoningTier } from '../co
 import { getSessionStats, getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
 import { getGitStatus, isGitRepository } from '../utils/git';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
-import { checkApiRateLimit } from '../utils/ratelimit';
 import { expandFileAndFolderMentions, expandGitMentions } from '../utils/mentions';
 import { expandWebMentions } from '../utils/webFetch';
 import { handleCommand as dispatchCommand, AppCommandContext } from './commands';
@@ -214,11 +213,10 @@ async function handleSubmit(message: string): Promise<void> {
     return;
   }
 
-  const rateCheck = checkApiRateLimit();
-  if (!rateCheck.allowed) {
-    app.notify(rateCheck.message || 'Rate limit exceeded', 5000);
-    return;
-  }
+  // API rate limiting now lives at the transport layer (api/index.ts chat()
+  // + utils/agentChat.ts agentChat/agentChatFallback) — the single choke
+  // point shared by TUI, ACP and sub-agents. Checking here too would count
+  // the same request against the window twice.
 
   // Auto agent mode
   const agentMode = config.get('agentMode') || 'off';
@@ -335,38 +333,13 @@ async function handleSubmit(message: string): Promise<void> {
       projectId,
       messages: messagesNow,
     });
-    const sharedFields = {
-      sessionId,
-      sessionName: displayName,
-      messageCount: messagesNow.length,
-      cliVersion: getCurrentVersion(),
-      projectName: projectContext?.name,
-      projectId,
-      language: projectContext?.type,
-      isGit: isGitRepository(process.cwd()),
-    };
-    // Cloud stats are append-only events, so report only this prompt's delta.
-    // Sending the full session accumulator after every prompt makes totals grow
-    // 1× + 2× + 3× and is the source of the inflated dashboard token count.
-    const costBreakdown = getCostBreakdown(tokenReportStart);
-    if (costBreakdown.length > 0) {
-      for (const entry of costBreakdown) {
-        reportStats({
-          ...sharedFields,
-          model: entry.model,
-          provider: entry.provider,
-          inputTokens: entry.promptTokens || undefined,
-          outputTokens: entry.completionTokens || undefined,
-          cacheCreationTokens: entry.cacheCreationTokens || undefined,
-          cacheReadTokens: entry.cacheReadTokens || undefined,
-          estimatedCost: entry.estimatedCost || undefined,
-        });
-      }
-    } else {
-      reportStats({ ...sharedFields, model: config.get('model'), provider: config.get('provider') });
-    }
+    reportTurnStats(true);
   } catch (error) {
     app.endStreaming();
+    // The turn still consumed tokens even though it failed or was aborted, so
+    // report the delta before returning — gracefulShutdown no longer sends a
+    // cumulative catch-all that would have swept them up later.
+    reportTurnStats(false);
     const err = error as Error & { name: string };
     if (err.name === 'AbortError') return;
     app.notify(`Error: ${err.message}`, 5000);
@@ -635,11 +608,14 @@ Commands (in chat):
       }
 
       // Also pull portable personal config — personalities + custom commands +
-      // the user profile. Additive merge (never clobbers local files).
-      const { pullPersonalities, pullCommands, pullUserProfile } = await import('../utils/codeepCloud.js');
+      // the user profile. Web-edited personalities replace their local copy
+      // after a safety backup; commands/profile retain additive merge rules.
+      const { pullPersonalities, pullCommands, pullUserProfile, getLastPersonalityPullBackupCount } = await import('../utils/codeepCloud.js');
       const pCount = await pullPersonalities();
       if (typeof pCount === 'number' && pCount > 0) {
         console.log(`  Pulled ${pCount} personalit${pCount === 1 ? 'y' : 'ies'}.`);
+        const backups = getLastPersonalityPullBackupCount();
+        if (backups > 0) console.log(`  Backed up ${backups} replaced local cop${backups === 1 ? 'y' : 'ies'} in ~/.codeep/backups/personalities/.`);
       }
       const cCount = await pullCommands();
       if (typeof cCount === 'number' && cCount > 0) {

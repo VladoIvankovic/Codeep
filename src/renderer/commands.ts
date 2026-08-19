@@ -17,10 +17,6 @@ import {
   setApiKey,
   clearApiKey,
   getApiKey,
-  isTelemetryEnabled,
-  telemetryForcedOffByEnv,
-  isKeySyncEnabled,
-  keySyncForcedOffByEnv,
   saveSession,
   startNewSession,
   loadSession,
@@ -45,6 +41,8 @@ import { loadProjectIntelligence, saveProjectIntelligence } from '../utils/proje
 import { ollamaModelHint } from './ollamaHint';
 import { buildSearchSnippets, parseKeepRecent, joinSessionName, parseTaskAddArgs, formatTaskList, formatProfileList, formatMemoryList, formatStatsReport, extractCodeBlocks, resolveBlockIndex, extractFileChanges, formatApplyDiffLine, parsePromptArgs, formatMcpReloadReport, formatMcpResourcesList, formatMcpResourceRead, formatMcpPromptsList, formatMcpPromptResult, formatMcpServerList, parseInsightsDays, formatCloudSessionLabel, formatMeSyncReport, formatMeLearnResult, formatMeInitResult, formatSkillsShow, formatSkillsBrowseEmpty, formatSkillsPublishResult } from './commands/helpers';
 import { resolveCommand } from './commands/registry';
+import { telemetryCommand } from '../commands/core/telemetry';
+import { keysyncCommand } from '../commands/core/keysync';
 
 // ─── Extended context for command handlers ────────────────────────────────────
 
@@ -303,60 +301,26 @@ export async function handleCommand(
     }
 
     case 'telemetry': {
-      const sub = args[0]?.toLowerCase();
-      const envOff = telemetryForcedOffByEnv();
-      if (sub === 'on' || sub === 'off') {
-        if (envOff) {
-          ctx.app.notify('Telemetry is forced OFF by CODEEP_NO_TELEMETRY / DO_NOT_TRACK — unset that env var to change it.');
-          break;
-        }
-        config.set('telemetry', sub === 'on');
-        ctx.app.notify(sub === 'on'
-          ? 'Telemetry on — usage stats, transcripts, progress & notes sync to codeep.dev.'
-          : 'Telemetry off — no automatic cloud uploads.');
-        break;
+      // Core semantics in commands/core/telemetry.ts — this surface renders
+      // status as a banner system message, everything else as a notification.
+      const result = telemetryCommand(args);
+      if (result.kind === 'info') {
+        ctx.app.addMessage({ role: 'system', content: `## Telemetry\n\n${result.message}` } as Message);
+      } else {
+        ctx.app.notify(result.message);
       }
-      if (sub && sub !== 'status') {
-        ctx.app.notify('Usage: /telemetry · /telemetry on · /telemetry off');
-        break;
-      }
-      const flag = config.get('telemetry') !== false;
-      const tLines: string[] = ['## Telemetry', ''];
-      tLines.push(`**State**      ${isTelemetryEnabled() ? 'on' : 'off'}`);
-      tLines.push(`**Flag**       telemetry = ${flag}`);
-      if (envOff) tLines.push('**Env**        forced off by CODEEP_NO_TELEMETRY / DO_NOT_TRACK (overrides the flag)');
-      tLines.push('');
-      tLines.push('Toggle with `/telemetry on` or `/telemetry off`. Controls automatic uploads of usage stats, session transcripts, progress, and memory notes.');
-      ctx.app.addMessage({ role: 'system', content: tLines.join('\n') } as Message);
       break;
     }
 
     case 'keysync': {
-      const sub = args[0]?.toLowerCase();
-      const envOff = keySyncForcedOffByEnv();
-      if (sub === 'on' || sub === 'off') {
-        if (envOff) {
-          ctx.app.notify('Cloud key sync is forced OFF by CODEEP_NO_KEY_SYNC — unset that env var to change it.');
-          break;
-        }
-        config.set('syncKeysToCloud', sub === 'on');
-        ctx.app.notify(sub === 'on'
-          ? 'Cloud key sync on — `codeep account push/sync` will now upload/download API keys. Note: synced keys are stored server-readable on codeep.dev.'
-          : 'Cloud key sync off — API keys stay in your OS keychain only. (Run `codeep account purge-keys` to also wipe any keys already on the server.)');
-        break;
+      // Core semantics in commands/core/keysync.ts — this surface renders
+      // status as a banner system message, everything else as a notification.
+      const result = keysyncCommand(args);
+      if (result.kind === 'info') {
+        ctx.app.addMessage({ role: 'system', content: `## Cloud key sync\n\n${result.message}` } as Message);
+      } else {
+        ctx.app.notify(result.message);
       }
-      if (sub && sub !== 'status') {
-        ctx.app.notify('Usage: /keysync · /keysync on · /keysync off');
-        break;
-      }
-      const flag = config.get('syncKeysToCloud') === true;
-      const kLines: string[] = ['## Cloud key sync', ''];
-      kLines.push(`**State**      ${isKeySyncEnabled() ? 'on' : 'off'}`);
-      kLines.push(`**Flag**       syncKeysToCloud = ${flag}`);
-      if (envOff) kLines.push('**Env**        forced off by CODEEP_NO_KEY_SYNC (overrides the flag)');
-      kLines.push('');
-      kLines.push('OFF by default. API keys live only in your OS keychain unless you turn this on. When on, `codeep account push`/`sync` upload/download keys, which are stored **server-readable** on codeep.dev. Toggle with `/keysync on` or `/keysync off`; wipe server copies with `codeep account purge-keys`.');
-      ctx.app.addMessage({ role: 'system', content: kLines.join('\n') } as Message);
       break;
     }
 
@@ -485,7 +449,7 @@ export async function handleCommand(
     }
 
     case 'personality': {
-      const { formatPersonalityList, findPersonality } = await import('../utils/personalities');
+      const { formatPersonalityList, findPersonality, formatPersonalityActivation } = await import('../utils/personalities');
       const sub = args[0]?.toLowerCase();
 
       if (!sub) {
@@ -505,7 +469,7 @@ export async function handleCommand(
       config.set('activePersonality', personality.name);
       ctx.app.addMessage({
         role: 'system',
-        content: `Active personality: **${personality.displayName}** (\`${personality.name}\`, ${personality.scope})\n\n_${personality.description}_\n\nClear with \`/personality off\`.`,
+        content: formatPersonalityActivation(personality),
       });
       break;
     }

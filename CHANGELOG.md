@@ -11,6 +11,145 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.19.0] — 2026-08-19
+
+> Custom bots you can actually trust: pin a model, grant only the capabilities you choose, and scope a bot to the projects it belongs to — enforced at runtime across CLI, Mac, VS Code and the dashboard.
+
+### Added
+
+- **Portable, enforceable custom bots.** `custom-bot/v1` personalities can pin
+  an exact `provider/model`, expose only selected Files/Terminal/Tests/Git/Web/
+  MCP capabilities, and limit availability to all projects, selected project
+  names, or personal mode. Legacy prompt-only personalities remain compatible
+  and unrestricted. CLI, ACP, VS Code, macOS, and Dashboard Agent Studio share
+  the same Markdown contract. Versioned files fail closed when tool metadata is
+  missing or malformed, and invalid model/scope metadata cannot activate.
+- **Native ACP custom-bot controls.** Clients can list, activate, and sync bots
+  through `session/list_personalities`, `session/set_personality`, and
+  `session/sync_personalities` without scraping chat output.
+
+### Changed
+
+- **Capabilities now say what they actually grant.** The builder promised that
+  unselected tools are "removed from this agent's runtime", which reads as a
+  guarantee that a Git-only bot cannot see file contents. It can:
+  `git show HEAD:file` is functionally `cat file`, and history inspection
+  (`log -p`, `diff`, `blame`) cannot be separated from the content it inspects.
+  Nor is Git read-only: `git rm`, `git commit` and `git push` are on the
+  allowlist, so a Git-only bot can rewrite the repo and publish the result.
+  Every capability now carries a description, and choosing Git without Files
+  spells out both halves — in the builder, in `/personality`, in the Mac persona
+  sheet and in the VS Code picker. The enforcement is unchanged; the promise is
+  now true.
+
+- **Dashboard personality edits now reach local runtimes safely.** A manual
+  cloud pull atomically applies changed personality bodies and backs up every
+  divergent local copy under `~/.codeep/backups/personalities/`. Custom command
+  pulls remain additive.
+
+
+- **`App.ts` refactor begins: HunkPicker extracted.** The interactive
+  `/apply --interactive` picker (state + key handling + rendering) moved from
+  the 3.3k-line `App.ts` monolith into `components/HunkPicker.ts`, following
+  the same `{ State, handleKey, render }` convention as Settings/Export/
+  Search. App.ts now owns a single state field and wires it in. The picker
+  logic is now unit-tested in isolation (12 tests pinning the y/n/a/q/↑/↓
+  semantics and the fires-exactly-once `onComplete` contract) — previously
+  untestable inline. First of several planned extractions (mention picker,
+  paste dialog, autocomplete) to bring App.ts down to a manageable size.
+- **PasteDialog extracted from App.ts.** The large-paste confirmation
+  ("Paste Detected" with Add/Send/Cancel) moved to
+  `components/PasteDialog.ts` in the same shape. The key handler returns
+  `{ state, action }` — a discriminated action union (`add-to-input` /
+  `send-directly` / `cancel` / `none`) — so App keeps the side effects
+  (editor insert, message submit, notification) while the decision logic is
+  pure and unit-tested (7 tests).
+- **MentionPicker extracted from App.ts.** The mid-sentence `@file`
+  autocomplete (5 state fields) moved to `components/MentionPicker.ts`.
+  The load-bearing `@`-sigil buffer math (re-adding the `@` after slicing,
+  without which a completed path silently stops being a mention and the file
+  never gets attached) now lives in a pure `applyMentionToBuffer()` covered
+  by tests, including cursor positioning and mid-buffer replacement (9
+  tests).
+- **CommandAutocomplete extracted from App.ts.** The `/command` picker (3
+  state fields) moved to `components/CommandAutocomplete.ts` — same shape
+  as MentionPicker (pure key handler + `commandToBuffer()` buffer math,
+  9 tests). With this, all four picker-style widgets live outside App.ts as
+  testable components.
+- **Shared command core established (`commands/core/`).** `/telemetry` and
+  `/keysync` are the first commands whose semantics (env-var hard-off
+  checks, config toggling, status facts) live in one place used by BOTH the
+  TUI and ACP dispatch — previously two hand-maintained copies that could
+  (and did) drift in wording and behavior. Surfaces now only render the
+  `CommandResult`. The env-var invariants (CODEEP_NO_TELEMETRY,
+  CODEEP_NO_KEY_SYNC overriding any config flag) and the
+  server-readable-keys disclosure are pinned by 11 unit tests. Remaining
+  ~38 shared commands migrate incrementally, same pattern.
+
+- **Default rate limits lowered from effectively-unlimited.** New configs get
+  `rateLimitApi: 240`/min and `rateLimitCommands: 120`/min — generous for a
+  full 50-iteration agent run, but a runaway loop now stops instead of
+  burning quota. Existing configs are untouched; tune via `/settings`.
+
+### Fixed
+
+- **Stray characters no longer survive in the TUI.** The screen paints
+  differentially — a cell whose value already matches the shadow copy is
+  skipped — which meant a BLANK cell was never emitted at all. Column 0 of the
+  header is blank (the wordmark starts at x = 1), so whatever the terminal
+  happened to show there before Codeep started stayed for the whole session; the
+  session picker and confirm prompt kept it on screen, and only resizing the
+  window cleared it. Both overlays now invalidate the shadow on the way in and
+  out, and the invalidation fills it with a sentinel no real cell can hold, so
+  blanks repaint too.
+
+- **An aborted or failed turn reports its tokens again.** 2.18.1 shipped a
+  `reportTurnStats` helper that was defined but never called: the success path
+  kept an inline duplicate, so cloud stats kept working there, while the catch
+  path reported nothing at all. Tokens burned by a turn you stopped with Esc, or
+  that errored, reached no one — and `gracefulShutdown` no longer sends the
+  cumulative catch-all that used to sweep them up. Both paths now go through the
+  one helper, and the inline copy is gone. `tsc` stayed silent about the dead
+  function because `noUnusedLocals` is off.
+
+- **SSRF guard now covers `curl`/`wget`/`http`/`https` in `execute_command`.**
+  The `fetch_url` tool already blocked private/loopback/metadata IPs
+  (169.254.169.254), but the same model-controlled URL could simply be passed
+  to `curl` instead and sail through. URL arguments (including scheme-less
+  host forms like `curl 169.254.169.254/latest` and hostnames that resolve
+  privately) now go through the identical `assertFetchUrlAllowed` check. The
+  guard moved to a shared `utils/ssrfGuard.ts` module so `fetch_url` and the
+  shell path can't drift apart.
+- **`env` removed from the agent command whitelist.** A single `env` call
+  dumped `process.env` into the model's context — including every provider
+  API key riding in environment variables. Run `env` yourself outside the
+  agent if you need environment info.
+- **Exec-escape flags blocked on whitelisted utilities.** `find -exec`,
+  `-execdir`, `-ok`, `-okdir` and `tar --to-command` spawn arbitrary commands
+  as arguments, silently bypassing the command whitelist
+  (`find . -exec rm -rf / \;`). Plain `find`/`tar` usage is unaffected.
+
+
+- **Rate limiting is now enforced everywhere.** Previously `checkApiRateLimit`
+  was called only on the TUI's manual-chat path and `checkCommandRateLimit`
+  had no production call sites at all — an autonomous agent run (up to 50
+  iterations, each with its own API call and shell commands) was completely
+  unthrottled. The guards now live at the transport layer: `chat()` in
+  `api/index.ts` and `agentChat()`/`agentChatFallback()` in
+  `utils/agentChat.ts` (covering TUI, ACP sessions, sub-agents and session
+  titles), plus `execute_command` in `utils/toolExecution.ts`. Local no-key
+  providers (Ollama) bypass the API limiter — there's no quota to protect on
+  localhost. The duplicate check in the TUI submit path was removed so a
+  request isn't counted twice. Source-level regression tests in
+  `rateLimitWiring.test.ts` keep the guards from being silently dropped.
+
+### Removed
+
+- **Nothing removed** — the earlier note in this section was wrong: on
+  case-insensitive filesystems `readme.md` and `README.md` are the same file,
+  so "the duplicate" never existed and deleting it would have deleted the
+  README itself. (Caught before release; restored from git.)
+
 ## [2.18.1] — 2026-08-15
 
 > The last place `/cost` still priced plan usage: the prompt-caching savings line quoted dollars for subscription providers that bill a flat fee.

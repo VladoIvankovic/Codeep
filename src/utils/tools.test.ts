@@ -98,6 +98,20 @@ describe('getOpenAITools', () => {
     expect(execCmd.function.parameters.required).toContain('command');
     expect(execCmd.function.parameters.required).not.toContain('args');
   });
+
+  it('filters built-in and additional tools through a per-run allowlist', () => {
+    const tools = getOpenAITools(
+      [{ name: 'github__issues', description: 'Issues', inputSchema: { type: 'object', properties: {} } }],
+      new Set(['read_file']),
+    );
+    expect(tools.map(tool => tool.function.name)).toEqual(['read_file']);
+
+    const withExternal = getOpenAITools(
+      [{ name: 'github__issues', description: 'Issues', inputSchema: { type: 'object', properties: {} } }],
+      new Set(['github__issues']),
+    );
+    expect(withExternal.map(tool => tool.function.name)).toEqual(['github__issues']);
+  });
 });
 
 // ─── getAnthropicTools ───────────────────────────────────────────────────────
@@ -146,6 +160,10 @@ describe('getAnthropicTools', () => {
     const argsParam = execCmd.input_schema.properties.args;
     expect(argsParam.type).toBe('array');
     expect(argsParam.items).toEqual({ type: 'string' });
+  });
+
+  it('filters the Anthropic catalog through a per-run allowlist', () => {
+    expect(getAnthropicTools(undefined, new Set(['read_file'])).map(tool => tool.name)).toEqual(['read_file']);
   });
 
   it('should not wrap tools in a function envelope (unlike OpenAI)', () => {

@@ -28,7 +28,14 @@ import {
 } from './agentChat';
 import { ApiError } from '../api/index';
 import type { AgentChatResponse } from './agentChat';
+import type { AgentChatRuntime } from './agentChat';
 import { loadUserProfilePrompt } from './userProfile';
+import {
+  getActivePersonality,
+  getPersonalityToolAllowlist,
+  isPersonalityToolCallAllowed,
+  resolvePersonalityRuntimeModel,
+} from './personalities';
 export { loadProjectRules, loadProgressLog, writeProgressLog, formatChatHistoryForAgent };
 export type { AgentChatResponse };
 
@@ -312,6 +319,21 @@ export async function runAgent(
   const startTime = Date.now();
   const actions: ActionLog[] = [];
   const messages: Message[] = [];
+
+  // A structured custom bot is resolved once per run. This keeps a cloud sync
+  // or file edit from changing policy halfway through an in-flight request.
+  const activePersonality = getActivePersonality(projectContext.root);
+  const currentRuntime = {
+    providerId: String(config.get('provider')),
+    model: String(config.get('model')),
+    protocol: config.get('protocol') as 'openai' | 'anthropic',
+  };
+  const personalityModel = activePersonality
+    ? resolvePersonalityRuntimeModel(activePersonality, currentRuntime)
+    : null;
+  const chatRuntime: AgentChatRuntime = {
+    ...(personalityModel ?? currentRuntime),
+  };
   
   // Start history session for undo support. Skipped for nested (delegated)
   // runs so we don't reset the parent's currentSession singleton — the
@@ -332,7 +354,7 @@ export async function runAgent(
         name: projectContext.name,
         type: projectContext.type,
         structure: projectContext.structure,
-      });
+      }, chatRuntime);
       
       if (taskPlan.tasks.length > 1) {
         opts.onTaskPlan?.(taskPlan);
@@ -353,8 +375,8 @@ export async function runAgent(
   const smartContextStr = formatSmartContext(smartContext);
   
   // Check if provider supports native tools
-  const protocol = config.get('protocol');
-  const providerId = config.get('provider');
+  const protocol = chatRuntime.protocol ?? config.get('protocol');
+  const providerId = chatRuntime.providerId ?? config.get('provider');
   const useNativeTools = supportsNativeTools(providerId, protocol);
 
   // Fetch the MCP tool catalog once per agent run. The session id keys into
@@ -369,6 +391,7 @@ export async function runAgent(
   // read <uri>` manually. Servers that don't expose resources or prompts
   // get no virtual tools — the wrappers are only emitted where useful.
   let mcpToolDefs: { name: string; description?: string; inputSchema?: Record<string, unknown> }[] = [];
+  const registeredMcpToolNames = new Set<string>();
   if (opts.mcpSessionId) {
     try {
       const { getSessionTools, getSessionVirtualTools } = await import('./mcpRegistry.js');
@@ -381,6 +404,7 @@ export async function runAgent(
         description: t.description,
         inputSchema: t.inputSchema,
       }));
+      mcpToolDefs.forEach(tool => registeredMcpToolNames.add(tool.name));
     } catch {
       // Don't let a registry blip kill the whole agent run.
     }
@@ -442,10 +466,27 @@ export async function runAgent(
     }
   }
 
+  const updateRuntimeToolAllowlist = () => {
+    const personalityToolAllowlist = activePersonality
+      ? getPersonalityToolAllowlist(activePersonality, registeredMcpToolNames)
+      : undefined;
+    let effectiveToolAllowlist: string[] | undefined;
+    if (!personalityToolAllowlist && !opts.allowedTools) effectiveToolAllowlist = undefined;
+    else if (!personalityToolAllowlist) effectiveToolAllowlist = [...(opts.allowedTools ?? [])];
+    else if (!opts.allowedTools) effectiveToolAllowlist = personalityToolAllowlist;
+    else {
+      const delegated = new Set(opts.allowedTools);
+      effectiveToolAllowlist = personalityToolAllowlist.filter(tool => delegated.has(tool));
+    }
+    if (effectiveToolAllowlist) chatRuntime.allowedToolNames = effectiveToolAllowlist;
+    else delete chatRuntime.allowedToolNames;
+  };
+  updateRuntimeToolAllowlist();
+
   // Build system prompt - use fallback format if native tools not supported
   let systemPrompt = useNativeTools
-    ? getAgentSystemPrompt(projectContext)
-    : getFallbackSystemPrompt(projectContext, mcpToolDefs);
+    ? getAgentSystemPrompt(projectContext, chatRuntime)
+    : getFallbackSystemPrompt(projectContext, mcpToolDefs, chatRuntime);
 
   // Delegated sub-agent role — its defining instruction. Injected right after
   // the base prompt so it frames everything that follows. Empty for normal runs.
@@ -511,14 +552,15 @@ export async function runAgent(
   // Active personality goes LAST — appended after skills / project rules /
   // smart context so its tone overrides earlier conventions. Set via
   // `/personality <name>`; empty when no personality is active.
-  try {
-    const { getActivePersonalityPrompt } = await import('./personalities.js');
-    const personalityPrompt = getActivePersonalityPrompt(projectContext.root);
-    if (personalityPrompt) {
-      systemPrompt += personalityPrompt;
+  if (activePersonality?.prompt) {
+    systemPrompt += activePersonality.prompt;
+    if (activePersonality.restrictTools) {
+      const capabilities = activePersonality.tools?.join(', ') || '(none recognised)';
+      systemPrompt += `\n\n## Enforced custom-bot capabilities\nThis run is restricted to: ${capabilities}. `
+        + 'The runtime enforces this policy even if other prompt text asks for a disallowed tool. '
+        + 'Tests permit matching test runners; Git permits a conservative set of built-in git commands. '
+        + 'Broader executables (including gh) require Terminal.';
     }
-  } catch {
-    // Personality loading must never block an agent run.
   }
 
   // Initial user message with optional task plan
@@ -695,16 +737,24 @@ export async function runAgent(
       // requiring a session restart to see new tools.
       if (opts.mcpSessionId) {
         try {
-          const { consumeSessionCatalogChanges, getSessionTools } = await import('./mcpRegistry.js');
+          const { consumeSessionCatalogChanges, getSessionTools, getSessionVirtualTools } = await import('./mcpRegistry.js');
           const dirty = consumeSessionCatalogChanges(opts.mcpSessionId);
           if (dirty.has('tools')) {
-            const refreshed = await getSessionTools(opts.mcpSessionId);
-            mcpToolDefs = refreshed.map(t => ({
+            const [refreshed, refreshedVirtuals] = await Promise.all([
+              getSessionTools(opts.mcpSessionId),
+              getSessionVirtualTools(opts.mcpSessionId),
+            ]);
+            const localToolDefs = mcpToolDefs.filter(tool => tool.name === 'invoke_skill' || tool.name === 'delegate');
+            const refreshedMcpDefs = [...refreshed, ...refreshedVirtuals].map(t => ({
               name: t.agentName,
               description: t.description,
               inputSchema: t.inputSchema,
             }));
-            debug(`MCP tool catalog refreshed mid-run: ${mcpToolDefs.length} tool(s)`);
+            mcpToolDefs = [...refreshedMcpDefs, ...localToolDefs];
+            registeredMcpToolNames.clear();
+            refreshedMcpDefs.forEach(tool => registeredMcpToolNames.add(tool.name));
+            updateRuntimeToolAllowlist();
+            debug(`MCP tool catalog refreshed mid-run: ${refreshedMcpDefs.length} tool(s)`);
           }
         } catch {
           // Don't let a refresh hiccup break the iteration.
@@ -724,6 +774,7 @@ export async function runAgent(
             opts.abortSignal,
             dynamicTimeout * (1 + retryCount * 0.5), // Increase timeout on retry
             mcpToolDefs,
+            chatRuntime,
           );
           consecutiveTimeouts = 0; // Reset consecutive count on success
           consecutiveRateLimits = 0;
@@ -942,6 +993,25 @@ export async function runAgent(
       for (const toolCall of toolCalls) {
         opts.onToolCall?.(toolCall);
 
+        // Structured custom-bot policy is a runtime security boundary, not a
+        // prompt suggestion. It runs before permission UI or external ACP
+        // terminal delegation, so disallowed commands cannot escape via a
+        // different execution surface.
+        if (activePersonality && !isPersonalityToolCallAllowed(activePersonality, toolCall, registeredMcpToolNames)) {
+          const allowed = activePersonality.declaredTools?.join(', ') || 'none';
+          const denied: ToolResult = {
+            success: false,
+            output: '',
+            error: `Tool "${toolCall.tool}" is blocked by custom bot "${activePersonality.displayName}".`,
+            tool: toolCall.tool,
+            parameters: toolCall.parameters,
+          };
+          opts.onToolResult?.(denied, toolCall);
+          actions.push(createActionLog(toolCall, denied));
+          toolResults.push(`Tool ${toolCall.tool} is blocked by the active custom bot. Allowed capabilities: ${allowed}.`);
+          continue;
+        }
+
         // Tool scoping for delegated sub-agents: reject any tool outside the
         // agent's allowlist up front — no permission prompt, no execution.
         if (opts.allowedTools && !opts.allowedTools.includes(toolCall.tool)) {
@@ -1114,8 +1184,17 @@ export async function runAgent(
     // Support legacy boolean values: true -> 'all', false -> 'off'
     const autoVerify = autoVerifyRaw === true ? 'all' : autoVerifyRaw === false ? 'off' : autoVerifyRaw;
     const maxFixAttempts = opts.maxFixAttempts ?? config.get('agentMaxFixAttempts');
+    const botAllowsTerminal = !activePersonality?.restrictTools || activePersonality.tools?.includes('terminal') === true;
+    const botAllowsTests = botAllowsTerminal || activePersonality?.tools?.includes('tests') === true;
+    const verificationPolicy = {
+      runBuild: (autoVerify === 'all' || autoVerify === 'build') && botAllowsTerminal,
+      runTest: (autoVerify === 'all' || autoVerify === 'test') && botAllowsTests,
+      runTypecheck: (autoVerify === 'all' || autoVerify === 'typecheck') && botAllowsTerminal,
+      runLint: false,
+    };
+    const hasPermittedVerification = verificationPolicy.runBuild || verificationPolicy.runTest || verificationPolicy.runTypecheck;
 
-    if (autoVerify !== 'off' && !opts.dryRun) {
+    if (autoVerify !== 'off' && !opts.dryRun && hasPermittedVerification) {
       // Check if we made any file changes worth verifying
       const hasFileChanges = actions.some(a => 
         a.type === 'write' || a.type === 'edit' || a.type === 'delete'
@@ -1134,12 +1213,7 @@ export async function runAgent(
           opts.onIteration?.(iteration, `Verification attempt ${fixAttempt + 1}/${maxFixAttempts}`);
 
           // Run verifications based on selected mode
-          const verifyResults = await runAllVerifications(projectContext.root || process.cwd(), {
-            runBuild: autoVerify === 'all' || autoVerify === 'build',
-            runTest: autoVerify === 'all' || autoVerify === 'test',
-            runTypecheck: autoVerify === 'all' || autoVerify === 'typecheck',
-            runLint: false,
-          });
+          const verifyResults = await runAllVerifications(projectContext.root || process.cwd(), verificationPolicy);
 
           opts.onVerification?.(verifyResults);
 
@@ -1219,6 +1293,7 @@ export async function runAgent(
               opts.abortSignal,
               undefined,
               mcpToolDefs,
+              chatRuntime,
             );
             
             const { content: fixContent, toolCalls: fixToolCalls } = fixResponse;
@@ -1235,6 +1310,34 @@ export async function runAgent(
             
             for (const toolCall of fixToolCalls) {
               opts.onToolCall?.(toolCall);
+
+              if (activePersonality && !isPersonalityToolCallAllowed(activePersonality, toolCall, registeredMcpToolNames)) {
+                const denied: ToolResult = {
+                  success: false,
+                  output: '',
+                  error: `Tool "${toolCall.tool}" is blocked by custom bot "${activePersonality.displayName}".`,
+                  tool: toolCall.tool,
+                  parameters: toolCall.parameters,
+                };
+                opts.onToolResult?.(denied, toolCall);
+                actions.push(createActionLog(toolCall, denied));
+                fixResults.push(`Tool ${toolCall.tool} blocked by the active custom bot.`);
+                continue;
+              }
+
+              if (opts.allowedTools && !opts.allowedTools.includes(toolCall.tool)) {
+                const denied: ToolResult = {
+                  success: false,
+                  output: '',
+                  error: `Tool "${toolCall.tool}" is not available to this sub-agent.`,
+                  tool: toolCall.tool,
+                  parameters: toolCall.parameters,
+                };
+                opts.onToolResult?.(denied, toolCall);
+                actions.push(createActionLog(toolCall, denied));
+                fixResults.push(`Tool ${toolCall.tool} is not allowed for this sub-agent.`);
+                continue;
+              }
 
               const toolResult = await executeTool(toolCall, projectContext.root || process.cwd(), opts.fs, opts.mcpSessionId);
               opts.onToolResult?.(toolResult, toolCall);
@@ -1270,6 +1373,7 @@ export async function runAgent(
     if (!opts.nested
         && (opts.depth ?? 0) === 0
         && !opts.dryRun
+        && !activePersonality?.restrictTools
         && config.get('agentAutoReview') === true
         && !opts.abortSignal?.aborted
         && actions.some(a => a.type === 'write' || a.type === 'edit' || a.type === 'delete')) {

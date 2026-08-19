@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, existsSync, chmodSync } from 'fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, existsSync, chmodSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { executeTool, FsCallbacks } from './toolExecution';
@@ -136,6 +136,39 @@ describe('write_file — disk path', () => {
     expect(existsSync(join(tmpRoot, 'nested/deep/x.txt'))).toBe(true);
   });
 
+  it('rejects a new file beneath a symlinked directory outside the workspace', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'codeep-toolexec-outside-'));
+    try {
+      symlinkSync(outside, join(tmpRoot, 'escape'), 'dir');
+      const result = await executeTool(
+        makeCall('write_file', { path: 'escape/new.txt', content: 'must not escape' }),
+        tmpRoot,
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/symlink traversal|could not be resolved/i);
+      expect(existsSync(join(outside, 'new.txt'))).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects writing through a broken symlink leaf', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'codeep-toolexec-outside-'));
+    try {
+      const missingTarget = join(outside, 'created-through-link.txt');
+      symlinkSync(missingTarget, join(tmpRoot, 'broken-link.txt'));
+      const result = await executeTool(
+        makeCall('write_file', { path: 'broken-link.txt', content: 'must not escape' }),
+        tmpRoot,
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/could not be resolved/i);
+      expect(existsSync(missingTarget)).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it('errors when content is undefined (LLM truncation guard)', async () => {
     const result = await executeTool(
       makeCall('write_file', { path: 'a.txt', content: undefined as unknown as string }),
@@ -176,6 +209,28 @@ describe('write_file — client delegation', () => {
     );
     expect(result.success).toBe(true);
     expect(readFileSync(join(tmpRoot, 'a.txt'), 'utf-8')).toBe('hello');
+  });
+});
+
+describe('list_files — symlink boundaries', () => {
+  it('does not recurse through a symlinked directory outside the workspace', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'codeep-toolexec-outside-'));
+    try {
+      writeFileSync(join(outside, 'outside-secret.txt'), 'secret');
+      symlinkSync(outside, join(tmpRoot, 'external'), 'dir');
+      writeFileSync(join(tmpRoot, 'inside.txt'), 'safe');
+
+      const result = await executeTool(
+        makeCall('list_files', { path: '.', recursive: true }),
+        tmpRoot,
+      );
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('inside.txt');
+      expect(result.output).not.toContain('outside-secret.txt');
+      expect(result.output).not.toContain('external/');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 

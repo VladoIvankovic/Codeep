@@ -315,6 +315,30 @@ export class Screen {
   /**
    * Full render (no diff, redraw everything)
    */
+  /**
+   * Force the next `render()` to repaint every cell.
+   *
+   * The differential renderer skips a cell whose buffer value already matches
+   * the shadow copy — correct only while nothing else writes to the terminal.
+   * The inline overlays (session picker, confirm prompt) draw below the managed
+   * area and scroll it, after which the shadow no longer describes what is on
+   * screen and stale glyphs survive: most visibly a leftover character in
+   * column 0 of the header, which the header never overwrites because it starts
+   * at x = 1. Resizing already recovered by rebuilding both buffers; this is the
+   * same recovery without making the user resize the window.
+   */
+  invalidate(): void {
+    // Fill the shadow with a sentinel no real cell can hold, NOT with spaces.
+    // createEmptyBuffer() fills with ' ', which still compares EQUAL to a blank
+    // buffer cell — so every blank stayed skipped and column 0 of the header
+    // (the wordmark starts at x = 1) was never emitted at all. Whatever the
+    // terminal happened to show there survived indefinitely.
+    const impossible = '\u0000';
+    this.rendered = Array.from({ length: this.height }, () =>
+      Array.from({ length: this.width }, () => ({ char: impossible, style: impossible })));
+    process.stdout.write('\x1b[2J');
+  }
+
   fullRender(): void {
     let output = cursor.hide + cursor.home;
     let lastStyle = '';

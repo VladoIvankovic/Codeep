@@ -1,11 +1,36 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+
+const plannerMocks = vi.hoisted(() => ({
+  configGet: vi.fn(),
+  getApiKey: vi.fn(),
+  resolveBaseUrl: vi.fn(),
+}));
+
+vi.mock('../config/index', () => ({
+  config: { get: plannerMocks.configGet },
+  getApiKey: plannerMocks.getApiKey,
+  resolveBaseUrl: plannerMocks.resolveBaseUrl,
+}));
 import {
   canStartTask,
   getNextTask,
   formatTaskPlan,
+  planTasks,
   type SubTask,
   type TaskPlan,
 } from './taskPlanner';
+
+const originalFetch = global.fetch;
+
+beforeEach(() => {
+  plannerMocks.configGet.mockReset();
+  plannerMocks.getApiKey.mockReset();
+  plannerMocks.resolveBaseUrl.mockReset();
+});
+
+afterEach(() => {
+  global.fetch = originalFetch;
+});
 
 function task(overrides: Partial<SubTask> = {}): SubTask {
   return { id: 1, description: 'do something', status: 'pending', ...overrides };
@@ -149,5 +174,71 @@ describe('formatTaskPlan', () => {
     });
     expect(out).toContain('Task Plan:');
     expect(out).toContain('Estimated iterations: ~0');
+  });
+});
+
+describe('planTasks runtime', () => {
+  it('uses the custom-bot provider, model, protocol, and matching API key for planning', async () => {
+    plannerMocks.getApiKey.mockReturnValue('bot-provider-key');
+    plannerMocks.resolveBaseUrl.mockReturnValue('https://bot-provider.invalid/v1');
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({
+          tasks: [{ id: 1, description: 'Use the selected model', dependencies: [] }],
+        }) } }],
+      }),
+    } as Response);
+
+    const plan = await planTasks('Build the requested feature', {
+      name: 'Codeep',
+      type: 'typescript',
+      structure: 'src/',
+    }, {
+      providerId: 'z.ai',
+      model: 'glm-5.3',
+      protocol: 'openai',
+    });
+
+    expect(plannerMocks.getApiKey).toHaveBeenCalledWith('z.ai');
+    expect(plannerMocks.resolveBaseUrl).toHaveBeenCalledWith('z.ai', 'openai');
+    expect(plannerMocks.configGet).not.toHaveBeenCalled();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(url).toBe('https://bot-provider.invalid/v1/chat/completions');
+    expect(init.headers.Authorization).toBe('Bearer bot-provider-key');
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'glm-5.3' });
+    expect(plan.tasks[0].description).toBe('Use the selected model');
+  });
+
+  it('uses the Anthropic endpoint and auth contract for an Anthropic custom bot', async () => {
+    plannerMocks.getApiKey.mockReturnValue('anthropic-bot-key');
+    plannerMocks.resolveBaseUrl.mockReturnValue('https://api.anthropic.invalid');
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: [{ text: JSON.stringify({
+          tasks: [{ id: 1, description: 'Plan with Claude', dependencies: [] }],
+        }) }],
+      }),
+    } as Response);
+
+    const plan = await planTasks('Implement this complex feature', {
+      name: 'Codeep',
+      type: 'typescript',
+      structure: 'src/',
+    }, {
+      providerId: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      protocol: 'anthropic',
+    });
+
+    expect(plannerMocks.getApiKey).toHaveBeenCalledWith('anthropic');
+    const [url, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(url).toBe('https://api.anthropic.invalid/v1/messages');
+    expect(init.headers['x-api-key']).toBe('anthropic-bot-key');
+    expect(init.headers['anthropic-version']).toBe('2023-06-01');
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'claude-sonnet-4-6' });
+    expect(plan.tasks[0].description).toBe('Plan with Claude');
   });
 });

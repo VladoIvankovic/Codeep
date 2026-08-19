@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -24,6 +24,8 @@ import {
   collectEmbeddedContext,
   providerHasKey,
   buildConfigOptions,
+  buildPersonalityListResult,
+  resolvePersonalitySelection,
   AGENT_MODES,
 } from './server';
 import { config } from '../config/index';
@@ -360,6 +362,81 @@ describe('buildConfigOptions', () => {
     const opts2 = buildConfigOptions();
     const write2 = opts2.find(o => o.id === 'agentConfirmWriteFile')!;
     expect(write2.currentValue).toBe('true');
+  });
+});
+
+// ─── Custom-bot availability in ACP extensions ─────────────────────────────
+
+describe('ACP custom-bot model validation', () => {
+  it('lists an invalid exact model as unavailable and rejects selection', () => {
+    const root = mkdtempSync(join(tmpdir(), 'codeep-acp-personality-'));
+    try {
+      const dir = join(root, '.codeep', 'personalities');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'invalid-model.md'), `---
+codeep: custom-bot/v1
+model: glm-5.3
+tools: [files]
+scope: all
+---
+# Invalid model bot
+`);
+      writeFileSync(join(dir, 'prompt-only-section.md'), `# Prompt-only section
+
+## Responsibility
+Explain the repository without tools.
+
+## Response style
+Concise.
+`);
+      writeFileSync(join(dir, 'conversation-only.md'), `---
+codeep: custom-bot/v1
+model: automatic
+tools: []
+scope: all
+---
+# Conversation only
+`);
+      writeFileSync(join(dir, 'legacy-model-heading.md'), `# Legacy guide
+
+This is ordinary prompt prose.
+
+## Model
+Explain the domain model before editing code.
+`);
+      config.set('activePersonality', 'invalid-model');
+
+      const result = buildPersonalityListResult(root);
+      expect(result.personalities.find(personality => personality.name === 'invalid-model')).toMatchObject({
+        structured: true,
+        model: 'glm-5.3',
+        available: false,
+      });
+      expect(result.personalities.find(personality => personality.name === 'prompt-only-section')).toMatchObject({
+        structured: true,
+        tools: [],
+        restrictTools: false,
+        available: true,
+      });
+      expect(result.personalities.find(personality => personality.name === 'conversation-only')).toMatchObject({
+        structured: true,
+        tools: [],
+        restrictTools: true,
+        available: true,
+      });
+      expect(result.personalities.find(personality => personality.name === 'legacy-model-heading')).toMatchObject({
+        structured: false,
+        model: 'automatic',
+        tools: [],
+        restrictTools: false,
+        available: true,
+      });
+      expect(result.activePersonality).toBeNull();
+      expect(resolvePersonalitySelection('invalid-model', root)).toBeNull();
+    } finally {
+      config.set('activePersonality', null);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

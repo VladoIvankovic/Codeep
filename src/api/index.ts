@@ -2,6 +2,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import { Message, config, getApiKey, resolveBaseUrl } from '../config/index';
 import { withRetry, isNetworkError, isTimeoutError } from '../utils/retry';
+import { checkApiRateLimit } from '../utils/ratelimit';
 import { ProjectContext } from '../utils/project';
 import { getProvider, getProviderBaseUrl, getProviderAuthHeader, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, reasoningParamsFor, type ReasoningTier } from '../config/providers';
 import { logApiRequest, logApiResponse, logAppError } from '../utils/logger';
@@ -184,6 +185,16 @@ export async function chat(
   const protocol = config.get('protocol');
   const model = config.get('model');
   const providerId = config.get('provider');
+
+  // Global API throttle — the single choke point every surface funnels
+  // through (TUI chat, agent loop, ACP sessions, sub-agents, session
+  // titles). Without this, a runaway agent loop burns provider quota and
+  // hits provider-side 429s with nothing on our side slowing it down.
+  const rateCheck = checkApiRateLimit();
+  if (!rateCheck.allowed) {
+    throw new ApiError(rateCheck.message || 'API rate limit exceeded', 429);
+  }
+
   const { isNoApiKeyProvider } = await import('../config/providers.js');
   const apiKey = getApiKey() || (isNoApiKeyProvider(providerId) ? 'ollama' : null);
 

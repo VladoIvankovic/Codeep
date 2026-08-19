@@ -196,11 +196,12 @@ export const AGENT_TOOLS = {
 /**
  * Get filtered tool entries (excludes provider-specific tools when API key not available)
  */
-function getFilteredToolEntries(): [string, typeof AGENT_TOOLS[keyof typeof AGENT_TOOLS]][] {
+function getFilteredToolEntries(allowedToolNames?: ReadonlySet<string>): [string, typeof AGENT_TOOLS[keyof typeof AGENT_TOOLS]][] {
   const hasMcp = hasZaiMcpAccess();
   const hasZaiVision = hasZaiVisionAccess();
   const hasMinimaxMcp = hasMinimaxMcpAccess();
   return Object.entries(AGENT_TOOLS).filter(([name]) => {
+    if (allowedToolNames && !allowedToolNames.has(name)) return false;
     if (ZAI_MCP_TOOLS.includes(name)) return hasMcp;
     if (ZAI_VISION_TOOLS.includes(name)) return hasZaiVision;
     if (MINIMAX_MCP_TOOLS.includes(name)) return hasMinimaxMcp;
@@ -226,10 +227,10 @@ export interface AdditionalToolDef {
  * Optionally appends an "Additional tools" section listing tools from
  * sources outside the built-in catalog (currently MCP servers).
  */
-export function formatToolDefinitions(additionalTools?: AdditionalToolDef[]): string {
+export function formatToolDefinitions(additionalTools?: AdditionalToolDef[], allowedToolNames?: ReadonlySet<string>): string {
   const lines: string[] = [];
 
-  for (const [name, tool] of getFilteredToolEntries()) {
+  for (const [name, tool] of getFilteredToolEntries(allowedToolNames)) {
     lines.push(`### ${name}`);
     lines.push(tool.description);
     lines.push('Parameters:');
@@ -240,7 +241,8 @@ export function formatToolDefinitions(additionalTools?: AdditionalToolDef[]): st
     lines.push('');
   }
 
-  if (additionalTools?.length) {
+  const allowedAdditionalTools = additionalTools?.filter(tool => !allowedToolNames || allowedToolNames.has(tool.name));
+  if (allowedAdditionalTools?.length) {
     // Token budget caps. MCP servers can return tools with absurdly verbose
     // JSON Schema definitions (multi-KB per tool). Without caps a 30-tool
     // server eats ~10K tokens of every prompt. Per-tool 2KB + total 16KB
@@ -253,7 +255,7 @@ export function formatToolDefinitions(additionalTools?: AdditionalToolDef[]): st
 
     lines.push('## Additional tools (from MCP servers)');
     lines.push('');
-    for (const tool of additionalTools) {
+    for (const tool of allowedAdditionalTools) {
       if (budget <= 0) { skipped++; continue; }
       const headerLines = [`### ${tool.name}`];
       if (tool.description) headerLines.push(tool.description);
@@ -293,8 +295,8 @@ function additionalToolSchema(tool: AdditionalToolDef): Record<string, unknown> 
  * Get tools in OpenAI Function Calling format.
  * Additional tools (e.g. MCP) are appended with their JSON-schema as-is.
  */
-export function getOpenAITools(additionalTools?: AdditionalToolDef[]): OpenAITool[] {
-  const builtin: OpenAITool[] = getFilteredToolEntries().map(([name, tool]) => {
+export function getOpenAITools(additionalTools?: AdditionalToolDef[], allowedToolNames?: ReadonlySet<string>): OpenAITool[] {
+  const builtin: OpenAITool[] = getFilteredToolEntries(allowedToolNames).map(([name, tool]) => {
     const properties: Record<string, { type: string; description: string; items?: { type: string } }> = {};
     const required: string[] = [];
 
@@ -318,8 +320,9 @@ export function getOpenAITools(additionalTools?: AdditionalToolDef[]): OpenAIToo
     };
   });
 
-  if (!additionalTools?.length) return builtin;
-  const extra: OpenAITool[] = additionalTools.map(t => ({
+  const allowedAdditionalTools = additionalTools?.filter(tool => !allowedToolNames || allowedToolNames.has(tool.name));
+  if (!allowedAdditionalTools?.length) return builtin;
+  const extra: OpenAITool[] = allowedAdditionalTools.map(t => ({
     type: 'function' as const,
     function: {
       name: t.name,
@@ -336,8 +339,8 @@ export function getOpenAITools(additionalTools?: AdditionalToolDef[]): OpenAIToo
  * Get tools in Anthropic Tool Use format.
  * Additional tools (e.g. MCP) are appended with their JSON-schema as-is.
  */
-export function getAnthropicTools(additionalTools?: AdditionalToolDef[]): AnthropicTool[] {
-  const builtin: AnthropicTool[] = getFilteredToolEntries().map(([name, tool]) => {
+export function getAnthropicTools(additionalTools?: AdditionalToolDef[], allowedToolNames?: ReadonlySet<string>): AnthropicTool[] {
+  const builtin: AnthropicTool[] = getFilteredToolEntries(allowedToolNames).map(([name, tool]) => {
     const properties: Record<string, { type: string; description: string; items?: { type: string } }> = {};
     const required: string[] = [];
 
@@ -358,8 +361,9 @@ export function getAnthropicTools(additionalTools?: AdditionalToolDef[]): Anthro
     };
   });
 
-  if (!additionalTools?.length) return builtin;
-  const extra: AnthropicTool[] = additionalTools.map(t => ({
+  const allowedAdditionalTools = additionalTools?.filter(tool => !allowedToolNames || allowedToolNames.has(tool.name));
+  if (!allowedAdditionalTools?.length) return builtin;
+  const extra: AnthropicTool[] = allowedAdditionalTools.map(t => ({
     name: t.name,
     description: t.description ?? `External tool: ${t.name}`,
     input_schema: additionalToolSchema(t) as { type: 'object'; properties: Record<string, { type: string; description: string }>; required: string[] },

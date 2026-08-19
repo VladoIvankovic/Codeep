@@ -25,11 +25,21 @@ import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './t
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { formatToolDefinitions, getOpenAITools, getAnthropicTools, AdditionalToolDef } from './tools';
 import { readOpenRouterPreferences } from './openrouterPrefs';
+import { checkApiRateLimit } from './ratelimit';
+import { ApiError } from '../api/index';
 import { handleStream, handleOpenAIAgentStream, handleAnthropicAgentStream } from './agentStream';
 import type { AgentChatResponse } from './agentStream';
 import { logger } from './logger';
 
 export type { AgentChatResponse };
+
+/** Per-run overrides used by structured custom bots. They never mutate config. */
+export interface AgentChatRuntime {
+  providerId?: string;
+  model?: string;
+  protocol?: 'openai' | 'anthropic';
+  allowedToolNames?: string[];
+}
 
 const debug = (...args: unknown[]) => {
   if (process.env.CODEEP_DEBUG === '1') {
@@ -303,21 +313,24 @@ export async function summarizeEarlierHistory(
   }
 }
 
-export function getAgentSystemPrompt(projectContext: ProjectContext): string {
+export function getAgentSystemPrompt(projectContext: ProjectContext, runtime?: AgentChatRuntime): string {
   const root = projectContext.root || process.cwd();
   // State the real underlying model/provider so "which model are you"
   // gets a truthful answer instead of a hallucinated one.
-  const model = String(config.get('model') || '');
-  const providerId = String(config.get('provider') || '');
+  const model = String(runtime?.model || config.get('model') || '');
+  const providerId = String(runtime?.providerId || config.get('provider') || '');
   const identity = model
     ? `You are Codeep, an autonomous AI coding agent operating inside this project. The underlying model is \`${model}\` (via ${providerId}). If asked which model or provider you are, answer truthfully with these details. Never claim to be Claude or any other model unless that is genuinely the configured model.`
     : `You are Codeep, an autonomous AI coding agent operating inside this project. Never refer to yourself as Claude or any other AI unless that is genuinely the configured model.`;
+  const toolInstructions = runtime?.allowedToolNames !== undefined
+    ? `This run has an enforced tool allowlist. Only these tools may be used: ${runtime.allowedToolNames.length ? runtime.allowedToolNames.slice(0, 50).join(', ') : '(none)'}. Do not request or claim access to any other tool.`
+    : `- read_file / write_file / edit_file / delete_file — file ops (prefer edit_file for modifications to keep surrounding content intact)
+- create_directory / list_files / search_code — project navigation
+- execute_command — ONLY for package managers & version control: npm, yarn, pnpm, bun, git, composer, pip, cargo, go, make. Never for ls/cat/grep/mkdir/rm/cp/mv/touch — use the dedicated tools.`;
   return `${identity}
 
 ## Tools
-- read_file / write_file / edit_file / delete_file — file ops (prefer edit_file for modifications to keep surrounding content intact)
-- create_directory / list_files / search_code — project navigation
-- execute_command — ONLY for package managers & version control: npm, yarn, pnpm, bun, git, composer, pip, cargo, go, make. Never for ls/cat/grep/mkdir/rm/cp/mv/touch — use the dedicated tools.
+${toolInstructions}
 
 ## Behavior
 - Do what the user asked — in whatever language they wrote. Tool names stay English.
@@ -357,8 +370,10 @@ ${projectContext.structure ? `\n## Project Structure\n${projectContext.structure
 export function getFallbackSystemPrompt(
   projectContext: ProjectContext,
   additionalTools?: AdditionalToolDef[],
+  runtime?: AgentChatRuntime,
 ): string {
-  return getAgentSystemPrompt(projectContext) + '\n\n' + formatToolDefinitions(additionalTools);
+  const allowed = runtime?.allowedToolNames ? new Set(runtime.allowedToolNames) : undefined;
+  return getAgentSystemPrompt(projectContext, runtime) + '\n\n' + formatToolDefinitions(additionalTools, allowed);
 }
 
 /**
@@ -378,19 +393,33 @@ export async function agentChat(
    * omitted or an empty array.
    */
   additionalTools?: AdditionalToolDef[],
+  runtime?: AgentChatRuntime,
 ): Promise<AgentChatResponse> {
-  const protocol = config.get('protocol');
-  const model = config.get('model');
-  const providerId = config.get('provider');
-  const apiKey = getApiKey() || (isNoApiKeyProvider(providerId) ? 'ollama' : null);
+  const protocol = runtime?.protocol ?? config.get('protocol');
+  const model = runtime?.model ?? config.get('model');
+  const providerId = runtime?.providerId ?? config.get('provider');
+  const apiKey = getApiKey(providerId) || (isNoApiKeyProvider(providerId) ? 'ollama' : null);
+  const allowedTools = runtime?.allowedToolNames ? new Set(runtime.allowedToolNames) : undefined;
 
   let baseUrl = resolveBaseUrl(providerId, protocol);
   const authHeader = getProviderAuthHeader(providerId, protocol);
 
   if (!baseUrl) throw new Error(`Provider ${providerId} does not support ${protocol} protocol`);
 
+  // Global API throttle — same choke point as api/chat(). Checked here so
+  // the agent loop (which can run up to agentMaxIterations iterations, each
+  // with its own API call) is rate-limited even when it never routes
+  // through api/chat(). Bypassed for no-key local providers (Ollama) —
+  // there is no quota to protect on localhost.
+  if (!isNoApiKeyProvider(providerId)) {
+    const rateCheck = checkApiRateLimit();
+    if (!rateCheck.allowed) {
+      throw new ApiError(rateCheck.message || 'API rate limit exceeded', 429);
+    }
+  }
+
   if (!supportsNativeTools(providerId, protocol)) {
-    return await agentChatFallback(messages, systemPrompt, onChunk, abortSignal);
+    return await agentChatFallback(messages, systemPrompt, onChunk, abortSignal, dynamicTimeout, additionalTools, runtime);
   }
 
   const controller = new AbortController();
@@ -465,7 +494,7 @@ export async function agentChat(
           model,
           messages: [],
           rawMessages: [{ role: 'system', content: systemPrompt }, ...messages] as unknown[],
-          tools: getOpenAITools(additionalTools) as unknown[],
+          tools: getOpenAITools(additionalTools, allowedTools) as unknown[],
           numCtx,
           keepAlive: (config.get('ollamaKeepAlive') as string) || undefined,
           temperature: requiresDefaultTemperature(providerId) ? undefined : Number(config.get('temperature')),
@@ -488,7 +517,7 @@ export async function agentChat(
 
       body = {
         model, messages: [{ role: 'system', content: systemPrompt }, ...messages],
-        tools: getOpenAITools(additionalTools), tool_choice: 'auto', stream: useStreaming,
+        tools: getOpenAITools(additionalTools, allowedTools), tool_choice: 'auto', stream: useStreaming,
         ...tempParam, ...tokParam, ...reasoningParam,
         // Ask ALL OpenAI-compatible providers to emit a usage block in the
         // stream — without this most (DeepSeek/Kimi/Grok/Qwen/GLM/…) send no
@@ -506,7 +535,7 @@ export async function agentChat(
       // Cache hits cost 0.1× input. Misses ("cache creation") cost 1.25×.
       // Net win after the 2nd same-shape request. Below 1024 input tokens
       // Anthropic silently skips caching — no error path to handle.
-      const anthropicTools = getAnthropicTools(additionalTools);
+      const anthropicTools = getAnthropicTools(additionalTools, allowedTools);
       const cachedTools = anthropicTools.length > 0
         ? [
             ...anthropicTools.slice(0, -1),
@@ -529,7 +558,7 @@ export async function agentChat(
     if (!response.ok) {
       const errorText = await response.text();
       if (errorText.includes('tools') || errorText.includes('function') || response.status === 400) {
-        return await agentChatFallback(messages, systemPrompt, onChunk, abortSignal);
+        return await agentChatFallback(messages, systemPrompt, onChunk, abortSignal, dynamicTimeout, additionalTools, runtime);
       }
       throw new Error(`API error: ${response.status} - ${errorText}`);
     }
@@ -582,7 +611,7 @@ export async function agentChat(
       throw error;
     }
     if (err.message.includes('tools') || err.message.includes('function')) {
-      return await agentChatFallback(messages, systemPrompt, onChunk, abortSignal);
+      return await agentChatFallback(messages, systemPrompt, onChunk, abortSignal, dynamicTimeout, additionalTools, runtime);
     }
     throw error;
   } finally {
@@ -599,17 +628,30 @@ export async function agentChatFallback(
   systemPrompt: string,
   onChunk?: (chunk: string) => void,
   abortSignal?: AbortSignal,
-  dynamicTimeout?: number
+  dynamicTimeout?: number,
+  additionalTools?: AdditionalToolDef[],
+  runtime?: AgentChatRuntime,
 ): Promise<AgentChatResponse> {
-  const protocol = config.get('protocol');
-  const model = config.get('model');
-  const providerId = config.get('provider');
-  const apiKey = getApiKey() || (isNoApiKeyProvider(providerId) ? 'ollama' : null);
+  const protocol = runtime?.protocol ?? config.get('protocol');
+  const model = runtime?.model ?? config.get('model');
+  const providerId = runtime?.providerId ?? config.get('provider');
+  const apiKey = getApiKey(providerId) || (isNoApiKeyProvider(providerId) ? 'ollama' : null);
+  const allowedTools = runtime?.allowedToolNames ? new Set(runtime.allowedToolNames) : undefined;
 
   let baseUrl = resolveBaseUrl(providerId, protocol);
   const authHeader = getProviderAuthHeader(providerId, protocol);
 
   if (!baseUrl) throw new Error(`Provider ${providerId} does not support ${protocol} protocol`);
+
+  // See rate-limit note in agentChat above — same choke point, same local-
+  // provider bypass. This path runs when the provider has no native tool
+  // support, so it's reached directly (not via agentChat's early return).
+  if (!isNoApiKeyProvider(providerId)) {
+    const rateCheck = checkApiRateLimit();
+    if (!rateCheck.allowed) {
+      throw new ApiError(rateCheck.message || 'API rate limit exceeded', 429);
+    }
+  }
 
   const controller = new AbortController();
   const timeoutMs = dynamicTimeout || config.get('apiTimeout');
@@ -633,7 +675,7 @@ export async function agentChatFallback(
 
   const fallbackPrompt = systemPrompt.includes('## Available Tools')
     ? systemPrompt
-    : systemPrompt + '\n\n' + formatToolDefinitions();
+    : systemPrompt + '\n\n' + formatToolDefinitions(additionalTools, allowedTools);
 
   try {
     let endpoint: string;

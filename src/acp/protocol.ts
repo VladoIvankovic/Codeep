@@ -311,6 +311,49 @@ export interface ListSessionsResult {
   nextCursor?: string | null;
 }
 
+// ─── Codeep personality extensions ──────────────────────────────────────────
+
+export interface ListPersonalitiesParams {
+  sessionId: string;
+}
+
+export interface AcpPersonalityInfo {
+  name: string;
+  displayName: string;
+  description: string;
+  structured: boolean;
+  /** True only when Tools was explicitly declared; [] then means conversation-only. */
+  restrictTools: boolean;
+  scope: 'builtin' | 'project' | 'global';
+  model: string;
+  tools: string[];
+  projectScope: 'all' | 'selected' | 'personal' | 'unspecified';
+  projects: string[];
+  available: boolean;
+}
+
+export interface ListPersonalitiesResult {
+  personalities: AcpPersonalityInfo[];
+  activePersonality: string | null;
+}
+
+export interface SetPersonalityParams {
+  sessionId: string;
+  personalityId: string | null;
+}
+
+export interface SetPersonalityResult {
+  activePersonality: string | null;
+}
+
+export interface SyncPersonalitiesParams {
+  sessionId: string;
+}
+
+export interface SyncPersonalitiesResult extends ListPersonalitiesResult {
+  updated: number;
+}
+
 // ─── session/delete ───────────────────────────────────────────────────────────
 
 export interface DeleteSessionParams {

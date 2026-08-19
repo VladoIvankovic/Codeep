@@ -289,12 +289,12 @@ export async function purgeKeys(): Promise<boolean> {
 //
 // Both are name → raw-.md-body bundles stored in a global dir
 // (~/.codeep/personalities, ~/.codeep/commands). The sync is bidirectional
-// and merge-based: pull writes any remote file not present locally; push
-// sends every local file. Last-write-wins on the server via upsert. We
-// never delete locally on pull — additive only, so a sync can't nuke
-// work you haven't pushed.
+// and merge-based. Personality pulls are cloud-authoritative because the web
+// builder edits the cloud copy: changed local files are backed up before the
+// remote body replaces them. Commands retain the older additive-only merge.
+// Pull never deletes a local file that disappeared from the server.
 
-import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
@@ -329,10 +329,54 @@ function writeFileBundle(kind: 'personalities' | 'commands', items: Record<strin
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   let written = 0;
   for (const [name, body] of Object.entries(items)) {
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(name) || name.length > 64 || typeof body !== 'string' || !body) continue;
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name) || name.length > 64 || typeof body !== 'string' || !body || body.length > 64 * 1024) continue;
     const filePath = join(dir, `${name}.md`);
     if (existsSync(filePath)) continue; // don't clobber local
     try { writeFileSync(filePath, body); written++; } catch { /* skip */ }
+  }
+  return written;
+}
+
+/** Apply a cloud personality bundle. Updated bodies replace the active local
+ * file so web edits actually take effect, but every divergent local body is
+ * first copied to ~/.codeep/backups/personalities/. */
+let lastPersonalityPullBackupCount = 0;
+function writePulledPersonalityBundle(items: Record<string, string>): number {
+  lastPersonalityPullBackupCount = 0;
+  const dir = globalDir('personalities');
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  let written = 0;
+  for (const [name, body] of Object.entries(items)) {
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name) || name.length > 64 || typeof body !== 'string' || !body || body.length > 64 * 1024) continue;
+    const filePath = join(dir, `${name}.md`);
+    let tempPath = '';
+    try {
+      if (existsSync(filePath)) {
+        const local = readFileSync(filePath, 'utf8');
+        if (local === body) continue;
+        const backupDir = join(homedir(), '.codeep', 'backups', 'personalities');
+        if (!existsSync(backupDir)) mkdirSync(backupDir, { recursive: true });
+        let suffix = new Date().toISOString().replace(/[:.]/g, '-');
+        let backupPath = join(backupDir, `${name}-${suffix}.md`);
+        let collision = 1;
+        while (existsSync(backupPath)) {
+          backupPath = join(backupDir, `${name}-${suffix}-${collision++}.md`);
+        }
+        writeFileSync(backupPath, local);
+        lastPersonalityPullBackupCount++;
+      }
+      // Same-directory rename is atomic on supported local filesystems: a
+      // crash cannot leave a half-written active personality.
+      tempPath = join(dir, `.${name}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`);
+      writeFileSync(tempPath, body);
+      renameSync(tempPath, filePath);
+      written++;
+    } catch {
+      // A backup/write failure leaves the existing active file untouched.
+      if (tempPath && existsSync(tempPath)) {
+        try { unlinkSync(tempPath); } catch { /* best effort temp cleanup */ }
+      }
+    }
   }
   return written;
 }
@@ -345,7 +389,9 @@ async function pullBundle(kind: 'personalities' | 'commands'): Promise<number | 
   try {
     const data = await res.json() as { ok: boolean; items: Record<string, string> };
     if (!data.ok) return null;
-    return writeFileBundle(kind, data.items ?? {});
+    return kind === 'personalities'
+      ? writePulledPersonalityBundle(data.items ?? {})
+      : writeFileBundle(kind, data.items ?? {});
   } catch {
     return null;
   }
@@ -366,6 +412,7 @@ async function pushBundle(kind: 'personalities' | 'commands'): Promise<number | 
 }
 
 export const pullPersonalities = () => pullBundle('personalities');
+export const getLastPersonalityPullBackupCount = () => lastPersonalityPullBackupCount;
 export const pushPersonalities = () => pushBundle('personalities');
 export const pullCommands = () => pullBundle('commands');
 export const pushCommands = () => pushBundle('commands');
@@ -706,3 +753,4 @@ async function fetchWithRetry(
 export const _globalDirForTest = globalDir;
 export const _readFileBundleForTest = readFileBundle;
 export const _writeFileBundleForTest = writeFileBundle;
+export const _writePulledPersonalityBundleForTest = writePulledPersonalityBundle;

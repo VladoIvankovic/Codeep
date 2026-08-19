@@ -32,7 +32,17 @@ vi.mock('./agentStream', () => ({
   AgentChatResponse: {},
 }));
 
-import { loadProjectRules, formatChatHistoryForAgent, summarizeEarlierHistory, TimeoutError } from './agentChat';
+import { loadProjectRules, formatChatHistoryForAgent, summarizeEarlierHistory, getAgentSystemPrompt, TimeoutError } from './agentChat';
+
+describe('per-run custom-bot runtime', () => {
+  it('reports the runtime model/provider without mutating global config', () => {
+    mockExistsSync.mockReturnValue(false);
+    const prompt = getAgentSystemPrompt({
+      root: '/project', name: 'project', type: 'TypeScript', structure: '', keyFiles: [], fileCount: 0, summary: '',
+    }, { providerId: 'z.ai', model: 'glm-5.3', protocol: 'openai' });
+    expect(prompt).toContain('`glm-5.3` (via z.ai)');
+  });
+});
 
 describe('summarizeEarlierHistory', () => {
   it('returns empty for missing/empty history', async () => {

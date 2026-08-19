@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { Screen } from './Screen';
 
 const screens: Screen[] = [];
@@ -136,5 +136,69 @@ describe('Screen — onResize', () => {
     let called = false;
     s.onResize(() => { called = true; });
     expect(called).toBe(false);
+  });
+});
+
+describe('invalidate', () => {
+  // The differential renderer skips a cell whose buffer value matches the
+  // shadow copy. That is only sound while nothing else writes to the terminal —
+  // the inline overlays draw below the managed area and scroll it, leaving
+  // stale glyphs the next render() would never repaint (the `f` before CODEEP).
+  it('makes the next render repaint a cell it would otherwise skip', () => {
+    const s = new Screen();
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write')
+      .mockImplementation((chunk: unknown) => { writes.push(String(chunk)); return true; });
+    try {
+      s.write(0, 0, 'X');
+      s.render();                       // X reaches the terminal, shadow records it
+      writes.length = 0;
+
+      s.write(0, 0, 'X');
+      s.render();                       // unchanged → nothing emitted
+      expect(writes.join('')).not.toContain('X');
+
+      s.invalidate();                   // shadow no longer trusted
+      writes.length = 0;
+      s.write(0, 0, 'X');
+      s.render();
+      expect(writes.join('')).toContain('X');
+    } finally {
+      spy.mockRestore();
+      s.cleanup();
+    }
+  });
+});
+
+describe('invalidate — blank cells', () => {
+  // The original attempt filled the shadow with spaces, which still compare
+  // equal to a blank buffer cell. Column 0 of the header is blank (the wordmark
+  // starts at x = 1), so it was never emitted and whatever the terminal showed
+  // there survived every repaint — the `f` before CODEEP.
+  it('repaints a BLANK cell, not just a changed one', () => {
+    const s = new Screen();
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write')
+      .mockImplementation((chunk: unknown) => { writes.push(String(chunk)); return true; });
+    try {
+      s.render();                 // shadow and buffer agree: all blank
+      writes.length = 0;
+      s.render();
+      // Nothing changed, so only the trailing cursor restore is emitted —
+      // count the cell addresses so the assertion cannot be satisfied by it.
+      const quiet = (writes.join('').match(/\x1b\[\d+;\d+H/g) ?? []).length;
+
+      s.invalidate();
+      writes.length = 0;
+      s.render();
+      const repainted = (writes.join('').match(/\x1b\[\d+;\d+H/g) ?? []).length;
+
+      // A full repaint addresses every cell on the screen, not just the cursor.
+      expect(quiet).toBeLessThan(5);
+      expect(repainted).toBeGreaterThan(s.getSize().width);
+    } finally {
+      spy.mockRestore();
+      s.cleanup();
+    }
   });
 });

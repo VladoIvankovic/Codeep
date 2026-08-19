@@ -8,12 +8,45 @@ vi.mock('../utils/git', async (importOriginal) => {
   return { ...actual, getGitStatus: vi.fn(actual.getGitStatus) };
 });
 
+import { readFileSync } from 'node:fs';
 import { deriveSessionName } from './main';
 import { getGitStatus } from '../utils/git';
+
+// Comment-stripped: a plain text match happily finds `// reportTurnStats(true)`
+// and would pass against the very bug these guards exist to catch.
+const mainSource = readFileSync('src/renderer/main.ts', 'utf-8')
+  .split('\n')
+  .filter(line => !line.trim().startsWith('//'))
+  .join('\n');
 
 describe('module load', () => {
   it('does not resolve the git branch at import time', () => {
     expect(getGitStatus).not.toHaveBeenCalled();
+  });
+});
+
+// handleSubmit is not exported and mocking the whole chat pipeline to reach it
+// would be brittle, so these guard the wiring at source level. Narrow on
+// purpose: reportTurnStats once shipped DEFINED BUT NEVER CALLED — the success
+// path kept an inline duplicate and the catch path reported nothing at all, so
+// tokens burned by an aborted turn reached no one. tsc stayed silent because
+// noUnusedLocals is off.
+describe('cloud stats wiring', () => {
+  it('calls reportTurnStats, rather than only defining it', () => {
+    expect(mainSource).toMatch(/const reportTurnStats = /);
+    expect(mainSource).toMatch(/\breportTurnStats\(true\)/);
+  });
+
+  it('reports the delta from the catch path too', () => {
+    // An aborted or failed turn still burned tokens, and gracefulShutdown no
+    // longer sends a cumulative catch-all that would sweep them up later.
+    const catchBlock = mainSource.slice(mainSource.indexOf('} catch (error) {'));
+    expect(catchBlock).toMatch(/\breportTurnStats\(false\)/);
+  });
+
+  it('keeps one reporting implementation, not an inline copy beside it', () => {
+    // The inline duplicate is what silently kept working while the helper rotted.
+    expect(mainSource.match(/getCostBreakdown\(tokenReportStart\)/g) ?? []).toHaveLength(1);
   });
 });
 

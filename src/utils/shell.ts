@@ -5,6 +5,7 @@
 import { spawnSync, spawn, SpawnSyncOptions } from 'child_process';
 import { resolve, relative, isAbsolute } from 'path';
 import { existsSync } from 'fs';
+import { assertFetchUrlAllowed } from './ssrfGuard';
 
 export interface CommandResult {
   success: boolean;
@@ -98,8 +99,13 @@ const ALLOWED_COMMANDS = new Set([
   'eslint', 'prettier', 'black', 'rustfmt',
   
   // Other common tools
-  'echo', 'pwd', 'which', 'env', 'date', 'sleep',
-  'curl', 'wget', // allowed but patterns checked
+  // NOTE: `env` deliberately NOT whitelisted — it dumps process.env to
+  // stdout, which lands in the model's context. Provider API keys ride in
+  // env vars, so a single `env` call would exfiltrate every credential the
+  // CLI holds. `printenv` is excluded for the same reason. Run these
+  // yourself outside the agent if you need environment info.
+  'echo', 'pwd', 'which', 'date', 'sleep',
+  'curl', 'wget', // allowed but patterns + SSRF-checked
   'tar', 'unzip', 'zip',
   
   // HTTP tools
@@ -134,8 +140,64 @@ function hasInlineEval(command: string, args: string[]): boolean {
   return false;
 }
 
+// Commands whose arguments carry URLs that must pass the SSRF guard
+// (private/loopback/metadata IP check) before execution. `fetch_url` already
+// routes through assertFetchUrlAllowed; without this list the same model-
+// controlled URL could just be passed to curl instead.
+const URL_CARRYING_COMMANDS = new Set(['curl', 'wget', 'http', 'https']);
+
+// Heuristic: extract URL-looking arguments. curl/wget accept URLs with or
+// without a scheme (curl example.com works), and URLs may also ride in
+// option values (`--url=…`, `-d @url`, header values like
+// `Host: internal.corp`). We normalize scheme-less hosts so the guard sees
+// what curl will actually connect to.
+function extractUrlCandidates(args: string[]): string[] {
+  const urls: string[] = [];
+  for (const arg of args) {
+    if (arg.startsWith('-')) {
+      // Option values: --url=x, --output=y are paths not URLs, but
+      // --header="Host: x" can smuggle a host. Keep it simple: only check
+      // --url= style options that plausibly carry a URL.
+      const m = arg.match(/^--url=(.+)$/i);
+      if (m) urls.push(m[1]);
+      continue;
+    }
+    if (/^https?:\/\//i.test(arg)) {
+      urls.push(arg);
+    } else if (
+      // scheme-less host forms curl accepts: literal IPs (with optional
+      // port/path), 'localhost', and named hosts (example.com, internal.corp).
+      // Anything else (plain filenames, package names) is left alone.
+      /^(localhost([\/?#].*)?|\d{1,3}(\.\d{1,3}){3}(:\d+)?([\/?#].*)?|[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?([\/?#].*)?)$/i.test(arg)
+    ) {
+      // scheme-less host or host/path — what curl will connect to
+      urls.push(`http://${arg}`);
+    }
+  }
+  return urls;
+}
+
+// Exec-escapes: whitelisted utilities that can run ARBITRARY other commands
+// as part of their arguments, silently bypassing the whitelist above.
+//   find . -exec <anything> \;        → runs <anything>
+//   find . -execdir <anything> \;
+//   tar --to-command=<anything>       → pipes each extracted file into it
+//   xargs <anything>                  → not whitelisted itself, but listed
+//                                       here for documentation; see note.
+const EXEC_ESCAPE_SHORT: Record<string, string[]> = {
+  find: ['-exec', '-execdir', '-ok', '-okdir'],
+  tar: ['--to-command'],
+};
+
+function hasExecEscape(command: string, args: string[]): boolean {
+  const flags = EXEC_ESCAPE_SHORT[command] ?? [];
+  if (flags.length === 0) return false;
+  return args.some((a) => flags.includes(a) || flags.some((f) => a.startsWith(f + '=')));
+}
+
 /**
- * Validate if a command is safe to execute
+ * Validate if a command is safe to execute (synchronous checks).
+ * See validateCommandAsync for the DNS-resolving SSRF checks.
  */
 export function validateCommand(
   command: string,
@@ -156,6 +218,12 @@ export function validateCommand(
   // arbitrary code execution (the whitelist alone doesn't stop `node -e "…"`).
   if (hasInlineEval(command, args)) {
     return { valid: false, reason: `Inline code execution via '${command}' (e.g. -e/-c/--eval) is not allowed in agent mode — put the code in a file and run that, or run it yourself.` };
+  }
+
+  // Block whitelisted utilities whose flags spawn OTHER commands — that
+  // would bypass the whitelist entirely (find . -exec rm -rf / \;).
+  if (hasExecEscape(command, args)) {
+    return { valid: false, reason: `'${command}' with exec flags (-exec/-execdir/--to-command…) runs arbitrary commands and is not allowed in agent mode.` };
   }
 
   // Check full command string against dangerous patterns
@@ -295,6 +363,30 @@ export function executeCommand(
 }
 
 /**
+ * Async validation: everything in validateCommand plus the DNS-resolving
+ * SSRF check for URL-carrying commands (curl/wget/http/https). Split from
+ * the sync part because DNS lookups can't block the event loop.
+ */
+export async function validateCommandAsync(
+  command: string,
+  args: string[],
+  options?: CommandOptions
+): Promise<{ valid: boolean; reason?: string }> {
+  const sync = validateCommand(command, args, options);
+  if (!sync.valid) return sync;
+
+  if (URL_CARRYING_COMMANDS.has(command)) {
+    for (const url of extractUrlCandidates(args)) {
+      const blocked = await assertFetchUrlAllowed(url);
+      if (blocked) {
+        return { valid: false, reason: `Blocked URL in ${command} arguments: ${blocked}` };
+      }
+    }
+  }
+  return { valid: true };
+}
+
+/**
  * Execute a shell command asynchronously (non-blocking)
  */
 export function executeCommandAsync(
@@ -307,93 +399,96 @@ export function executeCommandAsync(
     const cwd = options?.cwd || process.cwd();
     const timeout = options?.timeout || 60000;
 
-    // Validate command first (synchronous, fast)
-    const validation = validateCommand(command, args, options);
-    if (!validation.valid) {
-      resolve({
-        success: false,
-        stdout: '',
-        stderr: validation.reason || 'Command validation failed',
-        exitCode: -1,
-        duration: 0,
-        command,
-        args,
+    // Validate command first — async because URL-carrying commands get a
+    // DNS-resolving SSRF check (private/loopback/metadata IP guard) that
+    // matches the one on the fetch_url tool.
+    validateCommandAsync(command, args, options).then((validation) => {
+      if (!validation.valid) {
+        resolve({
+          success: false,
+          stdout: '',
+          stderr: validation.reason || 'Command validation failed',
+          exitCode: -1,
+          duration: 0,
+          command,
+          args,
+        });
+        return;
+      }
+
+      // Ensure cwd exists
+      if (!existsSync(cwd)) {
+        resolve({
+          success: false,
+          stdout: '',
+          stderr: `Working directory does not exist: ${cwd}`,
+          exitCode: -1,
+          duration: 0,
+          command,
+          args,
+        });
+        return;
+      }
+
+      const child = spawn(command, args, {
+        cwd,
+        env: { ...process.env, ...options?.env },
       });
-      return;
-    }
 
-    // Ensure cwd exists
-    if (!existsSync(cwd)) {
-      resolve({
-        success: false,
-        stdout: '',
-        stderr: `Working directory does not exist: ${cwd}`,
-        exitCode: -1,
-        duration: 0,
-        command,
-        args,
+      let stdout = '';
+      let stderr = '';
+
+      child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
+      child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+
+      let settled = false;
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        child.kill('SIGTERM');
+        const duration = Date.now() - startTime;
+        resolve({
+          success: false,
+          stdout,
+          stderr: `Command timed out after ${timeout}ms`,
+          exitCode: -1,
+          duration,
+          command,
+          args,
+        });
+      }, timeout);
+
+      child.on('close', (code: number | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const duration = Date.now() - startTime;
+        resolve({
+          success: code === 0,
+          stdout,
+          stderr,
+          exitCode: code ?? -1,
+          duration,
+          command,
+          args,
+        });
       });
-      return;
-    }
 
-    const child = spawn(command, args, {
-      cwd,
-      env: { ...process.env, ...options?.env },
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
-    child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
-
-    let settled = false;
-
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill('SIGTERM');
-      const duration = Date.now() - startTime;
-      resolve({
-        success: false,
-        stdout,
-        stderr: `Command timed out after ${timeout}ms`,
-        exitCode: -1,
-        duration,
-        command,
-        args,
-      });
-    }, timeout);
-
-    child.on('close', (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      const duration = Date.now() - startTime;
-      resolve({
-        success: code === 0,
-        stdout,
-        stderr,
-        exitCode: code ?? -1,
-        duration,
-        command,
-        args,
-      });
-    });
-
-    child.on('error', (err: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      const duration = Date.now() - startTime;
-      resolve({
-        success: false,
-        stdout: '',
-        stderr: err.message,
-        exitCode: -1,
-        duration,
-        command,
-        args,
+      child.on('error', (err: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const duration = Date.now() - startTime;
+        resolve({
+          success: false,
+          stdout: '',
+          stderr: err.message,
+          exitCode: -1,
+          duration,
+          command,
+          args,
+        });
       });
     });
   });

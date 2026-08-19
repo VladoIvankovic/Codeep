@@ -677,9 +677,10 @@ Then call it as `/sec-review src/api/login.ts` (or `/sec` via the alias).
 **Discovery:** `/commands` lists all available templates. Project files shadow
 global files with the same name. Aliases also work for autocomplete.
 
-### Personalities (`/personality`, new in 2.0.3)
+### Personalities and custom bots (`/personality`)
 
-Swap how the agent talks and what it prioritises mid-conversation:
+Built-in personalities change tone and priorities. A structured custom bot can
+also pin a model, restrict runtime tools, and limit where it is available:
 
 ```
 /personality                  # list available
@@ -694,23 +695,56 @@ Six built-in presets: `concise`, `verbose`, `security`, `senior-reviewer`,
 `junior-mentor`, `ship-it`. The active one persists across sessions
 (stored in `~/.codeep/config.json` as `activePersonality`).
 
-**Custom personalities** — drop a Markdown file in
+**Custom bots** — build one in **Dashboard → Agent Studio**, or drop a Markdown
+file in
 `.codeep/personalities/<name>.md` (project) or
 `~/.codeep/personalities/<name>.md` (global):
 
 ```markdown
-# Personality: PR Reviewer
+---
+codeep: custom-bot/v1
+description: Reviews changes without modifying the project.
+model: automatic
+tools: [files, git]
+scope: selected
+projects: [Codeep]
+---
+# PR Reviewer
 
-You are reviewing a PR from a junior engineer:
-- Cite line numbers for every concern.
-- Suggest an alternative, don't just flag the problem.
-- Keep tone collaborative, not pedantic.
-- End with one thing the author did well.
+## Responsibility
+Review the requested change and cite concrete evidence.
+
+## Always
+- Call out untested behavior.
+
+## Never
+- Modify files or publish changes.
+
+## Advanced instructions
+Keep the tone collaborative and end with the highest-risk finding.
 ```
 
-First `# Personality:` line is the display name; the rest is appended
-to the agent's system prompt verbatim when active. Project shadows
-global shadows built-in (by name).
+Portable tool groups are `files`, `terminal`, `tests`, `git`, `web`, and
+`mcp`; unselected groups are removed from the model's runtime and checked
+again before execution. Missing, empty, or malformed `tools` metadata in a v1
+file creates a conversation-only bot. Use
+`scope: all`, `selected`, or `personal`; selected scope matches the project
+directory basename against `projects` (with optional `*` and `?` wildcards).
+An exact `provider/model` applies only to
+that run, while `automatic` inherits the current selection.
+
+Portable v1 fails closed for unclassified capabilities: Skills, delegation,
+and vision are not exposed to structured bots yet. MCP is available only when
+the active ACP session has registered those exact tools.
+
+Legacy prompt-only Markdown remains supported and unrestricted. The older
+section-only Agent Studio format is recognized when it contains
+`Responsibility` plus another standard section; without a Tools section it
+also stays unrestricted until explicitly converted. Invalid structured model
+or scope metadata makes the bot unavailable rather than silently widening its
+runtime. An explicit unsupported `codeep` schema marker is also unavailable;
+it is never reinterpreted as legacy. Project files shadow global files, which
+shadow built-ins with the same name.
 
 ### Activity Insights (`/insights`, new in 2.0.3)
 
@@ -885,10 +919,13 @@ codeep account push   # Upload local personalities + commands to codeep.dev
 codeep account sync   # Download them onto a new machine
 ```
 
-Merging is **additive** — `sync` only writes files that don't already exist
-locally, so it never clobbers a personality or command you've edited on this
-machine. View what's synced (and prune stale entries) under **Personalities**
-and **Custom commands** on the [dashboard](https://codeep.dev/dashboard).
+A manual `sync` treats the dashboard personality as current. When a changed
+cloud personality replaces a local file, Codeep first saves the local version
+under `~/.codeep/backups/personalities/` and then swaps the new file in
+atomically. Custom commands keep the older **additive** merge and are never
+overwritten by a pull. View and edit custom bots in **Agent Studio**, and prune
+commands under **Custom commands**, on the
+[dashboard](https://codeep.dev/dashboard).
 
 Hooks and MCP server configs are deliberately **not** synced: hooks run
 arbitrary shell, and MCP configs often embed tokens, so both stay local to each

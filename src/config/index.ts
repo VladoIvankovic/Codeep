@@ -359,8 +359,8 @@ function createConfig(): Conf<ConfigSchema> {
     maxTokens: 32768,
     reasoningEffort: 'auto',
     apiTimeout: 60000,
-    rateLimitApi: 10000,
-    rateLimitCommands: 10000,
+    rateLimitApi: 240, // API requests per minute — generous for a 50-iteration agent, still stops runaway loops
+    rateLimitCommands: 120, // Commands per minute
     projectPermissions: [],
     providerApiKeys: [],
     configuredProviderIds: [],

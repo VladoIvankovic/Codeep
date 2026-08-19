@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir, homedir } from 'os';
 import {
@@ -7,6 +7,8 @@ import {
   _globalDirForTest,
   _readFileBundleForTest,
   _writeFileBundleForTest,
+  _writePulledPersonalityBundleForTest,
+  getLastPersonalityPullBackupCount,
 } from './codeepCloud';
 
 describe('generateProjectId', () => {
@@ -220,5 +222,55 @@ describe('writeFileBundle', () => {
     _writeFileBundleForTest('commands', { c1: 'b' });
     expect(existsSync(join(tmpHome, '.codeep', 'personalities', 'p1.md'))).toBe(true);
     expect(existsSync(join(tmpHome, '.codeep', 'commands', 'c1.md'))).toBe(true);
+  });
+});
+
+describe('cloud-authoritative personality pull', () => {
+  let tmpHome: string;
+  const REAL_HOME = homedir();
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'codeep-personality-pull-'));
+    process.env.HOME = tmpHome;
+    process.env.USERPROFILE = tmpHome;
+  });
+
+  afterEach(() => {
+    process.env.HOME = REAL_HOME;
+    process.env.USERPROFILE = REAL_HOME;
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it('writes a new cloud personality', () => {
+    expect(_writePulledPersonalityBundleForTest({ reviewer: '# Reviewer\nCloud' })).toBe(1);
+    expect(readFileSync(join(tmpHome, '.codeep', 'personalities', 'reviewer.md'), 'utf8')).toBe('# Reviewer\nCloud');
+  });
+
+  it('replaces a changed local body after preserving a backup', () => {
+    const dir = join(tmpHome, '.codeep', 'personalities');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'reviewer.md'), '# Reviewer\nLocal edits');
+
+    expect(_writePulledPersonalityBundleForTest({ reviewer: '# Reviewer\nCloud edit' })).toBe(1);
+    expect(getLastPersonalityPullBackupCount()).toBe(1);
+    expect(readFileSync(join(dir, 'reviewer.md'), 'utf8')).toBe('# Reviewer\nCloud edit');
+
+    const backupDir = join(tmpHome, '.codeep', 'backups', 'personalities');
+    const backups = readdirSync(backupDir);
+    expect(backups).toHaveLength(1);
+    expect(readFileSync(join(backupDir, backups[0]), 'utf8')).toBe('# Reviewer\nLocal edits');
+  });
+
+  it('does nothing when local and cloud bodies are identical', () => {
+    const dir = join(tmpHome, '.codeep', 'personalities');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'same.md'), 'same');
+    expect(_writePulledPersonalityBundleForTest({ same: 'same' })).toBe(0);
+    expect(existsSync(join(tmpHome, '.codeep', 'backups', 'personalities'))).toBe(false);
+  });
+
+  it('rejects oversized cloud bodies', () => {
+    expect(_writePulledPersonalityBundleForTest({ huge: 'x'.repeat(64 * 1024 + 1) })).toBe(0);
+    expect(existsSync(join(tmpHome, '.codeep', 'personalities', 'huge.md'))).toBe(false);
   });
 });

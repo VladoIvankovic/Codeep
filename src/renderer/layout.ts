@@ -71,6 +71,7 @@ export function bottomPanelHeight(s: LayoutSnapshot): number {
   }
   if (s.hunkPickerOpen) {
     // Title + progress + path + header + up to 12 diff lines + more marker + legend.
+    // Kept in sync with components/HunkPicker.ts (hunkPickerPanelHeight).
     return 18;
   }
   if (s.statusOpen) {

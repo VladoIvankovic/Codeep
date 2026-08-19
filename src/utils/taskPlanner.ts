@@ -3,7 +3,7 @@
  */
 
 import { config, getApiKey, Message, resolveBaseUrl } from '../config/index';
-import { getProviderAuthHeader, requiresDefaultTemperature } from '../config/providers';
+import { getProviderAuthHeader, isNoApiKeyProvider, requiresDefaultTemperature } from '../config/providers';
 
 export interface SubTask {
   id: number;
@@ -18,12 +18,20 @@ export interface TaskPlan {
   estimatedIterations: number;
 }
 
+/** Per-run provider selection. Used by custom bots without mutating config. */
+export interface TaskPlannerRuntime {
+  providerId?: string;
+  model?: string;
+  protocol?: 'openai' | 'anthropic';
+}
+
 /**
  * Ask AI to break down a complex task into subtasks
  */
 export async function planTasks(
   userPrompt: string,
-  projectContext: { name: string; type: string; structure: string }
+  projectContext: { name: string; type: string; structure: string },
+  runtime: TaskPlannerRuntime = {},
 ): Promise<TaskPlan> {
   const systemPrompt = `You are a task planning expert. Break down user requests into clear, sequential subtasks.
 
@@ -55,15 +63,18 @@ User Request: ${userPrompt}
 Break this down into subtasks. Each task = one file or one logical unit. Respond with JSON only.`;
 
   try {
-    const apiKey = await getApiKey();
+    const protocol = runtime.protocol ?? config.get('protocol') as 'openai' | 'anthropic';
+    const provider = runtime.providerId ?? config.get('provider');
+    const model = runtime.model ?? config.get('model');
+    const apiKey = getApiKey(provider) || (isNoApiKeyProvider(provider) ? 'ollama' : '');
     if (!apiKey) {
       throw new Error('No API key configured');
     }
 
-    const protocol = config.get('protocol') as 'openai' | 'anthropic';
-    const provider = config.get('provider');
-    const model = config.get('model');
     const baseUrl = resolveBaseUrl(provider, protocol);
+    if (!baseUrl) {
+      throw new Error(`No API base URL configured for ${provider}`);
+    }
     const authHeaderType = getProviderAuthHeader(provider, protocol);
 
     const messages: Message[] = [
@@ -96,8 +107,14 @@ Break this down into subtasks. Each task = one file or one logical unit. Respond
     } else {
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
+    if (protocol === 'anthropic') {
+      headers['anthropic-version'] = '2023-06-01';
+    }
 
-    const response = await fetch(`${baseUrl}/chat/completions`, {
+    const endpoint = protocol === 'anthropic'
+      ? `${baseUrl}/v1/messages`
+      : `${baseUrl}/chat/completions`;
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify(requestBody),
