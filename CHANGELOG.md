@@ -11,6 +11,29 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.20.0] — 2026-08-20
+
+> GLM-5.3 reached Z.AI's pay-per-use API and now carries the rate they publish, instead of no price at all.
+
+### Added
+
+- **GLM-5.3 on the Z.AI pay-per-use API.** It shipped to GLM Coding Plan
+  subscribers first; the standalone model API accepts it as of 2026-08-19, so
+  it now appears on that roster too and is its default. The China gateway
+  (`z.ai-cn`, `z.ai-cn-api`) is a separate listing that Z.AI's page does not
+  cover, so it keeps the GLM-5.2 roster — offering an id a gateway rejects
+  would be a guaranteed 4xx.
+
+### Changed
+
+- **GLM-5.3 is priced at $1.40 / $4.40 per 1M tokens.** It was carried unpriced
+  by design: no per-token rate existed while the model was Coding-Plan only, and
+  borrowing GLM-5.2's would have been an invented number. Z.AI now publishes one,
+  and it happens to equal GLM-5.2's — a fact about today's price list, not a rule
+  linking the two. `/cost` and the dashboard stop showing pay-per-use GLM-5.3
+  traffic as free. Coding Plan usage is flat-fee and still reads "Included in
+  plan".
+
 ## [2.19.0] — 2026-08-19
 
 > Custom bots you can actually trust: pin a model, grant only the capabilities you choose, and scope a bot to the projects it belongs to — enforced at runtime across CLI, Mac, VS Code and the dashboard.

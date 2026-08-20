@@ -303,9 +303,11 @@ describe('getPricingTable', () => {
     expect(byModel.get('grok-4.6')).toMatchObject({ inputPer1M: 2, outputPer1M: 6 });
   });
 
-  it('leaves GLM-5.3 unpriced — Z.AI publishes no per-token rate', () => {
-    const ids = getPricingTable().map(e => e.model);
-    expect(ids).not.toContain('glm-5.3');
+  it('prices GLM-5.3 at the rate Z.AI publishes', () => {
+    // It was deliberately unpriced while the standalone API was "coming soon";
+    // the rate below is the one on docs.z.ai, not GLM-5.2's borrowed.
+    const byModel = new Map(getPricingTable().map(e => [e.model, e]));
+    expect(byModel.get('glm-5.3')).toMatchObject({ inputPer1M: 1.40, outputPer1M: 4.40 });
   });
 
   it('only contains models that also have context-window entries', () => {

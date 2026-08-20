@@ -127,9 +127,11 @@ export function getModelContextWindow(model: string): number {
 const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }> = {
   // Z.AI / ZhipuAI
   // Coding Plan is flat-fee; these official rates apply to pay-per-use.
-  // `glm-5.3` is GLM Coding Plan only — Z.AI publishes no per-token rate for it
-  // (the standalone model API is still "coming soon"), so it stays unpriced
-  // rather than borrowing GLM-5.2's.
+  // GLM-5.3 reached the standalone API on 2026-08-19 and is listed at the same
+  // rate as GLM-5.2 (docs.z.ai/guides/overview/pricing). Verified there, not
+  // inferred from the match — the two being equal today is a coincidence of the
+  // price list, not a rule.
+  'glm-5.3':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
   'glm-5.2':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
   'glm-5.1':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
   'glm-5-turbo':       { inputPer1M: 1.20,  outputPer1M: 4.00 },

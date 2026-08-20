@@ -64,9 +64,10 @@ Last full review: **2026-08-15**
   peak figures — an over-estimate, deliberately, per rule 5.
 - **Gemini 3.6 / 3.7 Flash run a promotional $0.75/$3.75 through 2026-12-31**,
   stepping back to $1.50/$7.50 on 2027-01-01. Revisit both together.
-- **GLM-5.3 has no published per-token rate** — Coding Plan only, standalone API
-  still "coming soon". It is exempted in the CLI's pricing/context lockstep test
-  rather than given a borrowed price.
+- **GLM-5.3 was unpriced until 2026-08-19**, when it reached the standalone API
+  and appeared on the pay-per-use price list at $1.40/$4.40 — the same figures as
+  GLM-5.2, read off the page rather than inherited from it. The China gateway
+  (`z.ai-cn*`) is a separate listing and still carries only the 5.2 roster.
 
 ## Official source index
 

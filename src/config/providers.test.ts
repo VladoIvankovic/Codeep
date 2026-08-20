@@ -302,12 +302,15 @@ describe('providers', () => {
       expect(modelRejectsSamplingParams('gemini-3.6-flash')).toBe(false);
       expect(modelSupportsReasoningEffort('google', 'gemini-3.7-flash')).toBe(true);
     });
-    it('lists GLM-5.3 on the Coding Plan provider ONLY (never pay-per-use)', () => {
-      // Z.AI's standalone model API does not accept glm-5.3 yet, so leaking it
-      // into a pay-per-use roster would hand users a guaranteed 4xx.
-      expect(getProvider('z.ai')!.models.map(m => m.id)).toContain('glm-5.3');
-      expect(getProvider('z.ai')!.defaultModel).toBe('glm-5.3');
-      for (const id of ['z.ai-api', 'z.ai-cn', 'z.ai-cn-api']) {
+    it('lists GLM-5.3 on the international rosters, not the China ones', () => {
+      // It reached the standalone pay-per-use API on 2026-08-19. The China
+      // platform bills separately and its listing has not been checked, so
+      // leaking it there would still hand users a guaranteed 4xx.
+      for (const id of ['z.ai', 'z.ai-api']) {
+        expect(getProvider(id)!.models.map(m => m.id), id).toContain('glm-5.3');
+        expect(getProvider(id)!.defaultModel, id).toBe('glm-5.3');
+      }
+      for (const id of ['z.ai-cn', 'z.ai-cn-api']) {
         expect(getProvider(id)!.models.map(m => m.id), id).not.toContain('glm-5.3');
       }
     });
@@ -354,7 +357,6 @@ describe('providers', () => {
       const UNPRICED_BY_DESIGN = new Set([
         'kimi-k2.7-code-highspeed', // Moonshot publishes no distinct high-speed rate
         'qwen3.8-max-preview',      // Token-Plan credits only; no pay-per-use rate published
-        'glm-5.3',                  // GLM Coding Plan only; Z.AI publishes no per-token rate
       ]);
       const priced = new Set(getPricingTable().map(entry => entry.model));
 

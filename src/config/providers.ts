@@ -68,8 +68,6 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      // GLM-5.3 is Coding-Plan only — the standalone pay-per-use API does not
-      // accept it yet, so it must NOT be copied into `z.ai-api`.
       { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
       { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant, available to all users' },
@@ -99,10 +97,15 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest flagship for project-scale engineering (1M context)' },
+      // GLM-5.3 reached the standalone pay-per-use API on 2026-08-19 and is
+      // priced on docs.z.ai/guides/overview/pricing. The China platform
+      // (`z.ai-cn*`) bills separately and is not covered by that page, so it is
+      // left alone until its own listing is checked.
+      { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
+      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant' },
     ],
-    defaultModel: 'glm-5.2',
+    defaultModel: 'glm-5.3',
     defaultProtocol: 'openai',
     maxOutputTokens: 131_072,
     envKey: 'ZAI_API_KEY',
