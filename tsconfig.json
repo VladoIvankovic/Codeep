@@ -5,6 +5,11 @@
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
     "strict": true,
+    // Zero violations when enabled on 2026-08-20, so these cost nothing today
+    // and fail the build the first time someone writes a switch case that
+    // falls through or a branch that forgets to return.
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
