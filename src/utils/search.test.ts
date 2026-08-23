@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { searchMessages, type SearchResult } from './search';
+import { searchMessages } from './search';
 import type { Message } from '../config/index';
 
 function msg(role: 'user' | 'assistant', content: string): Message {

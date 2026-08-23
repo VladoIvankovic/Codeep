@@ -13,7 +13,6 @@ import {
   listSessionsWithInfo,
   startNewSession,
   loadSession,
-  getCurrentSessionId,
   saveSession,
   initializeAsProject,
   isManuallyInitializedProject,

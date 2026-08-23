@@ -3,7 +3,7 @@
  */
 
 import { Screen } from '../Screen';
-import { fg, style } from '../ansi';
+import { style } from '../ansi';
 import { PRIMARY_COLOR, LOGO_LINES as LOGO } from './uiConstants';
 
 const TAGLINE = 'Deep into Code.';

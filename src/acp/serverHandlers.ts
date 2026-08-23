@@ -22,7 +22,6 @@ import type {
   SetSessionConfigOptionParams,
   ListSessionsParams, ListSessionsResult, AcpSessionInfo,
   DeleteSessionParams,
-  SessionModeState, SessionConfigOption,
 } from './protocol.js';
 import { AGENT_MODES, buildConfigOptions } from './server.js';
 import type { AcpSession } from './commands.js';

@@ -2,10 +2,10 @@
  * Code Review Mode - AI-powered code review
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join, extname, relative } from 'path';
 import { ProjectContext } from './project';
-import { getGitDiff, getChangedFiles } from './git';
+import { getChangedFiles } from './git';
 import { loadReviewConfig, globToRegExp } from './reviewConfig';
 
 export interface ReviewIssue {

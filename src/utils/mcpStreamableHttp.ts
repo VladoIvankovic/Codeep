@@ -40,10 +40,6 @@ export class StreamableHttpClient {
   private notificationAbort: AbortController | null = null;
   private stopped = false;
   /** True after the server has set a session id (i.e. it tracks state). */
-  private get hasServerSession(): boolean {
-    return this.sessionId !== null;
-  }
-
   constructor(private readonly opts: StreamableHttpOptions) {}
 
   /**

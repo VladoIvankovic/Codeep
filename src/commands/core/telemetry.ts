@@ -6,7 +6,7 @@
 // surface's job; this returns plain-data CommandResults.
 
 import { config, isTelemetryEnabled, telemetryForcedOffByEnv } from '../../config/index';
-import { ok, warn, info, error, type CommandResult } from './index';
+import { ok, warn, info, type CommandResult } from './index';
 
 export function telemetryCommand(args: string[]): CommandResult {
   const sub = args[0]?.toLowerCase();

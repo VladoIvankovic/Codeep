@@ -26,14 +26,12 @@ export interface LoginOptions {
  */
 export class LoginScreen {
   private screen: Screen;
-  private input: Input;
   private editor: LineEditor;
   private options: LoginOptions;
   private showKey = false;
   
   constructor(screen: Screen, input: Input, options: LoginOptions) {
     this.screen = screen;
-    this.input = input;
     this.editor = new LineEditor();
     this.options = options;
   }

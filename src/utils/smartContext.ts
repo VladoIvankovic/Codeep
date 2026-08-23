@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, statSync } from 'fs';
 import { join, dirname, basename, extname, relative } from 'path';
 import { ProjectContext } from './project';
-import { loadIgnoreRules, isIgnored, IgnoreRules } from './gitignore';
+import { loadIgnoreRules, isIgnored } from './gitignore';
 import { logger } from './logger';
 
 export interface RelatedFile {
@@ -28,25 +28,6 @@ const MAX_CONTEXT_SIZE = 50000;
 const MAX_FILES = 15;
 
 // File extensions we care about
-const CODE_EXTENSIONS = new Set([
-  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
-  '.py', '.pyw',
-  '.go',
-  '.rs',
-  '.php', '.phtml',
-  '.java', '.kt', '.scala',
-  '.cs', '.fs',
-  '.rb',
-  '.swift',
-  '.c', '.cpp', '.h', '.hpp',
-  '.vue', '.svelte',
-  '.css', '.scss', '.less',
-  '.html', '.htm',
-  '.json', '.yaml', '.yml', '.toml',
-  '.sql',
-  '.md',
-]);
-
 /**
  * Extract imports/requires from file content
  */

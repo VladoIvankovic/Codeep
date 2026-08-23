@@ -89,12 +89,11 @@ export function parseFrontmatter(raw: string): ParsedFrontmatter {
 
   const meta: Record<string, unknown> = {};
   const lines = match[1].split('\n');
-  let currentKey: string | null = null;
   let currentList: string[] | null = null;
 
   for (const rawLine of lines) {
     const line = rawLine.replace(/\s+$/, '');
-    if (!line.trim()) { currentKey = null; currentList = null; continue; }
+    if (!line.trim()) { currentList = null; continue; }
 
     // Block-list item: `  - foo`
     const listItem = line.match(/^\s+-\s+(.*)$/);
@@ -111,7 +110,6 @@ export function parseFrontmatter(raw: string): ParsedFrontmatter {
 
     if (value === '') {
       // Empty → expecting a block list below
-      currentKey = key;
       currentList = [];
       meta[key] = currentList;
       continue;
@@ -125,7 +123,6 @@ export function parseFrontmatter(raw: string): ParsedFrontmatter {
       value = stripQuotes(value);
     }
     meta[key] = value;
-    currentKey = null;
     currentList = null;
   }
   return { meta, body: match[2].trimStart() };

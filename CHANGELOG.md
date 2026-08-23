@@ -11,6 +11,44 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.21.0] — 2026-08-21
+
+> Agents you delete on the dashboard now disappear from your machines, sync says when it failed instead of going quiet, and a dependency advisory is closed.
+
+### Added
+
+- **Deleting an agent on codeep.dev now reaches your machines.** It never did:
+  the pull loop only iterated what the server returned, so a bot removed on the
+  dashboard stayed on every client forever. The server now sends an explicit
+  tombstone list and the CLI applies it — backing each file up to
+  `~/.codeep/backups/personalities/` before removing it. Absence from the
+  payload still means nothing at all: an expired session, the wrong account or
+  a truncated response all produce an empty payload, and deleting on absence
+  would wipe every local agent. Project-scoped agents in
+  `.codeep/personalities/` are not cloud-owned and are never touched.
+
+### Changed
+
+- **Sync failures no longer look like success.** Every failure path returned
+  `null` and the caller printed only when something changed, so a dead network,
+  an expired token and "nothing new" were all the same silence. Pulls and pushes
+  now report which of the four happened — not linked, unreachable, rejected, or
+  a response this version can't read — and say "already up to date" when that is
+  the truth.
+
+### Fixed
+
+- **A high-severity advisory in `js-yaml`.** Patch-level bump, one call site.
+  The CLI's production dependencies now report zero advisories.
+
+### Removed
+
+- **A dead full-screen permission picker**, superseded by the in-app overlay and
+  unreachable since. Its component and tests went with it — 142 lines that
+  looked alive and had passing tests. `noUnusedLocals` is now on: it is the
+  check that would have caught `reportTurnStats` shipping dead in 2.18.1, and it
+  caught an unwired function inside an hour of being enabled.
+
 ## [2.20.0] — 2026-08-20
 
 > GLM-5.3 reached Z.AI's pay-per-use API and now carries the rate they publish, instead of no price at all.

@@ -1,11 +1,11 @@
 import * as http from 'node:http';
 import * as https from 'node:https';
 import { Message, config, getApiKey, resolveBaseUrl } from '../config/index';
-import { withRetry, isNetworkError, isTimeoutError } from '../utils/retry';
+import { withRetry, isNetworkError } from '../utils/retry';
 import { checkApiRateLimit } from '../utils/ratelimit';
 import { ProjectContext } from '../utils/project';
 import { getProvider, getProviderBaseUrl, getProviderAuthHeader, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, reasoningParamsFor, type ReasoningTier } from '../config/providers';
-import { logApiRequest, logApiResponse, logAppError } from '../utils/logger';
+import { logApiRequest, logApiResponse } from '../utils/logger';
 import { loadProjectIntelligence, generateContextFromIntelligence, ProjectIntelligence } from '../utils/projectIntelligence';
 import { loadProjectRules } from '../utils/agent';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from '../utils/tokenTracker';

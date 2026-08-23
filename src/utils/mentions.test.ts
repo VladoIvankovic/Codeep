@@ -13,7 +13,6 @@ import {
   expandFileAndFolderMentions,
   extractGitMentions,
   MAX_MENTION_BYTES,
-  MAX_FOLDER_BYTES,
 } from './mentions';
 
 // ─── Test sandbox ─────────────────────────────────────────────────────────────

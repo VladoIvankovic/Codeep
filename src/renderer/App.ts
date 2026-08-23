@@ -7,7 +7,7 @@ import { Screen } from './Screen';
 import { Input, LineEditor, KeyEvent } from './Input';
 import { fg, style } from './ansi';
 import { getActionColor, formatActionTarget, getActionLabel } from './components/ActionFormatting';
-import { PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES, LOGO_HEIGHT } from './components/uiConstants';
+import { PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES } from './components/uiConstants';
 import { bottomPanelHeight, chatLayout, messageOffsets, scrollOffsetForTarget, scrollWindow, formatTokenCount, statusBarRightHint, activePanel, computeInputDisplay, agentProgressBar, truncateNotification, shouldShowPasteDialog, buildPasteInfo, type LayoutSnapshot } from './layout';
 import {
   buildAgentTimelineModel,
@@ -30,7 +30,6 @@ import {
 } from './handlers';
 import clipboardy from 'clipboardy';
 import { readImageFromClipboard } from '../utils/clipboard.js';
-import { spawn } from 'child_process';
 import { estimateResourceImpact, formatResourceImpact } from '../utils/resourceImpact';
 
 // (PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES, LOGO_HEIGHT moved to
@@ -1613,7 +1612,6 @@ export class App {
       mentionItemCount: this.mention.items.length,
     } satisfies LayoutSnapshot);
     const layout = chatLayout(height, panelHeight);
-    const mainHeight = layout.mainHeight;
     const headerHeight = width >= 60 && height >= 16 ? 2 : 0;
     const messagesStart = Math.min(layout.messagesEnd, headerHeight);
     const messagesEnd = layout.messagesEnd;

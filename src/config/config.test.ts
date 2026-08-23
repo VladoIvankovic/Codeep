@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -67,7 +67,7 @@ describe('config utilities', () => {
     });
 
     it('should have display names for all languages', () => {
-      for (const [code, name] of Object.entries(LANGUAGES)) {
+      for (const [, name] of Object.entries(LANGUAGES)) {
         expect(typeof name).toBe('string');
         expect(name.length).toBeGreaterThan(0);
       }

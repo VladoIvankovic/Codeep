@@ -53,7 +53,6 @@ export function generateDiff(
   let oldIdx = 0;
   let newIdx = 0;
   let currentHunk: DiffHunk | null = null;
-  let pendingContext: DiffLine[] = [];
   
   for (const [oldMatch, newMatch] of lcs) {
     // Handle deletions

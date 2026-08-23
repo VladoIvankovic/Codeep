@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 // Guards for the P0 rate-limit wiring (see CHANGELOG 2.18.2):
 //   - api/chat() must throw before any HTTP request when the API limiter blocks

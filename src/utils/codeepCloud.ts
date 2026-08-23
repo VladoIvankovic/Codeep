@@ -341,6 +341,49 @@ function writeFileBundle(kind: 'personalities' | 'commands', items: Record<strin
  * file so web edits actually take effect, but every divergent local body is
  * first copied to ~/.codeep/backups/personalities/. */
 let lastPersonalityPullBackupCount = 0;
+/** Copy an about-to-be-replaced-or-removed personality into the backup dir.
+ *  Shared so a deletion is backed up by exactly the same rules as an overwrite
+ *  — nothing local is ever lost without a copy first. */
+function backupLocalPersonality(name: string, body: string): void {
+  const backupDir = join(homedir(), '.codeep', 'backups', 'personalities');
+  if (!existsSync(backupDir)) mkdirSync(backupDir, { recursive: true });
+  const suffix = new Date().toISOString().replace(/[:.]/g, '-');
+  let backupPath = join(backupDir, `${name}-${suffix}.md`);
+  let collision = 1;
+  while (existsSync(backupPath)) {
+    backupPath = join(backupDir, `${name}-${suffix}-${collision++}.md`);
+  }
+  writeFileSync(backupPath, body);
+  lastPersonalityPullBackupCount++;
+}
+
+/** Apply the server's explicit deletion list.
+ *
+ *  Only names the server named. Absence from `items` is deliberately NOT a
+ *  deletion signal: an expired session, the wrong account, or a truncated
+ *  response all yield an empty `items`, and deleting on absence would wipe
+ *  every local agent. Project-scoped agents in `.codeep/personalities/` are
+ *  not cloud-owned and are never touched — only the global directory is.
+ *  Every removal is backed up first, and a failed backup cancels the delete. */
+function applyPersonalityTombstones(deleted: readonly string[]): number {
+  const dir = globalDir('personalities');
+  if (!existsSync(dir)) return 0;
+  let removed = 0;
+  for (const name of deleted) {
+    if (typeof name !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(name) || name.length > 64) continue;
+    const filePath = join(dir, `${name}.md`);
+    if (!existsSync(filePath)) continue;
+    try {
+      backupLocalPersonality(name, readFileSync(filePath, 'utf8'));
+      unlinkSync(filePath);
+      removed++;
+    } catch {
+      // A failed backup must not become a deletion — leave the file alone.
+    }
+  }
+  return removed;
+}
+
 function writePulledPersonalityBundle(items: Record<string, string>): number {
   lastPersonalityPullBackupCount = 0;
   const dir = globalDir('personalities');
@@ -354,16 +397,7 @@ function writePulledPersonalityBundle(items: Record<string, string>): number {
       if (existsSync(filePath)) {
         const local = readFileSync(filePath, 'utf8');
         if (local === body) continue;
-        const backupDir = join(homedir(), '.codeep', 'backups', 'personalities');
-        if (!existsSync(backupDir)) mkdirSync(backupDir, { recursive: true });
-        let suffix = new Date().toISOString().replace(/[:.]/g, '-');
-        let backupPath = join(backupDir, `${name}-${suffix}.md`);
-        let collision = 1;
-        while (existsSync(backupPath)) {
-          backupPath = join(backupDir, `${name}-${suffix}-${collision++}.md`);
-        }
-        writeFileSync(backupPath, local);
-        lastPersonalityPullBackupCount++;
+        backupLocalPersonality(name, local);
       }
       // Same-directory rename is atomic on supported local filesystems: a
       // crash cannot leave a half-written active personality.
@@ -381,34 +415,70 @@ function writePulledPersonalityBundle(items: Record<string, string>): number {
   return written;
 }
 
-async function pullBundle(kind: 'personalities' | 'commands'): Promise<number | null> {
-  const syncToken = getSyncToken();
-  if (!syncToken) return null;
-  const res = await fetchWithRetry(`${API_BASE}/api/${kind}`, { headers: { 'x-sync-token': syncToken } });
-  if (!res?.ok) return null;
-  try {
-    const data = await res.json() as { ok: boolean; items: Record<string, string> };
-    if (!data.ok) return null;
-    return kind === 'personalities'
-      ? writePulledPersonalityBundle(data.items ?? {})
-      : writeFileBundle(kind, data.items ?? {});
-  } catch {
-    return null;
+/** Why a sync attempt produced nothing. Reported so a silent failure cannot
+ *  look like a successful no-op — the two were indistinguishable when every
+ *  path returned `null`, and a user watching `codeep account sync` print
+ *  nothing had no way to tell which had happened. */
+export type SyncFailure =
+  | 'not-linked'    // no sync token — the account was never linked
+  | 'unreachable'   // request failed, timed out, or the server answered non-2xx
+  | 'rejected'      // the server answered, but with ok:false
+  | 'malformed';    // the response was not the JSON we expect
+
+/** Success carries a count (which may legitimately be 0 — nothing new), plus
+ *  how many local agents the server's tombstone list removed. */
+export type SyncResult =
+  | { ok: true; count: number; removed: number }
+  | { ok: false; reason: SyncFailure };
+
+export function describeSyncFailure(reason: SyncFailure): string {
+  switch (reason) {
+    case 'not-linked':  return 'not linked to codeep.dev — run: codeep account';
+    case 'unreachable': return "couldn't reach codeep.dev";
+    case 'rejected':    return 'codeep.dev refused the request — try signing in again';
+    case 'malformed':   return 'codeep.dev sent a response this version cannot read';
   }
 }
 
-async function pushBundle(kind: 'personalities' | 'commands'): Promise<number | null> {
+async function pullBundle(kind: 'personalities' | 'commands'): Promise<SyncResult> {
   const syncToken = getSyncToken();
-  if (!syncToken) return null;
+  if (!syncToken) return { ok: false, reason: 'not-linked' };
+  const res = await fetchWithRetry(`${API_BASE}/api/${kind}`, { headers: { 'x-sync-token': syncToken } });
+  if (!res?.ok) return { ok: false, reason: 'unreachable' };
+  try {
+    const data = await res.json() as {
+      ok: boolean;
+      items: Record<string, string>;
+      deleted?: unknown;
+    };
+    if (!data.ok) return { ok: false, reason: 'rejected' };
+    const count = kind === 'personalities'
+      ? writePulledPersonalityBundle(data.items ?? {})
+      : writeFileBundle(kind, data.items ?? {});
+    // A missing `deleted` field means "no deletions" — never "delete
+    // everything". Older servers simply omit it, and a client that treated the
+    // omission as a full tombstone list would empty the user's agent folder.
+    const removed = kind === 'personalities' && Array.isArray(data.deleted)
+      ? applyPersonalityTombstones(data.deleted as string[])
+      : 0;
+    return { ok: true, count, removed };
+  } catch {
+    return { ok: false, reason: 'malformed' };
+  }
+}
+
+async function pushBundle(kind: 'personalities' | 'commands'): Promise<SyncResult> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return { ok: false, reason: 'not-linked' };
   const items = readFileBundle(kind);
   const count = Object.keys(items).length;
-  if (count === 0) return 0;
+  if (count === 0) return { ok: true, count: 0, removed: 0 };
   const res = await fetchWithRetry(`${API_BASE}/api/${kind}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
     body: JSON.stringify({ items }),
   });
-  return res?.ok ? count : null;
+  return res?.ok ? { ok: true, count, removed: 0 } : { ok: false, reason: 'unreachable' };
 }
 
 export const pullPersonalities = () => pullBundle('personalities');
@@ -754,3 +824,4 @@ export const _globalDirForTest = globalDir;
 export const _readFileBundleForTest = readFileBundle;
 export const _writeFileBundleForTest = writeFileBundle;
 export const _writePulledPersonalityBundleForTest = writePulledPersonalityBundle;
+export const _applyPersonalityTombstonesForTest = applyPersonalityTombstones;

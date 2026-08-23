@@ -7,8 +7,6 @@ import {
   parseAnthropicToolCalls,
   createActionLog,
   AGENT_TOOLS,
-  OpenAITool,
-  AnthropicTool,
   ToolCall,
   ToolResult,
 } from './tools';

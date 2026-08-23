@@ -10,6 +10,10 @@
     // falls through or a branch that forgets to return.
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
+    // Turned on after clearing 68 violations. It is the flag that would have
+    // caught reportTurnStats shipping dead in 2.18.1 — the helper was written,
+    // never called, and tsc stayed silent for a whole release.
+    "noUnusedLocals": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,

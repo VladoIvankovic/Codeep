@@ -2,7 +2,6 @@
  * Box drawing utilities for borders, frames, modals
  */
 
-import { fg, style } from '../ansi';
 
 // Box drawing characters (Unicode)
 export const boxChars = {

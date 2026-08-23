@@ -39,7 +39,7 @@ describe('providers', () => {
     });
 
     it('should have valid structure for all providers', () => {
-      for (const [id, provider] of Object.entries(PROVIDERS)) {
+      for (const [, provider] of Object.entries(PROVIDERS)) {
         expect(provider.name).toBeDefined();
         expect(typeof provider.name).toBe('string');
         expect(provider.description).toBeDefined();

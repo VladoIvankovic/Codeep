@@ -2,14 +2,10 @@
  * Settings screen component
  */
 
-import { Screen } from '../Screen';
-import { fg, style } from '../ansi';
 import { config, type ConfigSchema } from '../../config/index';
 import { updateRateLimits } from '../../utils/ratelimit';
 
 // Primary color: #f02a30 (Codeep red)
-const PRIMARY_COLOR = fg.rgb(240, 42, 48);
-const PRIMARY_BRIGHT = fg.rgb(255, 80, 85);
 
 export interface SettingItem {
   /** Must be a known config key — typed as `keyof ConfigSchema` so adding a
@@ -321,15 +317,6 @@ export interface SettingsState {
 /**
  * Format value for display
  */
-function formatValue(setting: SettingItem): string {
-  const value = setting.getValue();
-  if (setting.type === 'select' && setting.options) {
-    const option = setting.options.find(o => o.value === value);
-    return option ? option.label : String(value);
-  }
-  return String(value);
-}
-
 /**
  * Handle settings key
  * Returns: { handled: boolean, close: boolean, notify?: string }

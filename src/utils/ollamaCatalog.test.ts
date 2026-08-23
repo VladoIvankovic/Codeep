@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   OLLAMA_CODING_MODELS,
   catalogAgentHint,
-  type OllamaCatalogEntry,
 } from './ollamaCatalog';
 
 describe('OLLAMA_CODING_MODELS', () => {

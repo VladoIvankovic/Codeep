@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { formatWelcomeMessage } from './WelcomeFormatter';
 import { PRIMARY_COLOR } from './uiConstants';
-import { fg, style } from '../ansi';
+import { fg } from '../ansi';
 
 describe('formatWelcomeMessage', () => {
   it('renders a blank line as an empty line and keeps the trailing newline', () => {

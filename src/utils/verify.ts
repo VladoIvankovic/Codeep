@@ -6,7 +6,6 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { executeCommandAsync } from './shell';
-import { ProjectContext } from './project';
 
 export interface VerifyResult {
   success: boolean;

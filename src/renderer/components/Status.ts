@@ -4,7 +4,6 @@
 
 import { Screen } from '../Screen';
 import { fg, style } from '../ansi';
-import { createBox, centerBox } from './Box';
 import { PRIMARY_COLOR } from './uiConstants';
 
 export interface StatusInfo {

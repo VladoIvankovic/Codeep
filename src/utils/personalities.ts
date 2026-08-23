@@ -675,7 +675,6 @@ export function isPersonalityToolCallAllowed(
   if (WEB_TOOLS.includes(tool)) return personality.tools?.includes('web') === true;
   if (tool === 'execute_command') {
     if (personality.tools?.includes('terminal')) return true;
-    const command = commandName(toolCall);
     if (personality.tools?.includes('git') && isRestrictedGitCommandAllowed(toolCall)) return true;
     if (personality.tools?.includes('tests') && isTestCommand(toolCall)) return true;
     return false;

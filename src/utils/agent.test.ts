@@ -122,6 +122,9 @@ describe('loadProjectRules', () => {
 
     const result = loadProjectRules(projectRoot);
 
+    // The title promises this. Without it the test passes on any return value,
+    // and only proves which files were probed.
+    expect(result).toBe('');
     // Empty after trim, so should skip and check next candidate
     expect(mockExistsSync).toHaveBeenCalledWith(join(projectRoot, '.codeep', 'rules.md'));
     // Since the first file was empty (whitespace-only), it checks the second

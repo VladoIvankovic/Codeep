@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   handleLogoutKey,
   type LogoutState,
-  type LogoutCallbacks,
   type LogoutProvider,
 } from './Logout';
 import type { KeyEvent } from '../Input';

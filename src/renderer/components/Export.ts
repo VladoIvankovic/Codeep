@@ -7,7 +7,6 @@ import { fg, style } from '../ansi';
 import { KeyEvent } from '../Input';
 
 // Primary color: #f02a30 (Codeep red)
-const PRIMARY_COLOR = fg.rgb(240, 42, 48);
 
 export interface ExportState {
   exportOpen: boolean;

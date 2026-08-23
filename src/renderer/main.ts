@@ -11,16 +11,13 @@ import { Screen } from './Screen';
 import { Input, KeyEvent } from './Input';
 import { StatusInfo } from './components/Status';
 import { LoginScreen, renderProviderSelect } from './components/Login';
-import { renderPermissionScreen, getPermissionOptions, PermissionLevel } from './components/Permission';
 import { chat, setProjectContext } from '../api/index';
 import { getZaiVisionConfig, getMinimaxMcpConfig, callZaiVisionApi, callMinimaxApi } from '../utils/mcpIntegration';
 import {
   config,
-  isConfigured,
   loadApiKey,
   loadAllApiKeys,
   getCurrentProvider,
-  PROVIDERS,
   autoSaveSession,
   startNewSession,
   getCurrentSessionId,
@@ -49,7 +46,7 @@ import { reportStats, syncSession, generateProjectId } from '../utils/codeepClou
 import { expandFileAndFolderMentions, expandGitMentions } from '../utils/mentions';
 import { expandWebMentions } from '../utils/webFetch';
 import { handleCommand as dispatchCommand, AppCommandContext } from './commands';
-import { logger, logAppError } from '../utils/logger';
+import { logAppError } from '../utils/logger';
 import {
   executeAgentTask,
   runAgentTask,
@@ -447,44 +444,6 @@ async function showLoginFlow(): Promise<string | null> {
   });
 }
 
-// ─── Permission flow (full-screen, pre-app) ───────────────────────────────────
-
-async function showPermissionFlow(): Promise<PermissionLevel> {
-  return new Promise((resolve) => {
-    const screen = new Screen();
-    const input = new Input();
-
-    let selectedIndex = 0;
-    const options = getPermissionOptions();
-    const isProject = isProjectDirectory(projectPath);
-    const currentPermission: PermissionLevel = hasWritePermission(projectPath)
-      ? 'write'
-      : hasReadPermission(projectPath)
-        ? 'read'
-        : 'none';
-
-    screen.init();
-    input.start();
-
-    const cleanup = () => { input.stop(); screen.cleanup(); };
-    const render = () => {
-      renderPermissionScreen(screen, {
-        projectPath, isProject, currentPermission,
-        onSelect: () => {}, onCancel: () => {},
-      }, selectedIndex);
-    };
-
-    input.onKey((event: KeyEvent) => {
-      if (event.key === 'up') { selectedIndex = Math.max(0, selectedIndex - 1); render(); }
-      else if (event.key === 'down') { selectedIndex = Math.min(options.length - 1, selectedIndex + 1); render(); }
-      else if (event.key === 'enter') { cleanup(); resolve(options[selectedIndex]); }
-      else if (event.key === 'escape') { cleanup(); resolve('none'); }
-    });
-
-    render();
-  });
-}
-
 // ─── Session picker ───────────────────────────────────────────────────────────
 
 function showSessionPickerInline(): void {
@@ -611,15 +570,28 @@ Commands (in chat):
       // the user profile. Web-edited personalities replace their local copy
       // after a safety backup; commands/profile retain additive merge rules.
       const { pullPersonalities, pullCommands, pullUserProfile, getLastPersonalityPullBackupCount } = await import('../utils/codeepCloud.js');
-      const pCount = await pullPersonalities();
-      if (typeof pCount === 'number' && pCount > 0) {
-        console.log(`  Pulled ${pCount} personalit${pCount === 1 ? 'y' : 'ies'}.`);
+      // Report all three outcomes, not just the interesting one. Printing only
+      // on count > 0 made a failed sync look identical to a sync with nothing
+      // new — silence meant either, and the user could not tell which.
+      const { describeSyncFailure } = await import('../utils/codeepCloud.js');
+      const personalities = await pullPersonalities();
+      if (!personalities.ok) {
+        console.log(`  Could not pull agents — ${describeSyncFailure(personalities.reason)}.`);
+      } else if (personalities.count > 0) {
+        console.log(`  Pulled ${personalities.count} personalit${personalities.count === 1 ? 'y' : 'ies'}.`);
         const backups = getLastPersonalityPullBackupCount();
         if (backups > 0) console.log(`  Backed up ${backups} replaced local cop${backups === 1 ? 'y' : 'ies'} in ~/.codeep/backups/personalities/.`);
+      } else if (personalities.removed === 0) {
+        console.log('  Agents already up to date.');
       }
-      const cCount = await pullCommands();
-      if (typeof cCount === 'number' && cCount > 0) {
-        console.log(`  Pulled ${cCount} custom command${cCount === 1 ? '' : 's'}.`);
+      if (personalities.ok && personalities.removed > 0) {
+        console.log(`  Removed ${personalities.removed} agent${personalities.removed === 1 ? '' : 's'} deleted on codeep.dev (backed up first).`);
+      }
+      const commands = await pullCommands();
+      if (!commands.ok) {
+        console.log(`  Could not pull custom commands — ${describeSyncFailure(commands.reason)}.`);
+      } else if (commands.count > 0) {
+        console.log(`  Pulled ${commands.count} custom command${commands.count === 1 ? '' : 's'}.`);
       }
       const profPulled = await pullUserProfile();
       if (profPulled === 1) {
@@ -663,13 +635,18 @@ Commands (in chat):
 
       // Also push portable personal config — personalities + commands + profile.
       const { pushPersonalities, pushCommands, pushUserProfile } = await import('../utils/codeepCloud.js');
-      const pCount = await pushPersonalities();
-      if (typeof pCount === 'number' && pCount > 0) {
-        console.log(`  Pushed ${pCount} personalit${pCount === 1 ? 'y' : 'ies'}.`);
+      const { describeSyncFailure } = await import('../utils/codeepCloud.js');
+      const personalities = await pushPersonalities();
+      if (!personalities.ok) {
+        console.log(`  Could not push agents — ${describeSyncFailure(personalities.reason)}.`);
+      } else if (personalities.count > 0) {
+        console.log(`  Pushed ${personalities.count} personalit${personalities.count === 1 ? 'y' : 'ies'}.`);
       }
-      const cCount = await pushCommands();
-      if (typeof cCount === 'number' && cCount > 0) {
-        console.log(`  Pushed ${cCount} custom command${cCount === 1 ? '' : 's'}.`);
+      const commands = await pushCommands();
+      if (!commands.ok) {
+        console.log(`  Could not push custom commands — ${describeSyncFailure(commands.reason)}.`);
+      } else if (commands.count > 0) {
+        console.log(`  Pushed ${commands.count} custom command${commands.count === 1 ? '' : 's'}.`);
       }
       if (await pushUserProfile()) {
         console.log('  Pushed your profile (about you).');

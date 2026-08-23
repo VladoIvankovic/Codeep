@@ -14,7 +14,7 @@ vi.mock('fs', async (importOriginal) => {
   };
 });
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
 import { join } from 'path';
 import {
   scanProject,
@@ -29,7 +29,6 @@ const mockExistsSync = existsSync as ReturnType<typeof vi.fn>;
 const mockReadFileSync = readFileSync as ReturnType<typeof vi.fn>;
 const mockWriteFileSync = writeFileSync as ReturnType<typeof vi.fn>;
 const mockMkdirSync = mkdirSync as ReturnType<typeof vi.fn>;
-const mockStatSync = statSync as ReturnType<typeof vi.fn>;
 const mockReaddirSync = readdirSync as ReturnType<typeof vi.fn>;
 
 // Minimal valid intelligence object for testing generateContextFromIntelligence

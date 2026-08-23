@@ -3,7 +3,6 @@
  * Handles keypresses, special keys, and line editing
  */
 
-import * as readline from 'readline';
 
 export interface KeyEvent {
   key: string;
@@ -18,7 +17,6 @@ export type KeyHandler = (event: KeyEvent) => void;
 
 export class Input {
   private handlers: KeyHandler[] = [];
-  private rl: readline.Interface | null = null;
   private dataHandler: ((data: string) => void) | null = null;
   
   /**

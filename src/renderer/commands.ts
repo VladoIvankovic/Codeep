@@ -2003,7 +2003,6 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
 
     case 'profile': {
       const subCmd = args[0]?.toLowerCase();
-      const profileName = args[1] || args[0]; // /profile save name OR /profile name
 
       if (!subCmd || subCmd === 'list') {
         const profiles = listProfiles();
@@ -2054,9 +2053,9 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
 
     case 'sync': {
       const subCmd = args[0]?.toLowerCase() || 'all';
-      const { pushLearning, pullLearning, pushProfiles, pullProfiles } = await import('../utils/codeepCloud');
+      const { pushLearning, pushProfiles, pullProfiles } = await import('../utils/codeepCloud');
       const { getSyncToken } = await import('../config/index');
-      const { loadGlobalPreferences, saveGlobalPreferences } = await import('../utils/learning');
+      const { loadGlobalPreferences } = await import('../utils/learning');
 
       if (!getSyncToken()) {
         ctx.app.notify('Not linked to codeep.dev. Run: codeep account');

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // Mock fs and path modules before importing skills
 vi.mock('fs', async (importOriginal) => {

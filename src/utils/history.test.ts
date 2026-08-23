@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock fs before importing — preserve all original exports so transitive deps work
 vi.mock('fs', async (importOriginal) => {
@@ -21,7 +21,7 @@ vi.mock('os', () => ({
   homedir: vi.fn(() => '/home/test'),
 }));
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync, statSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, statSync, readdirSync } from 'fs';
 import {
   startSession,
   endSession,
@@ -33,7 +33,6 @@ import {
   getCurrentSession,
   undoLastAction,
   undoAllActions,
-  undoAction,
   getRecentSessions,
   getSession,
   formatSession,
@@ -44,8 +43,6 @@ const mockExistsSync = existsSync as ReturnType<typeof vi.fn>;
 const mockReadFileSync = readFileSync as ReturnType<typeof vi.fn>;
 const mockWriteFileSync = writeFileSync as ReturnType<typeof vi.fn>;
 const mockUnlinkSync = unlinkSync as ReturnType<typeof vi.fn>;
-const mockMkdirSync = mkdirSync as ReturnType<typeof vi.fn>;
-const mockRmSync = rmSync as ReturnType<typeof vi.fn>;
 const mockStatSync = statSync as ReturnType<typeof vi.fn>;
 const mockReaddirSync = readdirSync as ReturnType<typeof vi.fn>;
 

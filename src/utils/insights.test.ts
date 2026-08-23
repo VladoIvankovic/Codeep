@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, unlinkSync } from 'fs';
-import { tmpdir, homedir } from 'os';
+import { mkdirSync, writeFileSync, existsSync, readdirSync, unlinkSync } from 'fs';
+import { homedir } from 'os';
 import { join } from 'path';
 
 // We can't easily redirect homedir() at runtime, so insights.test seeds

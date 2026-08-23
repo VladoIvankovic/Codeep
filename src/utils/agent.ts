@@ -19,7 +19,6 @@ import {
   agentChat,
   getAgentSystemPrompt,
   getFallbackSystemPrompt,
-  TimeoutError,
   loadProjectRules,
   loadProgressLog,
   writeProgressLog,
@@ -74,7 +73,7 @@ import { supportsNativeTools } from '../config/providers';
 import { startSession, endSession, undoLastAction, undoAllActions, getCurrentSession, getRecentSessions, formatSession, ActionSession } from './history';
 import { runAllVerifications, formatErrorsForAgent, hasVerificationErrors, getVerificationSummary, VerifyResult } from './verify';
 import { gatherSmartContext, formatSmartContext, extractTargetFile } from './smartContext';
-import { planTasks, getNextTask, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
+import { planTasks, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
 import { getTaskContextPrompt } from './taskContext';
 import { getLastUsage, getModelContextWindow } from './tokenTracker';
 
@@ -338,7 +337,10 @@ export async function runAgent(
   // Start history session for undo support. Skipped for nested (delegated)
   // runs so we don't reset the parent's currentSession singleton — the
   // sub-agent's actions still record into the parent's open session.
-  const sessionId = opts.nested ? '' : startSession(prompt, projectContext.root || process.cwd());
+  // The return value is unused — startSession's point here is the side
+  // effect of opening the history session. Binding it hid that from
+  // noUnusedLocals, so the dead binding is gone and the call stays.
+  if (!opts.nested) startSession(prompt, projectContext.root || process.cwd());
   
   // Task planning phase (if enabled)
   // Use planning for complex keywords or multi-word prompts

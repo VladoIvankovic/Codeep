@@ -23,7 +23,7 @@
  * explicitly `/add` very large files if they really want them.
  */
 
-import { existsSync, statSync, readFileSync, readdirSync, type Dirent } from 'fs';
+import { statSync, readFileSync, readdirSync, type Dirent } from 'fs';
 import { join, isAbsolute, relative, resolve, sep } from 'path';
 
 /** Max file size we'll auto-inline from a mention (100 KB). */

@@ -922,13 +922,17 @@ export function startAcpServer(): Promise<void> {
       transport.error(msg.id, -32602, `Unknown sessionId: ${params.sessionId}`);
       return;
     }
-    const updated = await pullPersonalities();
-    if (updated === null) {
-      transport.error(msg.id, -32001, 'Personality sync failed or this device is not linked to codeep.dev.');
+    const { describeSyncFailure } = await import('../utils/codeepCloud.js');
+    const sync = await pullPersonalities();
+    if (!sync.ok) {
+      // The old contract collapsed every failure into one message that also
+      // covered "not linked", so a client could not tell an expired session
+      // from an unreachable server. Say which.
+      transport.error(msg.id, -32001, `Personality sync failed — ${describeSyncFailure(sync.reason)}.`);
       return;
     }
     const list = personalityListResult(params.sessionId)!;
-    const result: SyncPersonalitiesResult = { updated, ...list };
+    const result: SyncPersonalitiesResult = { updated: sync.count, ...list };
     transport.respond(msg.id, result);
   }
 

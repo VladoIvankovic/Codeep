@@ -5,7 +5,6 @@
 
 import { Screen } from '../Screen';
 import { fg, style } from '../ansi';
-import { config } from '../../config/index';
 
 // Primary color: #f02a30 (Codeep red)
 const PRIMARY_COLOR = fg.rgb(240, 42, 48);

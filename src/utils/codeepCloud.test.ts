@@ -8,6 +8,7 @@ import {
   _readFileBundleForTest,
   _writeFileBundleForTest,
   _writePulledPersonalityBundleForTest,
+  _applyPersonalityTombstonesForTest,
   getLastPersonalityPullBackupCount,
 } from './codeepCloud';
 
@@ -272,5 +273,72 @@ describe('cloud-authoritative personality pull', () => {
   it('rejects oversized cloud bodies', () => {
     expect(_writePulledPersonalityBundleForTest({ huge: 'x'.repeat(64 * 1024 + 1) })).toBe(0);
     expect(existsSync(join(tmpHome, '.codeep', 'personalities', 'huge.md'))).toBe(false);
+  });
+});
+
+describe('applyPersonalityTombstones', () => {
+  const REAL_HOME = homedir();
+  let tmpHome: string;
+  let dir: string;
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'codeep-tomb-'));
+    process.env.HOME = tmpHome;
+    dir = join(tmpHome, '.codeep', 'personalities');
+    mkdirSync(dir, { recursive: true });
+  });
+  afterEach(() => {
+    process.env.HOME = REAL_HOME;
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  const write = (name: string, body = `# ${name}\n`) => writeFileSync(join(dir, `${name}.md`), body);
+  const backups = () => {
+    const b = join(tmpHome, '.codeep', 'backups', 'personalities');
+    return existsSync(b) ? readdirSync(b) : [];
+  };
+
+  it('removes a tombstoned agent and backs it up first', () => {
+    write('retired', '# Retired\nbody\n');
+    expect(_applyPersonalityTombstonesForTest(['retired'])).toBe(1);
+    expect(existsSync(join(dir, 'retired.md'))).toBe(false);
+    const saved = backups();
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatch(/^retired-/);
+  });
+
+  it('leaves every other agent alone', () => {
+    write('keep-me');
+    write('retired');
+    _applyPersonalityTombstonesForTest(['retired']);
+    expect(existsSync(join(dir, 'keep-me.md'))).toBe(true);
+  });
+
+  // The whole reason tombstones exist: absence must never imply deletion, or a
+  // failed request that yields an empty payload would wipe the folder.
+  it('deletes nothing when handed an empty list', () => {
+    write('keep-me');
+    expect(_applyPersonalityTombstonesForTest([])).toBe(0);
+    expect(existsSync(join(dir, 'keep-me.md'))).toBe(true);
+  });
+
+  it('ignores names that never existed locally', () => {
+    expect(_applyPersonalityTombstonesForTest(['never-here'])).toBe(0);
+    expect(backups()).toHaveLength(0);
+  });
+
+  it('refuses names that could escape the personalities directory', () => {
+    const outside = join(tmpHome, '.codeep', 'secret.md');
+    writeFileSync(outside, 'do not touch');
+    for (const evil of ['../secret', '../../etc/passwd', 'a/../../b', '.hidden', 'UPPER']) {
+      expect(_applyPersonalityTombstonesForTest([evil])).toBe(0);
+    }
+    expect(existsSync(outside)).toBe(true);
+  });
+
+  it('ignores non-string entries rather than throwing', () => {
+    write('keep-me');
+    expect(_applyPersonalityTombstonesForTest([null, 42, {}] as unknown as string[])).toBe(0);
+    expect(existsSync(join(dir, 'keep-me.md'))).toBe(true);
   });
 });

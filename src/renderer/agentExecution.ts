@@ -6,14 +6,14 @@
  * global variables in main.ts.
  */
 
-import { App, Message } from './App';
+import { App } from './App';
 import { chat } from '../api/index';
 import { runAgent, AgentResult, PermissionOutcome } from '../utils/agent';
 import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
 import { getGitStatus, isGitRepository } from '../utils/git';
-import { getSessionStats, getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
+import { getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
 
 export function getActionType(toolName: string): string {
   return toolName.includes('write') ? 'write' :

@@ -349,7 +349,6 @@ export function generateCommitMessage(
   const hasWrites = actions.some(a => a.type === 'write');
   const hasEdits = actions.some(a => a.type === 'edit');
   const hasDeletes = actions.some(a => a.type === 'delete');
-  const hasCommands = actions.some(a => a.type === 'command');
   
   // Determine prefix
   let prefix = 'chore';
