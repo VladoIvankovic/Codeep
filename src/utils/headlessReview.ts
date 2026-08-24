@@ -1,3 +1,4 @@
+import { buildFixPlan, summariseFixPlan, type FixPlan } from './reviewFix.js';
 // Headless `codeep review` — a non-interactive entry point around the
 // deterministic reviewer in codeReview.ts. No API key, no TUI: it scans, prints
 // a report (markdown or JSON), and exits non-zero when issues at/above a chosen
@@ -27,6 +28,10 @@ export interface ReviewArgs {
   rules: boolean;
   ai: boolean;
   help: boolean;
+  /** Hand the findings to an agent and let it edit the working tree. */
+  fix: boolean;
+  /** Lowest severity the fix run may act on. Suggestions are never eligible. */
+  fixMinSeverity: 'error' | 'warning';
 }
 
 const FAIL_ON_VALUES: readonly FailOn[] = ['error', 'warning', 'info', 'none'];
@@ -47,6 +52,12 @@ Options:
   --json              Print the result as JSON instead of the markdown report
   --fail-on <level>   Exit non-zero when an issue at or above <level> is found:
                       error | warning | info | none   (default: error)
+  --fix               After the review, let an agent fix what it found. Edits the
+                      working tree and stops there — it never commits, branches
+                      or pushes. Runs under a files+tests boundary: no shell, no
+                      network, no git. Needs an API key.
+  --fix-min-severity  Lowest severity --fix may act on: error | warning
+                      (default: warning). Suggestions are never eligible.
   --rules             List the built-in rule ids (for "disable" in .codeep/review.*) and exit
   --ai                After the offline pass, ask your configured provider for a
                       contextual second opinion on the working-tree diff
@@ -57,7 +68,10 @@ Exit code: 0 when nothing at/above --fail-on is found, 1 otherwise.`;
 
 /** Parse `codeep review` argv (everything after the subcommand). Pure. */
 export function parseReviewArgs(argv: string[]): ReviewArgs {
-  const out: ReviewArgs = { files: [], json: false, failOn: 'error', rules: false, ai: false, help: false };
+  const out: ReviewArgs = {
+    files: [], json: false, failOn: 'error', rules: false, ai: false, help: false,
+    fix: false, fixMinSeverity: 'warning',
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--json') {
@@ -66,6 +80,14 @@ export function parseReviewArgs(argv: string[]): ReviewArgs {
       out.rules = true;
     } else if (arg === '--ai') {
       out.ai = true;
+    } else if (arg === '--fix') {
+      out.fix = true;
+    } else if (arg === '--fix-min-severity') {
+      const v = argv[++i];
+      if (v === 'error' || v === 'warning') out.fixMinSeverity = v;
+    } else if (arg.startsWith('--fix-min-severity=')) {
+      const v = arg.slice('--fix-min-severity='.length);
+      if (v === 'error' || v === 'warning') out.fixMinSeverity = v;
     } else if (arg === '-h' || arg === '--help') {
       out.help = true;
     } else if (arg === '--fail-on') {
@@ -116,6 +138,9 @@ export interface ReviewDeps {
   aiReview: (result: ReviewResult) => Promise<string | null>;
   /** Provider/model label for the AI section header. */
   aiMeta: () => { provider?: string; model?: string };
+  /** Run an agent over a fix plan. Returns a human summary, or null when it
+   *  could not run at all (no API key, provider unreachable). */
+  applyFixes: (plan: FixPlan) => Promise<string | null>;
 }
 
 /**
@@ -137,11 +162,26 @@ export async function runHeadlessReview(argv: string[], deps: ReviewDeps = defau
   const result = deps.review(args.files.length ? args.files : undefined);
   const aiText = args.ai ? await deps.aiReview(result) : null;
 
+  // Fixing happens after reporting, and never changes the exit code. CI decides
+  // pass or fail from what the reviewer found; whether an agent then managed to
+  // repair some of it is a separate question, and letting a successful fix turn
+  // a red check green would hide the finding rather than resolve it.
+  let fixSummary: string | null = null;
+  if (args.fix) {
+    const plan = buildFixPlan(result.issues, { minSeverity: args.fixMinSeverity });
+    fixSummary = plan.skipped ? summariseFixPlan(plan) : await deps.applyFixes(plan);
+  }
+
   if (args.json) {
-    deps.write(JSON.stringify(args.ai ? { ...result, aiReview: aiText } : result, null, 2));
+    deps.write(JSON.stringify({
+      ...result,
+      ...(args.ai ? { aiReview: aiText } : {}),
+      ...(args.fix ? { fix: fixSummary } : {}),
+    }, null, 2));
   } else {
     const md = formatReviewResult(result);
-    deps.write(args.ai ? appendAiSection(md, aiText, deps.aiMeta()) : md);
+    const withAi = args.ai ? appendAiSection(md, aiText, deps.aiMeta()) : md;
+    deps.write(fixSummary ? `${withAi}\n\n## Fix run\n\n${fixSummary}\n` : withAi);
   }
   return exitCodeForResult(result, args.failOn);
 }
@@ -166,6 +206,7 @@ function defaultDeps(): ReviewDeps {
     review: (files) => performCodeReview(minimalContext(cwd), files),
     write: (text) => process.stdout.write(text + '\n'),
     listRules: () => formatBuiltinRules(),
+    applyFixes: (plan) => runFixPlan(plan, minimalContext(cwd)),
     aiMeta: () => {
       try {
         return { provider: getCurrentProvider().name, model: String(config.get('model') || '') };
@@ -196,4 +237,43 @@ function defaultDeps(): ReviewDeps {
       }
     },
   };
+}
+
+/**
+ * Run a fix plan through the agent.
+ *
+ * The plan's personality is passed as the active one, so the same enforcement
+ * any custom bot gets applies here: the model is offered `files` and `tests`
+ * and nothing else. It edits the working tree and stops — branching, committing
+ * and opening a pull request belong to whatever called this, which in CI is the
+ * action that holds the token.
+ */
+async function runFixPlan(plan: FixPlan, context: ProjectContext): Promise<string | null> {
+  try {
+    const { runAgent } = await import('./agent.js');
+    // No cast here. `as never` on this call once hid the fact that
+    // personalityOverride did not exist, which would have run the CI fix with
+    // no boundary at all while the tests happily asserted otherwise.
+    const result = await runAgent(plan.prompt, context, {
+      personalityOverride: plan.personality,
+      maxIterations: 12,
+    });
+
+    const edited = new Set(
+      result.actions
+        .filter(a => a.type === 'write' || a.type === 'edit')
+        .map(a => a.target),
+    );
+    if (!result.success) {
+      return `${summariseFixPlan(plan)} The run did not finish: ${result.error ?? 'unknown error'}.`;
+    }
+    if (edited.size === 0) {
+      return `${summariseFixPlan(plan)} Nothing was changed — the agent judged the findings not mechanically fixable.`;
+    }
+    return `${summariseFixPlan(plan)} Edited ${edited.size} file${edited.size === 1 ? '' : 's'}: ${[...edited].join(', ')}.`;
+  } catch (error) {
+    // A missing key or an unreachable provider must not fail the review. The
+    // findings are already reported and the exit code already decided.
+    return `Could not run the fix: ${(error as Error).message}`;
+  }
 }

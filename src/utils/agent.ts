@@ -32,6 +32,7 @@ import { loadUserProfilePrompt } from './userProfile';
 import { beginAuditRun, endAuditRun, recordAuditEvent, describeAuditTarget } from './auditLog';
 import {
   getActivePersonality,
+  type Personality,
   getPersonalityToolAllowlist,
   isPersonalityToolCallAllowed,
   resolvePersonalityRuntimeModel,
@@ -230,6 +231,12 @@ export interface AgentOptions {
    *  sub-agent's tool actions still record into the parent's session, so undo
    *  spans delegation. */
   nested?: boolean;
+  /** Run under this capability boundary instead of whatever the user has
+   *  selected. Used by non-interactive callers that must pin the boundary
+   *  themselves — a CI fix, for example, runs files+tests regardless of the
+   *  machine's active bot. Enforced by the same gate as any other bot; this
+   *  chooses which one applies, never whether one does. */
+  personalityOverride?: Personality;
   /** Delegation depth. 0 = top-level orchestrator (gets the `delegate` tool);
    *  sub-agents run at depth 1 and cannot delegate further (v1). */
   depth?: number;
@@ -322,7 +329,7 @@ export async function runAgent(
 
   // A structured custom bot is resolved once per run. This keeps a cloud sync
   // or file edit from changing policy halfway through an in-flight request.
-  const activePersonality = getActivePersonality(projectContext.root);
+  const activePersonality = opts.personalityOverride ?? getActivePersonality(projectContext.root);
   const currentRuntime = {
     providerId: String(config.get('provider')),
     model: String(config.get('model')),

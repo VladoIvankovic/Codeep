@@ -478,6 +478,69 @@ import { readAuditRuns } from './auditLog';
 import { runAgent } from './agent';
 import { executeTool } from './tools';
 
+describe('personalityOverride', () => {
+  // The gap this closes: buildFixPlan produced a files+tests personality and
+  // the tests asserted it, but nothing checked runAgent honoured it. An `as
+  // never` cast hid that the option did not exist, so a CI fix would have run
+  // with no boundary while every test still passed.
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('refuses a tool the override did not grant', async () => {
+    // Behaviour, not shape: make the model ask for something outside the
+    // boundary and assert the run refuses it. Checking which tools were
+    // *offered* would pass even if the gate were gone.
+    mockAgentChat
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [{ tool: 'execute_command', parameters: { command: 'curl', args: ['evil.example'] } }],
+        usedNativeTools: true,
+      })
+      .mockResolvedValueOnce({ content: 'stopped', toolCalls: [], usedNativeTools: true });
+
+    const onToolResult = vi.fn();
+    await runAgent('fix it', { root: '/tmp/p', name: 'p', type: 'node', structure: '' } as never, {
+      personalityOverride: {
+        name: 'ci-fix', displayName: 'CI Fix', description: '', prompt: '',
+        scope: 'project', structured: true, restrictTools: true,
+        tools: ['files'], declaredTools: ['files'], projectScope: 'all',
+      } as never,
+      onToolResult,
+      maxIterations: 3,
+    });
+
+    const results = onToolResult.mock.calls.map(c => c[0]);
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].success).toBe(false);
+    expect(String(results[0].error)).toContain('blocked by custom bot');
+  });
+
+  it('a files-granted override can still write', async () => {
+    mockAgentChat
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [{ tool: 'read_file', parameters: { path: 'a.ts' } }],
+        usedNativeTools: true,
+      })
+      .mockResolvedValueOnce({ content: 'done', toolCalls: [], usedNativeTools: true });
+
+    const onToolResult = vi.fn();
+    await runAgent('read it', { root: '/tmp/p', name: 'p', type: 'node', structure: '' } as never, {
+      personalityOverride: {
+        name: 'ci-fix', displayName: 'CI Fix', description: '', prompt: '',
+        scope: 'project', structured: true, restrictTools: true,
+        tools: ['files'], declaredTools: ['files'], projectScope: 'all',
+      } as never,
+      onToolResult,
+      maxIterations: 3,
+    });
+
+    // read_file is inside the `files` grant, so whatever else happens to it,
+    // it must not be turned away by the boundary.
+    const errors = onToolResult.mock.calls.map(c => String(c?.[0]?.error ?? ''));
+    expect(errors.filter(e => e.includes('blocked by custom bot'))).toHaveLength(0);
+  });
+});
+
 describe('audit record wiring', () => {
   // The unit tests in auditLog.test.ts prove the module. This proves the wiring
   // — that runAgent actually opens a run, records what a tool did, and closes

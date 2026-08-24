@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import type { FixPlan } from './reviewFix';
 import {
   parseReviewArgs,
   exitCodeForResult,
@@ -24,7 +25,10 @@ function result(issues: Array<Pick<ReviewIssue, 'severity'>>): ReviewResult {
 
 describe('parseReviewArgs', () => {
   it('defaults to no files, markdown output, fail-on error', () => {
-    expect(parseReviewArgs([])).toEqual({ files: [], json: false, failOn: 'error', rules: false, ai: false, help: false });
+    expect(parseReviewArgs([])).toEqual({
+      files: [], json: false, failOn: 'error', rules: false, ai: false, help: false,
+      fix: false, fixMinSeverity: 'warning',
+    });
   });
 
   it('collects positional file arguments', () => {
@@ -56,6 +60,8 @@ describe('parseReviewArgs', () => {
       rules: false,
       ai: false,
       help: false,
+        fix: false,
+        fixMinSeverity: 'warning',
     });
   });
 });
@@ -82,7 +88,67 @@ describe('exitCodeForResult', () => {
   });
 });
 
+describe('--fix', () => {
+  it('parses the flag and its severity floor, in both forms', () => {
+    expect(parseReviewArgs(['--fix']).fix).toBe(true);
+    expect(parseReviewArgs(['--fix']).fixMinSeverity).toBe('warning');
+    expect(parseReviewArgs(['--fix', '--fix-min-severity', 'error']).fixMinSeverity).toBe('error');
+    expect(parseReviewArgs(['--fix', '--fix-min-severity=error']).fixMinSeverity).toBe('error');
+  });
+
+  it('ignores a nonsense severity rather than widening the default', () => {
+    expect(parseReviewArgs(['--fix-min-severity', 'suggestion']).fixMinSeverity).toBe('warning');
+    expect(parseReviewArgs(['--fix-min-severity=everything']).fixMinSeverity).toBe('warning');
+  });
+});
+
 describe('runHeadlessReview', () => {
+
+  // The exit code is the reviewer's verdict. Letting a successful fix turn a
+  // red check green would hide the finding rather than resolve it — the point
+  // of CI is that someone sees it.
+  it('never changes the exit code, however the fix goes', async () => {
+    const failing = result([{ severity: 'error' }]);
+    const withoutFix = await runHeadlessReview([], deps({ review: () => failing }).d);
+    const withFix = await runHeadlessReview(['--fix'], deps({ review: () => failing }).d);
+    expect(withoutFix).toBe(1);
+    expect(withFix).toBe(1);
+  });
+
+  it('does not call the agent at all when nothing is fixable', async () => {
+    const applyFixes = vi.fn(async (_plan: FixPlan) => 'should not happen');
+    const onlyOpinions = result([{ severity: 'suggestion' }]);
+    await runHeadlessReview(['--fix'], deps({ review: () => onlyOpinions, applyFixes }).d);
+    expect(applyFixes).not.toHaveBeenCalled();
+  });
+
+  it('hands the agent a plan bounded to files and tests', async () => {
+    const applyFixes = vi.fn(async (_plan: FixPlan) => 'done');
+    const failing = result([{ severity: 'error' }]);
+    await runHeadlessReview(['--fix'], deps({ review: () => failing, applyFixes }).d);
+
+    expect(applyFixes).toHaveBeenCalledOnce();
+    const plan = applyFixes.mock.calls[0]![0];
+    expect(plan.personality.tools).toEqual(['files', 'tests']);
+    expect(plan.personality.restrictTools).toBe(true);
+  });
+
+  it('reports the fix in the JSON payload without disturbing the rest', async () => {
+    const failing = result([{ severity: 'error' }]);
+    const d = deps({ review: () => failing, applyFixes: async () => 'Edited 1 file: a.ts.' });
+    await runHeadlessReview(['--fix', '--json'], d.d);
+    const payload = JSON.parse(d.writes.join(''));
+    expect(payload.fix).toBe('Edited 1 file: a.ts.');
+    expect(payload.issues).toHaveLength(1);
+  });
+
+  it('says nothing about fixing when --fix was not asked for', async () => {
+    const failing = result([{ severity: 'error' }]);
+    const d = deps({ review: () => failing });
+    await runHeadlessReview(['--json'], d.d);
+    expect(JSON.parse(d.writes.join(''))).not.toHaveProperty('fix');
+  });
+
   function deps(overrides: Partial<ReviewDeps> = {}) {
     const writes: string[] = [];
     const d: ReviewDeps = {
@@ -91,6 +157,7 @@ describe('runHeadlessReview', () => {
       listRules: vi.fn(() => 'eval-usage\ntodo-comment\nlong-file'),
       aiReview: vi.fn(async () => 'AI second opinion text'),
       aiMeta: () => ({ provider: 'Z.AI', model: 'glm-5.1' }),
+      applyFixes: vi.fn(async () => 'Edited 1 file: src/a.ts.'),
       ...overrides,
     };
     return { d, writes };
