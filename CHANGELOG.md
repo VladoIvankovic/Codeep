@@ -11,6 +11,30 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [Unreleased]
+
+> Every agent run now records what it touched — including the tool calls the capability boundary refused, which nothing recorded before.
+
+### Added
+
+- **`/audit` — what an agent actually did.** Each run appends to
+  `.codeep/audit/` in the project: one JSON line per event, one file per day.
+  It records reads and refusals, which `history.ts` does not, because that
+  journal exists to undo writes rather than to say what happened. The most
+  useful line is the one that never existed — a tool call the boundary
+  refused. A capability limit nothing records is one you have to take on faith.
+
+  File contents are deliberately absent. Undo already keeps them; a record you
+  might hand to someone else should not carry your source with it. Command
+  lines are kept, so treat the directory like shell history. `/audit off` stops
+  recording without deleting anything already written.
+
+### Changed
+
+- **`noUnusedLocals` earns its keep.** Turning it on in 2.21.0 caught a helper
+  written for this release and never wired — the same shape as `reportTurnStats`
+  shipping dead in 2.18.1, found this time within the hour.
+
 ## [2.21.0] — 2026-08-21
 
 > Agents you delete on the dashboard now disappear from your machines, sync says when it failed instead of going quiet, and a dependency advisory is closed.
