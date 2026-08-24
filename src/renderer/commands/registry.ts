@@ -239,6 +239,7 @@ export const COMMANDS: CommandDef[] = [
     usage: ['init [project]', 'learn [on|off]', 'sync', 'off', 'forget'],
   },
   { name: 'agents', description: 'List sub-agents the agent can delegate to (researcher / reviewer / tester / your own)', category: 'settings' },
+  { name: 'audit', description: 'What agents did in this project — runs, tools used, and anything the boundary refused', category: 'settings', usage: ['on', 'off'] },
   { name: 'insights', description: 'Activity summary — runs, files, tools, projects over the last N days (default 7)', category: 'settings', usage: ['--days N'] },
   { name: 'openrouter', description: 'OpenRouter routing prefs (prefer/ignore providers, fallbacks, privacy)', category: 'settings' },
 

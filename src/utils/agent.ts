@@ -29,6 +29,7 @@ import { ApiError } from '../api/index';
 import type { AgentChatResponse } from './agentChat';
 import type { AgentChatRuntime } from './agentChat';
 import { loadUserProfilePrompt } from './userProfile';
+import { beginAuditRun, endAuditRun, recordAuditEvent, describeAuditTarget } from './auditLog';
 import {
   getActivePersonality,
   getPersonalityToolAllowlist,
@@ -340,7 +341,17 @@ export async function runAgent(
   // The return value is unused — startSession's point here is the side
   // effect of opening the history session. Binding it hid that from
   // noUnusedLocals, so the dead binding is gone and the call stays.
-  if (!opts.nested) startSession(prompt, projectContext.root || process.cwd());
+  const auditRoot = projectContext.root || process.cwd();
+  if (!opts.nested) startSession(prompt, auditRoot);
+  // A delegated sub-agent records into the parent's run for the same reason it
+  // shares the parent's history session: its actions are part of what the run
+  // did, not a separate story. Only the top-level call opens a run.
+  let auditFailure: string | undefined;
+  const auditRun = opts.nested ? '' : beginAuditRun(auditRoot, {
+    prompt,
+    agent: activePersonality?.displayName,
+    capabilities: activePersonality?.declaredTools,
+  });
   
   // Task planning phase (if enabled)
   // Use planning for complex keywords or multi-word prompts
@@ -1010,6 +1021,13 @@ export async function runAgent(
           };
           opts.onToolResult?.(denied, toolCall);
           actions.push(createActionLog(toolCall, denied));
+          // The one event nothing recorded before. A boundary you cannot audit
+          // is a boundary you have to take on faith.
+          recordAuditEvent(auditRoot, {
+            ts: Date.now(), run: auditRun, tool: toolCall.tool, action: 'refused',
+            target: describeAuditTarget(toolCall), outcome: 'refused',
+            detail: `blocked by custom bot "${activePersonality.displayName}"; allowed: ${allowed}`,
+          });
           toolResults.push(`Tool ${toolCall.tool} is blocked by the active custom bot. Allowed capabilities: ${allowed}.`);
           continue;
         }
@@ -1117,6 +1135,14 @@ export async function runAgent(
         // Log action
         const actionLog = createActionLog(toolCall, toolResult);
         actions.push(actionLog);
+        // createActionLog already classified this; reuse its verdict rather than
+        // re-deriving the action type in a second place that could drift.
+        recordAuditEvent(auditRoot, {
+          ts: Date.now(), run: auditRun, tool: toolCall.tool, action: actionLog.type,
+          target: describeAuditTarget(toolCall),
+          outcome: toolResult.success ? 'ok' : 'error',
+          detail: toolResult.success ? undefined : toolResult.error,
+        });
 
         // ── Infinite loop detection for write/edit ──────────────────────────
         if (toolCall.tool === 'write_file' || toolCall.tool === 'edit_file') {
@@ -1323,6 +1349,13 @@ export async function runAgent(
                 };
                 opts.onToolResult?.(denied, toolCall);
                 actions.push(createActionLog(toolCall, denied));
+                // The one event nothing recorded before. A boundary you cannot audit
+                // is a boundary you have to take on faith.
+                recordAuditEvent(auditRoot, {
+                  ts: Date.now(), run: auditRun, tool: toolCall.tool, action: 'refused',
+                  target: describeAuditTarget(toolCall), outcome: 'refused',
+                  detail: `blocked by custom bot "${activePersonality.displayName}"`,
+                });
                 fixResults.push(`Tool ${toolCall.tool} blocked by the active custom bot.`);
                 continue;
               }
@@ -1346,6 +1379,14 @@ export async function runAgent(
               
               const actionLog = createActionLog(toolCall, toolResult);
               actions.push(actionLog);
+              // createActionLog already classified this; reuse its verdict rather than
+              // re-deriving the action type in a second place that could drift.
+              recordAuditEvent(auditRoot, {
+                ts: Date.now(), run: auditRun, tool: toolCall.tool, action: actionLog.type,
+                target: describeAuditTarget(toolCall),
+                outcome: toolResult.success ? 'ok' : 'error',
+                detail: toolResult.success ? undefined : toolResult.error,
+              });
               
               if (toolResult.success) {
                 const truncated = truncateToolResult(toolResult.output, toolCall.tool);
@@ -1404,6 +1445,7 @@ export async function runAgent(
 
   } catch (error) {
     const err = error as Error;
+    auditFailure = err.message;
     result = {
       success: false,
       iterations: iteration,
@@ -1415,7 +1457,13 @@ export async function runAgent(
   } finally {
     // End session and save history. Skipped for nested runs so we don't write
     // a separate session file or null out the parent's open session.
-    if (!opts.nested) endSession();
+    if (!opts.nested) {
+      endSession();
+      // In `finally`, so a run that throws still closes its record. An audit
+      // trail that only survives success is worth very little — the runs you
+      // most want to read are the ones that went wrong.
+      endAuditRun(auditRoot, auditRun, auditFailure ? 'error' : 'ok', auditFailure);
+    }
   }
 }
 

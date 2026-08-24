@@ -66,6 +66,12 @@ export interface ConfigSchema {
    *  user (reply language, style, stack, preferences). Default true; set false
    *  to keep the profile files but stop injecting them. Managed via `/me`. */
   userProfile: boolean;
+  /** Append a record of what each agent run touched to `.codeep/audit/`.
+   *  Reads and refusals included — `history.ts` records neither, because it
+   *  exists to undo writes rather than to say what happened. On unless set
+   *  false: a record you must remember to enable is not one you can rely on
+   *  having when you need it. */
+  auditLog: boolean;
   /** Auto-learn: at session save, run one LLM pass to extract durable facts /
    *  preferences about the user and merge them into `~/.codeep/profile.learned.md`
    *  (injected alongside the hand-written profile). OFF by default — opt in via
@@ -352,6 +358,7 @@ function createConfig(): Conf<ConfigSchema> {
     autoSessionTitle: true,
     autoSummarizeHistory: true,
     userProfile: true,
+    auditLog: true,
     autoLearnProfile: false,
     trustedHookProjects: [],
     currentSessionId: '',

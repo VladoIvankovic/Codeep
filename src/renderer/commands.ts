@@ -474,6 +474,25 @@ export async function handleCommand(
       break;
     }
 
+    case 'audit': {
+      const { formatAuditLog } = await import('../utils/auditLog');
+      const sub = args[0]?.toLowerCase();
+      if (sub === 'on' || sub === 'off') {
+        config.set('auditLog', sub === 'on');
+        ctx.app.notify(sub === 'on'
+          ? 'Audit recording on — runs are recorded to .codeep/audit/.'
+          : 'Audit recording off. Records already written are kept.');
+        break;
+      }
+      if (sub) {
+        ctx.app.notify(`Unknown audit subcommand: ${sub}. Use /audit, /audit on, or /audit off`);
+        break;
+      }
+      ctx.app.addMessage({ role: 'system', content: formatAuditLog(ctx.projectPath) });
+      break;
+    }
+
+
     case 'agents': {
       // List sub-agents the agent can `delegate` to (built-in + .codeep/agents/).
       const { formatAgentList } = await import('../utils/agents');

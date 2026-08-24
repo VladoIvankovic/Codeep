@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock 'fs' before importing the module under test - use importOriginal to
 // preserve all fs exports that transitive dependencies need (e.g. mkdirSync).
@@ -472,8 +472,76 @@ vi.mock('./taskPlanner', () => ({
   formatTaskPlan: vi.fn(() => ''),
 }));
 
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { readAuditRuns } from './auditLog';
 import { runAgent } from './agent';
 import { executeTool } from './tools';
+
+describe('audit record wiring', () => {
+  // The unit tests in auditLog.test.ts prove the module. This proves the wiring
+  // — that runAgent actually opens a run, records what a tool did, and closes
+  // it. Those are three separate call sites, and type-checking says nothing
+  // about whether they ever execute.
+  let auditRoot: string;
+
+  // This file mocks existsSync/readFileSync for the rules tests. The audit log
+  // uses both for real work, so point them back at the genuine implementations
+  // for the duration of this block — and reset them afterwards so the mocking
+  // the rest of the file relies on is not left altered.
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const realFs = await vi.importActual<typeof import('fs')>('fs');
+    vi.mocked(existsSync).mockImplementation(realFs.existsSync);
+    vi.mocked(readFileSync).mockImplementation(realFs.readFileSync as never);
+    auditRoot = mkdtempSync(join(tmpdir(), 'codeep-agent-audit-'));
+  });
+  afterEach(() => {
+    vi.mocked(existsSync).mockReset();
+    vi.mocked(readFileSync).mockReset();
+    rmSync(auditRoot, { recursive: true, force: true });
+  });
+
+  it('opens a run, records the tool call, and closes it', async () => {
+    mockAgentChat
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [{ tool: 'execute_command', parameters: { command: 'npm', args: ['test'] } }],
+        usedNativeTools: true,
+      })
+      .mockResolvedValueOnce({ content: 'Done.', toolCalls: [], usedNativeTools: true });
+
+    await runAgent('run the tests', {
+      root: auditRoot, name: 'p', type: 'node', structure: '',
+    } as never, {
+      onExecuteCommand: vi.fn().mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0 }),
+      maxIterations: 5,
+    });
+
+    const runs = readAuditRuns(auditRoot);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].prompt).toBe('run the tests');
+    expect(runs[0].outcome).toBe('ok');
+
+    const command = runs[0].events.find(e => e.action === 'command');
+    expect(command, 'the command should appear in the record').toBeDefined();
+    expect(command!.target).toBe('npm test');
+    expect(command!.outcome).toBe('ok');
+  });
+
+  it('writes nothing anywhere but the project it describes', async () => {
+    mockAgentChat.mockResolvedValueOnce({ content: 'Nothing to do.', toolCalls: [], usedNativeTools: true });
+    await runAgent('do nothing', {
+      root: auditRoot, name: 'p', type: 'node', structure: '',
+    } as never, { maxIterations: 2 });
+
+    expect(existsSync(join(auditRoot, '.codeep', 'audit'))).toBe(true);
+    const runs = readAuditRuns(auditRoot);
+    expect(runs).toHaveLength(1);
+    // No tool ran, so the record holds the run markers and nothing else.
+    expect(runs[0].events).toHaveLength(0);
+  });
+});
 
 describe('onExecuteCommand callback', () => {
   beforeEach(() => {
