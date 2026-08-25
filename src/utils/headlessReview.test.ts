@@ -231,3 +231,29 @@ describe('runHeadlessReview', () => {
     expect(code).toBe(0);
   });
 });
+
+describe('runFixPlan wiring', () => {
+  /**
+   * `getApiKey` is synchronous and reads a cache that only `loadAllApiKeys`
+   * fills — it never consults the environment itself. So an agent started
+   * without that call sends an empty bearer token and is rejected on every
+   * request. The AI review path had always loaded keys; the fix path never
+   * did, and a CI run with a perfectly valid key in the environment spent its
+   * whole iteration budget collecting 401s before blaming the iteration limit.
+   *
+   * The ordering is what matters and the ordering is textual, so this reads the
+   * source rather than claiming to have exercised the network.
+   */
+  it('loads API keys before it starts the agent', async () => {
+    const { readFileSync } = await vi.importActual<typeof import('fs')>('fs');
+    const src = readFileSync(new URL('./headlessReview.ts', import.meta.url), 'utf8');
+
+    const body = src.slice(src.indexOf('async function runFixPlan'));
+    const load = body.indexOf('loadAllApiKeys()');
+    const run = body.indexOf('runAgent(');
+
+    expect(load, 'runFixPlan must load API keys').toBeGreaterThan(-1);
+    expect(run, 'runFixPlan must call runAgent').toBeGreaterThan(-1);
+    expect(load, 'keys must be loaded before the agent starts').toBeLessThan(run);
+  });
+});

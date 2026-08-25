@@ -287,7 +287,7 @@ export async function summarizeEarlierHistory(
   if (dropped.length === 0) return '';
 
   const key = createHash('sha256')
-    .update(dropped.map(m => `${m.role}:${m.content}`).join(' '))
+    .update(dropped.map(m => `${m.role}:${m.content}`).join('\u0000'))
     .digest('hex');
   const cached = earlierSummaryCache.get(key);
   if (cached) return cached;
@@ -560,7 +560,12 @@ export async function agentChat(
       if (errorText.includes('tools') || errorText.includes('function') || response.status === 400) {
         return await agentChatFallback(messages, systemPrompt, onChunk, abortSignal, dynamicTimeout, additionalTools, runtime);
       }
-      throw new Error(`API error: ${response.status} - ${errorText}`);
+      // ApiError, not Error: runAgent's retry loop refuses to retry a 4xx by
+      // checking `err instanceof ApiError && err.status`. A bare Error made
+      // that guard silently inapplicable, so an expired key was retried once
+      // per iteration until the budget ran out and the run reported "Exceeded
+      // maximum of N iterations" — the one explanation unrelated to the cause.
+      throw new ApiError(`API error: ${response.status} - ${errorText}`, response.status);
     }
 
     if (useStreaming && response.body) {
@@ -719,7 +724,9 @@ export async function agentChatFallback(
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`API error: ${response.status} - ${error}`);
+      // Same reasoning as the native-tools path: the status has to survive, or
+      // the caller cannot tell "your key is wrong" from "the network hiccuped".
+      throw new ApiError(`API error: ${response.status} - ${error}`, response.status);
     }
 
     let content: string;

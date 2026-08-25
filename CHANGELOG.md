@@ -11,6 +11,39 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.24.0] — 2026-08-25
+
+> A rejected API key made an agent run look like it had simply run out of steps: every request was retried, the budget drained, and the report blamed the iteration limit.
+
+### Fixed
+
+- **A 4xx from the provider was retried until the iteration budget ran out.**
+  `agentChat` threw a bare `Error` for any failed HTTP response, so the retry
+  loop's "never retry a 4xx" branch — which tests `err instanceof ApiError &&
+  err.status` — never applied. An expired key was retried once per iteration
+  and the run then reported `Exceeded maximum of N iterations`: the one
+  explanation with nothing to do with the cause. A run that used to burn
+  twenty-five requests over six minutes now stops on the first, saying `401`.
+
+- **`review --fix` never loaded the API keys.** `getApiKey` is synchronous and
+  reads a cache that only `loadAllApiKeys` fills; it does not consult the
+  environment itself. The fix agent started without that call, so every request
+  went out with an empty bearer token. In CI this looked exactly like a model
+  that would not do the work, with a perfectly valid key sitting in the
+  environment the whole time.
+
+- **A fix that changed nothing said nothing about why.** The summary reported
+  what did not happen and never what did. It now counts the agent's tool calls,
+  separates failures from successes, and quotes the first failure — usually a
+  refusal, and usually the entire explanation.
+
+### Changed
+
+- **`src/utils/agentChat.ts` is a text file again.** It contained a literal NUL
+  byte — a deliberate separator written as a raw byte rather than `\u0000` —
+  which made `grep`, `file` and diff viewers treat the whole file as binary and
+  silently skip it. Same behaviour, same separator, now searchable.
+
 ## [2.23.0] — 2026-08-25
 
 > Security rules had never once looked at a `.mjs` file, `forEach` + `await` only counted when it wasn't an arrow function, and the CI fix agent ran out of steps before it could finish.

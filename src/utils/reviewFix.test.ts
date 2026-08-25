@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildFixPlan, isFixable, ciFixPersonality, formatFixPrompt, summariseFixPlan } from './reviewFix';
+import { buildFixPlan, isFixable, ciFixPersonality, formatFixPrompt, summariseFixPlan, describeAgentActivity } from './reviewFix';
 import { isPersonalityToolCallAllowed, getPersonalityToolAllowlist } from './personalities';
 import type { ReviewIssue } from './codeReview';
 
@@ -126,5 +126,42 @@ describe('the instruction', () => {
       issue({ severity: 'warning', file: 'src/b.ts' }),
     ]);
     expect(summariseFixPlan(plan)).toBe('Attempting 1 error and 1 warning across 2 files.');
+  });
+});
+
+describe('describeAgentActivity', () => {
+  it('counts what the agent did, by kind', () => {
+    const out = describeAgentActivity([
+      { type: 'read', result: 'success' },
+      { type: 'read', result: 'success' },
+      { type: 'edit', result: 'success' },
+    ]);
+    expect(out).toContain('3 tool calls');
+    expect(out).toContain('2 read');
+    expect(out).toContain('1 edit');
+  });
+
+  // The reason a fix did nothing is usually in a refusal, and a refusal is the
+  // one thing a "nothing was changed" summary never used to mention.
+  it('separates failures and quotes the first reason', () => {
+    const out = describeAgentActivity([
+      { type: 'command', result: 'error', details: 'git is not available to this agent' },
+      { type: 'command', result: 'error', details: 'still not available' },
+      { type: 'read', result: 'success' },
+    ]);
+    expect(out).toContain('2 command (2 failed)');
+    expect(out).toContain('git is not available to this agent');
+    expect(out).not.toContain('still not available');
+  });
+
+  it('says so when the agent never called a tool', () => {
+    expect(describeAgentActivity([])).toContain('no tool calls');
+  });
+
+  it('caps a long failure detail', () => {
+    const out = describeAgentActivity([
+      { type: 'command', result: 'error', details: 'x'.repeat(500) },
+    ]);
+    expect(out.length).toBeLessThan(320);
   });
 });

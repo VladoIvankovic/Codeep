@@ -170,3 +170,37 @@ export function summariseFixPlan(plan: FixPlan): string {
   ].filter(Boolean);
   return `Attempting ${parts.join(' and ')} across ${plan.files.length} file${plan.files.length === 1 ? '' : 's'}.`;
 }
+
+/**
+ * What the agent actually did, in one line.
+ *
+ * A fix that changes nothing is the hardest outcome to act on, because the
+ * summary that reports it — "the run did not finish", "nothing was changed" —
+ * says what did not happen and never what did. Debugging one such run through
+ * CI cost two releases and forty minutes of guessing at whether the agent
+ * could not find the file, could not write, or was being refused a tool.
+ *
+ * Counting the action log answers that in the message itself. Failures are
+ * called out separately from successes, and one failing detail is quoted,
+ * because a refusal reason is usually the whole explanation.
+ */
+export function describeAgentActivity(actions: { type: string; result: string; details?: string }[]): string {
+  if (actions.length === 0) return 'It made no tool calls at all.';
+
+  const byType = new Map<string, { ok: number; failed: number }>();
+  for (const action of actions) {
+    const tally = byType.get(action.type) ?? { ok: 0, failed: 0 };
+    if (action.result === 'error') tally.failed++;
+    else tally.ok++;
+    byType.set(action.type, tally);
+  }
+
+  const parts = [...byType.entries()]
+    .sort((a, b) => (b[1].ok + b[1].failed) - (a[1].ok + a[1].failed))
+    .map(([type, { ok, failed }]) => (failed ? `${ok + failed} ${type} (${failed} failed)` : `${ok} ${type}`));
+
+  const firstFailure = actions.find(a => a.result === 'error' && a.details);
+  const why = firstFailure ? ` First failure: ${firstFailure.details!.slice(0, 200)}` : '';
+
+  return `It made ${actions.length} tool call${actions.length === 1 ? '' : 's'}: ${parts.join(', ')}.${why}`;
+}

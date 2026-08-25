@@ -21,7 +21,23 @@ vi.mock('../config/providers', () => ({
   getProviderBaseUrl: vi.fn(() => 'https://api.example.com'),
   getProviderAuthHeader: vi.fn(() => 'Bearer sk-test'),
   supportsNativeTools: vi.fn(() => true),
+  // The rest of what agentChat() itself reaches for. The prompt-building tests
+  // never called it, so the mock only had to cover three.
+  getEffectiveMaxTokens: vi.fn(() => 4096),
+  usesMaxCompletionTokens: vi.fn(() => false),
+  requiresDefaultTemperature: vi.fn(() => false),
+  modelRejectsSamplingParams: vi.fn(() => false),
+  isNoApiKeyProvider: vi.fn(() => false),
+  reasoningParamsFor: vi.fn(() => ({})),
+  providerNoStreamWithTools: vi.fn(() => true),
 }));
+vi.mock('./ratelimit', () => ({ checkApiRateLimit: vi.fn() }));
+vi.mock('./openrouterPrefs', () => ({ readOpenRouterPreferences: vi.fn(() => ({})) }));
+vi.mock('./projectIntelligence', () => ({
+  loadProjectIntelligence: vi.fn(() => null),
+  generateContextFromIntelligence: vi.fn(() => ''),
+}));
+vi.mock('./codeepCloud', () => ({ syncProgress: vi.fn(), generateProjectId: vi.fn(() => 'p') }));
 vi.mock('./tokenTracker', () => ({ recordTokenUsage: vi.fn(), extractOpenAIUsage: vi.fn(), extractAnthropicUsage: vi.fn() }));
 vi.mock('./toolParsing', () => ({ parseOpenAIToolCalls: vi.fn(() => []), parseAnthropicToolCalls: vi.fn(() => []), parseToolCalls: vi.fn(() => []) }));
 vi.mock('./tools', () => ({ formatToolDefinitions: vi.fn(() => ''), getOpenAITools: vi.fn(() => []), getAnthropicTools: vi.fn(() => []) }));
@@ -240,5 +256,32 @@ describe('TimeoutError', () => {
   it('has a message', () => {
     const err = new TimeoutError('custom message');
     expect(err.message).toBe('custom message');
+  });
+});
+
+describe('HTTP failures carry their status', () => {
+  /**
+   * A source-level guard, deliberately.
+   *
+   * The defect was one missing constructor argument: an expired key arrived as
+   * a bare `Error`, so runAgent's "never retry a 4xx" branch — which tests
+   * `err instanceof ApiError && err.status` — did not apply. Every iteration
+   * retried the same rejection until the budget ran out, and the run then
+   * blamed the iteration limit, the one explanation unrelated to the cause.
+   *
+   * Reaching those throws at runtime means standing up the whole provider,
+   * rate-limit and streaming graph. The mistake being guarded against is
+   * textual — `new Error` where `new ApiError` belongs — so reading the source
+   * catches it exactly, and says so rather than implying it proved behaviour.
+   */
+  it('never throws a status-less Error for an HTTP failure', async () => {
+    const { readFileSync: realRead } = await vi.importActual<typeof import('fs')>('fs');
+    const src = realRead(new URL('./agentChat.ts', import.meta.url), 'utf8');
+
+    const bare = [...src.matchAll(/throw new Error\(`API error:[^`]*`\)/g)].map(m => m[0]);
+    expect(bare).toEqual([]);
+
+    const withStatus = [...src.matchAll(/throw new ApiError\(`API error:[^`]*`,\s*response\.status\)/g)];
+    expect(withStatus.length).toBeGreaterThanOrEqual(2);
   });
 });

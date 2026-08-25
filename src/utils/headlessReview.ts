@@ -1,4 +1,4 @@
-import { buildFixPlan, summariseFixPlan, type FixPlan } from './reviewFix.js';
+import { buildFixPlan, summariseFixPlan, describeAgentActivity, type FixPlan } from './reviewFix.js';
 // Headless `codeep review` — a non-interactive entry point around the
 // deterministic reviewer in codeReview.ts. No API key, no TUI: it scans, prints
 // a report (markdown or JSON), and exits non-zero when issues at/above a chosen
@@ -250,6 +250,19 @@ function defaultDeps(): ReviewDeps {
  */
 async function runFixPlan(plan: FixPlan, context: ProjectContext): Promise<string | null> {
   try {
+    // Populate the key cache before anything asks for it. `getApiKey` is
+    // synchronous and reads the cache alone — it does not consult the
+    // environment — so without this every request goes out with an empty
+    // bearer token and the provider answers 401. The AI review path next door
+    // has always done this; the fix path never did, which is why a CI run with
+    // a perfectly good key in the environment spent its whole iteration budget
+    // being rejected.
+    const { loadAllApiKeys, isConfigured } = await import('../config/index.js');
+    await loadAllApiKeys();
+    if (!isConfigured()) {
+      return `${summariseFixPlan(plan)} No API key is configured for the current provider, so the fix agent could not start.`;
+    }
+
     const { runAgent } = await import('./agent.js');
     // No cast here. `as never` on this call once hid the fact that
     // personalityOverride did not exist, which would have run the CI fix with
@@ -269,11 +282,12 @@ async function runFixPlan(plan: FixPlan, context: ProjectContext): Promise<strin
         .filter(a => a.type === 'write' || a.type === 'edit')
         .map(a => a.target),
     );
+    const activity = describeAgentActivity(result.actions);
     if (!result.success) {
-      return `${summariseFixPlan(plan)} The run did not finish: ${result.error ?? 'unknown error'}.`;
+      return `${summariseFixPlan(plan)} The run did not finish: ${result.error ?? 'unknown error'}. ${activity}`;
     }
     if (edited.size === 0) {
-      return `${summariseFixPlan(plan)} Nothing was changed — the agent judged the findings not mechanically fixable.`;
+      return `${summariseFixPlan(plan)} Nothing was changed. ${activity}`;
     }
     return `${summariseFixPlan(plan)} Edited ${edited.size} file${edited.size === 1 ? '' : 's'}: ${[...edited].join(', ')}.`;
   } catch (error) {
