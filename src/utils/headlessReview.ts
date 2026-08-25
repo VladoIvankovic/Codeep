@@ -256,7 +256,12 @@ async function runFixPlan(plan: FixPlan, context: ProjectContext): Promise<strin
     // no boundary at all while the tests happily asserted otherwise.
     const result = await runAgent(plan.prompt, context, {
       personalityOverride: plan.personality,
-      maxIterations: 12,
+      // The product default. 12 was picked to keep a CI run cheap and was
+      // simply too small: fixing one innerHTML call and running the suite ran
+      // out of steps, and an agent stopped mid-edit leaves a worse diff than
+      // one that never started. The real bounds on cost here are the size of
+      // the plan, which buildFixPlan caps, and the action's wall-clock.
+      maxIterations: 25,
     });
 
     const edited = new Set(

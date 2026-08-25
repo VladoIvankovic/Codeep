@@ -11,6 +11,37 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.23.0] — 2026-08-25
+
+> Security rules had never once looked at a `.mjs` file, `forEach` + `await` only counted when it wasn't an arrow function, and the CI fix agent ran out of steps before it could finish.
+
+### Fixed
+
+- **`.mjs` and `.cjs` were invisible to thirteen rules.** Every rule that names
+  `.js` in its `extensions` list — which is all four security rules, plus the
+  performance and best-practice ones — skipped these files entirely. `eval()`,
+  `innerHTML` and hardcoded credentials went unreported in any ES-module or
+  CommonJS-suffixed file. Found while reviewing `codeep-action`, whose own
+  scripts are `.mjs`: its self-review had never applied a single security rule
+  to itself.
+
+  The extension is now normalised once, rather than widening thirteen arrays
+  that would go stale on the next rule added. The directory walk picks these
+  files up too, so a whole-project review no longer steps over them.
+
+- **`foreach-await` never matched an arrow function.** The pattern required the
+  `await` to follow forEach's *closing paren*, which only lines up for
+  `function (x) {`. Every modern form went unreported, and the rule also only
+  fired when `await` was the very first token in the body — so
+  `{ out.push(await f(id)) }` was invisible. Both bounds stay explicit and both
+  classes negated, so matching is linear.
+
+- **A CI fix run gave up after 12 steps.** `codeep review --fix` capped the
+  agent at 12 iterations, under half the product default. Fixing one `innerHTML`
+  call and running the test suite exhausted it, and an agent stopped mid-edit
+  leaves a worse diff than one that never started. Now 25, the same as
+  everywhere else; the plan size and the caller's wall-clock are the real bounds.
+
 ## [2.22.0] — 2026-08-25
 
 > Every run now records what it touched, including what the boundary refused — and four bugs that only a real session could surface.
