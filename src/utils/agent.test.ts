@@ -592,6 +592,29 @@ describe('audit record wiring', () => {
     expect(command!.outcome).toBe('ok');
   });
 
+  // Found by a live run: three runs all showed ✓, but two had failed at the
+  // provider. Several failure paths return `success: false` with a plain
+  // `return` rather than throwing, so reading only the catch recorded them as
+  // successful. An audit record that says a failed run passed is worse than no
+  // record at all.
+  it('records a run that failed without throwing as failed', async () => {
+    // The abort path is the cleanest example: it returns `success: false` with
+    // a plain `return` and no retry, so it isolates the bug without waiting on
+    // the provider backoff that a 4xx would trigger.
+    const aborted = new Error('stopped');
+    aborted.name = 'AbortError';
+    mockAgentChat.mockRejectedValue(aborted);
+
+    const outcome = await runAgent('do something', {
+      root: auditRoot, name: 'p', type: 'node', structure: '',
+    } as never, { maxIterations: 2 });
+    expect(outcome.success).toBe(false);
+
+    const [run] = readAuditRuns(auditRoot);
+    expect(run, 'the run should still have been recorded').toBeDefined();
+    expect(run.outcome).toBe('error');
+  });
+
   it('writes nothing anywhere but the project it describes', async () => {
     mockAgentChat.mockResolvedValueOnce({ content: 'Nothing to do.', toolCalls: [], usedNativeTools: true });
     await runAgent('do nothing', {

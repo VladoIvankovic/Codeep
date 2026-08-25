@@ -1,6 +1,6 @@
 import * as http from 'node:http';
 import * as https from 'node:https';
-import { Message, config, getApiKey, resolveBaseUrl } from '../config/index';
+import { Message, config, getApiKey, resolveBaseUrl, describeUnsendableKey } from '../config/index';
 import { withRetry, isNetworkError } from '../utils/retry';
 import { checkApiRateLimit } from '../utils/ratelimit';
 import { ProjectContext } from '../utils/project';
@@ -167,6 +167,32 @@ function parseApiError(status: number, body: string): string {
   // Truncate long raw error bodies
   const truncated = body.length > 200 ? body.slice(0, 200) + '...' : body;
   return `${status} - ${truncated}`;
+}
+
+/**
+ * Put the key in the right header, refusing early if it cannot be sent.
+ *
+ * `fetch` throws "Cannot convert argument to a ByteString because the character
+ * at index N…" for a header value outside Latin-1, counting from the start of
+ * `Bearer <key>` — so the index points four characters left of where anyone
+ * would look, and the message never mentions the key at all. Worse, the caller
+ * treats it as a transient API error and retries twice more, which cannot
+ * possibly help.
+ */
+function applyAuthHeader(
+  headers: Record<string, string>,
+  apiKey: string,
+  authHeader: string,
+): void {
+  const problem = describeUnsendableKey(apiKey);
+  if (problem) {
+    throw new ApiError(`This API key cannot be used: ${problem}. Re-copy it and run /login to set it again.`, 400);
+  }
+  if (authHeader === 'Bearer') {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  } else {
+    headers['x-api-key'] = apiKey;
+  }
 }
 
 export async function chat(
@@ -440,11 +466,7 @@ async function chatOpenAI(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (authHeader === 'Bearer') {
-    headers['Authorization'] = `Bearer ${apiKey}`;
-  } else {
-    headers['x-api-key'] = apiKey;
-  }
+  applyAuthHeader(headers, apiKey, authHeader);
   // OpenRouter: branding headers + opt in to `usage.cost` so the
   // chat path reports authoritative per-call cost just like agentChat
   // does. Kept identical to the agentChat block so the two paths stay
@@ -734,11 +756,7 @@ async function chatAnthropic(
     'Content-Type': 'application/json',
     'anthropic-version': '2023-06-01',
   };
-  if (authHeader === 'Bearer') {
-    headers['Authorization'] = `Bearer ${apiKey}`;
-  } else {
-    headers['x-api-key'] = apiKey;
-  }
+  applyAuthHeader(headers, apiKey, authHeader);
 
   try {
     // Anthropic prompt caching: wrap system as an array with a
@@ -896,11 +914,7 @@ export async function validateApiKey(apiKey: string, providerId?: string): Promi
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (authHeader === 'Bearer') {
-    headers['Authorization'] = `Bearer ${apiKey}`;
-  } else {
-    headers['x-api-key'] = apiKey;
-  }
+  applyAuthHeader(headers, apiKey, authHeader);
   if (protocol === 'anthropic') {
     headers['anthropic-version'] = '2023-06-01';
   }

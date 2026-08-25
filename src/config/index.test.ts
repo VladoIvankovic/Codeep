@@ -10,6 +10,7 @@ import {
   isManuallyInitializedProject,
   isProjectDirectory,
   type Profile,
+  describeUnsendableKey,
 } from './index';
 
 let root: string;
@@ -172,5 +173,43 @@ describe('applyProfile', () => {
 
     applyProfile(profileWith('ollama', 'qwen3-coder-plus:latest'));
     expect(config.get('model')).toBe('qwen3-coder-plus:latest');
+  });
+});
+
+describe('describeUnsendableKey', () => {
+  // Found from a live run: a key with an invisible character produced
+  // "Cannot convert argument to a ByteString because the character at index
+  // 10…" — an index counted across `Bearer <key>`, so it pointed seven
+  // characters left of the real culprit, and the message never said "key".
+  // Worse, the caller retried twice more, which could not possibly help.
+  it('accepts an ordinary key', () => {
+    expect(describeUnsendableKey('sk-abcdef0123456789')).toBeNull();
+    expect(describeUnsendableKey('')).toBeNull();
+  });
+
+  it('names the position in the key, not in the header', () => {
+    // Character 4 of the key is the one at index 10 of `Bearer <key>`.
+    const problem = describeUnsendableKey('abc​def');
+    expect(problem).toContain('character 4');
+    expect(problem).toContain('zero-width space');
+  });
+
+  it('recognises the characters a paste actually introduces', () => {
+    expect(describeUnsendableKey('ab cd')).toContain('non-breaking space');
+    expect(describeUnsendableKey('ab’cd')).toContain('curly quote');
+    expect(describeUnsendableKey('ab“cd')).toContain('curly double quote');
+  });
+
+  it('falls back to a code point for anything else', () => {
+    expect(describeUnsendableKey('abc中')).toContain('U+4E2D');
+  });
+
+  // The description exists to be shown to someone. It must never contain the
+  // key it is describing.
+  it('never reproduces the key', () => {
+    const secret = 'sk-supersecret​value';
+    const problem = describeUnsendableKey(secret)!;
+    expect(problem).not.toContain('supersecret');
+    expect(problem).not.toContain(secret);
   });
 });

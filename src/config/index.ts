@@ -1530,3 +1530,35 @@ export function deleteProfile(name: string): boolean {
     return false;
   }
 }
+
+/**
+ * Whether a key can survive being put in an HTTP header.
+ *
+ * `fetch` encodes header values as Latin-1 and throws "Cannot convert argument
+ * to a ByteString" on anything outside it. A key pasted from a web page or a
+ * chat message can pick up a non-breaking space, a zero-width character or a
+ * curly quote, and the resulting failure names neither the key nor the
+ * character — only "the character at index N", counted across the whole header
+ * value with `Bearer ` included, which is not where anyone would look.
+ *
+ * Returns null when the key is fine, or a description that locates the problem
+ * without ever reproducing the key itself.
+ */
+export function describeUnsendableKey(apiKey: string): string | null {
+  for (let i = 0; i < apiKey.length; i++) {
+    const code = apiKey.charCodeAt(i);
+    if (code > 0xFF) {
+      const name = code === 0x200B ? 'a zero-width space'
+        : code === 0x2018 || code === 0x2019 ? 'a curly quote'
+        : code === 0x201C || code === 0x201D ? 'a curly double quote'
+        : `U+${code.toString(16).toUpperCase().padStart(4, '0')}`;
+      return `character ${i + 1} of the key is ${name}, which cannot be sent in an HTTP header`;
+    }
+    // 0xA0 is inside Latin-1 and technically sendable, but a non-breaking space
+    // in a key is never intentional and produces a 401 that reads as a bad key.
+    if (code === 0xA0) {
+      return `character ${i + 1} of the key is a non-breaking space — probably picked up when copying`;
+    }
+  }
+  return null;
+}

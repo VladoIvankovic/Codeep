@@ -1,8 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'fs';
 
 // ─── Mock setup ──────────────────────────────────────────────────────────────
 // Mock config module
 vi.mock('../config/index', () => ({
+  // Real implementation, not a stub: this guard is the reason a key with an
+  // invisible character now fails with a sentence instead of a ByteString
+  // error, and a stub that always passes would hide a regression in it.
+  describeUnsendableKey: (key: string) => {
+    for (let i = 0; i < key.length; i++) {
+      if (key.charCodeAt(i) > 0xFF) return `character ${i + 1} of the key is unsendable`;
+    }
+    return null;
+  },
   config: {
     get: vi.fn((key: string) => {
       const defaults: Record<string, unknown> = {
@@ -406,6 +416,23 @@ describe('chat() — shouldRetry predicate', () => {
     // status undefined — treated as retryable
     const err = new Error('network failure');
     expect(capturedShouldRetry?.(err)).toBe(true);
+  });
+});
+
+describe('an unsendable key', () => {
+  // The first version of this message told people to run `/key`, which does
+  // not exist — the command is `/login`. A message that names a command the
+  // app does not have is worse than a vague one.
+  it('points at a command that actually exists', async () => {
+    const { COMMANDS } = await import('../renderer/commands/registry');
+    const names = new Set(COMMANDS.flatMap(c => [c.name, ...(c.aliases ?? [])]));
+    const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+    const referenced = [...source.matchAll(/run \/([a-z]+) to/g)].map(m => m[1]);
+
+    expect(referenced.length).toBeGreaterThan(0);
+    for (const cmd of referenced) {
+      expect(names.has(cmd), `/${cmd} is referenced in an error but is not a command`).toBe(true);
+    }
   });
 });
 

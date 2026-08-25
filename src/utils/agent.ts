@@ -306,6 +306,30 @@ const DEFAULT_OPTIONS: AgentOptions = {
 
 
 /**
+ * Sleep that gives up when the run is stopped.
+ *
+ * A plain `setTimeout` promise ignores the abort signal, so pressing Stop
+ * during "retrying in 10s" did nothing until the wait expired — and then the
+ * loop went on to retry anyway. Ctrl-C behaved the same way, because both
+ * routes set the same signal that nothing was reading.
+ *
+ * Resolves early on abort. Callers must still check `aborted` afterwards; this
+ * only stops the waiting, it does not decide what to do next.
+ */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise(resolve => {
+    const timer = setTimeout(finish, ms);
+    function finish() {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    }
+    signal?.addEventListener('abort', finish, { once: true });
+  });
+}
+
+/**
  * Run the agent loop
  */
 export async function runAgent(
@@ -592,7 +616,10 @@ export async function runAgent(
   
   let iteration = 0;
   let finalResponse = '';
-  let result: AgentResult;
+  // Initialised rather than merely declared: the `finally` reads it to decide
+  // the audit outcome, and TypeScript is right that a throw before assignment
+  // would leave it unset.
+  let result: AgentResult | undefined;
   let consecutiveTimeouts = 0;
   let incompleteWorkRetries = 0;
   // If the model claims completion but the task isn't actually done, we nudge it
@@ -735,7 +762,7 @@ export async function runAgent(
       if (iteration > 1) {
         const totalTokensEstimate = messages.reduce((sum, m) => sum + Math.ceil((m.content as string).length / 4), 0);
         const throttleMs = Math.min(Math.floor(totalTokensEstimate / 10000) * 1000, 5000);
-        if (throttleMs > 0) await new Promise(resolve => setTimeout(resolve, throttleMs));
+        if (throttleMs > 0) await abortableSleep(throttleMs, opts.abortSignal);
       }
 
       // Compress messages if context window is getting full (silent)
@@ -844,7 +871,10 @@ export async function runAgent(
             }
 
             // Wait before retry (exponential backoff)
-            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+            await abortableSleep(1000 * retryCount, opts.abortSignal);
+            // Stopping during a backoff must actually stop. Without this the
+            // wait ended and the loop retried the request the user cancelled.
+            if (opts.abortSignal?.aborted) break;
             continue;
           }
 
@@ -909,7 +939,11 @@ export async function runAgent(
             });
             break; // Break retry loop, continue main loop
           }
-          await new Promise(resolve => setTimeout(resolve, waitSec * 1000));
+          await abortableSleep(waitSec * 1000, opts.abortSignal);
+          // Stopping during a rate-limit wait must actually stop. Without
+          // this the wait ran to completion and the loop retried the request
+          // the user had already cancelled.
+          if (opts.abortSignal?.aborted) break;
           continue;
         }
       }
@@ -1469,7 +1503,18 @@ export async function runAgent(
       // In `finally`, so a run that throws still closes its record. An audit
       // trail that only survives success is worth very little — the runs you
       // most want to read are the ones that went wrong.
-      endAuditRun(auditRoot, auditRun, auditFailure ? 'error' : 'ok', auditFailure);
+      //
+      // The outcome comes from the result, not from whether an exception
+      // escaped. Several failure paths — a user abort, a 4xx from the provider
+      // — return `success: false` with a plain `return`, and reading only the
+      // catch recorded those as successful runs. An audit record that says a
+      // failed run passed is worse than having no record at all.
+      const failed = auditFailure ?? (
+        result === undefined || result.success
+          ? undefined
+          : (result.aborted ? 'stopped by the user' : (result.error ?? 'run did not succeed'))
+      );
+      endAuditRun(auditRoot, auditRun, failed ? 'error' : 'ok', failed);
     }
   }
 }
