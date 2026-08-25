@@ -112,11 +112,14 @@ const CODE_PATTERNS: RuleDef[] = [
   // Performance issues
   {
     id: 'foreach-await',
-    pattern: /\.forEach\s*\([^)]*\)\s*{\s*await/g,
+    pattern: /\.forEach\s*\(\s*async\b[^{]{0,120}\{[^{}]{0,200}?\bawait\b/g,
     category: 'performance',
     severity: 'warning',
     message: 'Sequential async operations in forEach are inefficient',
     suggestion: 'Use Promise.all() with map() for parallel execution',
+    // Both quantifiers are bounded and both classes are negated, so the match
+    // is linear in the input — this rule is a built-in and never passes
+    // through the custom-rule screening in utils/reviewConfig.ts.
     extensions: ['.js', '.ts', '.jsx', '.tsx'],
   },
   {
@@ -235,6 +238,22 @@ const CODE_PATTERNS: RuleDef[] = [
 ];
 
 /**
+ * Collapse JavaScript's module-flavoured extensions onto `.js`.
+ *
+ * `.mjs` and `.cjs` are JavaScript — the module system differs, nothing a
+ * regex rule cares about does. Without this, thirteen rules that name `.js`
+ * silently skipped every such file, security rules included: `eval()`,
+ * `innerHTML` and hardcoded credentials went unreported in `.mjs` entirely.
+ *
+ * Normalising here rather than widening each rule's `extensions` array means a
+ * rule added tomorrow is covered by default. The arrays were the wrong place
+ * to fix it — thirteen copies of the same fact is how it went wrong once.
+ */
+function normaliseExtension(ext: string): string {
+  return ext === '.mjs' || ext === '.cjs' ? '.js' : ext;
+}
+
+/**
  * Analyze a single file for issues
  */
 function analyzeFile(
@@ -245,7 +264,7 @@ function analyzeFile(
   disabled: Set<string>
 ): ReviewIssue[] {
   const issues: ReviewIssue[] = [];
-  const ext = extname(filePath);
+  const ext = normaliseExtension(extname(filePath));
   const relativePath = relative(projectRoot, filePath);
   const lines = content.split('\n');
 
@@ -388,7 +407,7 @@ function getAllSourceFiles(dir: string, maxFiles: number = 50): string[] {
           }
         } else if (entry.isFile()) {
           const ext = extname(entry.name);
-          if (['.ts', '.tsx', '.js', '.jsx', '.py', '.php', '.go', '.rs'].includes(ext)) {
+          if (['.ts', '.tsx', '.js', '.mjs', '.cjs', '.jsx', '.py', '.php', '.go', '.rs'].includes(ext)) {
             files.push(fullPath);
           }
         }

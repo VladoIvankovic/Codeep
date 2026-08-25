@@ -107,3 +107,65 @@ describe('listBuiltinRules', () => {
     expect(rules.every((r) => r.id && r.category && r.severity && r.description)).toBe(true);
   });
 });
+
+describe('JavaScript module extensions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  // Thirteen rules name '.js' in their `extensions` array. `.mjs` and `.cjs`
+  // are JavaScript too, and were silently skipped by every one of them —
+  // including all four security rules. The action's own scripts are `.mjs`,
+  // so its self-review had never applied a security rule to itself.
+  it.each(['.mjs', '.cjs'])('applies .js rules to %s files', (ext) => {
+    const file = `a${ext}`;
+    setup(null, { [file]: 'el.innerHTML = user;\n' });
+    const result = performCodeReview(ctx, [file]);
+    expect(result.issues.some((i) => i.message.includes('innerHTML'))).toBe(true);
+  });
+
+  it('still withholds TypeScript-only rules from .mjs', () => {
+    setup(null, { 'a.mjs': 'const x = y as any;\n' });
+    const result = performCodeReview(ctx, ['a.mjs']);
+    expect(result.issues.some((i) => i.message.includes('any'))).toBe(false);
+  });
+
+  it('leaves unrelated extensions alone', () => {
+    setup(null, { 'a.py': 'el.innerHTML = user\n' });
+    const result = performCodeReview(ctx, ['a.py']);
+    expect(result.issues.some((i) => i.message.includes('innerHTML'))).toBe(false);
+  });
+});
+
+describe('foreach-await', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  // The original pattern required the `await` to follow forEach's *closing
+  // paren*, which only ever lines up for `function (x) {` — every arrow form,
+  // the dominant style, went unreported.
+  it.each([
+    ['arrow with parens', 'ids.forEach(async (id) => {\n  await save(id);\n});\n'],
+    ['arrow without parens', 'ids.forEach(async id => {\n  await save(id);\n});\n'],
+    ['single line', 'ids.forEach(async x => { await f(x) });\n'],
+    ['await inside an expression', 'ids.forEach(async id => {\n  out.push(await fetch(id));\n});\n'],
+    ['await after an assignment', 'ids.forEach(async id => {\n  const r = await fetch(id);\n  use(r);\n});\n'],
+    ['function expression', 'ids.forEach(async function (id) {\n  await save(id);\n});\n'],
+  ])('flags %s', (_name, code) => {
+    setup(null, { 'a.ts': code });
+    const result = performCodeReview(ctx, ['a.ts']);
+    expect(result.issues.some((i) => i.message.includes('Sequential async'))).toBe(true);
+  });
+
+  it.each([
+    ['a synchronous forEach', 'ids.forEach(id => {\n  save(id);\n});\n'],
+    ['an async callback that never awaits', 'ids.forEach(async id => {\n  fireAndForget(id);\n});\n'],
+  ])('leaves %s alone', (_name, code) => {
+    setup(null, { 'a.ts': code });
+    const result = performCodeReview(ctx, ['a.ts']);
+    expect(result.issues.some((i) => i.message.includes('Sequential async'))).toBe(false);
+  });
+});
