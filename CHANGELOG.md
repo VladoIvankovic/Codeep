@@ -11,9 +11,9 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
-## [Unreleased]
+## [2.22.0] — 2026-08-25
 
-> Every agent run now records what it touched — including the tool calls the capability boundary refused, which nothing recorded before.
+> Every run now records what it touched, including what the boundary refused — and four bugs that only a real session could surface.
 
 ### Added
 
@@ -28,6 +28,31 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
   might hand to someone else should not carry your source with it. Command
   lines are kept, so treat the directory like shell history. `/audit off` stops
   recording without deleting anything already written.
+
+- **`codeep review --fix`.** After reporting, hand the findings to an agent and
+  let it edit the working tree. It runs under a files-and-tests boundary — no
+  shell, no network, no git — enforced by the same gate as any custom bot, not
+  suggested in a prompt. Suggestions are never eligible: acting on opinion
+  produces churn and buries the findings that matter. It never commits,
+  branches or pushes, and it never changes the exit code, because a fix that
+  turned a red check green would hide the finding rather than resolve it.
+
+### Fixed
+
+- **Stop now stops during a retry.** Three waits in the agent loop used a plain
+  timer that ignored the abort signal, so pressing Esc or Ctrl-C during
+  "retrying in 10s" did nothing until the wait expired — and then the loop
+  retried the request anyway. Found by trying to cancel one.
+- **A run that failed is recorded as failed.** Several failure paths — a user
+  abort, a 4xx from the provider — return without throwing, and the audit
+  record read only the exception. Three runs that died at the provider were all
+  logged as successful. A record that says a failed run passed is worse than no
+  record.
+- **A key with an invisible character now says so.** A non-Latin-1 character in
+  an API key produced "Cannot convert argument to a ByteString because the
+  character at index 10…", counted across `Bearer <key>` so it pointed seven
+  characters left of the real one, never mentioned the key, and retried twice
+  more. It now names the position in the key and fails immediately.
 
 ### Changed
 
