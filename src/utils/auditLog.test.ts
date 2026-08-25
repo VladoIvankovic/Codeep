@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -116,11 +116,15 @@ describe('robustness', () => {
   });
 
   it('does not throw when the project cannot be written to', () => {
-    const readOnly = join(root, 'ro');
-    mkdirSync(readOnly);
-    vi.spyOn(process, 'cwd').mockReturnValue(readOnly);
-    // Simulate an unwritable tree by pointing at a path that cannot be created.
-    expect(() => recordAuditEvent('/proc/nonexistent-codeep-audit', {
+    // A file where a directory needs to be: mkdir under it fails with ENOTDIR
+    // on every platform. The previous version used a /proc path, which only
+    // means anything on Linux, and mocked process.cwd() — which vitest, vite
+    // and module resolution all call, and which hung a CI runner for twenty
+    // minutes. The spy was never needed: the path is passed in explicitly.
+    const blocker = join(root, 'not-a-directory');
+    writeFileSync(blocker, 'this is a file');
+
+    expect(() => recordAuditEvent(blocker, {
       ts: Date.now(), run: 'r', action: 'read', target: 'x',
     })).not.toThrow();
   });
