@@ -142,6 +142,22 @@ export const SETTINGS: SettingItem[] = [
     ],
   },
   {
+    key: 'telegramApproval',
+    label: 'Answer confirmations on Telegram',
+    getValue: () => config.get('telegramApproval') === true,
+    type: 'select',
+    options: [
+      { value: 'false', label: 'Off' },
+      { value: 'true', label: 'On' },
+    ],
+  },
+  {
+    key: 'telegramChatId',
+    label: 'Telegram chat ID',
+    getValue: () => config.get('telegramChatId') || '',
+    type: 'text',
+  },
+  {
     key: 'agentConfirmDeleteFile',
     label: 'Confirm: delete_file',
     getValue: () => config.get('agentConfirmDeleteFile') !== false,

@@ -11,6 +11,38 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [Unreleased]
+
+### Added
+
+- **Answer a confirmation from your phone, over Telegram.** When a run stops on
+  a dangerous tool it waits — and if you have walked away, it waits for as long
+  as you are gone. Connect a bot with `/telegram` and the same question arrives
+  on your phone with the same three answers. Whichever you use first decides;
+  answering in the terminal takes the message down rather than leaving buttons
+  that no longer do anything, and answering on the phone closes the terminal
+  dialog without running either of its callbacks.
+
+  This is where Telegram earns its keep. The Mac app can carry approvals through
+  the user's own iCloud; Linux and Windows have nothing of the sort. The bot API
+  is polled outbound, so there is no server to host and no inbound port to open,
+  and the same code works everywhere the CLI does.
+
+  **Only the chat ID you configure can answer.** A bot's username is
+  discoverable, and without that check anyone who found yours could approve a
+  destructive command on your machine. A late tap cannot reopen a settled
+  question either — each message carries a token matched against the question
+  actually in flight.
+
+  **Interactive runs only.** A headless run — `codeep review --fix`, ACP, CI —
+  has nobody to ask, and blocking one on an answer that cannot come would hang
+  a pipeline. Those paths are untouched and still decide from
+  `agentConfirmation`.
+
+  The token goes in your OS keychain; the chat ID is ordinary config. Telegram
+  necessarily sees the command, because you cannot judge what you are approving
+  otherwise — which is why this is off by default.
+
 ## [2.25.0] — 2026-08-28
 
 > GLM-5.3-Flash: the same million-token window and tool calling as the flagship, at a twentieth of the price.

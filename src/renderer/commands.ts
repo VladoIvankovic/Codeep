@@ -32,6 +32,7 @@ import {
   initializeAsProject,
   isManuallyInitializedProject,
 } from '../config/index';
+import { setTelegramToken, clearTelegramToken, hasTelegramToken } from '../utils/telegramCredentials';
 import { getProjectContext } from '../utils/project';
 import { getCurrentVersion } from '../utils/update';
 import { getProviderList, getProvider, modelSupportsReasoningEffort, reasoningParamsFor, availableReasoningTiers, resolveReasoningTier, REASONING_TIERS, type ReasoningTier } from '../config/providers';
@@ -1106,6 +1107,40 @@ Format: use headers per category, only include categories where you found issues
       ctx.app.showSelect('Select Language', languages, currentLang, (item) => {
         config.set('language', item.key as string);
         ctx.app.notify(`Language: ${item.label}`);
+      });
+      break;
+    }
+
+    case 'telegram': {
+      const enabled = config.get('telegramApproval') === true;
+      const chatId = String(config.get('telegramChatId') || '').trim();
+      const hasToken = await hasTelegramToken();
+
+      // Say what is missing before offering to fix it. Half-configured behaves
+      // exactly like off, and without this the user turns the switch on, sees
+      // nothing arrive, and has no way to tell which half is absent.
+      ctx.app.notify([
+        `Telegram approval: ${enabled ? 'on' : 'off'}`,
+        `Bot token: ${hasToken ? 'saved' : 'missing'}`,
+        `Chat ID: ${chatId || 'missing'}`,
+      ].join(' · '));
+
+      ctx.app.showSecret('Paste your Telegram bot token (from @BotFather)', async (token) => {
+        if (token === null) return;
+        if (!token.trim()) {
+          await clearTelegramToken();
+          ctx.app.notify('Telegram bot token removed.');
+          return;
+        }
+        try {
+          await setTelegramToken(token);
+        } catch {
+          ctx.app.notify('Could not save the token (secure storage unavailable).');
+          return;
+        }
+        ctx.app.notify(chatId
+          ? 'Token saved. Turn on "Answer confirmations on Telegram" in /settings.'
+          : 'Token saved. Now set your chat ID in /settings — open https://api.telegram.org/bot<TOKEN>/getUpdates after messaging your bot.');
       });
       break;
     }

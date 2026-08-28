@@ -112,6 +112,14 @@ export interface ConfigSchema {
   ollamaNumCtx: number;
   customBaseUrl: string; // Base URL for the "custom" OpenAI-compatible provider (e.g. vLLM/LiteLLM: http://host:8000/v1)
   agentConfirmation: 'always' | 'dangerous' | 'never'; // Confirmation mode for agent actions
+  /** Also send a pending confirmation to Telegram, so it can be answered away
+   *  from the desk. Interactive runs only — a headless run has nobody to ask,
+   *  and waiting on an answer that cannot come would hang CI. The bot token
+   *  lives in the keychain, never here. */
+  telegramApproval: boolean;
+  /** The single chat allowed to answer. Not a secret — it identifies a
+   *  conversation, and it is useless without the token. */
+  telegramChatId: string;
   agentConfirmDeleteFile: boolean; // Confirm before delete_file in dangerous mode
   agentConfirmExecuteCommand: boolean; // Confirm before execute_command in dangerous mode
   agentConfirmWriteFile: boolean; // Confirm before write_file/edit_file in dangerous mode
@@ -334,6 +342,8 @@ function createConfig(): Conf<ConfigSchema> {
     ollamaNumCtx: 0,
     customBaseUrl: '',
     agentConfirmation: 'dangerous',
+    telegramApproval: false,
+    telegramChatId: '',
     agentConfirmDeleteFile: true,
     agentConfirmExecuteCommand: true,
     agentConfirmWriteFile: false,

@@ -9,6 +9,9 @@
 import { App } from './App';
 import { chat } from '../api/index';
 import { runAgent, AgentResult, PermissionOutcome } from '../utils/agent';
+import { TelegramApproval, outcomeForAnswer, describePermissionOutcome } from '../utils/telegramApproval';
+import { loadTelegramCredentials } from '../utils/telegramCredentials';
+import { raceApproval, type RaceParticipant } from '../utils/approvalRace';
 import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
@@ -220,28 +223,72 @@ export async function executeAgentTask(
     app.setAgentMaxIterations(Math.max(5, rawIterations));
 
     const confirmationMode = config.get('agentConfirmation') || 'dangerous';
+
+    // Read the Telegram credentials once for the whole run rather than per tool
+    // call: they come from the OS keychain, and paying that on every dangerous
+    // tool would put a keychain round-trip in front of each confirmation.
+    // Null means the feature is off or half-configured, and the terminal is
+    // then the only place the question appears — exactly as before.
+    const telegramCredentials = confirmationMode === 'dangerous'
+      ? await loadTelegramCredentials()
+      : null;
+
     const onRequestPermission = confirmationMode === 'dangerous'
-      ? (toolCall: import('../utils/tools').ToolCall) => new Promise<PermissionOutcome>((resolve) => {
+      ? async (toolCall: import('../utils/tools').ToolCall): Promise<PermissionOutcome> => {
           const target = (toolCall.parameters.path as string) ||
             (toolCall.parameters.command as string) || 'unknown';
           const shortTarget = target.length > 50 ? '...' + target.slice(-47) : target;
-          app.showConfirm({
-            title: '⚠️  Confirm Action',
-            message: [
-              'The agent wants to execute:',
-              '',
-              `  ${toolCall.tool}`,
-              `  ${shortTarget}`,
-              '',
-              'Allow this action?',
-            ],
-            confirmLabel: 'Allow',
-            cancelLabel: 'Deny',
-            extraOption: { label: 'Always Allow', onSelect: () => resolve('allow_always') },
-            onConfirm: () => resolve('allow_once'),
-            onCancel: () => resolve('reject_always'),
-          });
-        })
+
+          const inTerminal: RaceParticipant<PermissionOutcome> = {
+            answer: new Promise<PermissionOutcome | null>((resolve) => {
+              app.showConfirm({
+                title: '⚠️  Confirm Action',
+                message: [
+                  'The agent wants to execute:',
+                  '',
+                  `  ${toolCall.tool}`,
+                  `  ${shortTarget}`,
+                  '',
+                  telegramCredentials ? 'Allow this action? (or answer on Telegram)' : 'Allow this action?',
+                ],
+                confirmLabel: 'Allow',
+                cancelLabel: 'Deny',
+                extraOption: { label: 'Always Allow', onSelect: () => resolve('allow_always') },
+                onConfirm: () => resolve('allow_once'),
+                onCancel: () => resolve('reject_always'),
+              });
+            }),
+            // Answered on the phone: take the dialog down without running either
+            // callback, since the decision is already made and taken.
+            withdraw: (winner) => app.dismissConfirm(`Answered on Telegram — ${winner}.`),
+          };
+
+          let onPhone: RaceParticipant<PermissionOutcome> | null = null;
+          if (telegramCredentials) {
+            const telegram = new TelegramApproval(telegramCredentials);
+            onPhone = {
+              answer: telegram
+                .ask(target, toolCall.tool, true)
+                .then(answer => (answer ? outcomeForAnswer(answer) : null))
+                // A phone that cannot be reached is not a denial. Step aside and
+                // let the terminal decide, however long that takes.
+                .catch(() => null),
+              withdraw: (winner) => telegram.withdraw(winner),
+            };
+          }
+
+          const { answer } = await raceApproval(
+            inTerminal,
+            onPhone,
+            outcome => describePermissionOutcome(outcome),
+          );
+
+          // Nobody answered — neither side could even ask. `classifyPermissionOutcome`
+          // fails closed on anything it does not recognise, and this is spelled
+          // out rather than left to that: a question that was never put must
+          // never read as a yes.
+          return answer ?? 'reject_once';
+        }
       : undefined;
 
     const result: AgentResult = await runAgent(enrichedTask, context, {

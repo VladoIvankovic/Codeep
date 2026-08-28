@@ -263,6 +263,10 @@ export class App {
   // Inline login state
   private loginOpen = false;
   private loginStep: 'provider' | 'apikey' = 'provider';
+  /** Overrides the masked step's heading when that screen is reused for a
+   *  secret that is not a provider API key — a Telegram bot token, say.
+   *  Empty for an ordinary login. */
+  private secretPrompt = '';
   private loginProviders: Array<{ id: string; name: string; description?: string; subscribeUrl?: string; noApiKey?: boolean }> = [];
   private loginProviderIndex = 0;
   private loginApiKey = '';
@@ -676,6 +680,26 @@ export class App {
   }
 
   /**
+   * Take the confirmation down without answering it.
+   *
+   * For a question that was settled somewhere else — today that means a phone
+   * answered it over Telegram. Neither callback fires: the decision has already
+   * been made and taken, and running `onCancel` here would deny a tool the user
+   * just approved.
+   *
+   * A no-op when nothing is open, so the caller can dismiss unconditionally
+   * rather than racing to check first.
+   */
+  dismissConfirm(reason?: string): void {
+    if (!this.confirmOpen) return;
+    this.screen.invalidate();
+    this.confirmOptions = null;
+    this.confirmOpen = false;
+    if (reason) this.notify(reason);
+    this.scheduleRender();
+  }
+
+  /**
    * Show the interactive hunk picker (`/apply --interactive`).
    * The caller passes pre-built items + an `onComplete` callback.
    */
@@ -840,10 +864,32 @@ export class App {
     this.loginApiKey = '';
     this.loginError = '';
     this.loginCallback = callback;
+    this.secretPrompt = '';
     this.loginOpen = true;
     this.scheduleRender();
   }
-  
+
+  /**
+   * Ask for one secret, masked, with no provider step.
+   *
+   * The login screen already takes a credential without echoing it, and a second
+   * implementation of that is a second place to get masking wrong. This reuses
+   * it and replaces only the heading: "Enter API Key for Z.AI" is the wrong
+   * sentence for a Telegram bot token, and a prompt naming the wrong thing is
+   * how someone pastes the wrong thing.
+   */
+  showSecret(prompt: string, callback: (secret: string | null) => void): void {
+    this.loginProviders = [{ id: 'secret', name: prompt }];
+    this.loginProviderIndex = 0;
+    this.loginStep = 'apikey';
+    this.loginApiKey = '';
+    this.loginError = '';
+    this.secretPrompt = prompt;
+    this.loginCallback = (result) => callback(result ? result.apiKey : null);
+    this.loginOpen = true;
+    this.scheduleRender();
+  }
+
   /**
    * Reinitialize screen (after external screen takeover)
    */
@@ -2976,7 +3022,8 @@ export class App {
     } else {
       // API key entry
       const selectedProvider = this.loginProviders[this.loginProviderIndex];
-      this.screen.writeLine(y++, `Enter API Key for ${selectedProvider.name}`, fg.cyan + style.bold);
+      const heading = this.secretPrompt || `Enter API Key for ${selectedProvider.name}`;
+      this.screen.writeLine(y++, heading, fg.cyan + style.bold);
       y++;
       
       // API key input (masked)

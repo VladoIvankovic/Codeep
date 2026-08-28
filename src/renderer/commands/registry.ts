@@ -224,6 +224,7 @@ export const COMMANDS: CommandDef[] = [
   { name: 'lang', description: 'Set response language', category: 'settings' },
   { name: 'grant', description: 'Grant write permission', category: 'settings' },
   { name: 'login', aliases: ['apikey'], description: 'Login with API key', category: 'settings' },
+  { name: 'telegram', description: 'Set up answering confirmations on your phone', category: 'settings' },
   { name: 'logout', description: 'Logout from provider', category: 'settings' },
   {
     name: 'profile',

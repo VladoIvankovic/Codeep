@@ -1,0 +1,344 @@
+/**
+ * Answer a pending tool confirmation from a phone.
+ *
+ * The agent already parks on `onRequestPermission` and resumes when that promise
+ * settles. This adds a second way to settle it — nothing in the gate changes,
+ * and whichever answers first wins. A run that would have sat at an empty desk
+ * until someone came back can now continue.
+ *
+ * Telegram carries it because Telegram runs the infrastructure: the bot API is
+ * polled outbound from this machine, so there is no server to host, no inbound
+ * port, and no per-user cost. Long polling, never a webhook — a webhook needs a
+ * public address, which is precisely what we do not want to need. That is also
+ * why this works identically on Linux and Windows, where the Mac app's CloudKit
+ * route does not exist.
+ *
+ * SECURITY: a Telegram bot is reachable by anyone who learns its username. Every
+ * update is checked against the configured chat id before it can decide
+ * anything. Without that check a stranger who found the bot could approve a
+ * destructive command on someone else's machine. See `isFromOwner`.
+ *
+ * PRIVACY: the message carries the command line, so Telegram sees it. Stated in
+ * the docs rather than hidden — it is the reason this is opt-in.
+ *
+ * Ported from the Mac app's `TelegramApproval.swift`; the wire format, the token
+ * matching and the ownership check are deliberately identical, so a bug found on
+ * one side is findable on the other.
+ */
+
+/** What the phone sent back. Mirrors the three buttons the desktop offers. */
+export type TelegramAnswer = 'run' | 'skip' | 'cancel';
+
+const ANSWERS: readonly TelegramAnswer[] = ['run', 'skip', 'cancel'];
+
+export interface TelegramCredentials {
+  /** From @BotFather. A credential — belongs in the keychain, never in config. */
+  botToken: string;
+  /** The single chat allowed to answer. Anything else is ignored. */
+  chatID: string;
+}
+
+/** Longest command we put in a message. Telegram caps at 4096 for the whole
+ *  text; this keeps room for the heading and the fences, and a command longer
+ *  than this is not something anyone reads off a phone anyway. */
+const MAX_COMMAND_CHARS = 300;
+
+/**
+ * The message text.
+ *
+ * Fenced, because a command containing underscores or asterisks would otherwise
+ * be mangled by Markdown parsing into something that is not what will run — and
+ * approving a command you were shown incorrectly is the one failure this whole
+ * feature must not have.
+ */
+export function composeMessage(
+  command: string,
+  toolName: string,
+  isDestructive: boolean,
+): string {
+  const head = isDestructive
+    ? '⚠️ Codeep wants to run a destructive tool'
+    : 'Codeep needs approval';
+  const trimmed = command.length > MAX_COMMAND_CHARS
+    ? command.slice(0, MAX_COMMAND_CHARS - 1) + '…'
+    : command;
+  // A fence inside the command would close ours early and leak the rest as
+  // prose. Neutralise it rather than trusting the input.
+  const safe = trimmed.replace(/```/g, "'''");
+  return `${head}\n\n\`${toolName}\`\n\n\`\`\`\n${safe}\n\`\`\``;
+}
+
+/**
+ * Only the configured chat may decide.
+ *
+ * A bot's username is discoverable, so without this an unrelated Telegram user
+ * could approve a command on someone else's machine. Telegram sends the id as a
+ * number; it is compared as a string because that is how the user typed it.
+ */
+export function isFromOwner(callback: unknown, chatID: string): boolean {
+  if (!chatID) return false;
+  const message = (callback as { message?: unknown } | null)?.message;
+  const chat = (message as { chat?: unknown } | null)?.chat;
+  const id = (chat as { id?: unknown } | null)?.id;
+  if (typeof id === 'number') return String(id) === chatID;
+  if (typeof id === 'string') return id === chatID;
+  return false;
+}
+
+/**
+ * Split `run:<token>` into its parts.
+ *
+ * A callback whose token does not match the question in flight is ignored, and
+ * that is what stops a stale button — tapped after the run moved on — from
+ * answering a later question it was never shown.
+ */
+export function parseCallbackData(
+  data: string,
+): { answer: TelegramAnswer; token: string } | null {
+  const separator = data.indexOf(':');
+  if (separator <= 0) return null;
+  const answer = data.slice(0, separator);
+  const token = data.slice(separator + 1);
+  if (!token) return null;
+  if (!ANSWERS.includes(answer as TelegramAnswer)) return null;
+  return { answer: answer as TelegramAnswer, token };
+}
+
+/** The keyboard sent with the question. Shape pinned by a test — a renamed
+ *  callback_data field would leave three buttons that silently do nothing. */
+export function buildKeyboard(token: string): Record<string, unknown> {
+  return {
+    inline_keyboard: [[
+      { text: 'Run', callback_data: `run:${token}` },
+      { text: 'Skip', callback_data: `skip:${token}` },
+      { text: 'Cancel', callback_data: `cancel:${token}` },
+    ]],
+  };
+}
+
+/**
+ * Advance the long-poll offset past everything just handled.
+ *
+ * Telegram redelivers any update that has not been acknowledged by a higher
+ * offset, so getting this wrong means the same tap arrives forever. Exported
+ * because it is off-by-one-shaped and cheaper to test than to debug against a
+ * live bot.
+ */
+export function nextOffset(current: number, updates: { update_id?: unknown }[]): number {
+  let out = current;
+  for (const update of updates) {
+    if (typeof update.update_id === 'number') out = Math.max(out, update.update_id + 1);
+  }
+  return out;
+}
+
+/**
+ * Telegram's three buttons, in the terms the agent's gate speaks.
+ *
+ * The gate has four outcomes and `classifyPermissionOutcome` fails closed on
+ * anything it does not recognise, so this must be exhaustive rather than
+ * defaulted — a typo here would read as a denial, which is safe but silently
+ * wrong, and the user would tap Run and watch nothing happen.
+ */
+export function outcomeForAnswer(answer: TelegramAnswer): 'allow_once' | 'reject_once' | 'reject_always' {
+  switch (answer) {
+    case 'run': return 'allow_once';
+    // Skip this one and carry on — not a standing refusal.
+    case 'skip': return 'reject_once';
+    // Stop asking. The phone has no "always allow": granting a blanket
+    // permission is a decision that belongs at the keyboard, where you can see
+    // what you are granting it to.
+    case 'cancel': return 'reject_always';
+  }
+}
+
+/**
+ * How a decision reads on the other device, once it is too late to change it.
+ *
+ * The withdrawn side says what happened rather than just going blank, so
+ * someone reaching for their phone a moment late learns what they missed
+ * instead of finding a message that silently lost its buttons.
+ */
+export function describePermissionOutcome(outcome: string): string {
+  switch (outcome) {
+    case 'allow_once': return 'allowed';
+    case 'allow_always': return 'allowed, and always from now on';
+    case 'reject_once': return 'skipped';
+    case 'reject_always': return 'denied';
+    default: return 'decided';
+  }
+}
+
+// ─── The client ───────────────────────────────────────────────────────────────
+
+const API = 'https://api.telegram.org';
+/** Server-side long-poll window. The request blocks for up to this long. */
+const POLL_SECONDS = 25;
+/** Local ceiling, comfortably past the server's own. */
+const REQUEST_TIMEOUT_MS = (POLL_SECONDS + 10) * 1000;
+
+interface Outstanding {
+  token: string;
+  messageID: number;
+  resolve: (answer: TelegramAnswer | null) => void;
+}
+
+export class TelegramApproval {
+  private readonly credentials: TelegramCredentials;
+  private outstanding: Outstanding | null = null;
+  private updateOffset = 0;
+  private polling = false;
+
+  constructor(credentials: TelegramCredentials) {
+    this.credentials = credentials;
+  }
+
+  /**
+   * Send the question and wait.
+   *
+   * Resolves `null` when no answer arrived — the terminal was used instead, the
+   * caller aborted, or Telegram could not be reached. **A null is never
+   * approval**: the caller keeps its own gate and decides for itself.
+   */
+  async ask(
+    command: string,
+    toolName: string,
+    isDestructive: boolean,
+    signal?: AbortSignal,
+  ): Promise<TelegramAnswer | null> {
+    const token = randomToken();
+    const messageID = await this.sendQuestion(
+      composeMessage(command, toolName, isDestructive),
+      token,
+    );
+    if (messageID === null) return null;
+
+    return new Promise<TelegramAnswer | null>(resolve => {
+      let settled = false;
+      const finish = (answer: TelegramAnswer | null) => {
+        if (settled) return;
+        settled = true;
+        this.outstanding = null;
+        this.polling = false;
+        resolve(answer);
+      };
+
+      this.outstanding = { token, messageID, resolve: finish };
+
+      if (signal) {
+        if (signal.aborted) { finish(null); return; }
+        signal.addEventListener('abort', () => finish(null), { once: true });
+      }
+
+      void this.poll();
+    });
+  }
+
+  /**
+   * The terminal answered first. Close the question on the phone so nobody taps
+   * a button that would do nothing, and say where it was decided.
+   */
+  async withdraw(decidedInTerminal: string): Promise<void> {
+    const pending = this.outstanding;
+    if (!pending) return;
+    this.outstanding = null;
+    this.polling = false;
+    pending.resolve(null);
+    await this.edit(pending.messageID, `Answered in the terminal — ${decidedInTerminal}.`);
+  }
+
+  // ── plumbing ──
+
+  private async post(method: string, body: unknown): Promise<Record<string, unknown> | null> {
+    try {
+      const response = await fetch(`${API}/bot${this.credentials.botToken}/${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (!response.ok) return null;
+      return await response.json() as Record<string, unknown>;
+    } catch {
+      // Network, timeout, malformed JSON. Every one of them means "no answer
+      // from the phone", which the caller already handles.
+      return null;
+    }
+  }
+
+  private async sendQuestion(text: string, token: string): Promise<number | null> {
+    const json = await this.post('sendMessage', {
+      chat_id: this.credentials.chatID,
+      text,
+      parse_mode: 'Markdown',
+      reply_markup: buildKeyboard(token),
+    });
+    const result = json?.result as { message_id?: unknown } | undefined;
+    return typeof result?.message_id === 'number' ? result.message_id : null;
+  }
+
+  private async edit(messageID: number, text: string): Promise<void> {
+    await this.post('editMessageText', {
+      chat_id: this.credentials.chatID,
+      message_id: messageID,
+      text,
+    });
+  }
+
+  private async poll(): Promise<void> {
+    if (this.polling) return;
+    this.polling = true;
+    while (this.polling && this.outstanding) {
+      const json = await this.post('getUpdates', {
+        offset: this.updateOffset,
+        timeout: POLL_SECONDS,
+        allowed_updates: ['callback_query'],
+      });
+      if (!this.polling || !this.outstanding) return;
+
+      const updates = Array.isArray(json?.result) ? json.result as Record<string, unknown>[] : [];
+      this.updateOffset = nextOffset(this.updateOffset, updates);
+
+      for (const update of updates) {
+        if (update.callback_query) await this.handle(update.callback_query);
+        if (!this.outstanding) return;
+      }
+
+      // Telegram's long poll already blocks server-side; this pause only covers
+      // the error case, so a failing network cannot spin the loop.
+      if (updates.length === 0) await sleep(1000);
+    }
+  }
+
+  private async handle(callback: unknown): Promise<void> {
+    const pending = this.outstanding;
+    if (!pending) return;
+    if (!isFromOwner(callback, this.credentials.chatID)) return;
+
+    const data = (callback as { data?: unknown }).data;
+    if (typeof data !== 'string') return;
+    const parsed = parseCallbackData(data);
+    if (!parsed || parsed.token !== pending.token) return;
+
+    this.outstanding = null;
+    this.polling = false;
+
+    const id = (callback as { id?: unknown }).id;
+    if (typeof id === 'string') await this.post('answerCallbackQuery', { callback_query_id: id });
+    await this.edit(pending.messageID, `${capitalise(parsed.answer)} — sent to your terminal.`);
+
+    pending.resolve(parsed.answer);
+  }
+}
+
+function randomToken(): string {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function capitalise(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
