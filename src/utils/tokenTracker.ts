@@ -58,6 +58,7 @@ interface TokenRecord {
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Z.AI / ZhipuAI
   'glm-5.3':            1_000_000,
+  'glm-5.3-flash':      1_000_000,
   'glm-5.2':            1_000_000,
   'glm-5.1':              200_000,
   'glm-5-turbo':          202_752,
@@ -132,6 +133,10 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // inferred from the match — the two being equal today is a coincidence of the
   // price list, not a rule.
   'glm-5.3':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
+  // Flash lists at $0.15/$0.50 with a 50% launch promotion in force at the
+  // time of writing. The list price is what belongs here: a promotional rate
+  // would quietly understate every session's cost the day it ends.
+  'glm-5.3-flash':     { inputPer1M: 0.15,  outputPer1M: 0.50 },
   'glm-5.2':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
   'glm-5.1':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
   'glm-5-turbo':       { inputPer1M: 1.20,  outputPer1M: 4.00 },
@@ -172,6 +177,9 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // subscription alias (flat-fee in reality, priced notionally like K2.7 Code).
   'kimi-k3':                   { inputPer1M: 3.00, outputPer1M: 15.00 },
   'kimi-k2.7-code':            { inputPer1M: 0.95, outputPer1M: 4.00 },
+  // Highspeed is the same model served faster, at exactly double the rate
+  // across every token category (platform.kimi.ai/docs/pricing/chat-k27-code).
+  'kimi-k2.7-code-highspeed':  { inputPer1M: 1.90, outputPer1M: 8.00 },
   // Kimi doesn't publish a distinct high-speed price in its main table.
   // Leave that variant unpriced rather than presenting an invented estimate.
   'kimi-k2.6':                 { inputPer1M: 0.95, outputPer1M: 4.00 },

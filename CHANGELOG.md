@@ -11,6 +11,27 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [2.25.0] — 2026-08-28
+
+> GLM-5.3-Flash: the same million-token window and tool calling as the flagship, at a twentieth of the price.
+
+### Added
+
+- **GLM-5.3-Flash** on both international Z.AI providers. Same 1M context, same
+  tool calling, and it takes the same graded thinking control — Flash also
+  refuses a disabled thinking block, so it goes through the same machinery as
+  5.3 rather than the on/off path. Listed at $0.15 in / $0.50 out per 1M; the
+  50% launch promotion is deliberately *not* what the cost tracker records,
+  since a promotional rate understates every session the day it ends. China
+  gateways keep 5.2 for the same reason 5.3 is not offered there.
+
+### Fixed
+
+- **`kimi-k2.7-code-highspeed` now has a rate.** It was exempted because Moonshot
+  published no distinct high-speed price; they now do — double the standard
+  model across every token category. The exemption is removed rather than left
+  as a dead suppression that would hide the next gap.
+
 ## [2.24.0] — 2026-08-25
 
 > A rejected API key made an agent run look like it had simply run out of steps: every request was retried, the budget drained, and the report blamed the iteration limit.

@@ -355,7 +355,6 @@ describe('providers', () => {
       // Models that deliberately carry a context window but no pricing row.
       // Each needs a matching comment in tokenTracker.ts saying why.
       const UNPRICED_BY_DESIGN = new Set([
-        'kimi-k2.7-code-highspeed', // Moonshot publishes no distinct high-speed rate
         'qwen3.8-max-preview',      // Token-Plan credits only; no pay-per-use rate published
       ]);
       const priced = new Set(getPricingTable().map(entry => entry.model));

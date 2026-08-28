@@ -69,6 +69,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     },
     models: [
       { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
+      { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', description: 'Same 1M context at a twentieth of the price' },
       { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant, available to all users' },
     ],
@@ -102,6 +103,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       // (`z.ai-cn*`) bills separately and is not covered by that page, so it is
       // left alone until its own listing is checked.
       { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
+      { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', description: 'Same 1M context at a twentieth of the price' },
       { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant' },
     ],
