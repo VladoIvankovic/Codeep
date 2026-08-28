@@ -227,6 +227,73 @@ describe('getCostBreakdown', () => {
     expect(breakdown[0].estimatedCost).toBeCloseTo(1.4, 6);
   });
 
+  it('reads Kimi cache hits, which arrive at the top level and not nested', () => {
+    // Kimi returns usage.cached_tokens directly; only reading
+    // prompt_tokens_details silently zeroed every one of them.
+    const usage = extractOpenAIUsage({
+      usage: { prompt_tokens: 10_000, completion_tokens: 200, total_tokens: 10_200, cached_tokens: 8_000 },
+    });
+    expect(usage?.cacheReadTokens).toBe(8_000);
+  });
+
+  it('still prefers the nested field where a provider sends both', () => {
+    const usage = extractOpenAIUsage({
+      usage: {
+        prompt_tokens: 10_000,
+        completion_tokens: 200,
+        total_tokens: 10_200,
+        cached_tokens: 1,
+        prompt_tokens_details: { cached_tokens: 8_000 },
+      },
+    });
+    expect(usage?.cacheReadTokens).toBe(8_000);
+  });
+
+  it('treats a nested zero as an answer, not as a missing field', () => {
+    // A provider reporting "nothing was cached" must not fall through to the
+    // top-level key and pick up a stale or unrelated value.
+    const usage = extractOpenAIUsage({
+      usage: {
+        prompt_tokens: 10_000,
+        completion_tokens: 200,
+        total_tokens: 10_200,
+        cached_tokens: 8_000,
+        prompt_tokens_details: { cached_tokens: 0 },
+      },
+    });
+    expect(usage?.cacheReadTokens).toBeUndefined();
+  });
+
+  it('bills a Kimi cache read at its own rate, not Anthropic\'s', () => {
+    // kimi-k2.7-code lists $0.19 cache-hit against $0.95 cache-miss — 0.2×,
+    // where the hardcoded 0.1× charged half of what the read actually costs.
+    recordTokenUsage(
+      {
+        promptTokens: 10_000,
+        completionTokens: 0,
+        totalTokens: 10_000,
+        cacheReadTokens: 8_000,
+      },
+      'kimi-k2.7-code',
+      'kimi-api',
+    );
+    const breakdown = getCostBreakdown();
+    // Uncached = 2000 at 1.0× = (2000/1M) * 0.95 = 0.0019
+    // Cache read = 8000 at 0.2× = (8000/1M) * 0.95 * 0.2 = 0.00152
+    expect(breakdown[0].estimatedCost).toBeCloseTo(0.00342, 6);
+  });
+
+  it('bills a Qwen cache read at the 20% Alibaba documents', () => {
+    recordTokenUsage(
+      { promptTokens: 10_000, completionTokens: 0, totalTokens: 10_000, cacheReadTokens: 10_000 },
+      'qwen3.7-max',
+      'qwen-api',
+    );
+    // qwen3.7-max input rate is $2.50/1M; every prompt token here was a cache
+    // hit, so the whole bill is 10000 * 2.50/1M * 0.2.
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.005, 8);
+  });
+
   it('applies Anthropic cache pricing (read 0.1×, write 1.25×)', () => {
     // Claude Opus 4.7 input rate is $5/1M. Verify the multipliers land.
     recordTokenUsage(

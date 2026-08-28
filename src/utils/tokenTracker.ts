@@ -284,11 +284,18 @@ export function recordTokenUsage(
  */
 export function extractOpenAIUsage(data: any): TokenUsage | null {
   if (data?.usage) {
-    // OpenAI-protocol `prompt_tokens` is INCLUSIVE of cached prompt tokens
-    // (DeepSeek/OpenAI report cache hits in prompt_tokens_details.cached_tokens).
+    // OpenAI-protocol `prompt_tokens` is INCLUSIVE of cached prompt tokens.
     // Surface them so getCostBreakdown bills cache reads at the discounted
     // rate instead of the full cache-miss input rate.
-    const cached = data.usage.prompt_tokens_details?.cached_tokens || 0;
+    //
+    // Two shapes are in the wild. OpenAI, DeepSeek and Qwen's text models nest
+    // it under prompt_tokens_details; Kimi returns it at the top level, and
+    // Alibaba's own docs say some Qwen models still do and will be migrated
+    // later. Reading only the nested form zeroed every Kimi cache hit, so the
+    // cached portion of a run billed at the full cache-miss rate — five times
+    // what it costs — with nothing anywhere to say so.
+    const nested = data.usage.prompt_tokens_details?.cached_tokens;
+    const cached = (typeof nested === 'number' ? nested : data.usage.cached_tokens) || 0;
     return {
       promptTokens: data.usage.prompt_tokens || 0,
       completionTokens: data.usage.completion_tokens || 0,
@@ -337,6 +344,28 @@ export interface ProviderCostBreakdown {
 }
 
 /**
+ * What a provider charges to read a cached token, as a fraction of its own
+ * cache-miss input rate.
+ *
+ * 0.1 is Anthropic's ratio and used to be applied to everyone. Kimi lists
+ * $0.19 against a $0.95 cache-miss rate, and Alibaba prices Qwen's implicit
+ * cache at 20% of input — both 0.2, so every cached token on those two was
+ * billed at half what it actually costs.
+ */
+const CACHE_READ_RATE: Record<string, number> = {
+  'kimi': 0.2,
+  'kimi-api': 0.2,
+  'qwen': 0.2,
+  'qwen-api': 0.2,
+  'qwen-cn': 0.2,
+  'qwen-cn-api': 0.2,
+  'qwen-token-plan': 0.2,
+};
+
+/** Anthropic's ratio, and the safest guess for a provider we have not priced. */
+const DEFAULT_CACHE_READ_RATE = 0.1;
+
+/**
  * Get cost breakdown grouped by provider/model.
  *
  * `startIndex` lets callers price only the records appended since a marker (see
@@ -363,16 +392,19 @@ export function getCostBreakdown(startIndex = 0): ProviderCostBreakdown[] {
     } else {
       const pricing = MODEL_PRICING[record.model];
       if (pricing) {
-        // Anthropic prompt caching: cache_creation_input is billed at 1.25×
-        // the base input rate, cache_read_input at 0.1×. The remaining
-        // (uncached) prompt tokens bill at the standard 1.0× rate.
+        // Cache writes bill at 1.25× the base input rate (Anthropic's, and the
+        // only provider here that charges for them at all); cache reads bill
+        // at whatever fraction the provider charges. The remaining (uncached)
+        // prompt tokens bill at the standard 1.0× rate.
         const cacheCreate = record.cacheCreationTokens ?? 0;
         const cacheRead = record.cacheReadTokens ?? 0;
+        const cacheReadRate = CACHE_READ_RATE[record.provider?.trim().toLowerCase()]
+          ?? DEFAULT_CACHE_READ_RATE;
         const uncachedPrompt = Math.max(0, record.promptTokens - cacheCreate - cacheRead);
         existing.estimatedCost +=
           (uncachedPrompt / 1_000_000) * pricing.inputPer1M
           + (cacheCreate / 1_000_000) * pricing.inputPer1M * 1.25
-          + (cacheRead / 1_000_000) * pricing.inputPer1M * 0.1
+          + (cacheRead / 1_000_000) * pricing.inputPer1M * cacheReadRate
           + (record.completionTokens / 1_000_000) * pricing.outputPer1M;
       }
     }
