@@ -11,7 +11,18 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
-## [Unreleased]
+## [3.0.0] — 2026-08-28
+
+> Approval on your phone, on every platform — and the version numbers across the CLI, the Mac app and the VS Code extension now line up.
+
+### About the version
+
+Codeep V3 is one release across three surfaces, so the three carry one number.
+The CLI moves 2.25.0 → 3.0.0, the VS Code extension 2.9.0 → 3.0.0, and the Mac
+app 1.14.0 → 3.0.0. **Nothing here is a breaking change** — the major is the
+alignment, said out loud rather than left to look like an accident. The GitHub
+Action keeps its own `v1.x` line: it is a separate product with its own
+consumers and its own supply-chain pinning.
 
 ### Added
 
@@ -42,6 +53,28 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
   The token goes in your OS keychain; the chat ID is ordinary config. Telegram
   necessarily sees the command, because you cannot judge what you are approving
   otherwise — which is why this is off by default.
+
+### Fixed
+
+- **The confirmation showed the binary, not the command.** It read
+  `parameters.command`, which is `git` where the truth is `git status` — asking
+  someone to approve a command they had not been shown, which is the one thing
+  this gate must not do. The same truncated string went to the phone. The audit
+  record already joined the binary with its arguments; that is now what both
+  use.
+
+- **A Telegram send that failed said nothing.** A wrong chat ID was
+  indistinguishable from a phone nobody picked up. Telegram's own words are now
+  surfaced, and the failure people actually hit while setting this up is
+  translated into what to do about it.
+
+- **The Telegram toggle wrote a value its own getter could not read.** Its
+  options were the strings `'true'` and `'false'` while the getter returned a
+  boolean, so the setting reported "On" and read false immediately afterwards,
+  forever. Every select in the settings list is now checked against the value it
+  reads back.
+
+All three were found by using it, not by testing it.
 
 ## [2.25.0] — 2026-08-28
 
