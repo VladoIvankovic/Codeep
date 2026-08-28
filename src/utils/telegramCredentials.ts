@@ -45,7 +45,10 @@ export async function hasTelegramToken(): Promise<boolean> {
  * both would otherwise stall a run waiting for an answer that was never asked.
  */
 export async function loadTelegramCredentials(): Promise<TelegramCredentials | null> {
-  if (!config.get('telegramApproval')) return null;
+  // Strictly true. A truthy check would accept the string 'true' left behind
+  // by an earlier build whose toggle wrote strings — and then the feature
+  // would be live while the settings row read OFF.
+  if (config.get('telegramApproval') !== true) return null;
 
   const chatID = String(config.get('telegramChatId') || '').trim();
   if (!chatID) return null;

@@ -12,6 +12,7 @@ import { runAgent, AgentResult, PermissionOutcome } from '../utils/agent';
 import { TelegramApproval, outcomeForAnswer, describePermissionOutcome } from '../utils/telegramApproval';
 import { loadTelegramCredentials } from '../utils/telegramCredentials';
 import { raceApproval, type RaceParticipant } from '../utils/approvalRace';
+import { describeAuditTarget } from '../utils/auditLog';
 import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
@@ -235,8 +236,12 @@ export async function executeAgentTask(
 
     const onRequestPermission = confirmationMode === 'dangerous'
       ? async (toolCall: import('../utils/tools').ToolCall): Promise<PermissionOutcome> => {
-          const target = (toolCall.parameters.path as string) ||
-            (toolCall.parameters.command as string) || 'unknown';
+          // `parameters.command` is the binary alone — `git`, not `git status`.
+          // Showing that asks someone to approve a command they have not been
+          // shown, which is the one thing this gate must not do. The audit
+          // record already joins the binary with its arguments; reuse it rather
+          // than writing a second, subtly different answer.
+          const target = describeAuditTarget(toolCall);
           const shortTarget = target.length > 50 ? '...' + target.slice(-47) : target;
 
           const inTerminal: RaceParticipant<PermissionOutcome> = {
@@ -265,7 +270,12 @@ export async function executeAgentTask(
 
           let onPhone: RaceParticipant<PermissionOutcome> | null = null;
           if (telegramCredentials) {
-            const telegram = new TelegramApproval(telegramCredentials);
+            // Report a failure to *ask* once, in the terminal. Without this a
+            // wrong chat id looks exactly like a phone nobody picked up.
+            const telegram = new TelegramApproval(
+              telegramCredentials,
+              reason => app.notifyWarn(`Telegram: ${reason}`),
+            );
             onPhone = {
               answer: telegram
                 .ask(target, toolCall.tool, true)

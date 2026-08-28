@@ -6,6 +6,7 @@ import {
   buildKeyboard,
   nextOffset,
   outcomeForAnswer,
+  describeApiError,
 } from './telegramApproval';
 
 describe('isFromOwner', () => {
@@ -184,5 +185,36 @@ describe('outcomeForAnswer', () => {
     for (const answer of ['run', 'skip', 'cancel'] as const) {
       expect(outcomeForAnswer(answer)).not.toBe('allow_always');
     }
+  });
+});
+
+describe('describeApiError', () => {
+  /**
+   * The failure people actually hit while setting this up. Left as a bare
+   * "could not send", it is indistinguishable from a phone nobody picked up —
+   * which is exactly how it presented the first time this ran for real.
+   */
+  it('explains a wrong chat ID in terms of what to do', () => {
+    const message = describeApiError(400, { ok: false, description: 'Bad Request: chat not found' });
+    expect(message).toContain('chat not found');
+    expect(message).toMatch(/getUpdates|message the bot/i);
+  });
+
+  it('names a rejected token and where to fix it', () => {
+    expect(describeApiError(401, { ok: false, description: 'Unauthorized' })).toContain('/telegram');
+  });
+
+  it('explains a blocked bot', () => {
+    expect(describeApiError(403, { ok: false, description: 'Forbidden: bot was blocked by the user' }))
+      .toMatch(/blocked/i);
+  });
+
+  it('passes through anything else Telegram said rather than inventing a reason', () => {
+    expect(describeApiError(400, { ok: false, description: 'Bad Request: message is too long' }))
+      .toContain('message is too long');
+  });
+
+  it('still says something when there is no description', () => {
+    expect(describeApiError(502, null)).toContain('502');
   });
 });

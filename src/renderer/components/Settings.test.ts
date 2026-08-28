@@ -177,3 +177,39 @@ describe('handleSettingsKey — rate-limit side effect', () => {
     expect(config.get('rateLimitCommands')).toBe(500);
   });
 });
+
+describe('select options match the values they read back', () => {
+  /**
+   * A select whose current value is not among its own options is broken, and
+   * broken in a way that looks like it works: the row renders the raw value,
+   * the toggle writes something the getter cannot recognise, and the setting
+   * reads Off forever while reporting that it was turned On.
+   *
+   * That is exactly what shipped for `telegramApproval`, whose options were the
+   * strings 'true' and 'false' while its getter returned a boolean. Nothing in
+   * the type system objects: `SettingItem.getValue` returns
+   * `string | number | boolean`, and `options[].value` is the same union, so
+   * the two sides are free to disagree.
+   */
+  it.each(SETTINGS.filter(s => s.type === 'select').map(s => [s.key, s] as const))(
+    '%s offers its own current value',
+    (_key, setting) => {
+      const current = setting.getValue();
+      const values = (setting.options ?? []).map(o => o.value);
+
+      expect(values.length).toBeGreaterThan(1);
+      // Strict membership. `includes` uses SameValueZero, so 'true' does not
+      // match true — which is the whole point of the check.
+      expect(values).toContain(current);
+    },
+  );
+
+  it.each(SETTINGS.filter(s => s.type === 'select').map(s => [s.key, s] as const))(
+    '%s keeps one type across all its options',
+    (_key, setting) => {
+      const types = new Set((setting.options ?? []).map(o => typeof o.value));
+      expect([...types]).toHaveLength(1);
+      expect(types.has(typeof setting.getValue())).toBe(true);
+    },
+  );
+});

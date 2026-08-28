@@ -146,9 +146,13 @@ export const SETTINGS: SettingItem[] = [
     label: 'Answer confirmations on Telegram',
     getValue: () => config.get('telegramApproval') === true,
     type: 'select',
+    // Booleans, not the strings 'true'/'false'. With strings the option never
+    // matches what getValue returns, so the row renders the raw value and the
+    // toggle writes a string that `=== true` can never satisfy — it reads Off
+    // forever while claiming to have been turned On.
     options: [
-      { value: 'false', label: 'Off' },
-      { value: 'true', label: 'On' },
+      { value: true, label: 'ON' },
+      { value: false, label: 'OFF' },
     ],
   },
   {

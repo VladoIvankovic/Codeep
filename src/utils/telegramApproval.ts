@@ -169,6 +169,28 @@ export function describePermissionOutcome(outcome: string): string {
   }
 }
 
+/**
+ * Telegram's failure, phrased for someone who is setting this up.
+ *
+ * `chat not found` is the one people actually hit: the id belongs to a
+ * conversation with a *different* bot, or the bot has never been messaged from
+ * that chat at all. Repeating the API's words and adding what they mean beats
+ * a generic failure that sends them back to the docs.
+ */
+export function describeApiError(status: number, json: Record<string, unknown> | null): string {
+  const description = typeof json?.description === 'string' ? json.description : '';
+  if (/chat not found/i.test(description)) {
+    return 'Telegram says "chat not found" — the chat ID does not belong to a conversation with this bot. Message the bot from that chat, then read the ID back from getUpdates.';
+  }
+  if (/bot was blocked/i.test(description)) {
+    return 'Telegram says the bot was blocked by this chat. Unblock it and try again.';
+  }
+  if (status === 401) {
+    return 'Telegram rejected the bot token. Re-enter it with /telegram.';
+  }
+  return description ? `Telegram refused the message: ${description}` : `Telegram returned HTTP ${status}.`;
+}
+
 // ─── The client ───────────────────────────────────────────────────────────────
 
 const API = 'https://api.telegram.org';
@@ -189,8 +211,13 @@ export class TelegramApproval {
   private updateOffset = 0;
   private polling = false;
 
-  constructor(credentials: TelegramCredentials) {
+  /** Called once when the question could not be put at all. Not for a missing
+   *  answer — only for a failure to ask. */
+  private readonly onProblem?: (reason: string) => void;
+
+  constructor(credentials: TelegramCredentials, onProblem?: (reason: string) => void) {
     this.credentials = credentials;
+    this.onProblem = onProblem;
   }
 
   /**
@@ -211,7 +238,12 @@ export class TelegramApproval {
       composeMessage(command, toolName, isDestructive),
       token,
     );
-    if (messageID === null) return null;
+    if (messageID === null) {
+      // Say it once, here, rather than leaving the caller to guess from a null
+      // that also means "answered elsewhere" and "cancelled".
+      this.onProblem?.(this.lastError ?? 'the question could not be sent');
+      return null;
+    }
 
     return new Promise<TelegramAnswer | null>(resolve => {
       let settled = false;
@@ -249,6 +281,16 @@ export class TelegramApproval {
 
   // ── plumbing ──
 
+  /**
+   * Why the last call failed, in Telegram's own words.
+   *
+   * Kept because swallowing it made a misconfiguration indistinguishable from
+   * silence: a wrong chat id answers `chat not found` on the very first send,
+   * and reporting nothing left the user watching a phone that was never going
+   * to ring.
+   */
+  private lastError: string | null = null;
+
   private async post(method: string, body: unknown): Promise<Record<string, unknown> | null> {
     try {
       const response = await fetch(`${API}/bot${this.credentials.botToken}/${method}`, {
@@ -257,11 +299,17 @@ export class TelegramApproval {
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
-      if (!response.ok) return null;
-      return await response.json() as Record<string, unknown>;
-    } catch {
-      // Network, timeout, malformed JSON. Every one of them means "no answer
-      // from the phone", which the caller already handles.
+      const json = await response.json().catch(() => null) as Record<string, unknown> | null;
+      if (!response.ok || json?.ok === false) {
+        this.lastError = describeApiError(response.status, json);
+        return null;
+      }
+      this.lastError = null;
+      return json;
+    } catch (error) {
+      // Network, timeout, malformed JSON. Still "no answer from the phone",
+      // but now it can say which.
+      this.lastError = (error as Error)?.message || 'could not reach Telegram';
       return null;
     }
   }
