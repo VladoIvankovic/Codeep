@@ -47,6 +47,9 @@ import { expandFileAndFolderMentions, expandGitMentions } from '../utils/mention
 import { expandWebMentions } from '../utils/webFetch';
 import { handleCommand as dispatchCommand, AppCommandContext } from './commands';
 import { logAppError } from '../utils/logger';
+import { loadTelegramInboxCredentials } from '../utils/telegramCredentials';
+import { attachTelegramInbox } from '../utils/telegramInbox';
+import { sendTelegramNotice } from '../utils/telegramNotify';
 import {
   executeAgentTask,
   runAgentTask,
@@ -85,6 +88,8 @@ export function deriveSessionName(message: string): string {
 }
 
 let isAgentRunningFlag = false;
+/** Set once the phone is allowed to send instructions; null when it is not. */
+let telegramInbox: { stop: () => void; drain: () => void } | null = null;
 let agentAbortController: AbortController | null = null;
 let pendingInteractiveContext: PendingInteractiveContext | null = null;
 
@@ -103,7 +108,14 @@ function makeCtx(): AppCommandContext {
     isAgentRunning: () => isAgentRunningFlag,
     // A finished run may have switched branches — drop the cache so the next
     // header render re-reads it.
-    setAgentRunning: (v) => { isAgentRunningFlag = v; if (!v) gitBranchCache = null; },
+    setAgentRunning: (v) => {
+      isAgentRunningFlag = v;
+      if (!v) {
+        gitBranchCache = null;
+        // A run just ended: hand over anything the phone sent while it was busy.
+        telegramInbox?.drain();
+      }
+    },
     setAbortController: (ctrl) => { agentAbortController = ctrl; },
     formatAddedFilesContext,
     handleCommand: (cmd, args) => dispatchCommand(cmd, args, makeCtx()),
@@ -818,6 +830,29 @@ Commands (in chat):
   app.addMessage({ role: 'welcome', content: welcomeLines.join('\n') });
 
   app.start();
+
+  // Let the phone send instructions, if it has been switched on. Started after
+  // app.start() so a prompt that arrives immediately has somewhere to land.
+  void (async () => {
+    const credentials = await loadTelegramInboxCredentials();
+    if (!credentials) return;
+    telegramInbox = attachTelegramInbox(credentials, {
+      isBusy: () => isAgentRunningFlag,
+      submit: (text) => {
+        // Through the same door the input box uses, and shown in the transcript
+        // the same way — a run started from the phone must not be invisible to
+        // whoever is sitting at the terminal.
+        app.addMessage({ role: 'user', content: text });
+        app.notify('Telegram: running an instruction from your phone');
+        app.setLoading(true);
+        void handleSubmit(text).catch(err => {
+          app.notify(`Error: ${err.message}`);
+          app.setLoading(false);
+        });
+      },
+      reply: (text) => { void sendTelegramNotice(credentials, text); },
+    });
+  })();
 
   // Spawn MCP servers in the background. They register against the fixed
   // session id `codeep-tui` that runAgentTask passes into runAgent's

@@ -31,12 +31,12 @@ export type TelegramAnswer = 'run' | 'skip' | 'cancel';
 
 const ANSWERS: readonly TelegramAnswer[] = ['run', 'skip', 'cancel'];
 
-export interface TelegramCredentials {
-  /** From @BotFather. A credential — belongs in the keychain, never in config. */
-  botToken: string;
-  /** The single chat allowed to answer. Anything else is ignored. */
-  chatID: string;
-}
+import { sharedUpdates, type TelegramCredentials } from './telegramUpdates';
+
+// Re-exported so callers and tests keep the import site they had before the
+// cursor moved into its own module.
+export type { TelegramCredentials } from './telegramUpdates';
+export { nextOffset } from './telegramUpdates';
 
 /** Longest command we put in a message. Telegram caps at 4096 for the whole
  *  text; this keeps room for the heading and the fences, and a command longer
@@ -116,21 +116,6 @@ export function buildKeyboard(token: string): Record<string, unknown> {
   };
 }
 
-/**
- * Advance the long-poll offset past everything just handled.
- *
- * Telegram redelivers any update that has not been acknowledged by a higher
- * offset, so getting this wrong means the same tap arrives forever. Exported
- * because it is off-by-one-shaped and cheaper to test than to debug against a
- * live bot.
- */
-export function nextOffset(current: number, updates: { update_id?: unknown }[]): number {
-  let out = current;
-  for (const update of updates) {
-    if (typeof update.update_id === 'number') out = Math.max(out, update.update_id + 1);
-  }
-  return out;
-}
 
 /**
  * Telegram's three buttons, in the terms the agent's gate speaks.
@@ -194,10 +179,8 @@ export function describeApiError(status: number, json: Record<string, unknown> |
 // ─── The client ───────────────────────────────────────────────────────────────
 
 const API = 'https://api.telegram.org';
-/** Server-side long-poll window. The request blocks for up to this long. */
-const POLL_SECONDS = 25;
-/** Local ceiling, comfortably past the server's own. */
-const REQUEST_TIMEOUT_MS = (POLL_SECONDS + 10) * 1000;
+/** Sending a message or editing one — no long poll lives here any more. */
+const REQUEST_TIMEOUT_MS = 15_000;
 
 interface Outstanding {
   token: string;
@@ -208,8 +191,8 @@ interface Outstanding {
 export class TelegramApproval {
   private readonly credentials: TelegramCredentials;
   private outstanding: Outstanding | null = null;
-  private updateOffset = 0;
-  private polling = false;
+  /** Set while a question is open; called to stop listening once it closes. */
+  private unlisten: (() => void) | null = null;
 
   /** Called once when the question could not be put at all. Not for a missing
    *  answer — only for a failure to ask. */
@@ -251,7 +234,8 @@ export class TelegramApproval {
         if (settled) return;
         settled = true;
         this.outstanding = null;
-        this.polling = false;
+        this.unlisten?.();
+        this.unlisten = null;
         resolve(answer);
       };
 
@@ -262,7 +246,10 @@ export class TelegramApproval {
         signal.addEventListener('abort', () => finish(null), { once: true });
       }
 
-      void this.poll();
+      // Listen on the bot's one poller rather than opening a second. Two
+      // cursors on the same bot silently eat each other's updates.
+      this.unlisten = sharedUpdates(this.credentials.botToken)
+        .subscribe('callback_query', callback => this.handle(callback));
     });
   }
 
@@ -274,7 +261,8 @@ export class TelegramApproval {
     const pending = this.outstanding;
     if (!pending) return;
     this.outstanding = null;
-    this.polling = false;
+    this.unlisten?.();
+    this.unlisten = null;
     pending.resolve(null);
     await this.edit(pending.messageID, `Answered in the terminal — ${decidedInTerminal}.`);
   }
@@ -333,31 +321,6 @@ export class TelegramApproval {
     });
   }
 
-  private async poll(): Promise<void> {
-    if (this.polling) return;
-    this.polling = true;
-    while (this.polling && this.outstanding) {
-      const json = await this.post('getUpdates', {
-        offset: this.updateOffset,
-        timeout: POLL_SECONDS,
-        allowed_updates: ['callback_query'],
-      });
-      if (!this.polling || !this.outstanding) return;
-
-      const updates = Array.isArray(json?.result) ? json.result as Record<string, unknown>[] : [];
-      this.updateOffset = nextOffset(this.updateOffset, updates);
-
-      for (const update of updates) {
-        if (update.callback_query) await this.handle(update.callback_query);
-        if (!this.outstanding) return;
-      }
-
-      // Telegram's long poll already blocks server-side; this pause only covers
-      // the error case, so a failing network cannot spin the loop.
-      if (updates.length === 0) await sleep(1000);
-    }
-  }
-
   private async handle(callback: unknown): Promise<void> {
     const pending = this.outstanding;
     if (!pending) return;
@@ -369,7 +332,8 @@ export class TelegramApproval {
     if (!parsed || parsed.token !== pending.token) return;
 
     this.outstanding = null;
-    this.polling = false;
+    this.unlisten?.();
+    this.unlisten = null;
 
     const id = (callback as { id?: unknown }).id;
     if (typeof id === 'string') await this.post('answerCallbackQuery', { callback_query_id: id });
@@ -387,6 +351,3 @@ function capitalise(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}

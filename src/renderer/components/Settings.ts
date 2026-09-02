@@ -156,6 +156,17 @@ export const SETTINGS: SettingItem[] = [
     ],
   },
   {
+    key: 'telegramInbox',
+    label: 'Start tasks from Telegram',
+    getValue: () => config.get('telegramInbox') === true,
+    type: 'select',
+    // Booleans, for the same reason as the row above.
+    options: [
+      { value: true, label: 'ON' },
+      { value: false, label: 'OFF' },
+    ],
+  },
+  {
     key: 'telegramChatId',
     label: 'Telegram chat ID',
     getValue: () => config.get('telegramChatId') || '',

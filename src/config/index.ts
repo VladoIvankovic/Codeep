@@ -117,6 +117,12 @@ export interface ConfigSchema {
    *  and waiting on an answer that cannot come would hang CI. The bot token
    *  lives in the keychain, never here. */
   telegramApproval: boolean;
+  /** Whether a message from the configured chat becomes a prompt.
+   *
+   *  Separate from telegramApproval on purpose. Approval lets the phone answer
+   *  a question the agent already chose to ask; this lets the phone ask one,
+   *  which is a keyboard attached to this machine. Off unless asked for. */
+  telegramInbox: boolean;
   /** The single chat allowed to answer. Not a secret — it identifies a
    *  conversation, and it is useless without the token. */
   telegramChatId: string;
@@ -343,6 +349,7 @@ function createConfig(): Conf<ConfigSchema> {
     customBaseUrl: '',
     agentConfirmation: 'dangerous',
     telegramApproval: false,
+    telegramInbox: false,
     telegramChatId: '',
     agentConfirmDeleteFile: true,
     agentConfirmExecuteCommand: true,

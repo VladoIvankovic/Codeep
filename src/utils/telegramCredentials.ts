@@ -49,7 +49,22 @@ export async function loadTelegramCredentials(): Promise<TelegramCredentials | n
   // by an earlier build whose toggle wrote strings — and then the feature
   // would be live while the settings row read OFF.
   if (config.get('telegramApproval') !== true) return null;
+  return readCredentials();
+}
 
+/**
+ * The same pair, for the inbox, behind its own switch.
+ *
+ * Not folded into the call above: someone can want the phone to be told a run
+ * finished without wanting the phone to be able to start one, and the reverse.
+ * One flag serving both would make turning either off turn both off.
+ */
+export async function loadTelegramInboxCredentials(): Promise<TelegramCredentials | null> {
+  if (config.get('telegramInbox') !== true) return null;
+  return readCredentials();
+}
+
+async function readCredentials(): Promise<TelegramCredentials | null> {
   const chatID = String(config.get('telegramChatId') || '').trim();
   if (!chatID) return null;
 
