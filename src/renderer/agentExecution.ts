@@ -495,12 +495,22 @@ export async function executeAgentTask(
     // Report stats to codeep.dev (fire-and-forget, only if github_id is set)
     const { getCurrentVersion } = await import('../utils/update.js');
     const sessionId = getCurrentSessionId();
-    // Auto-name from task if no display name set yet
-    if (!ctx.sessionDisplayName && ctx.setSessionDisplayName) {
+    // Auto-name from the task if no display name is set yet.
+    //
+    // The derived name is kept in a local rather than read back off ctx.
+    // makeCtx() copies sessionDisplayName by value, so setSessionDisplayName
+    // updates the module's variable while this object keeps the undefined it
+    // was built with — and reading it one line after calling the setter always
+    // returned nothing. Everything downstream then fell back to the session id,
+    // so a run reported itself to the dashboard, and announced itself on
+    // Telegram, as "session-2026-09-02-ddc1f13c" instead of its task.
+    let displayName = ctx.sessionDisplayName;
+    if (!displayName) {
       const taskWords = task.replace(/\s+/g, ' ').trim().split(' ').slice(0, 5).join(' ');
-      ctx.setSessionDisplayName(taskWords.length > 48 ? taskWords.slice(0, 45) + '…' : taskWords);
+      displayName = taskWords.length > 48 ? taskWords.slice(0, 45) + '…' : taskWords;
+      ctx.setSessionDisplayName?.(displayName);
     }
-    const displayName = ctx.sessionDisplayName || sessionId;
+    if (!displayName) displayName = sessionId;
     syncSession({
       sessionId,
       sessionName: displayName,
