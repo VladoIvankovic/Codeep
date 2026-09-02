@@ -93,7 +93,7 @@ export interface ConfirmOptions {
 
 // HunkPickerItem / HunkPickerOptions moved to ./components/HunkPicker.ts —
 // re-exported here so external importers (renderer/commands.ts) keep working.
-export { HunkPickerItem, HunkPickerOptions } from './components/HunkPicker';
+export type { HunkPickerItem, HunkPickerOptions } from './components/HunkPicker';
 import {
   createHunkPickerState,
   handleHunkPickerKey,

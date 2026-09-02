@@ -7,12 +7,18 @@
  */
 
 export { cursor, screen, fg, bg, style, styled, stripAnsi, visibleLength, truncate, wordWrap } from './ansi';
-export { Screen, Cell } from './Screen';
-export { Input, LineEditor, KeyEvent, KeyHandler } from './Input';
-export { App, AppOptions, Message } from './App';
+export { Screen } from './Screen';
+export type { Cell } from './Screen';
+export { Input, LineEditor } from './Input';
+export type { KeyEvent, KeyHandler } from './Input';
+export { App } from './App';
+export type { AppOptions, Message } from './App';
 
 // Components
-export { createBox, centerBox, BoxStyle, BoxOptions } from './components/Box';
-export { renderModal, renderHelpModal, renderListModal, ModalOptions } from './components/Modal';
+export { createBox, centerBox } from './components/Box';
+export type { BoxStyle, BoxOptions } from './components/Box';
+export { renderModal, renderHelpModal, renderListModal } from './components/Modal';
+export type { ModalOptions } from './components/Modal';
 export { helpCategories, keyboardShortcuts } from './components/Help';
-export { renderStatusScreen, StatusInfo } from './components/Status';
+export { renderStatusScreen } from './components/Status';
+export type { StatusInfo } from './components/Status';
