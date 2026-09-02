@@ -301,8 +301,15 @@ export function statusBarRightHint(args: {
   unseenWhileScrolled: number;
   isStreaming: boolean;
   isLoading: boolean;
+  /**
+   * False while something else owns the whole screen — the agent timeline
+   * takes it over and returns before the transcript is drawn at all, so
+   * scrolling changes an offset nothing reads. Offering PgDn there asks for a
+   * keypress that does nothing and leaves the reader hunting for the key.
+   */
+  canScroll: boolean;
 }): string {
-  if (args.scrollOffset > 0 && args.unseenWhileScrolled > 0) {
+  if (args.canScroll && args.scrollOffset > 0 && args.unseenWhileScrolled > 0) {
     return `↓ ${args.unseenWhileScrolled} new · PgDn `;
   }
   return args.isStreaming || args.isLoading ? 'Esc to stop ' : '/help · ↑↓ history ';

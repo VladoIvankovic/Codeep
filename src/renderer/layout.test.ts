@@ -487,38 +487,62 @@ describe('formatTokenCount', () => {
 // ─── statusBarRightHint ─────────────────────────────────────────────────────
 describe('statusBarRightHint', () => {
   it('shows the "new messages" badge when scrolled up with unseen messages', () => {
-    expect(statusBarRightHint({ scrollOffset: 5, unseenWhileScrolled: 3, isStreaming: false, isLoading: false }))
+    expect(statusBarRightHint({ scrollOffset: 5, unseenWhileScrolled: 3, isStreaming: false, isLoading: false, canScroll: true }))
       .toBe('↓ 3 new · PgDn ');
   });
 
   it('omits the badge when unseenWhileScrolled is 0 even if scrolled', () => {
-    expect(statusBarRightHint({ scrollOffset: 5, unseenWhileScrolled: 0, isStreaming: false, isLoading: false }))
+    expect(statusBarRightHint({ scrollOffset: 5, unseenWhileScrolled: 0, isStreaming: false, isLoading: false, canScroll: true }))
       .toBe('/help · ↑↓ history ');
   });
 
   it('omits the badge when not scrolled even if there are unseen messages', () => {
-    expect(statusBarRightHint({ scrollOffset: 0, unseenWhileScrolled: 5, isStreaming: false, isLoading: false }))
+    expect(statusBarRightHint({ scrollOffset: 0, unseenWhileScrolled: 5, isStreaming: false, isLoading: false, canScroll: true }))
       .toBe('/help · ↑↓ history ');
   });
 
   it('shows "Esc to stop" while streaming', () => {
-    expect(statusBarRightHint({ scrollOffset: 0, unseenWhileScrolled: 0, isStreaming: true, isLoading: false }))
+    expect(statusBarRightHint({ scrollOffset: 0, unseenWhileScrolled: 0, isStreaming: true, isLoading: false, canScroll: true }))
       .toBe('Esc to stop ');
   });
 
   it('shows "Esc to stop" while loading', () => {
-    expect(statusBarRightHint({ scrollOffset: 0, unseenWhileScrolled: 0, isStreaming: false, isLoading: true }))
+    expect(statusBarRightHint({ scrollOffset: 0, unseenWhileScrolled: 0, isStreaming: false, isLoading: true, canScroll: true }))
       .toBe('Esc to stop ');
   });
 
   it('shows the default help hint when idle and not scrolled', () => {
-    expect(statusBarRightHint({ scrollOffset: 0, unseenWhileScrolled: 0, isStreaming: false, isLoading: false }))
+    expect(statusBarRightHint({ scrollOffset: 0, unseenWhileScrolled: 0, isStreaming: false, isLoading: false, canScroll: true }))
       .toBe('/help · ↑↓ history ');
   });
 
   it('badge takes priority over streaming', () => {
-    expect(statusBarRightHint({ scrollOffset: 5, unseenWhileScrolled: 3, isStreaming: true, isLoading: false }))
+    expect(statusBarRightHint({ scrollOffset: 5, unseenWhileScrolled: 3, isStreaming: true, isLoading: false, canScroll: true }))
       .toBe('↓ 3 new · PgDn ');
+  });
+
+  it('does not offer PgDn when nothing on screen can scroll', () => {
+    // The agent timeline renders instead of the transcript and returns before
+    // it, so scrolling moves an offset nothing reads. The badge sent people
+    // hunting the keyboard for a key that would have done nothing anyway.
+    expect(statusBarRightHint({
+      scrollOffset: 12, unseenWhileScrolled: 21,
+      isStreaming: true, isLoading: false, canScroll: false,
+    })).not.toContain('PgDn');
+  });
+
+  it('falls back to the working hint there, not to silence', () => {
+    expect(statusBarRightHint({
+      scrollOffset: 12, unseenWhileScrolled: 21,
+      isStreaming: true, isLoading: false, canScroll: false,
+    })).toContain('Esc to stop');
+  });
+
+  it('still offers it in the transcript, where PgDn does move', () => {
+    expect(statusBarRightHint({
+      scrollOffset: 12, unseenWhileScrolled: 21,
+      isStreaming: true, isLoading: false, canScroll: true,
+    })).toContain('↓ 21 new');
   });
 });
 

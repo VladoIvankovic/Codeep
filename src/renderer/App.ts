@@ -1694,7 +1694,7 @@ export class App {
     
     
     // Status bar
-    this.renderStatusBar(statusLine, width);
+    this.renderStatusBar(statusLine, width, true);
     
     // Inline menu renders BELOW status bar
     if (this.menuOpen && this.menuItems.length > 0) {
@@ -1986,7 +1986,7 @@ export class App {
     this.renderInput(inputY, width, false);
     this.renderAgentKeyHints(hintsY, width);
     this.screen.horizontalLine(footerDividerY, '─', fg.gray);
-    this.renderStatusBar(statusY, width);
+    this.renderStatusBar(statusY, width, false);
     this.screen.render();
   }
 
@@ -2793,7 +2793,11 @@ export class App {
   /**
    * Render status bar
    */
-  private renderStatusBar(y: number, width: number): void {
+  /**
+   * @param canScroll false when the caller renders instead of the transcript
+   *   rather than above it, so there is nothing on screen for PgDn to move.
+   */
+  private renderStatusBar(y: number, width: number, canScroll: boolean): void {
     // Clear the line first
     this.screen.writeLine(y, '');
 
@@ -2812,9 +2816,13 @@ export class App {
       unseenWhileScrolled: this.unseenWhileScrolled,
       isStreaming: this.isStreaming,
       isLoading: this.isLoading,
+      canScroll,
     });
 
-    if (this.scrollOffset > 0 && this.unseenWhileScrolled > 0) {
+    // Only the badge replaces the footer. Without the guard a run wide enough
+    // to show the timeline traded its runtime and token counts for a hint that
+    // did nothing.
+    if (canScroll && this.scrollOffset > 0 && this.unseenWhileScrolled > 0) {
       this.screen.write(width - rightText.length, y, rightText, PRIMARY_COLOR);
       return;
     }
