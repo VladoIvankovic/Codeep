@@ -294,6 +294,32 @@ describe('getCostBreakdown', () => {
     expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.005, 8);
   });
 
+  it('prices Sonnet 5 at the rate that became permanent, not the one it nearly rose to', () => {
+    // The $2/$10 launch rate was billed as introductory through 2026-08-31 and
+    // the scheduled rise to $3/$15 was cancelled. Nothing failed when the table
+    // still said $3 — the number was simply 50% high with no test to notice.
+    const sonnet = getPricingTable().find(m => m.model === 'claude-sonnet-5');
+    expect(sonnet).toMatchObject({ inputPer1M: 2, outputPer1M: 10 });
+  });
+
+  it('knows Claude Fable 5.1, and does not fall back to Fable 5', () => {
+    expect(getPricingTable().find(m => m.model === 'claude-fable-5-1'))
+      .toMatchObject({ inputPer1M: 10, outputPer1M: 50 });
+    expect(getModelContextWindow('claude-fable-5-1')).toBe(1_000_000);
+  });
+
+  it('bills a Fable 5.1 cache read at 0.025×, which is its own and not Anthropic\'s', () => {
+    // Every other Anthropic model reads a cached token at 0.1×; this one is a
+    // quarter of that, so the provider-level rate would overcharge fourfold.
+    recordTokenUsage(
+      { promptTokens: 100_000, completionTokens: 0, totalTokens: 100_000, cacheReadTokens: 100_000 },
+      'claude-fable-5-1',
+      'anthropic',
+    );
+    // 100000/1M * $10 * 0.025 = 0.025
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.025, 8);
+  });
+
   it('applies Anthropic cache pricing (read 0.1×, write 1.25×)', () => {
     // Claude Opus 4.7 input rate is $5/1M. Verify the multipliers land.
     recordTokenUsage(

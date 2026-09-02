@@ -11,6 +11,8 @@ import { chat } from '../api/index';
 import { runAgent, AgentResult, PermissionOutcome } from '../utils/agent';
 import { TelegramApproval, outcomeForAnswer, describePermissionOutcome } from '../utils/telegramApproval';
 import { loadTelegramCredentials } from '../utils/telegramCredentials';
+import { composeRunSummary, sendTelegramNotice, shouldNotify } from '../utils/telegramNotify';
+import { isFlatFeeProvider } from '../config/providers';
 import { raceApproval, type RaceParticipant } from '../utils/approvalRace';
 import { describeAuditTarget } from '../utils/auditLog';
 import { ProjectContext } from '../utils/project';
@@ -233,6 +235,13 @@ export async function executeAgentTask(
     const telegramCredentials = confirmationMode === 'dangerous'
       ? await loadTelegramCredentials()
       : null;
+
+    // The finish notice does not depend on the confirmation mode — a run with
+    // confirmations off is exactly the one you are most likely to walk away
+    // from. Reuse the credentials already read above when there are any, so
+    // this costs a second keychain round-trip only when there are not.
+    const noticeCredentials = telegramCredentials ?? await loadTelegramCredentials();
+    const runStartedAt = Date.now();
 
     const onRequestPermission = confirmationMode === 'dangerous'
       ? async (toolCall: import('../utils/tools').ToolCall): Promise<PermissionOutcome> => {
@@ -503,6 +512,22 @@ export async function executeAgentTask(
     // even if the user switched model mid-session. Only this run's delta
     // (since tokenReportStart) is reported; the cumulative store is preserved.
     const costBreakdown = getCostBreakdown(tokenReportStart);
+
+    // Told once the run is over, and only when it ran long enough that you
+    // could plausibly have stopped watching. Awaited so the process does not
+    // exit from under the request, but never allowed to fail the run.
+    if (noticeCredentials) {
+      const elapsedMs = Date.now() - runStartedAt;
+      if (shouldNotify(elapsedMs, true)) {
+        const payPerUse = costBreakdown.filter(entry => !isFlatFeeProvider(entry.provider));
+        await sendTelegramNotice(noticeCredentials, composeRunSummary({
+          task: displayName,
+          elapsedMs,
+          tokens: costBreakdown.reduce((sum, e) => sum + e.promptTokens + e.completionTokens, 0),
+          costUsd: payPerUse.reduce((sum, e) => sum + e.estimatedCost, 0),
+        })).catch(() => false);
+      }
+    }
     const sharedFields = {
       sessionId,
       sessionName: displayName,

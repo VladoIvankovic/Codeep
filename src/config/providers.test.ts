@@ -232,7 +232,15 @@ describe('providers', () => {
       expect(modelIds).toContain('claude-opus-5');
       expect(modelIds).toContain('claude-sonnet-5');
       expect(modelIds).toContain('claude-haiku-4-5-20251001');
+      // Fable 5.1 supersedes Fable 5, which Anthropic now lists as legacy.
+      // Offering the superseded one would quietly pick a worse model at the
+      // same price — both are $10/$50.
       // Fable 5 is re-listed (available again) — Anthropic's most capable model.
+      expect(modelIds).toContain('claude-fable-5-1');
+      // Kept, not replaced. Dropping an id does not leave a pinned config on
+      // the older model — the lookup fails and the user lands on another
+      // provider's default, which is how the macOS app moved a pinned Fable 5
+      // to gpt-5.6-sol. Ids are added; they are not removed.
       expect(modelIds).toContain('claude-fable-5');
       expect(modelIds).not.toContain('claude-opus-4-7');
       expect(modelIds).not.toContain('claude-opus-4-6');

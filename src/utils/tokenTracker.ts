@@ -70,6 +70,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gpt-5.4':              1_050_000,
   'gpt-5.4-mini':         400_000,
   // Anthropic
+  'claude-fable-5-1':             1_000_000,
   'claude-fable-5':               1_000_000,
   'claude-opus-5':                1_000_000,
   'claude-sonnet-4-6':            1_000_000,
@@ -148,10 +149,11 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'gpt-5.4':      { inputPer1M: 2.50,  outputPer1M: 15.00 },
   'gpt-5.4-mini': { inputPer1M: 0.75,  outputPer1M: 4.50 },
   // Anthropic
+  'claude-fable-5-1':             { inputPer1M: 10.00, outputPer1M: 50.00 },
   'claude-fable-5':               { inputPer1M: 10.00, outputPer1M: 50.00 },
   'claude-opus-5':                { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-sonnet-4-6':            { inputPer1M: 3.00,  outputPer1M: 15.00 },
-  'claude-sonnet-5':              { inputPer1M: 3.00,  outputPer1M: 15.00 },
+  'claude-sonnet-5':              { inputPer1M: 2.00,  outputPer1M: 10.00 },
   'claude-haiku-4-5-20251001':    { inputPer1M: 1.00,  outputPer1M: 5.00 },
   // DeepSeek (cache-miss input pricing)
   // DeepSeek moved to peak / off-peak billing on 2026-08-16, with off-peak at
@@ -352,6 +354,17 @@ export interface ProviderCostBreakdown {
  * cache at 20% of input — both 0.2, so every cached token on those two was
  * billed at half what it actually costs.
  */
+/**
+ * Models whose cache-read rate is not their provider's usual one.
+ *
+ * Fable 5.1 reads a cached token at 0.025× the base input price, where every
+ * other Anthropic model charges 0.1×. Checked before the provider map, because
+ * this is a property of the model and not of the account it runs under.
+ */
+const MODEL_CACHE_READ_RATE: Record<string, number> = {
+  'claude-fable-5-1': 0.025,
+};
+
 const CACHE_READ_RATE: Record<string, number> = {
   'kimi': 0.2,
   'kimi-api': 0.2,
@@ -398,7 +411,8 @@ export function getCostBreakdown(startIndex = 0): ProviderCostBreakdown[] {
         // prompt tokens bill at the standard 1.0× rate.
         const cacheCreate = record.cacheCreationTokens ?? 0;
         const cacheRead = record.cacheReadTokens ?? 0;
-        const cacheReadRate = CACHE_READ_RATE[record.provider?.trim().toLowerCase()]
+        const cacheReadRate = MODEL_CACHE_READ_RATE[record.model]
+          ?? CACHE_READ_RATE[record.provider?.trim().toLowerCase()]
           ?? DEFAULT_CACHE_READ_RATE;
         const uncachedPrompt = Math.max(0, record.promptTokens - cacheCreate - cacheRead);
         existing.estimatedCost +=

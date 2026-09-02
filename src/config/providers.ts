@@ -527,7 +527,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'claude-fable-5',            name: 'Claude Fable 5',        description: 'Most capable — hardest reasoning & long-horizon agentic work' },
+      { id: 'claude-fable-5-1',          name: 'Claude Fable 5.1',      description: 'Most capable — hardest reasoning & long-horizon agentic work' },
+      { id: 'claude-fable-5',            name: 'Claude Fable 5',        description: 'Superseded by 5.1 — same price, kept for pinned configs' },
       { id: 'claude-opus-5',             name: 'Claude Opus 5',         description: 'Complex agentic coding & deep reasoning — the Opus workhorse' },
       { id: 'claude-sonnet-5',           name: 'Claude Sonnet 5',       description: 'Best balance of speed and intelligence' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku',          description: 'Fastest and most affordable' },
@@ -578,7 +579,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // get a working dropdown.
     models: [
       { id: 'openrouter/auto',                  name: 'Auto-route',         description: 'OpenRouter picks the best model for the task' },
-      { id: 'anthropic/claude-fable-5',         name: 'Claude Fable 5',     description: 'Anthropic — most capable' },
+      { id: 'anthropic/claude-fable-5-1',       name: 'Claude Fable 5.1',   description: 'Anthropic — most capable' },
+      { id: 'anthropic/claude-fable-5',         name: 'Claude Fable 5',     description: 'Anthropic — superseded by 5.1' },
       { id: 'anthropic/claude-opus-5',          name: 'Claude Opus 5',      description: 'Anthropic — flagship Opus tier' },
       { id: 'anthropic/claude-sonnet-5',        name: 'Claude Sonnet 5',    description: 'Anthropic — balanced' },
       { id: 'openai/gpt-5.6-sol',               name: 'GPT-5.6 Sol',        description: 'OpenAI — flagship' },
