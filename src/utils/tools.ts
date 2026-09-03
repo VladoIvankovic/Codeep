@@ -112,7 +112,12 @@ export const AGENT_TOOLS = {
   },
   execute_command: {
     name: 'execute_command',
-    description: 'Execute a shell command. Use for npm, git, build tools, tests, etc.',
+    // Naming a few examples read as an exhaustive list: the agent refused
+    // `sleep`, which IS on the allowlist, explaining that its tool was
+    // "limited to package managers and version control". It believed the
+    // description over its own capability. Say the shape instead, and let
+    // the runtime refuse — it already answers with a specific reason.
+    description: 'Execute a shell command. A safety allowlist applies and covers far more than build tooling — package managers, git, test runners, and ordinary utilities such as ls, cat, grep, find, echo, date, sleep and curl. Do not assume a command is forbidden: try it, and a refusal will say so.',
     parameters: {
       command: { type: 'string', description: 'The command to run (e.g., npm, git, node)', required: true },
       args: { type: 'array', description: 'Command arguments as array (e.g., ["install", "lodash"])', required: false },

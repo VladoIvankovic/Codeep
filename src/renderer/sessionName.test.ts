@@ -30,4 +30,17 @@ describe('session display name', () => {
   it('still falls back to the session id when there is no task to name it', () => {
     expect(source).toContain('if (!displayName) displayName = sessionId;');
   });
+
+  it('names the notice after this run, not after the session', () => {
+    // sessionDisplayName is the FIRST task's and stays put — right for a
+    // session, wrong for one run inside it. The second task in a session
+    // announced itself on Telegram under the first one's name.
+    expect(source).toContain('const runLabel = shortLabel(task)');
+    expect(source).toContain('task: runLabel,');
+    expect(source).not.toContain('task: displayName,');
+  });
+
+  it('still names the session after the task that opened it', () => {
+    expect(source).toContain('sessionName: displayName');
+  });
 });

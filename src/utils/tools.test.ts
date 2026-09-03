@@ -10,6 +10,7 @@ import {
   ToolCall,
   ToolResult,
 } from './tools';
+import { validateCommand } from './shell';
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 
@@ -821,4 +822,27 @@ describe('createActionLog', () => {
     expect(log.timestamp).toBeGreaterThanOrEqual(before);
     expect(log.timestamp).toBeLessThanOrEqual(after);
   });
+
+describe('execute_command description', () => {
+  const execute = AGENT_TOOLS.execute_command;
+
+  it('does not read as an exhaustive list of what is permitted', () => {
+    // "Use for npm, git, build tools, tests, etc." was taken as the whole
+    // allowlist: the agent refused `sleep`, which is on it, saying its tool was
+    // limited to package managers and version control. It believed the
+    // description over its own capability.
+    expect(execute.description).toMatch(/allowlist/i);
+    for (const command of ['ls', 'cat', 'grep', 'echo', 'sleep']) {
+      expect(execute.description).toContain(command);
+    }
+  });
+
+  it('names commands the allowlist actually contains', () => {
+    // A description that promises more than the runtime permits is the same
+    // failure pointed the other way.
+    for (const command of ['ls', 'cat', 'grep', 'find', 'echo', 'date', 'sleep', 'curl']) {
+      expect(validateCommand(command, [])).toMatchObject({ valid: true });
+    }
+  });
+});
 });

@@ -505,10 +505,20 @@ export async function executeAgentTask(
     // returned nothing. Everything downstream then fell back to the session id,
     // so a run reported itself to the dashboard, and announced itself on
     // Telegram, as "session-2026-09-02-ddc1f13c" instead of its task.
+    const shortLabel = (text: string) => {
+      const words = text.replace(/\s+/g, ' ').trim().split(' ').slice(0, 5).join(' ');
+      return words.length > 48 ? words.slice(0, 45) + '…' : words;
+    };
+
+    // What THIS run was asked to do. The session name below is the first task's
+    // and stays put, which is right for a session and wrong for one run inside
+    // it: the second task in a session would otherwise announce itself on
+    // Telegram under the first one's name.
+    const runLabel = shortLabel(task) || sessionId;
+
     let displayName = ctx.sessionDisplayName;
     if (!displayName) {
-      const taskWords = task.replace(/\s+/g, ' ').trim().split(' ').slice(0, 5).join(' ');
-      displayName = taskWords.length > 48 ? taskWords.slice(0, 45) + '…' : taskWords;
+      displayName = shortLabel(task);
       ctx.setSessionDisplayName?.(displayName);
     }
     if (!displayName) displayName = sessionId;
@@ -539,7 +549,7 @@ export async function executeAgentTask(
       if (fromPhone || shouldNotify(elapsedMs, true)) {
         const payPerUse = costBreakdown.filter(entry => !isFlatFeeProvider(entry.provider));
         await sendTelegramNotice(noticeCredentials, composeRunSummary({
-          task: displayName,
+          task: runLabel,
           elapsedMs,
           answer: fromPhone ? result.finalResponse : undefined,
           tokens: costBreakdown.reduce((sum, e) => sum + e.promptTokens + e.completionTokens, 0),
