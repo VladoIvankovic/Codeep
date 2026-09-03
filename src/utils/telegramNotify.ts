@@ -36,6 +36,14 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
 }
 
+/**
+ * Telegram refuses a message over 4096 characters outright.
+ *
+ * Kept well under: the rest of the summary shares the message, and a reply
+ * that fills a phone screen twice over is not read on a phone anyway.
+ */
+export const MAX_ANSWER_LENGTH = 3000;
+
 export interface RunSummary {
   /** What the run was called — the session display name, not the full prompt. */
   task: string;
@@ -45,15 +53,24 @@ export interface RunSummary {
   tokens?: number;
   /** Pay-per-use dollars. Omitted on a flat-fee plan, where any figure is invented. */
   costUsd?: number;
+  /**
+   * The agent's own reply, for a run that was started from the phone.
+   *
+   * Omitted for a run started at the terminal, where the answer is already on
+   * the screen the person is sitting at and sending it would put file contents
+   * or a command line into a chat for nothing.
+   */
+  answer?: string;
 }
 
 /**
  * The notification text.
  *
- * Deliberately does not carry the agent's output. A finished run can end with
- * anything in it — a file it read, a command it ran, a secret in an error — and
- * this goes to a chat that syncs to Telegram's servers. The terminal has the
- * result; this says only that there is one to come back to.
+ * Carries the agent's answer only when the run was started from the phone. A
+ * finished run can end with anything in it — a file it read, a command it ran,
+ * a secret inside an error — and this goes to a chat that syncs to Telegram's
+ * servers, so it travels only where it was actually asked for. Start a run at
+ * the terminal and this says there is a result to come back to, and no more.
  */
 export function composeRunSummary(summary: RunSummary): string {
   const head = summary.failure ? '⚠️ Codeep stopped' : '✅ Codeep finished';
@@ -69,6 +86,15 @@ export function composeRunSummary(summary: RunSummary): string {
     cost.push(`$${summary.costUsd.toFixed(summary.costUsd < 0.01 ? 4 : 2)}`);
   }
   if (cost.length > 0) lines.push(cost.join(' · '));
+
+  const answer = summary.answer?.trim();
+  if (answer) {
+    lines.push('');
+    lines.push(answer.length > MAX_ANSWER_LENGTH
+      // Say it was cut rather than ending mid-sentence and looking finished.
+      ? `${answer.slice(0, MAX_ANSWER_LENGTH)}\n\n[…cut — the full answer is in the terminal]`
+      : answer);
+  }
 
   return lines.join('\n');
 }

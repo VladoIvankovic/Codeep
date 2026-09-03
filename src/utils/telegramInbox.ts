@@ -145,6 +145,35 @@ export function describeStarted(text: string): string {
   return `Started — ${short}`;
 }
 
+// ─── Whose run is it ──────────────────────────────────────────────────────────
+
+/**
+ * Whether the run now finishing was started from the phone.
+ *
+ * It decides whether the agent's answer travels. Start a run at the terminal
+ * and the answer is already on the screen you are sitting at; sending it to
+ * Telegram would put a file's contents, a command line, or a secret inside an
+ * error message into a chat that syncs to Telegram's servers, for nothing. Ask
+ * from the phone and the answer is the entire point — you are not at the desk,
+ * and "finished, 33K tokens" answers nothing you asked.
+ *
+ * Module-level because the inbox and the notice sit either side of the run and
+ * share no object: the inbox is wired up once in main.ts, the notice fires deep
+ * inside executeAgentTask.
+ */
+let startedFromPhone = false;
+
+export function markRunFromPhone(): void {
+  startedFromPhone = true;
+}
+
+/** True once per run that came from the phone, then false again. */
+export function takeRunFromPhone(): boolean {
+  const was = startedFromPhone;
+  startedFromPhone = false;
+  return was;
+}
+
 // ─── Wiring ───────────────────────────────────────────────────────────────────
 
 export interface InboxHost {
@@ -183,6 +212,7 @@ export function attachTelegramInbox(
     }
 
     host.reply(describeStarted(result.text));
+    markRunFromPhone();
     host.submit(result.text);
   });
 
@@ -196,6 +226,7 @@ export function attachTelegramInbox(
       const next = queue.take();
       if (next === null) return;
       host.reply(describeStarted(next));
+      markRunFromPhone();
       host.submit(next);
     },
   };

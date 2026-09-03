@@ -8,6 +8,8 @@ import {
   InboxQueue,
   MAX_PROMPT_LENGTH,
   MAX_MESSAGE_AGE_MS,
+  markRunFromPhone,
+  takeRunFromPhone,
 } from './telegramInbox';
 
 const CHAT = '7843585422';
@@ -151,4 +153,19 @@ describe('describeStarted', () => {
     expect(out.length).toBeLessThan(80);
     expect(out).toMatch(/…$/);
   });
+
+describe('run origin', () => {
+  it('reports a phone-started run once, then forgets', () => {
+    // Consumed rather than read: left set, the next run started at the terminal
+    // would post its output to Telegram too.
+    markRunFromPhone();
+    expect(takeRunFromPhone()).toBe(true);
+    expect(takeRunFromPhone()).toBe(false);
+  });
+
+  it('starts out false, so a terminal run says nothing', () => {
+    takeRunFromPhone();
+    expect(takeRunFromPhone()).toBe(false);
+  });
+});
 });

@@ -12,6 +12,7 @@ import { runAgent, AgentResult, PermissionOutcome } from '../utils/agent';
 import { TelegramApproval, outcomeForAnswer, describePermissionOutcome } from '../utils/telegramApproval';
 import { loadTelegramCredentials } from '../utils/telegramCredentials';
 import { composeRunSummary, sendTelegramNotice, shouldNotify } from '../utils/telegramNotify';
+import { takeRunFromPhone } from '../utils/telegramInbox';
 import { isFlatFeeProvider } from '../config/providers';
 import { raceApproval, type RaceParticipant } from '../utils/approvalRace';
 import { describeAuditTarget } from '../utils/auditLog';
@@ -528,11 +529,19 @@ export async function executeAgentTask(
     // exit from under the request, but never allowed to fail the run.
     if (noticeCredentials) {
       const elapsedMs = Date.now() - runStartedAt;
-      if (shouldNotify(elapsedMs, true)) {
+      // Consumed once per run either way, so a phone-started run cannot leave
+      // the flag set for whatever the terminal does next.
+      const fromPhone = takeRunFromPhone();
+      // The one-minute threshold exists so a phone is not buzzed about work you
+      // watched finish. It has no business gating a run the phone itself asked
+      // for: that answer was wanted whether it took ten seconds or ten minutes,
+      // and withholding it leaves "Started —" as the last word.
+      if (fromPhone || shouldNotify(elapsedMs, true)) {
         const payPerUse = costBreakdown.filter(entry => !isFlatFeeProvider(entry.provider));
         await sendTelegramNotice(noticeCredentials, composeRunSummary({
           task: displayName,
           elapsedMs,
+          answer: fromPhone ? result.finalResponse : undefined,
           tokens: costBreakdown.reduce((sum, e) => sum + e.promptTokens + e.completionTokens, 0),
           costUsd: payPerUse.reduce((sum, e) => sum + e.estimatedCost, 0),
         })).catch(() => false);

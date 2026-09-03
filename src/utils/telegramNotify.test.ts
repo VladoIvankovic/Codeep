@@ -4,6 +4,7 @@ import {
   formatDuration,
   shouldNotify,
   NOTIFY_AFTER_MS,
+  MAX_ANSWER_LENGTH,
 } from './telegramNotify';
 
 describe('shouldNotify', () => {
@@ -60,10 +61,34 @@ describe('composeRunSummary', () => {
     expect(composeRunSummary({ task: 'x', elapsedMs: 70_000, costUsd: 1.5 })).toContain('$1.50');
   });
 
-  it('carries no agent output, only that there is a result to come back to', () => {
-    // The chat syncs to Telegram's servers; a finished run can end with a file
-    // it read or a secret in an error message.
+  it('carries no agent output for a run started at the terminal', () => {
+    // The chat syncs to Telegram's servers, and a finished run can end with a
+    // file it read or a secret inside an error. The answer travels only where
+    // it was asked for, and at the terminal it is already on screen.
     const text = composeRunSummary({ task: 'Deploy', elapsedMs: 120_000, tokens: 128_000 });
     expect(text.split('\n').length).toBeLessThanOrEqual(3);
+  });
+
+  it('carries the answer when the phone is the one that asked', () => {
+    // "finished, 33K tokens" answers nothing you asked from a phone.
+    const text = composeRunSummary({
+      task: 'koliko datoteka', elapsedMs: 20_000, answer: 'U src/utils ima 140 datoteka.',
+    });
+    expect(text).toContain('U src/utils ima 140 datoteka.');
+  });
+
+  it('cuts an answer that would not fit, and says it cut it', () => {
+    // Telegram refuses anything over 4096 characters outright, so an uncut
+    // answer would arrive as no message at all.
+    const text = composeRunSummary({
+      task: 'x', elapsedMs: 20_000, answer: 'y'.repeat(MAX_ANSWER_LENGTH + 500),
+    });
+    expect(text.length).toBeLessThan(4096);
+    expect(text).toMatch(/cut/i);
+  });
+
+  it('ignores an answer that is only whitespace', () => {
+    const text = composeRunSummary({ task: 'x', elapsedMs: 20_000, answer: '   \n  ' });
+    expect(text.split('\n').filter(Boolean).length).toBe(2);
   });
 });
