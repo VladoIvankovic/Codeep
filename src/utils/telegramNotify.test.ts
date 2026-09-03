@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   composeRunSummary,
   formatDuration,
   shouldNotify,
   NOTIFY_AFTER_MS,
   MAX_ANSWER_LENGTH,
+  stripMarkdown,
 } from './telegramNotify';
 
 describe('shouldNotify', () => {
@@ -91,4 +93,47 @@ describe('composeRunSummary', () => {
     const text = composeRunSummary({ task: 'x', elapsedMs: 20_000, answer: '   \n  ' });
     expect(text.split('\n').filter(Boolean).length).toBe(2);
   });
+
+describe('stripMarkdown', () => {
+  it('unwraps the markers a phone shows as noise', () => {
+    expect(stripMarkdown('**140 datoteka**')).toBe('140 datoteka');
+    expect(stripMarkdown('u `src/utils`')).toBe('u src/utils');
+    expect(stripMarkdown('## Naslov')).toBe('Naslov');
+  });
+
+  it('leaves single underscores alone, because identifiers use them', () => {
+    // `execute_command` and snake_case turn up in these answers constantly;
+    // mangling one to italicise nothing is worse than a visible marker.
+    expect(stripMarkdown('moj execute_command alat')).toBe('moj execute_command alat');
+    expect(stripMarkdown('a_b_c_d')).toBe('a_b_c_d');
+  });
+
+  it('keeps the code inside a fence and drops the fence', () => {
+    expect(stripMarkdown('```ts\nconst x = 1;\n```')).toBe('const x = 1;');
+  });
+
+  it('leaves an unpaired marker rather than eating the rest of the answer', () => {
+    // Looking for a partner that is not there is how a strip turns one stray
+    // character into a truncated answer.
+    expect(stripMarkdown('2 * 3 = 6')).toBe('2 * 3 = 6');
+    expect(stripMarkdown('a lone ` backtick')).toBe('a lone ` backtick');
+  });
+
+  it('is applied to the answer that goes to the phone', () => {
+    expect(composeRunSummary({ task: 'x', elapsedMs: 20_000, answer: '**140** datoteka' }))
+      .toContain('140 datoteka');
+  });
+
+  it('does not send markup to Telegram as parse_mode instead', () => {
+    // Telegram rejects a whole message whose markup is unbalanced, and an
+    // agent's answer is arbitrary text. One stray asterisk and the notice
+    // would not arrive at all.
+    // Comments stripped first: this file explains at length why parse_mode is
+    // not used, and matching that explanation would pass for the wrong reason.
+    const code = readFileSync('src/utils/telegramNotify.ts', 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+    expect(code).not.toContain('parse_mode');
+  });
+});
 });

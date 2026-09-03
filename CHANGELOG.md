@@ -11,6 +11,109 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.1.0] — 2026-09-02
+
+> Send Codeep an instruction from Telegram and it runs, with the answer coming back to the same chat — plus Claude Fable 5.1, a Sonnet 5 price that was 50% too high, and cache reads on Kimi and Qwen that were billed wrong in opposite directions.
+
+### Added
+
+- **Start a task from your phone.** V3 let Telegram answer a question the agent
+  chose to ask. This lets it ask one: send the bot an instruction in plain words
+  and it runs, shown in the terminal like any other, with the agent's answer
+  coming back to the same chat.
+
+  **Its own switch, off by default** — `/settings` → *Start tasks from
+  Telegram*. A chat that can only say Run, Skip or Cancel is bounded by what the
+  agent already decided to do; a chat that can send a prompt is a keyboard
+  attached to your machine. Both are gated on the same chat ID, but they are not
+  the same permission, so turning one on does not turn on the other.
+
+  An instruction sent while a run is in flight waits, and the bot says so. One
+  waits at a time and a newer one replaces it: two corrections typed during one
+  long run mean the second, not both in order.
+
+  Four refusals, each with something to say back rather than silence. Non-text,
+  slash commands, anything over 2000 characters, and **anything older than five
+  minutes** — Telegram holds undelivered messages for 24 hours, so without that
+  last rule an instruction typed to a machine that was switched off would run
+  the moment the CLI next started, hours later, with nobody watching. A message
+  from any other chat is ignored with no reply at all: answering confirms the
+  bot is live and attached to something worth probing.
+
+  A task started from the phone is **not** exempt from confirmation. It stops at
+  a dangerous tool exactly as it would have for someone at the keyboard, and
+  that question arrives on the same phone.
+
+- **Telegram says when a run is over.** Past a minute of run time, so a phone is
+  not buzzed about work you watched finish. It carries the task, the duration
+  and the token or cost line. The agent's answer travels only for a run the
+  phone started — at the terminal it is already on the screen you are sitting
+  at, and sending it would put file contents or a command line into a chat that
+  syncs to Telegram's servers for nothing.
+
+- **Claude Fable 5.1** (`claude-fable-5-1`). Prices like Fable 5, but reads a
+  cached token at 0.025× the input rate where every other Anthropic model
+  charges 0.1×, so the cache rate is resolved per model before per provider now.
+  Fable 5 stays listed: dropping an id does not leave a pinned config on the
+  older model, it drops the lookup and lands you on another provider's default.
+
+### Fixed
+
+- **Claude Sonnet 5 was priced 50% high.** The $2/$10 launch rate was billed as
+  introductory through 2026-08-31 and the scheduled rise to $3/$15 was
+  cancelled. Nothing failed when the table still said $3 — the number was simply
+  wrong, with no test to notice.
+
+- **Cache reads on Kimi and Qwen were billed wrong, in opposite directions.**
+  Two errors, and the first hid the second. Cache hits were read only from
+  `prompt_tokens_details.cached_tokens`; Kimi reports them at the top level of
+  `usage`, so every Kimi cache hit came back as zero and the whole prompt billed
+  at the cache-miss rate. And where a cache read *was* seen it billed at 0.1× —
+  Anthropic's multiplier, hardcoded for everyone — while Kimi lists $0.19
+  against $0.95 and Alibaba prices Qwen's implicit cache at 20% of input. Only
+  the metered keys were affected; the subscription tiers quote no dollar figure
+  at all.
+
+- **`npm run dev` had been dead for two weeks.** Two interfaces were re-exported
+  with value syntax. `tsc` erases the types and compiles happily, so the build,
+  `dist/` and the published CLI were all fine and CI had nothing to report — but
+  `tsx` transpiles file by file, leaves the re-export in, and the loader then
+  fails to find an export that never existed at runtime. `isolatedModules` is on
+  now, which named all eleven sites of that shape in one pass.
+
+- **A run reported itself by session id, not by its task.** The dashboard, the
+  stats report and the Telegram notice all read a name that was copied by value
+  before it was set, so `session-2026-09-02-ddc1f13c` went out in place of the
+  task. And the notice used the *session's* name, which is the first task's and
+  stays put — every task after the first announced itself under the first one's
+  name.
+
+- **The agent refused commands it is allowed to run.** `execute_command` was
+  described as "Use for npm, git, build tools, tests, etc.", and a few examples
+  read as an exhaustive list: it declined `sleep`, which is on the allowlist
+  beside `echo`, `pwd`, `date`, `ls`, `cat` and `curl`, explaining that its tool
+  was limited to package managers and version control. It believed the
+  description over its own capability.
+
+- **The "N new · PgDn" badge offered a key that does nothing mid-run.** While
+  the agent runs, the timeline owns the whole screen and returns before the
+  transcript is drawn, so scrolling moves an offset nothing reads. The badge
+  also replaced the status bar's runtime and token counts to say it.
+
+- **A failing Telegram poll looked like an idle bot.** Errors were caught and
+  turned into null with nothing said, so a webhook left configured (409) and a
+  revoked token (401) were indistinguishable from a phone nobody had messaged.
+  It now says so once when polling starts failing and once when it recovers.
+
+### Changed
+
+- **One Telegram poll, one cursor.** `getUpdates` confirms every update older
+  than its `offset` regardless of `allowed_updates` — that parameter only
+  filters the response. A second poller would have acknowledged approval taps it
+  never delivered, so approvals would have begun failing intermittently with
+  nothing to say why. The loop is shared now, asks for both kinds, and dispatches
+  locally where losing one is impossible.
+
 ## [3.0.0] — 2026-08-28
 
 > Approval on your phone, on every platform — and the version numbers across the CLI, the Mac app and the VS Code extension now line up.

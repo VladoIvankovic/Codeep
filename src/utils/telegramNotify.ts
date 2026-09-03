@@ -44,6 +44,38 @@ export function formatDuration(ms: number): string {
  */
 export const MAX_ANSWER_LENGTH = 3000;
 
+/**
+ * Markdown out, plain words in.
+ *
+ * The agent writes for a terminal that renders markdown, so its answer arrives
+ * on a phone as `**140 datoteka**` — asterisks and backticks read as noise
+ * exactly where the answer should be easiest to read.
+ *
+ * Stripped rather than handed to Telegram as `parse_mode`, which would be the
+ * obvious fix and the wrong one: Telegram rejects a whole message whose markup
+ * is unbalanced, and an agent's answer is arbitrary text. One stray asterisk
+ * and the notice does not arrive at all. Ugly beats missing, and this is
+ * neither.
+ *
+ * Deliberately conservative. Only paired markers are touched, and single
+ * underscores are left alone entirely — `execute_command` and `snake_case`
+ * appear in these answers constantly, and mangling an identifier to italicise
+ * nothing is worse than leaving a marker visible.
+ */
+export function stripMarkdown(text: string): string {
+  return text
+    // Fenced blocks: keep the code, drop the fence and any language tag.
+    .replace(/```[a-zA-Z0-9-]*\n?([\s\S]*?)```/g, '$1')
+    // Headings, which a phone shows as literal hashes.
+    .replace(/^#{1,6}[ \t]+/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    // Single backticks only — a lone one is left alone rather than eating the
+    // rest of the answer looking for a partner.
+    .replace(/`([^`\n]+)`/g, '$1')
+    .trim();
+}
+
 export interface RunSummary {
   /** What the run was called — the session display name, not the full prompt. */
   task: string;
@@ -87,7 +119,7 @@ export function composeRunSummary(summary: RunSummary): string {
   }
   if (cost.length > 0) lines.push(cost.join(' · '));
 
-  const answer = summary.answer?.trim();
+  const answer = summary.answer ? stripMarkdown(summary.answer) : undefined;
   if (answer) {
     lines.push('');
     lines.push(answer.length > MAX_ANSWER_LENGTH
