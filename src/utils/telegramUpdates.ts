@@ -39,6 +39,15 @@ export interface TelegramCredentials {
 
 export type UpdateKind = 'callback_query' | 'message';
 export type UpdateHandler = (payload: unknown) => void | Promise<void>;
+/**
+ * Told when a poll fails, and when one succeeds after failing.
+ *
+ * Without this the loop was completely silent: a webhook left configured on the
+ * bot answers 409 to every getUpdates, a revoked token answers 401, and both
+ * looked exactly like a phone nobody had messaged. Diagnosing it meant reading
+ * the source.
+ */
+export type PollObserver = (event: { ok: boolean; detail: string }) => void;
 
 /**
  * Where the cursor goes after a batch.
@@ -66,10 +75,24 @@ export class TelegramUpdates {
   private running = false;
 
   private readonly idlePauseMs: number;
+  private observer: PollObserver | null = null;
+  /** Only the first failure of a streak is reported, then the recovery. */
+  private failing = false;
 
   constructor(botToken: string, idlePauseMs: number = IDLE_PAUSE_MS) {
     this.botToken = botToken;
     this.idlePauseMs = idlePauseMs;
+  }
+
+  /** Watch the health of the poll itself, separately from its payload. */
+  observe(observer: PollObserver | null): void {
+    this.observer = observer;
+  }
+
+  private report(ok: boolean, detail: string): void {
+    if (ok === !this.failing) return;   // nothing changed; stay quiet
+    this.failing = !ok;
+    this.observer?.({ ok, detail });
   }
 
   /**
@@ -145,9 +168,15 @@ export class TelegramUpdates {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       const json = await response.json().catch(() => null) as Record<string, unknown> | null;
-      if (!response.ok || json?.ok === false) return null;
+      if (!response.ok || json?.ok === false) {
+        const description = typeof json?.description === 'string' ? json.description : `HTTP ${response.status}`;
+        this.report(false, description);
+        return null;
+      }
+      this.report(true, 'reading updates again');
       return json;
-    } catch {
+    } catch (error) {
+      this.report(false, (error as Error)?.message || 'could not reach Telegram');
       return null;
     }
   }

@@ -49,6 +49,7 @@ import { handleCommand as dispatchCommand, AppCommandContext } from './commands'
 import { logAppError } from '../utils/logger';
 import { loadTelegramInboxCredentials } from '../utils/telegramCredentials';
 import { attachTelegramInbox } from '../utils/telegramInbox';
+import { sharedUpdates } from '../utils/telegramUpdates';
 import { sendTelegramNotice } from '../utils/telegramNotify';
 import {
   executeAgentTask,
@@ -851,6 +852,14 @@ Commands (in chat):
         });
       },
       reply: (text) => { void sendTelegramNotice(credentials, text); },
+    });
+
+    // Say it once when the poll starts failing, and once when it recovers. A
+    // webhook left on the bot, or a revoked token, otherwise looks exactly like
+    // a phone nobody has messaged.
+    sharedUpdates(credentials.botToken).observe(({ ok, detail }) => {
+      if (ok) app.notify(`Telegram: ${detail}`);
+      else app.notifyWarn(`Telegram: ${detail}`);
     });
   })();
 

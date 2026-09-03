@@ -88,4 +88,44 @@ describe('TelegramUpdates', () => {
     await settle();
     expect(calls).toHaveLength(0);
   });
+
+  it('says why a poll failed instead of looking like an idle bot', async () => {
+    // A webhook left on the bot answers 409 to every getUpdates, and a revoked
+    // token answers 401. Silent, both were indistinguishable from a phone
+    // nobody had messaged.
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false, status: 409,
+      json: async () => ({ ok: false, description: 'Conflict: terminated by other getUpdates request' }),
+    }) as unknown as Response) as unknown as typeof fetch;
+
+    const seen: { ok: boolean; detail: string }[] = [];
+    const updates = new TelegramUpdates('token', 1);
+    updates.observe(event => seen.push(event));
+    const stop = updates.subscribe('message', () => {});
+    await settle();
+    stop();
+
+    expect(seen[0]!.ok).toBe(false);
+    expect(seen[0]!.detail).toContain('Conflict');
+  });
+
+  it('reports a streak once, and again when it recovers', async () => {
+    // A poll that fails every second for an hour is one problem, not 3600.
+    let failing = true;
+    globalThis.fetch = vi.fn(async () => (failing
+      ? { ok: false, status: 500, json: async () => ({ ok: false, description: 'boom' }) }
+      : { ok: true, json: async () => ({ ok: true, result: [] }) }) as unknown as Response,
+    ) as unknown as typeof fetch;
+
+    const seen: { ok: boolean }[] = [];
+    const updates = new TelegramUpdates('token', 1);
+    updates.observe(event => seen.push(event));
+    const stop = updates.subscribe('message', () => {});
+    await settle();
+    failing = false;
+    await settle();
+    stop();
+
+    expect(seen.map(e => e.ok)).toEqual([false, true]);
+  });
 });
