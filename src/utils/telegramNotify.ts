@@ -39,10 +39,77 @@ export function formatDuration(ms: number): string {
 /**
  * Telegram refuses a message over 4096 characters outright.
  *
- * Kept well under: the rest of the summary shares the message, and a reply
- * that fills a phone screen twice over is not read on a phone anyway.
+ * Kept well under, because the summary head shares the first message.
  */
 export const MAX_ANSWER_LENGTH = 3000;
+
+/**
+ * How many messages one answer may become.
+ *
+ * A long answer is worth several; an enormous one is not worth a phone buzzing
+ * eleven times, and past a point nobody is reading it there anyway. Three is
+ * enough for an explanation and short of a flood.
+ */
+export const MAX_ANSWER_PARTS = 3;
+
+/**
+ * An answer as the messages to send, in order.
+ *
+ * Cutting at the limit was honest — it said it had cut — but lossy in the place
+ * it hurts: an answer that lists files or walks through a change passes 3000
+ * characters easily, and the conclusion is at the end. So it is split instead,
+ * on a paragraph or line boundary where there is one nearby, and only what
+ * exceeds three messages is cut.
+ *
+ * Mirrors the Mac app's `TelegramAnswerText.partsForPhone` deliberately: two
+ * implementations of "what does the phone get" that can disagree is worse than
+ * either.
+ */
+export function splitAnswer(text: string): string[] {
+  const plain = text.trim();
+  if (!plain) return [];
+
+  const parts: string[] = [];
+  let rest = plain;
+
+  while (rest.length > 0 && parts.length < MAX_ANSWER_PARTS) {
+    if (rest.length <= MAX_ANSWER_LENGTH) {
+      parts.push(rest);
+      rest = '';
+      break;
+    }
+    const cut = breakPoint(rest);
+    parts.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).replace(/^[\n ]+/, '');
+  }
+
+  // Say it was cut rather than ending mid-sentence and looking finished.
+  if (rest.length > 0 && parts.length > 0) {
+    parts[parts.length - 1] += '\n\n[…cut — the full answer is in the terminal]';
+  }
+  return parts;
+}
+
+/**
+ * Where to end a part: the last paragraph break in the final third of the
+ * allowance, else the last line break, else the last space.
+ *
+ * Splitting mid-word reads as damage; splitting mid-paragraph reads as a
+ * continuation. Only the tail is searched so a single long paragraph does not
+ * send a 200-character message and push the rest into the next one.
+ */
+function breakPoint(text: string): number {
+  const earliest = Math.floor((MAX_ANSWER_LENGTH * 2) / 3);
+  const window = text.slice(earliest, MAX_ANSWER_LENGTH);
+
+  const paragraph = window.lastIndexOf('\n\n');
+  if (paragraph >= 0) return earliest + paragraph;
+  const line = window.lastIndexOf('\n');
+  if (line >= 0) return earliest + line;
+  const space = window.lastIndexOf(' ');
+  if (space >= 0) return earliest + space;
+  return MAX_ANSWER_LENGTH;
+}
 
 /**
  * Markdown out, plain words in.
@@ -95,16 +162,8 @@ export interface RunSummary {
   answer?: string;
 }
 
-/**
- * The notification text.
- *
- * Carries the agent's answer only when the run was started from the phone. A
- * finished run can end with anything in it — a file it read, a command it ran,
- * a secret inside an error — and this goes to a chat that syncs to Telegram's
- * servers, so it travels only where it was actually asked for. Start a run at
- * the terminal and this says there is a result to come back to, and no more.
- */
-export function composeRunSummary(summary: RunSummary): string {
+/** The head: what ran, how long it took, what it cost. Never the answer. */
+function composeHead(summary: RunSummary): string {
   const head = summary.failure ? '⚠️ Codeep stopped' : '✅ Codeep finished';
   const lines = [`${head} — ${summary.task}`, `took ${formatDuration(summary.elapsedMs)}`];
 
@@ -119,16 +178,28 @@ export function composeRunSummary(summary: RunSummary): string {
   }
   if (cost.length > 0) lines.push(cost.join(' · '));
 
-  const answer = summary.answer ? stripMarkdown(summary.answer) : undefined;
-  if (answer) {
-    lines.push('');
-    lines.push(answer.length > MAX_ANSWER_LENGTH
-      // Say it was cut rather than ending mid-sentence and looking finished.
-      ? `${answer.slice(0, MAX_ANSWER_LENGTH)}\n\n[…cut — the full answer is in the terminal]`
-      : answer);
-  }
-
   return lines.join('\n');
+}
+
+/**
+ * The notification, as the messages to send in order.
+ *
+ * One message when the answer fits, which is the common case. A longer answer
+ * continues into further messages rather than being cut at the first limit —
+ * see `splitAnswer`. The head shares the first message, so the reply is not a
+ * bare wall of text with no idea which run it belongs to.
+ *
+ * Carries the agent's answer only when the run was started from the phone. A
+ * finished run can end with anything in it — a file it read, a command it ran,
+ * a secret inside an error — and this goes to a chat that syncs to Telegram's
+ * servers, so it travels only where it was actually asked for. Start a run at
+ * the terminal and this says there is a result to come back to, and no more.
+ */
+export function composeRunMessages(summary: RunSummary): string[] {
+  const head = composeHead(summary);
+  const parts = summary.answer ? splitAnswer(stripMarkdown(summary.answer)) : [];
+  if (parts.length === 0) return [head];
+  return [`${head}\n\n${parts[0]}`, ...parts.slice(1)];
 }
 
 /**

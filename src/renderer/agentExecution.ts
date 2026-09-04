@@ -11,7 +11,7 @@ import { chat } from '../api/index';
 import { runAgent, AgentResult, PermissionOutcome } from '../utils/agent';
 import { TelegramApproval, outcomeForAnswer, describePermissionOutcome } from '../utils/telegramApproval';
 import { loadTelegramCredentials } from '../utils/telegramCredentials';
-import { composeRunSummary, sendTelegramNotice, shouldNotify } from '../utils/telegramNotify';
+import { composeRunMessages, sendTelegramNotice, shouldNotify } from '../utils/telegramNotify';
 import { takeRunFromPhone } from '../utils/telegramInbox';
 import { isFlatFeeProvider } from '../config/providers';
 import { raceApproval, type RaceParticipant } from '../utils/approvalRace';
@@ -548,13 +548,19 @@ export async function executeAgentTask(
       // and withholding it leaves "Started —" as the last word.
       if (fromPhone || shouldNotify(elapsedMs, true)) {
         const payPerUse = costBreakdown.filter(entry => !isFlatFeeProvider(entry.provider));
-        await sendTelegramNotice(noticeCredentials, composeRunSummary({
+        // Usually one message. An answer past Telegram's limit continues into
+        // further ones rather than being cut at the first — awaited in turn so
+        // they arrive in the order they were written.
+        const messages = composeRunMessages({
           task: runLabel,
           elapsedMs,
           answer: fromPhone ? result.finalResponse : undefined,
           tokens: costBreakdown.reduce((sum, e) => sum + e.promptTokens + e.completionTokens, 0),
           costUsd: payPerUse.reduce((sum, e) => sum + e.estimatedCost, 0),
-        })).catch(() => false);
+        });
+        for (const message of messages) {
+          await sendTelegramNotice(noticeCredentials, message).catch(() => false);
+        }
       }
     }
     const sharedFields = {
