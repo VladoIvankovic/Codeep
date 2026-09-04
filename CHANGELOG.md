@@ -11,6 +11,27 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.1.1] — 2026-09-04
+
+> TL;DR — a long answer from a phone-started run now arrives whole, across up to three messages, instead of being cut at 3000 characters.
+
+### Fixed
+
+- **A long answer to a phone-started run arrives whole.** Telegram refuses a
+  message over 4096 characters outright, so 3.1.0 cut the answer at 3000 and
+  said it had. Honest, but lossy in the place it hurts: an answer that lists
+  files or walks through a change passes 3000 easily, and the conclusion is at
+  the end. It is split now — on a paragraph break where there is one nearby,
+  else a line break, else a space, so a part never ends mid-word. Three messages
+  is the cap; a long answer is worth several, an enormous one is not worth a
+  phone buzzing eleven times. Only what runs past that is cut, and it still says
+  so. The summary head shares the first message, so a continuation is never a
+  wall of text with no idea which run it belongs to.
+
+  Matches the Mac app, which shipped the same rules in its 3.1.0 today. Two
+  implementations of "what does the phone get" that can disagree is worse than
+  either.
+
 ## [3.1.0] — 2026-09-02
 
 > Send Codeep an instruction from Telegram and it runs, with the answer coming back to the same chat — plus Claude Fable 5.1, a Sonnet 5 price that was 50% too high, and cache reads on Kimi and Qwen that were billed wrong in opposite directions.
