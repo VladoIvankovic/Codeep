@@ -20,8 +20,17 @@
   <a href="https://www.npmjs.com/package/codeep"><img src="https://img.shields.io/npm/v/codeep.svg" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/codeep"><img src="https://img.shields.io/npm/dm/codeep.svg" alt="npm downloads"></a>
   <a href="https://github.com/VladoIvankovic/Codeep/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/codeep.svg" alt="license"></a>
-  <a href="https://github.com/VladoIvankovic/Codeep"><img src="https://img.shields.io/github/stars/VladoIvankovic/Codeep?style=social" alt="GitHub stars"></a>
 </p>
+
+## Contents
+
+- [Install](#installation) · [Quick start](#quick-start) · [Upgrading](#upgrading)
+- [One agent, every surface](#one-agent-every-surface) · [Features](#features) · [Dashboard](#codeep-dashboard)
+- [Commands](#commands) · [Keyboard shortcuts](#keyboard-shortcuts) · [Configuration](#configuration)
+- [Zed (ACP)](#zed-editor-integration-acp) · [VS Code](#vs-code-extension) · [Contributing](#contributing)
+
+Full documentation: **[codeep.dev/docs](https://codeep.dev/docs)**
+
 
 ## One agent, every surface
 
@@ -32,6 +41,71 @@ agent workflow wherever you work:
 - **[macOS app](https://codeep.dev/docs/mac)** — a native SwiftUI workbench with project conversations and Run Inspector.
 - **[VS Code extension](https://github.com/VladoIvankovic/Codeep-vscode)** — the same agent over ACP, directly inside the editor. Also available on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=VladoIvankovic.codeep).
 - **[Web dashboard](https://codeep.dev/dashboard)** — synced sessions, usage, costs, tasks, and project activity.
+
+## Installation
+
+### Option 1: npm (Recommended)
+
+```bash
+npm install -g codeep
+```
+
+**Update:**
+```bash
+npm update -g codeep
+```
+
+### Option 2: curl
+
+For a machine without Node. The script is served from codeep.dev and fetched from
+this repository's newest release, so the command does not change if the repository
+moves.
+
+```bash
+curl -fsSL https://codeep.dev/install.sh | bash
+```
+
+**Custom installation directory:**
+```bash
+curl -fsSL https://codeep.dev/install.sh | INSTALL_DIR=~/.local/bin bash
+```
+
+**Specific version:**
+```bash
+curl -fsSL https://codeep.dev/install.sh | VERSION=3.1.1 bash
+```
+
+### Option 3: Manual Binary
+
+Download the latest binary for your platform from [GitHub Releases](https://github.com/VladoIvankovic/Codeep/releases):
+
+| Platform | Binary |
+|----------|--------|
+| macOS Apple Silicon (M1/M2/M3/M4) | `codeep-macos-arm64` |
+| macOS Intel | `codeep-macos-x64` |
+| Linux x86_64 | `codeep-linux-x64` |
+
+```bash
+# Example for macOS Apple Silicon:
+curl -fsSL https://github.com/VladoIvankovic/Codeep/releases/latest/download/codeep-macos-arm64 -o codeep
+chmod +x codeep
+sudo mv codeep /usr/local/bin/
+```
+
+## Quick Start
+
+```bash
+# Navigate to your project directory
+cd /path/to/your/project
+
+# Start Codeep
+codeep
+
+# On first run, enter your API key
+# Get one at: https://z.ai/subscribe?ic=NXYNXZOV14
+```
+
+After installation, `codeep` is available globally in your terminal. Simply run it from any project directory to start coding with AI assistance.
 
 ## Upgrading
 
@@ -965,79 +1039,6 @@ Create, view, and complete tasks directly from the CLI — or manage them on the
 ```
 
 Tasks are loaded into the agent context so the AI sees them automatically on the next message.
-
-## Installation
-
-### Option 1: curl (Quickest)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/VladoIvankovic/Codeep/main/install.sh | bash
-```
-
-**Custom installation directory:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/VladoIvankovic/Codeep/main/install.sh | INSTALL_DIR=~/.local/bin bash
-```
-
-**Specific version:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/VladoIvankovic/Codeep/main/install.sh | VERSION=1.0.0 bash
-```
-
-### Option 2: Homebrew (macOS/Linux)
-
-```bash
-brew tap VladoIvankovic/codeep
-brew install codeep
-```
-
-**Update:**
-```bash
-brew upgrade codeep
-```
-
-### Option 3: npm
-
-```bash
-npm install -g codeep
-```
-
-**Update:**
-```bash
-npm update -g codeep
-```
-
-### Option 4: Manual Binary
-
-Download the latest binary for your platform from [GitHub Releases](https://github.com/VladoIvankovic/Codeep/releases):
-
-| Platform | Binary |
-|----------|--------|
-| macOS Apple Silicon (M1/M2/M3/M4) | `codeep-macos-arm64` |
-| macOS Intel | `codeep-macos-x64` |
-| Linux x86_64 | `codeep-linux-x64` |
-
-```bash
-# Example for macOS Apple Silicon:
-curl -fsSL https://github.com/VladoIvankovic/Codeep/releases/latest/download/codeep-macos-arm64 -o codeep
-chmod +x codeep
-sudo mv codeep /usr/local/bin/
-```
-
-## Quick Start
-
-```bash
-# Navigate to your project directory
-cd /path/to/your/project
-
-# Start Codeep
-codeep
-
-# On first run, enter your API key
-# Get one at: https://z.ai/subscribe?ic=NXYNXZOV14
-```
-
-After installation, `codeep` is available globally in your terminal. Simply run it from any project directory to start coding with AI assistance.
 
 ## Commands
 
