@@ -85,6 +85,8 @@ describe('getModelContextWindow', () => {
     expect(getModelContextWindow('qwen3.8-max-preview')).toBe(1_000_000);
     expect(getModelContextWindow('glm-5.3')).toBe(1_000_000);
     expect(getModelContextWindow('gemini-3.7-flash')).toBe(1_048_576);
+    expect(getModelContextWindow('gemini-3.8-flash')).toBe(1_048_576);
+    expect(getModelContextWindow('gpt-6-astra')).toBe(1_050_000);
     expect(getModelContextWindow('grok-4.6')).toBe(500_000);
   });
 
@@ -392,6 +394,12 @@ describe('getPricingTable', () => {
     // storing the post-promotional 1.50/7.50 doubled every Gemini estimate.
     expect(byModel.get('gemini-3.7-flash')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 3.75 });
     expect(byModel.get('gemini-3.6-flash')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 3.75 });
+    // 3.8 Flash ships at the same promotional rate as 3.7, not at the 1.50/7.50
+    // it is scheduled to move to — that date has not arrived and such a rise has
+    // been cancelled before.
+    expect(byModel.get('gemini-3.8-flash')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 3.75 });
+    // GPT-6 Astra is twice 5.6 Sol; a run priced at Sol's rate reads half true.
+    expect(byModel.get('gpt-6-astra')).toMatchObject({ inputPer1M: 10, outputPer1M: 50 });
     // Grok 4.6 inherits 4.5's base-tier rate.
     expect(byModel.get('grok-4.6')).toMatchObject({ inputPer1M: 2, outputPer1M: 6 });
   });

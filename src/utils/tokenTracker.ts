@@ -63,6 +63,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'glm-5.1':              200_000,
   'glm-5-turbo':          202_752,
   // OpenAI
+  'gpt-6-astra':          1_050_000,
   'gpt-5.6-sol':          1_050_000,
   'gpt-5.6-terra':        1_050_000,
   'gpt-5.6-luna':         1_050_000,
@@ -81,6 +82,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'deepseek-v4-flash':    1_000_000,
   // Google
   'gemini-3.1-pro-preview':        1_048_576,
+  'gemini-3.8-flash':              1_048_576,
   'gemini-3.7-flash':              1_048_576,
   'gemini-3.6-flash':              1_048_576,
   'gemini-3.5-flash':              1_048_576,
@@ -142,6 +144,9 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'glm-5.1':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
   'glm-5-turbo':       { inputPer1M: 1.20,  outputPer1M: 4.00 },
   // OpenAI
+  // Twice the price of 5.6 Sol. Cached reads are $1.00/M — 0.1x input, which is
+  // what DEFAULT_CACHE_READ_RATE already applies, so no model row is needed.
+  'gpt-6-astra':   { inputPer1M: 10.00, outputPer1M: 50.00 },
   'gpt-5.6-sol':   { inputPer1M: 5.00,  outputPer1M: 30.00 },
   'gpt-5.6-terra': { inputPer1M: 2.00,  outputPer1M: 12.00 },
   'gpt-5.6-luna':  { inputPer1M: 0.20,  outputPer1M: 1.20 },
@@ -165,9 +170,13 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'deepseek-v4-pro':   { inputPer1M: 0.435, outputPer1M: 0.87 },
   'deepseek-v4-flash': { inputPer1M: 0.14,  outputPer1M: 0.28 },
   // Google
-  // Gemini 3.6/3.7 Flash carry PROMOTIONAL rates that run through 2026-12-31 and
-  // step up to 1.50/7.50 on 2027-01-01 — revisit both rows on that date.
+  // Gemini 3.6/3.7/3.8 Flash carry PROMOTIONAL rates that run through 2026-12-31
+  // and are scheduled to step up to 1.50/7.50 on 2027-01-01 — revisit all three
+  // rows on that date. Deliberately NOT written ahead of time: Anthropic
+  // cancelled exactly such a scheduled rise for Sonnet 5, and the pre-entered
+  // figure over-reported every run by 50% until someone noticed by hand.
   'gemini-3.1-pro-preview':        { inputPer1M: 2.00, outputPer1M: 12.00 },
+  'gemini-3.8-flash':              { inputPer1M: 0.75, outputPer1M: 3.75 },
   'gemini-3.7-flash':              { inputPer1M: 0.75, outputPer1M: 3.75 },
   'gemini-3.6-flash':              { inputPer1M: 0.75, outputPer1M: 3.75 },
   'gemini-3.5-flash':              { inputPer1M: 1.50, outputPer1M: 9.00 },

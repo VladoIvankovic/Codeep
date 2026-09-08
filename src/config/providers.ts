@@ -503,6 +503,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
+      { id: 'gpt-6-astra',   name: 'GPT-6 Astra',   description: 'Frontier GPT — 1M context, 128K output. Rolling out by organization, so a key may not have it yet. 2x the price of 5.6 Sol' },
       { id: 'gpt-5.6-sol',   name: 'GPT-5.6 Sol',   description: 'Most capable GPT — best for coding & agentic work' },
       { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', description: 'Balanced — GPT-5.5 quality at about half the price' },
       { id: 'gpt-5.6-luna',  name: 'GPT-5.6 Luna',  description: 'Fast and cheap — high-volume workloads' },
@@ -551,8 +552,9 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     },
     models: [
       { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro',        description: 'Most capable Gemini model' },
-      { id: 'gemini-3.7-flash',       name: 'Gemini 3.7 Flash',      description: 'Latest production Flash model — adjustable thinking, 64K output' },
-      { id: 'gemini-3.6-flash',       name: 'Gemini 3.6 Flash',      description: 'Previous production Flash model' },
+      { id: 'gemini-3.8-flash',       name: 'Gemini 3.8 Flash',      description: 'Latest production Flash model — adjustable thinking, 64K output' },
+      { id: 'gemini-3.7-flash',       name: 'Gemini 3.7 Flash',      description: 'Previous production Flash model' },
+      { id: 'gemini-3.6-flash',       name: 'Gemini 3.6 Flash',      description: 'Earlier production Flash model' },
       { id: 'gemini-3.5-flash',       name: 'Gemini 3.5 Flash',      description: 'Stable frontier Flash model for coding and long agentic tasks' },
       { id: 'gemini-3.5-flash-lite',  name: 'Gemini 3.5 Flash-Lite', description: 'Latest low-latency, low-cost workhorse' },
     ],
@@ -845,7 +847,7 @@ export function providerNoStreamWithTools(providerId: string): boolean {
 const SAMPLING_PARAMS_REJECTED = [
   'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5',
   'kimi-k3', 'kimi-k2.7-code', 'kimi-for-coding', 'k3',
-  'gemini-3.7-flash',
+  'gemini-3.7-flash', 'gemini-3.8-flash',
 ];
 
 export function modelRejectsSamplingParams(model: string): boolean {
@@ -921,8 +923,11 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
       if (idMatches(id, 'claude-haiku-4-5') || idMatches(id, 'claude-sonnet-4-5')) return false;
       return /^claude-(opus-5|opus-4-([5-9]|\d\d)|sonnet-(4-6|5)|fable-5)/.test(id);
     case 'openai':
-      // GPT-5.x are reasoning models — reasoning_effort across the family (incl. mini).
-      return id.startsWith('gpt-5');
+      // GPT-5.x and GPT-6.x are reasoning models — reasoning_effort across both
+      // families (incl. mini). Written as two prefixes rather than `gpt-`
+      // because GPT-4 and earlier are not reasoning models and must not be
+      // offered the parameter.
+      return id.startsWith('gpt-5') || id.startsWith('gpt-6');
     case 'google':
       // Gemini 3.x thinking_level via the OpenAI-compat reasoning_effort mapping.
       return id.startsWith('gemini-3');

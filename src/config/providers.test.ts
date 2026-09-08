@@ -262,6 +262,39 @@ describe('providers', () => {
     });
   });
 
+  describe('September 2026 models', () => {
+    it('offers GPT-6 Astra without making it the default', () => {
+      const provider = getProvider('openai')!;
+      const ids = provider.models.map(m => m.id);
+      expect(ids).toContain('gpt-6-astra');
+      // Twice the price of 5.6 Sol, and rolling out by organization — becoming
+      // the default would double every user's bill without them choosing it.
+      expect(provider.defaultModel).toBe('gpt-5.6-sol');
+      // Ids are added beside, never in place of: dropping one sends a pinned
+      // config to whatever the provider's default happens to be.
+      expect(ids).toContain('gpt-5.6-sol');
+    });
+
+    it('gives GPT-6 the thinking control, which a gpt-5 prefix would have missed', () => {
+      expect(modelSupportsReasoningEffort('openai', 'gpt-6-astra')).toBe(true);
+      expect(modelSupportsReasoningEffort('openai', 'gpt-5.6-sol')).toBe(true);
+      // GPT-4 and earlier are not reasoning models and must not be offered it.
+      expect(modelSupportsReasoningEffort('openai', 'gpt-4o')).toBe(false);
+    });
+
+    it('offers Gemini 3.8 Flash and knows it rejects sampling params', () => {
+      const ids = getProvider('google')!.models.map(m => m.id);
+      expect(ids).toContain('gemini-3.8-flash');
+      expect(ids).toContain('gemini-3.7-flash');
+      // Google removed the sampling parameters in the 3.7 generation and 3.8 is
+      // built on 3.7 — sending temperature is a 400 on every call.
+      expect(modelRejectsSamplingParams('gemini-3.8-flash')).toBe(true);
+      // Namespaced the way OpenRouter routes it.
+      expect(modelRejectsSamplingParams('google/gemini-3.8-flash')).toBe(true);
+      expect(modelRejectsSamplingParams('gemini-3.5-flash')).toBe(false);
+    });
+  });
+
   describe('deepseek provider', () => {
     it('should include DeepSeek V4 models and not include legacy ones', () => {
       const provider = getProvider('deepseek');
