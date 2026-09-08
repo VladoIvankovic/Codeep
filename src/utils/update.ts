@@ -132,7 +132,7 @@ export function getUpdateInstructions(): string {
       return 'npm update -g codeep';
     
     case 'binary':
-      return 'curl -fsSL https://raw.githubusercontent.com/VladoIvankovic/Codeep/main/install.sh | bash';
+      return 'curl -fsSL https://codeep.dev/install.sh | bash';
     
     default:
       return 'Visit: https://codeep.dev';

@@ -3,7 +3,7 @@
 # Install the latest version of Codeep AI coding assistant via npm
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/VladoIvankovic/Codeep/main/install.sh | bash
+#   curl -fsSL https://codeep.dev/install.sh | bash
 
 set -e
 
