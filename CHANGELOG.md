@@ -11,6 +11,44 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.2.0] — 2026-09-08
+
+> TL;DR — GPT-6 Astra and Gemini 3.8 Flash are in the model picker. Astra is not the default: it costs twice what GPT-5.6 Sol does and is still rolling out by organization.
+
+### Added
+
+- **GPT-6 Astra** (`gpt-6-astra`) — OpenAI's frontier model, released 3
+  September. 1M context, 128K output, and `/thinking` works on it.
+
+  **Not the default, on purpose.** It is $10/$50 per million tokens against 5.6
+  Sol's $5/$30 — twice the price — and OpenAI is still rolling it out
+  organization by organization, so a key that works today may not have it.
+  GPT-5.6 Sol stays the default; Astra is one `/model` away.
+
+- **Gemini 3.8 Flash** (`gemini-3.8-flash`) — Google's newest Flash, released 2
+  September, at the **same price as 3.7 Flash** ($0.75/$3.75 promotional). 1M
+  context, 64K output, tuned for long-horizon agentic work. If you are on 3.7
+  Flash there is no cost reason not to move.
+
+Existing model ids are untouched. New ones are added beside, never in place of —
+dropping an id does not leave a pinned config on the older model, it drops the
+lookup and lands that config on another provider's default.
+
+### Fixed
+
+- **`/thinking` would have been hidden on GPT-6.** The control was gated on a
+  `gpt-5` prefix, so a reasoning model would have arrived without it and with no
+  error to explain why.
+- **Gemini 3.8 would have returned 400 on every call.** Google removed
+  temperature, top_p and top_k in the 3.7 generation and 3.8 is built on 3.7, so
+  it inherits the removal — the parameters are now withheld for it too.
+
+Cost estimates use the promotional Gemini rate that runs to 2026-12-31. The rise
+scheduled for 2027-01-01 is deliberately not written ahead of time: doing exactly
+that for Sonnet 5 over-reported every run by 50% until it was caught by hand.
+Cached reads on GPT-6 Astra are $1.00/M — 0.1x input, which the default rate
+already applies.
+
 ## [3.1.1] — 2026-09-04
 
 > TL;DR — a long answer from a phone-started run now arrives whole, across up to three messages, instead of being cut at 3000 characters.
