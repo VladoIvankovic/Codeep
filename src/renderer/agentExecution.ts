@@ -533,15 +533,18 @@ export async function executeAgentTask(
     // even if the user switched model mid-session. Only this run's delta
     // (since tokenReportStart) is reported; the cumulative store is preserved.
     const costBreakdown = getCostBreakdown(tokenReportStart);
+    // Consumed exactly once per run, before anything branches on it: the notice
+    // path is conditional (no credentials, or a run too short to notify), and
+    // reading it inside that branch left the stat blind on every run that did
+    // not send a notification.
+    const startedFromPhone = takeRunFromPhone();
 
     // Told once the run is over, and only when it ran long enough that you
     // could plausibly have stopped watching. Awaited so the process does not
     // exit from under the request, but never allowed to fail the run.
     if (noticeCredentials) {
       const elapsedMs = Date.now() - runStartedAt;
-      // Consumed once per run either way, so a phone-started run cannot leave
-      // the flag set for whatever the terminal does next.
-      const fromPhone = takeRunFromPhone();
+      const fromPhone = startedFromPhone;
       // The one-minute threshold exists so a phone is not buzzed about work you
       // watched finish. It has no business gating a run the phone itself asked
       // for: that answer was wanted whether it took ten seconds or ten minutes,
@@ -564,6 +567,10 @@ export async function executeAgentTask(
       }
     }
     const sharedFields = {
+      // `fromPhone` is read above, where the notice consumes it. Captured here
+      // too because the stats event is the only place it can answer anything
+      // later — see docs/ios-decision.md.
+      fromPhone: startedFromPhone,
       sessionId,
       sessionName: displayName,
       messageCount: app.getMessages().length,

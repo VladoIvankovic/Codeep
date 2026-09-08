@@ -122,6 +122,15 @@ export interface StatsPayload {
   projectId?: string;
   language?: string;
   isGit?: boolean;
+  /**
+   * Whether this run was started from a phone rather than at the terminal.
+   *
+   * Recorded to answer whether a Codeep iOS app is worth building with
+   * behaviour instead of opinion: "would you like an iOS app?" costs nothing
+   * to say yes to, while actually driving a run from a phone — which the
+   * Telegram inbox has allowed since 3.1.0 — is a thing somebody did.
+   */
+  fromPhone?: boolean;
   inputTokens?: number;
   outputTokens?: number;
   /** Anthropic prompt caching: tokens written to cache (billed ~1.25× input).
