@@ -11,6 +11,46 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.2.1] — 2026-09-08
+
+> TL;DR — usage reports now include one boolean: whether the run was started from your phone. It exists to answer whether a Codeep iOS app is worth building with behaviour rather than a poll.
+
+### Changed
+
+- **Usage reports now include whether the run was started from a phone.** One
+  boolean, alongside the model, token counts and estimated cost already sent.
+
+  It answers one question — is a Codeep iOS app worth building — and it answers
+  it with behaviour rather than opinion. Asking would answer the wrong thing:
+  *"would you like an iOS app?"* costs nothing to say yes to, so a poll of it
+  comes back positive, looks like evidence, and is worth nothing. 3.1.0 already
+  shipped the cheap version of that app — starting a task from your phone over
+  Telegram — so what is worth knowing is whether anyone actually does it.
+
+  Said out loud rather than left in the code. Finding out from a diff that
+  something new is being recorded is a reasonable thing to be annoyed by.
+
+  Nothing about your prompt, the answer or the files is sent — this is a yes/no
+  about where a run came from, and it goes only if you have linked Codeep to an
+  account and left usage reporting on. `/telemetry` turns the whole thing off, as
+  before, and `CODEEP_NO_TELEMETRY` or `DO_NOT_TRACK` in the environment force it
+  off regardless of the setting.
+
+### Fixed
+
+- **`takeRunFromPhone()` moved out of the notification branch.** It was read
+  inside `if (noticeCredentials)`, which depends on having Telegram configured
+  *and* on the run being long enough to notify — so any run that sent no
+  notification left the flag unread. Consumed once per run now, before anything
+  branches on it, which is what its own comment had always claimed.
+
+### Docs
+
+- **`docs/ios-decision.md`** — the iOS app is paused, with the reasoning written
+  down: why a poll was rejected, what is being measured instead, and the three
+  things that would take it off pause. There is no iOS code, so the pause costs
+  nothing; what it buys is not re-arguing this every few weeks.
+
 ## [3.2.0] — 2026-09-08
 
 > TL;DR — GPT-6 Astra and Gemini 3.8 Flash are in the model picker. Astra is not the default: it costs twice what GPT-5.6 Sol does and is still rolling out by organization.
