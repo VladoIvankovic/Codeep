@@ -11,6 +11,43 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.2.2] — 2026-09-09
+
+> TL;DR — linking a server no longer means signing in to GitHub on it (it never did, nothing said so), and a device that failed to register once is no longer invisible and impossible to revoke.
+
+### Fixed
+
+- **`codeep account` now says the approval can happen on another device.** It
+  said "Opening browser…", which is not true on a server, and "paste the URL
+  manually", which reads as *into this machine's browser* — how someone ends up
+  signing in to GitHub on a box they never wanted their account on.
+
+  The link was always openable from anywhere: it carries a one-time code that is
+  claimed by whoever opens it while already signed in to codeep.dev, and it
+  expires in five minutes. So on a server: run the command there, copy the
+  printed URL, approve it from your own laptop or phone. The terminal is then
+  handed its own token. That is now what the output says, along with the expiry
+  and where the token is revoked.
+
+- **This machine re-registers on every start.** Registration ran once, at link
+  time, inside a `catch {}` that swallowed failures — and a network blip during
+  `codeep account` was enough to leave a machine with a working token and no
+  device record. It synced normally, never appeared under **Connected devices**,
+  and could not be revoked at all, because Revoke deletes a row that was never
+  written. Working, invisible and permanent, which is the worst of the three.
+
+  A failure deliberately does not latch: the next start tries again. It also
+  makes the dashboard's **last seen** mean last seen — it only moved at link
+  time before, so the column really read "linked".
+
+### Also, on the server
+
+Already live at codeep.dev, no update needed: **Revoke now actually revokes.** It
+deleted the device row and stopped there, while token lookup fell back to a
+one-row-per-user table holding whatever authorized most recently — so the device
+you linked last kept syncing after you revoked it, with the dashboard showing it
+gone. Worth re-revoking anything you thought you had already cut off.
+
 ## [3.2.1] — 2026-09-08
 
 > TL;DR — usage reports now include one boolean: whether the run was started from your phone. It exists to answer whether a Codeep iOS app is worth building with behaviour rather than a poll.
