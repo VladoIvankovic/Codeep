@@ -58,10 +58,18 @@ export async function runAccountFlow(): Promise<void> {
     return;
   }
 
+  // Say that the browser can be somewhere else, because it can and nothing
+  // said so. On a server there is no browser to open, and "paste the URL
+  // manually" reads as "into this machine's browser" — which is how people
+  // end up signing in to GitHub on a box they did not want their account on.
+  // The code grants nothing by itself: it is claimed by whoever opens it while
+  // already signed in, and it expires in five minutes.
   const url = `${API_BASE}/auth/cli?code=${code}`;
-  console.log('\n  Opening browser...');
+  console.log('\n  Open this link to approve — on this machine, or any device');
+  console.log('  where you are already signed in to codeep.dev:\n');
   console.log(`  ${url}\n`);
-  console.log('  If the browser did not open, paste the URL above manually.\n');
+  console.log('  The link expires in 5 minutes. This machine then gets its own');
+  console.log('  token, revocable from Settings -> Connected devices.\n');
   openBrowser(url);
 
   // Poll for authorization
