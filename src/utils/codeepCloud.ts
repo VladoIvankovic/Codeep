@@ -153,6 +153,42 @@ export interface StatsPayload {
 /**
  * Generate a stable project ID from the project root path.
  */
+/**
+ * Tell the server this device exists, on every start.
+ *
+ * Registration used to happen once, at link time, inside a `catch {}` that
+ * ignored failures — so a network blip during `codeep account` left a machine
+ * with a working token and no `user_devices` row. It synced fine, did not
+ * appear under Connected devices, and could not be revoked, because Revoke
+ * deletes a row that was never written. That is the worst of the three
+ * outcomes: working, invisible, and permanent.
+ *
+ * Repeating it makes a missed registration self-heal on the next run, and
+ * turns `last_seen` into something true — it previously only moved at link
+ * time, so the dashboard's "last seen" was really "linked".
+ *
+ * Once per process, fire-and-forget: it is a heartbeat, not a gate, and must
+ * never delay or fail a start. The next start retries it anyway.
+ */
+let deviceRegistered = false;
+
+export function ensureDeviceRegistered(): void {
+  if (deviceRegistered) return;
+  const syncToken = getSyncToken();
+  if (!syncToken) return;   // not linked; nothing to register
+  deviceRegistered = true;
+
+  void fetch(`${API_BASE}/api/auth/cli/device`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
+    body: JSON.stringify({ deviceId: getDeviceId(), hostname: hostname() }),
+  }).catch(() => {
+    // Allow the next call in this process to try again — a start that fails
+    // here should not mark the device as registered for good.
+    deviceRegistered = false;
+  });
+}
+
 export function generateProjectId(projectRoot: string): string {
   // Normalize: remove trailing slash, resolve to real path format
   const normalized = projectRoot.replace(/\/+$/, '').toLowerCase();

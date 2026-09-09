@@ -42,7 +42,7 @@ import { getCurrentVersion, checkForUpdates, getUpdateInstructions } from '../ut
 import { getProviderList, isNoApiKeyProvider, resolveReasoningTier } from '../config/providers';
 import { getSessionStats, getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
 import { getGitStatus, isGitRepository } from '../utils/git';
-import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
+import { reportStats, syncSession, generateProjectId, ensureDeviceRegistered } from '../utils/codeepCloud';
 import { expandFileAndFolderMentions, expandGitMentions } from '../utils/mentions';
 import { expandWebMentions } from '../utils/webFetch';
 import { handleCommand as dispatchCommand, AppCommandContext } from './commands';
@@ -696,6 +696,10 @@ Commands (in chat):
   }
 
   await loadAllApiKeys();
+  // Re-announce this device to the dashboard. Cheap, fire-and-forget, and it
+  // repairs a machine whose one registration at link time happened to fail —
+  // which until now left it syncing, unlisted, and impossible to revoke.
+  ensureDeviceRegistered();
   let apiKey: string | null = await loadApiKey();
 
   if (!apiKey && !isNoApiKeyProvider(config.get('provider'))) {
