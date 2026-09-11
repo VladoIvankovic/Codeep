@@ -87,6 +87,11 @@ describe('getModelContextWindow', () => {
     expect(getModelContextWindow('gemini-3.7-flash')).toBe(1_048_576);
     expect(getModelContextWindow('gemini-3.8-flash')).toBe(1_048_576);
     expect(getModelContextWindow('gpt-6-astra')).toBe(1_050_000);
+    expect(getModelContextWindow('deepseek-flash')).toBe(1_000_000);
+    expect(getModelContextWindow('qwen3.8-max')).toBe(1_000_000);
+    expect(getModelContextWindow('qwen3.8-flash')).toBe(1_000_000);
+    // Moonshot lists K3 at 1,048,576, not a round million.
+    expect(getModelContextWindow('kimi-k3')).toBe(1_048_576);
     expect(getModelContextWindow('grok-4.6')).toBe(500_000);
   });
 
@@ -400,6 +405,17 @@ describe('getPricingTable', () => {
     expect(byModel.get('gemini-3.8-flash')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 3.75 });
     // GPT-6 Astra is twice 5.6 Sol; a run priced at Sol's rate reads half true.
     expect(byModel.get('gpt-6-astra')).toMatchObject({ inputPer1M: 10, outputPer1M: 50 });
+    // DeepSeek carries PEAK. The old rows were 2–4.6x below it — under-reporting,
+    // the one direction this table must never err in.
+    expect(byModel.get('deepseek-flash')).toMatchObject({ inputPer1M: 0.30, outputPer1M: 1.20 });
+    expect(byModel.get('deepseek-v4-flash')).toMatchObject({ inputPer1M: 0.30, outputPer1M: 1.20 });
+    expect(byModel.get('deepseek-v4-pro')).toMatchObject({ inputPer1M: 1.32, outputPer1M: 3.96 });
+    // Sol's promotional rate, billed now; no end date written ahead of time.
+    expect(byModel.get('gpt-5.6-sol')).toMatchObject({ inputPer1M: 4, outputPer1M: 20 });
+    // M3 up to 512K prompt tokens — the 0.60/2.40 tier doubled nearly every estimate.
+    expect(byModel.get('MiniMax-M3')).toMatchObject({ inputPer1M: 0.30, outputPer1M: 1.20 });
+    expect(byModel.get('qwen3.8-max')).toMatchObject({ inputPer1M: 2, outputPer1M: 6 });
+    expect(byModel.get('qwen3.8-flash')).toMatchObject({ inputPer1M: 0.15, outputPer1M: 0.47 });
     // Grok 4.6 inherits 4.5's base-tier rate.
     expect(byModel.get('grok-4.6')).toMatchObject({ inputPer1M: 2, outputPer1M: 6 });
   });

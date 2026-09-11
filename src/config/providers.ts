@@ -69,7 +69,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     },
     models: [
       { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
-      { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', description: 'Same 1M context at a twentieth of the price' },
+      { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', description: 'Same 1M context at roughly a ninth of the price' },
       { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant, available to all users' },
     ],
@@ -103,7 +103,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       // (`z.ai-cn*`) bills separately and is not covered by that page, so it is
       // left alone until its own listing is checked.
       { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
-      { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', description: 'Same 1M context at a twentieth of the price' },
+      { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', description: 'Same 1M context at roughly a ninth of the price' },
       { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant' },
     ],
@@ -130,11 +130,14 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
         supportsNativeTools: true,
       },
     },
+    // GLM-5.3 is on the China gateway and the China Coding Plan (bigmodel.cn).
+    // Flash is listed only on China pay-per-use, so the plan does not offer it.
     models: [
-      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest flagship for project-scale engineering (1M context)' },
+      { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
+      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant, available to all users' },
     ],
-    defaultModel: 'glm-5.2',
+    defaultModel: 'glm-5.3',
     defaultProtocol: 'openai',
     maxOutputTokens: 131_072,
     envKey: 'ZAI_CN_API_KEY',
@@ -159,10 +162,12 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Latest flagship for project-scale engineering (1M context)' },
+      { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
+      { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', description: 'Same 1M context at a tenth of the price' },
+      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant' },
     ],
-    defaultModel: 'glm-5.2',
+    defaultModel: 'glm-5.3',
     defaultProtocol: 'openai',
     maxOutputTokens: 131_072,
     envKey: 'ZAI_CN_API_KEY',
@@ -257,11 +262,19 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
         supportsNativeTools: true,
       },
     },
+    // One model. DeepSeek's own pricing page names `deepseek-flash` (V4.1 Flash)
+    // as the model to use and says it outperforms V4 Pro. `deepseek-v4-flash`
+    // is already served by it, and from 2026-09-14 12:00 Beijing time every
+    // `deepseek-v4-pro` request is routed to it and billed at its price until
+    // a V4.1 Pro exists — so a Pro entry would be a label on a different model.
+    // Both old ids migrate via RETIRED_MODEL_REPLACEMENTS.
+    //
+    // Note the id differs on OpenRouter, which lists the same model as
+    // `deepseek/deepseek-v4.1-flash`.
     models: [
-      { id: 'deepseek-v4-pro',   name: 'DeepSeek V4 Pro',   description: 'Most capable DeepSeek model (1M context, thinking mode)' },
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', description: 'Fast and affordable DeepSeek model (1M context)' },
+      { id: 'deepseek-flash', name: 'DeepSeek V4.1 Flash', description: 'Current DeepSeek model — thinking on by default, vision, 1M context, 384K output' },
     ],
-    defaultModel: 'deepseek-v4-pro',
+    defaultModel: 'deepseek-flash',
     defaultProtocol: 'openai',
     maxOutputTokens: 384_000, // DeepSeek V4 max output
     envKey: 'DEEPSEEK_API_KEY',
@@ -394,12 +407,17 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     protocols: {
       openai: { baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
+    // 3.8 Max and Flash are GA on Model Studio international and cost less
+    // than the 3.7 Max / 3.6 Flash they sit above. China (`qwen-cn-api`) is a
+    // separate listing and is not changed on this evidence.
     models: [
-      { id: 'qwen3.7-max',   name: 'Qwen3.7-Max',   description: 'Latest flagship for complex coding and reasoning' },
+      { id: 'qwen3.8-max',   name: 'Qwen3.8-Max',   description: 'Latest flagship for complex coding and reasoning (1M context)' },
+      { id: 'qwen3.8-flash', name: 'Qwen3.8-Flash', description: 'Low-latency, low-cost multimodal model (1M context)' },
+      { id: 'qwen3.7-max',   name: 'Qwen3.7-Max',   description: 'Previous flagship for complex coding and reasoning' },
       { id: 'qwen3.7-plus',  name: 'Qwen3.7-Plus',  description: 'Balanced quality, speed, and price (1M context)' },
-      { id: 'qwen3.6-flash', name: 'Qwen3.6-Flash', description: 'Low-latency, low-cost multimodal model' },
+      { id: 'qwen3.6-flash', name: 'Qwen3.6-Flash', description: 'Previous low-latency, low-cost multimodal model' },
     ],
-    defaultModel: 'qwen3.7-max',
+    defaultModel: 'qwen3.8-max',
     defaultProtocol: 'openai',
     maxOutputTokens: 65_536,
     noStreamWithTools: true,
@@ -585,12 +603,17 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       { id: 'anthropic/claude-fable-5',         name: 'Claude Fable 5',     description: 'Anthropic — superseded by 5.1' },
       { id: 'anthropic/claude-opus-5',          name: 'Claude Opus 5',      description: 'Anthropic — flagship Opus tier' },
       { id: 'anthropic/claude-sonnet-5',        name: 'Claude Sonnet 5',    description: 'Anthropic — balanced' },
+      { id: 'openai/gpt-6-astra',               name: 'GPT-6 Astra',        description: 'OpenAI — frontier' },
       { id: 'openai/gpt-5.6-sol',               name: 'GPT-5.6 Sol',        description: 'OpenAI — flagship' },
       { id: 'openai/gpt-5.6-luna',              name: 'GPT-5.6 Luna',       description: 'OpenAI — fast/efficient' },
-      { id: 'google/gemini-3.7-flash',          name: 'Gemini 3.7 Flash',   description: 'Google — latest production Flash' },
-      { id: 'deepseek/deepseek-v4-pro',         name: 'DeepSeek V4 Pro',    description: 'DeepSeek — flagship agentic model' },
+      { id: 'google/gemini-3.8-flash',          name: 'Gemini 3.8 Flash',   description: 'Google — latest production Flash' },
+      { id: 'google/gemini-3.7-flash',          name: 'Gemini 3.7 Flash',   description: 'Google — previous production Flash' },
+      { id: 'deepseek/deepseek-v4.1-flash',     name: 'DeepSeek V4.1 Flash', description: 'DeepSeek — current model' },
       { id: 'moonshotai/kimi-k3',               name: 'Kimi K3',            description: 'Moonshot — long-horizon coding' },
-      { id: 'qwen/qwen3.8-max',                 name: 'Qwen 3.8 Max',       description: 'Alibaba — latest flagship' },
+      // Dated on purpose: OpenRouter lists only the snapshot. The undated
+      // `qwen/qwen3.8-max` this used to carry does not exist there, so picking
+      // it before the live catalogue loaded was an error.
+      { id: 'qwen/qwen3.8-max-0902',            name: 'Qwen 3.8 Max',       description: 'Alibaba — latest flagship' },
       { id: 'x-ai/grok-4.6',                    name: 'Grok 4.6',           description: 'xAI — flagship reasoning' },
     ],
     defaultModel: 'openrouter/auto',
@@ -660,6 +683,13 @@ const RETIRED_MODEL_REPLACEMENTS: Record<string, Record<string, string>> = {
   'z.ai-cn-api': { 'glm-5.1': 'glm-5.2', 'glm-5': 'glm-5.2' },
   google: {
     'gemini-3.1-flash-lite': 'gemini-3.5-flash-lite',
+  },
+  // DeepSeek named V4.1 Flash the model to use: the V4 Flash ids are retired
+  // and served by it, and V4 Pro is routed to it from 2026-09-14.
+  deepseek: {
+    'deepseek-v4-flash': 'deepseek-flash',
+    'deepseek-v4-flash-vision-exp': 'deepseek-flash',
+    'deepseek-v4-pro': 'deepseek-flash',
   },
   grok: {
     'grok-code-fast-1': 'grok-build-0.1',
@@ -932,7 +962,10 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
       // Gemini 3.x thinking_level via the OpenAI-compat reasoning_effort mapping.
       return id.startsWith('gemini-3');
     case 'deepseek':
-      return id.startsWith('deepseek-v4');
+      // `deepseek-flash` does not start with `deepseek-v4` — a prefix check
+      // alone would ship the current model with /thinking hidden, the same
+      // trap GPT-6 nearly fell into behind `gpt-5`.
+      return id.startsWith('deepseek-v4') || idMatches(id, 'deepseek-flash');
     case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
       // GLM-5.2 exposes graded High/Max effort; GLM-5.3 adds a distinct Low.
       // Turbo is a plain toggle.
@@ -991,7 +1024,12 @@ export function reasoningParamsFor(
       // 'minimal' is deliberately not emitted: 3.7 Flash rejects it outright.
       return { reasoning_effort: tier === 'max' ? 'high' : tier };
     case 'deepseek':
-      // Graded thinking depth: high (default) or max. Lower tiers collapse to high.
+      // V4.1 Flash distinguishes low / high / max (DeepSeek's mapping table:
+      // minimal+low→low, medium+high+xhigh→high, max+ultra→max). The retired V4
+      // ids graded only high|max. Always an effort, never a disabled block.
+      if (idMatches(canonicalModelId(model), 'deepseek-flash')) {
+        return { reasoning_effort: tier === 'low' ? 'low' : tier === 'max' ? 'max' : 'high' };
+      }
       return { reasoning_effort: tier === 'max' ? 'max' : 'high' };
     case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
       // GLM-5.3 accepts low/high/max; GLM-5.2 grades only high|max, so lower
@@ -1037,7 +1075,9 @@ export function availableReasoningTiers(providerId: string, model: string): Reas
       // coding, so collapsing it hid the setting most users want.
       return ['auto', 'low', 'medium', 'high'];
     case 'deepseek':
-      return ['auto', 'high', 'max'];
+      return idMatches(canonicalModelId(model), 'deepseek-flash')
+        ? ['auto', 'low', 'high', 'max']
+        : ['auto', 'high', 'max'];
     case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
       // GLM-5.3 distinguishes a Low tier; GLM-5.2 grades only high|max.
       return idMatches(canonicalModelId(model), 'glm-5-3')

@@ -1,6 +1,6 @@
 # Model catalogue and maintenance policy
 
-Last full review: **2026-08-15**
+Last full review: **2026-09-11**
 
 ## Product scope
 
@@ -37,6 +37,13 @@ Last full review: **2026-08-15**
 
 - Update the CLI catalogue and capability rules in
   `src/config/providers.ts`.
+- **When a new id changes shape, grep every capability check for it.** Gates
+  written as a prefix (`startsWith`, `hasPrefix`) or a substring (`contains`)
+  silently miss a renamed family. It happened twice in one month: `gpt-6-astra`
+  failed `startsWith('gpt-5')` and would have shipped with `/thinking` hidden;
+  `deepseek-flash` failed `deepseek-v4` in three places, one of which sized its
+  context window at 128K instead of 1M. Search `providers.ts`, `ModelTuning`,
+  `CostEstimator` and `ContextWindowEstimator` for the old family name.
 - Update CLI context/pricing in `src/utils/tokenTracker.ts`.
 - Add an exact migration in `src/config/index.ts` for removed stored ids.
 - Mirror the catalogue, tuning, context, and pricing in
@@ -59,23 +66,48 @@ Last full review: **2026-08-15**
 
 ## Known pricing quirks
 
-- **DeepSeek moved to peak / off-peak billing on 2026-08-16**, off-peak at half
-  the peak rate. `MODEL_PRICING` holds one rate per model, so it carries the
-  peak figures — an over-estimate, deliberately, per rule 5.
-- **Gemini 3.6 / 3.7 Flash run a promotional $0.75/$3.75 through 2026-12-31**,
-  stepping back to $1.50/$7.50 on 2027-01-01. Revisit both together.
+- **DeepSeek bills peak / off-peak** (off-peak is half; peak is 01:00–04:00 and
+  06:00–10:00 UTC on weekdays). `MODEL_PRICING` holds one rate per model, so it
+  carries **peak** — an over-estimate, deliberately, per rule 5. Rows reviewed
+  2026-09-11 had drifted two to four and a half times *below* peak, which is the
+  wrong direction; re-read the table, don't trust the comment.
+- **DeepSeek V4.1 Flash is `deepseek-flash`** on DeepSeek's API but
+  `deepseek/deepseek-v4.1-flash` on OpenRouter. From **2026-09-14 12:00 Beijing
+  time** every `deepseek-v4-pro` request is routed to V4.1 Flash and billed at its
+  price until a V4.1 Pro exists; watch for that release. Cache hits cost 2% of a
+  miss but arrive as `prompt_cache_hit_tokens`, which the tracker does not read,
+  so DeepSeek estimates bill all input at the miss rate.
+- **GPT-5.6 Sol runs a promotional $4/$20** "at least through 2026-11-21" (list
+  $5/$30). Long-context requests bill at a higher tier for Sol ($8/$30) and Astra
+  ($20/$75); the table carries short-context only.
+- **MiniMax-M3 is $0.30/$1.20 up to 512K prompt tokens** ("permanent 50% off"),
+  $0.60/$2.40 above. The table carries the lower tier.
+- **Gemini 3.6 / 3.7 / 3.8 Flash run a promotional $0.75/$3.75 through
+  2026-12-31**, scheduled to step back to $1.50/$7.50 on 2027-01-01. Revisit all
+  three together on that date — not before: a scheduled rise entered early is how
+  Sonnet 5 over-reported by 50% after Anthropic cancelled its own.
 - **GLM-5.3 was unpriced until 2026-08-19**, when it reached the standalone API
   and appeared on the pay-per-use price list at $1.40/$4.40 — the same figures as
-  GLM-5.2, read off the page rather than inherited from it. The China gateway
-  (`z.ai-cn*`) is a separate listing and still carries only the 5.2 roster.
+  GLM-5.2, read off the page rather than inherited from it. **GLM-5.3 reached the
+  China gateway** (`z.ai-cn*`) by 2026-09-11, on the China Coding Plan too, at
+  CNY 8/28 (5.3 Flash CNY 0.8/2.8, pay-per-use only). China reuses the USD rows,
+  a slight over-estimate.
+- **Claude Haiku 4.5 may retire from 2026-10-15** ("not sooner than"), with no
+  named replacement yet. Check the deprecations page before that date.
 
 ## Official source index
 
 - OpenAI: <https://developers.openai.com/api/docs/models>
-- Anthropic: <https://docs.anthropic.com/en/docs/about-claude/models/overview>
+- OpenAI pricing: <https://developers.openai.com/api/docs/pricing>
+- Anthropic: <https://platform.claude.com/docs/en/docs/about-claude/models/overview>
+  (the old docs.anthropic.com address redirects here)
 - Google Gemini: <https://ai.google.dev/gemini-api/docs/latest-model>
 - DeepSeek: <https://api-docs.deepseek.com/quick_start/pricing>
-- Z.AI: <https://docs.z.ai/guides/llm/glm-5.2>
+- DeepSeek thinking-effort mapping:
+  <https://api-docs.deepseek.com/guides/thinking_mode>
+- Z.AI: <https://docs.z.ai/guides/llm/glm-5.3>
+- Z.AI China (BigModel) models: <https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3>
+- Z.AI China pricing: <https://docs.bigmodel.cn/cn/guide/start/pricing>
 - Kimi: <https://platform.kimi.ai/docs/models>
 - Kimi Code plan model access:
   <https://www.kimi.com/code/docs/en/third-party-tools/claude-code.html>
@@ -83,6 +115,10 @@ Last full review: **2026-08-15**
 - xAI: <https://docs.x.ai/developers/models>
 - Alibaba Model Studio models:
   <https://www.alibabacloud.com/help/en/model-studio/models>
+- Alibaba Qwen3.8 Max / Flash:
+  <https://www.alibabacloud.com/help/en/model-studio/qwen3-8-max>,
+  <https://www.alibabacloud.com/help/en/model-studio/qwen3-8-flash>
+- Kimi pricing: <https://platform.kimi.ai/docs/pricing/chat>
 - Alibaba Coding Plan exact allowlist:
   <https://www.alibabacloud.com/help/en/model-studio/coding-plan>
 - Alibaba Token Plan endpoint and key isolation:

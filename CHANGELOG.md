@@ -11,6 +11,73 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.3.0] — 2026-09-11
+
+> TL;DR — DeepSeek V4.1 Flash replaces both V4 models before DeepSeek routes V4 Pro to it on 14 September. Qwen 3.8 Max and Flash, GLM-5.3 in China, and four cost figures corrected — DeepSeek's by more than four times.
+
+### Added
+
+- **DeepSeek V4.1 Flash is the DeepSeek model, and the default.** Its API id is
+  `deepseek-flash` — not `deepseek-v4.1-flash`, which is the id OpenRouter uses
+  for the same model. DeepSeek's own pricing page names it the model to use and
+  says it outperforms V4 Pro. `deepseek-v4-flash` is already retired and served by
+  it, and **from 14 September, 12:00 Beijing time, every `deepseek-v4-pro` request
+  is routed to V4.1 Flash and billed at its price** until a V4.1 Pro exists.
+
+  So the picker now offers one DeepSeek model, and a config holding either V4 id
+  moves to `deepseek-flash` automatically. Keeping a Pro entry would have meant a
+  Pro label on a Flash model. `/thinking` on it now offers **Low** as well as High
+  and Max — V4.1 tells the three apart; V4 did not.
+
+- **Qwen3.8-Max and Qwen3.8-Flash** on Qwen API (pay-per-use), with 3.8-Max as the
+  default. Both are generally available on Model Studio international, both have a
+  1M window, and both cost **less** than what they sit above: 3.8-Max is $2/$6
+  against 3.7-Max's $2.50/$7.50, and 3.8-Flash $0.15/$0.47 against 3.6-Flash's
+  $0.25/$1.50. The 3.7 models stay beside them. Qwen China and the Coding Plan are
+  unchanged — the Coding Plan's published allowlist does not include 3.8.
+
+- **GLM-5.3 on Z.AI China**, on both the GLM Coding Plan and pay-per-use, now as
+  the default there. **GLM-5.3 Flash** on China pay-per-use only — the China plan
+  does not list it.
+
+### Fixed
+
+- **DeepSeek estimates were two to four and a half times too low.** The pricing
+  rows no longer matched DeepSeek's peak rates — V4 Flash read $0.14/$0.28 against
+  $0.30/$1.20, V4 Pro $0.435/$0.87 against $1.32/$3.96. Codeep carries the peak
+  rate on purpose, so an estimate can run high but never low; this ran low, which
+  is the one direction it must not. Cache hits are still billed at the miss rate:
+  DeepSeek reports them in a field this does not read yet, so the error stays on
+  the high side.
+
+- **GPT-5.6 Sol is $4/$20**, a promotion OpenAI says runs at least through 21
+  November, not the $5/$30 it was priced at. **Correction:** the 3.2.0 notes called
+  GPT-6 Astra "twice the price" of Sol. Against what Sol is billed today, Astra is
+  two and a half times.
+
+- **MiniMax-M3 is $0.30/$1.20** for prompts up to 512K tokens. The $0.60/$2.40 it
+  was priced at is the long-context tier, so nearly every estimate was doubled.
+
+- **The OpenRouter fallback list offered a model that does not exist.**
+  `qwen/qwen3.8-max` is not on OpenRouter — only the `qwen3.8-max-0902` snapshot
+  is — so choosing it before the live catalogue loaded failed. Also: DeepSeek V4
+  Pro there becomes V4.1 Flash, and GPT-6 Astra and Gemini 3.8 Flash, missing from
+  this list since 3.2.0, are added.
+
+- **GLM-5.3 Flash was described as "a twentieth of the price"** of GLM-5.3. At
+  $0.15/$0.50 against $1.40/$4.40 it is about a ninth.
+
+- Kimi K3's context window is 1,048,576 tokens, as Moonshot lists it, not a
+  round million.
+
+### Caught before shipping
+
+`deepseek-flash` does not start with `deepseek-v4`, which is what the thinking
+control checked for — so the new default would have arrived with `/thinking`
+hidden and nothing to explain it. It is the same trap GPT-6 nearly fell into in
+3.2.0 behind a `gpt-5` prefix, and the model-maintenance checklist now says to
+search every capability check whenever an id changes shape.
+
 ## [3.2.2] — 2026-09-09
 
 > TL;DR — linking a server no longer means signing in to GitHub on it (it never did, nothing said so), and a device that failed to register once is no longer invisible and impossible to revoke.

@@ -78,6 +78,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'claude-sonnet-5':              1_000_000,
   'claude-haiku-4-5-20251001':    200_000,
   // DeepSeek
+  'deepseek-flash':       1_000_000,
   'deepseek-v4-pro':      1_000_000,
   'deepseek-v4-flash':    1_000_000,
   // Google
@@ -91,7 +92,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // MiniMax
   'MiniMax-M3':           1_000_000,
   // Kimi (Moonshot) — 1M on K3, 256K across K2.x
-  'kimi-k3':                   1_000_000,
+  'kimi-k3':                   1_048_576,
   'kimi-k2.7-code':            262_144,
   'kimi-k2.7-code-highspeed':  262_144,
   'kimi-k2.6':                 262_144,
@@ -107,6 +108,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'grok-code-fast-1':          256_000,
   'grok-4-fast-reasoning':     2_000_000,
   // Qwen (Alibaba) — current hosted generation
+  'qwen3.8-max':               1_000_000,
+  'qwen3.8-flash':               1_000_000,
   'qwen3.7-max':               1_000_000,
   'qwen3.8-max-preview':       1_000_000,
   'qwen3.7-plus':              1_000_000,
@@ -144,10 +147,14 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'glm-5.1':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
   'glm-5-turbo':       { inputPer1M: 1.20,  outputPer1M: 4.00 },
   // OpenAI
-  // Twice the price of 5.6 Sol. Cached reads are $1.00/M — 0.1x input, which is
+  // 2.5x 5.6 Sol at its current promotional rate. Cached reads are $1.00/M — 0.1x input, which is
   // what DEFAULT_CACHE_READ_RATE already applies, so no model row is needed.
   'gpt-6-astra':   { inputPer1M: 10.00, outputPer1M: 50.00 },
-  'gpt-5.6-sol':   { inputPer1M: 5.00,  outputPer1M: 30.00 },
+  // Promotional rate "available at least through 2026-11-21" per OpenAI's
+  // pricing page. Carried because it is what users are billed now, and no end
+  // date is written ahead of time — the Sonnet 5 lesson. Long-context requests
+  // bill 8/30; like every row here this holds the standard short-context tier.
+  'gpt-5.6-sol':   { inputPer1M: 4.00,  outputPer1M: 20.00 },
   'gpt-5.6-terra': { inputPer1M: 2.00,  outputPer1M: 12.00 },
   'gpt-5.6-luna':  { inputPer1M: 0.20,  outputPer1M: 1.20 },
   'gpt-5.5':      { inputPer1M: 5.00,  outputPer1M: 30.00 },
@@ -167,8 +174,19 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // honest direction for a cost estimate, and rule 5 of the catalogue policy
   // allows a clearly-labelled conservative approximation but never an invented
   // number. Cache-miss input; cache hits are ~1/50th and not modelled here.
-  'deepseek-v4-pro':   { inputPer1M: 0.435, outputPer1M: 0.87 },
-  'deepseek-v4-flash': { inputPer1M: 0.14,  outputPer1M: 0.28 },
+  // DeepSeek bills peak / off-peak (off-peak is half), and this table holds one
+  // rate, so it carries PEAK — an over-estimate by design. The previous rows
+  // (0.435/0.87 and 0.14/0.28) were two to four and a half times below today's
+  // peak and so under-reported, which is the one direction this table must not
+  // err in. Cache hits cost 2% of a miss, but DeepSeek reports them as
+  // `prompt_cache_hit_tokens`, which this tracker does not read — so every input
+  // token bills at the miss rate: an over-estimate again, not a gap.
+  'deepseek-flash':    { inputPer1M: 0.30, outputPer1M: 1.20 },
+  // Retired V4 Flash is served by V4.1 Flash and billed at its price.
+  'deepseek-v4-flash': { inputPer1M: 0.30, outputPer1M: 1.20 },
+  // Pro's own peak rate, right for every run until 2026-09-14; after that the id
+  // is routed to Flash, and configs holding it have been migrated away from it.
+  'deepseek-v4-pro':   { inputPer1M: 1.32, outputPer1M: 3.96 },
   // Google
   // Gemini 3.6/3.7/3.8 Flash carry PROMOTIONAL rates that run through 2026-12-31
   // and are scheduled to step up to 1.50/7.50 on 2027-01-01 — revisit all three
@@ -183,7 +201,10 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'gemini-3.5-flash-lite':         { inputPer1M: 0.30, outputPer1M: 2.50 },
   'gemini-3-flash-preview':        { inputPer1M: 0.50, outputPer1M: 3.00 },
   // MiniMax
-  'MiniMax-M3':             { inputPer1M: 0.60,  outputPer1M: 2.40 },
+  // "Permanent 50% off" list price for prompts up to 512K tokens; above that,
+  // 0.60/2.40. The old 0.60/2.40 row was the long-context tier and doubled the
+  // estimate for virtually every real request.
+  'MiniMax-M3':             { inputPer1M: 0.30,  outputPer1M: 1.20 },
   // Kimi (Moonshot) — pay-per-use cache-miss rates; `kimi-for-coding` is the
   // subscription alias (flat-fee in reality, priced notionally like K2.7 Code).
   'kimi-k3':                   { inputPer1M: 3.00, outputPer1M: 15.00 },
@@ -211,6 +232,8 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // `qwen3.8-max-preview` is Token-Plan-only (credit-metered, promotional
   // preview rate); Alibaba publishes no pay-per-use per-token price for it.
   // Leave it unpriced rather than borrowing the GA qwen3.8-max rate.
+  'qwen3.8-max':               { inputPer1M: 2.00, outputPer1M: 6.00 },
+  'qwen3.8-flash':             { inputPer1M: 0.15, outputPer1M: 0.47 },
   'qwen3.7-max':               { inputPer1M: 2.50, outputPer1M: 7.50 },
   'qwen3.7-plus':              { inputPer1M: 0.40, outputPer1M: 1.60 },
   'qwen3.6-plus':              { inputPer1M: 0.40, outputPer1M: 2.40 },

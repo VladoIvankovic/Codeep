@@ -296,15 +296,55 @@ describe('providers', () => {
   });
 
   describe('deepseek provider', () => {
-    it('should include DeepSeek V4 models and not include legacy ones', () => {
+    it('offers V4.1 Flash alone, as the default', () => {
       const provider = getProvider('deepseek');
       expect(provider).not.toBeNull();
-      expect(provider!.defaultModel).toBe('deepseek-v4-pro');
+      expect(provider!.defaultModel).toBe('deepseek-flash');
       const modelIds = provider!.models.map(m => m.id);
-      expect(modelIds).toContain('deepseek-v4-pro');
-      expect(modelIds).toContain('deepseek-v4-flash');
+      expect(modelIds).toEqual(['deepseek-flash']);
+      // V4 Flash is retired and served by V4.1 Flash; V4 Pro is routed to it
+      // from 2026-09-14. Listing either would label one model as another.
+      expect(modelIds).not.toContain('deepseek-v4-pro');
+      expect(modelIds).not.toContain('deepseek-v4-flash');
       expect(modelIds).not.toContain('deepseek-chat');
       expect(modelIds).not.toContain('deepseek-reasoner');
+    });
+
+    /// `deepseek-flash` does not start with `deepseek-v4`. The prefix check
+    /// alone would ship the default model with /thinking hidden.
+    it('gives V4.1 Flash the thinking control, with its low tier', () => {
+      expect(modelSupportsReasoningEffort('deepseek', 'deepseek-flash')).toBe(true);
+      expect(availableReasoningTiers('deepseek', 'deepseek-flash')).toEqual(['auto', 'low', 'high', 'max']);
+      expect(reasoningParamsFor('deepseek', 'deepseek-flash', 'low')).toEqual({ reasoning_effort: 'low' });
+      expect(reasoningParamsFor('deepseek', 'deepseek-flash', 'medium')).toEqual({ reasoning_effort: 'high' });
+      expect(reasoningParamsFor('deepseek', 'deepseek-flash', 'max')).toEqual({ reasoning_effort: 'max' });
+      // The retired V4 ids keep the narrower high|max grading.
+      expect(availableReasoningTiers('deepseek', 'deepseek-v4-pro')).toEqual(['auto', 'high', 'max']);
+    });
+
+    it('migrates both V4 ids to V4.1 Flash', () => {
+      expect(replacementModelFor('deepseek', 'deepseek-v4-pro')).toBe('deepseek-flash');
+      expect(replacementModelFor('deepseek', 'deepseek-v4-flash')).toBe('deepseek-flash');
+      // A current id has no replacement: the function answers only for retired ones.
+      expect(replacementModelFor('deepseek', 'deepseek-flash')).toBeUndefined();
+    });
+  });
+
+  describe('OpenRouter fallback list', () => {
+    const ids = () => getProvider('openrouter')!.models.map(m => m.id);
+
+    /// Picking an id from this list before the live catalogue loads sends it
+    /// straight to OpenRouter, so every entry must be one OpenRouter has.
+    it('does not offer a Qwen id OpenRouter does not carry', () => {
+      expect(ids()).not.toContain('qwen/qwen3.8-max');
+      expect(ids()).toContain('qwen/qwen3.8-max-0902');
+    });
+
+    it('carries the current DeepSeek, and the models added in 3.2.0', () => {
+      expect(ids()).toContain('deepseek/deepseek-v4.1-flash');
+      expect(ids()).not.toContain('deepseek/deepseek-v4-pro');
+      expect(ids()).toContain('openai/gpt-6-astra');
+      expect(ids()).toContain('google/gemini-3.8-flash');
     });
   });
 
@@ -343,17 +383,16 @@ describe('providers', () => {
       expect(modelRejectsSamplingParams('gemini-3.6-flash')).toBe(false);
       expect(modelSupportsReasoningEffort('google', 'gemini-3.7-flash')).toBe(true);
     });
-    it('lists GLM-5.3 on the international rosters, not the China ones', () => {
-      // It reached the standalone pay-per-use API on 2026-08-19. The China
-      // platform bills separately and its listing has not been checked, so
-      // leaking it there would still hand users a guaranteed 4xx.
-      for (const id of ['z.ai', 'z.ai-api']) {
+    it('lists GLM-5.3 on every Z.AI roster, and Flash only where it is sold', () => {
+      // International since 2026-08-19. China checked 2026-09-11: bigmodel.cn
+      // lists GLM-5.3 on the gateway and the China Coding Plan, and GLM-5.3
+      // Flash on China pay-per-use only.
+      for (const id of ['z.ai', 'z.ai-api', 'z.ai-cn', 'z.ai-cn-api']) {
         expect(getProvider(id)!.models.map(m => m.id), id).toContain('glm-5.3');
         expect(getProvider(id)!.defaultModel, id).toBe('glm-5.3');
       }
-      for (const id of ['z.ai-cn', 'z.ai-cn-api']) {
-        expect(getProvider(id)!.models.map(m => m.id), id).not.toContain('glm-5.3');
-      }
+      expect(getProvider('z.ai-cn-api')!.models.map(m => m.id)).toContain('glm-5.3-flash');
+      expect(getProvider('z.ai-cn')!.models.map(m => m.id)).not.toContain('glm-5.3-flash');
     });
     it('grades GLM-5.3 effort low/high/max and never disables thinking', () => {
       expect(modelSupportsReasoningEffort('z.ai', 'glm-5.3')).toBe(true);
@@ -682,7 +721,14 @@ describe('providers', () => {
         'qwen3.6-plus',
         'qwen3.5-plus',
       ]);
-      expect(PROVIDERS['qwen-api'].defaultModel).toBe('qwen3.7-max');
+      // 3.8 Max and Flash are GA on Model Studio international, and cheaper
+      // than the 3.7 Max / 3.6 Flash they sit above.
+      expect(PROVIDERS['qwen-api'].defaultModel).toBe('qwen3.8-max');
+      expect(PROVIDERS['qwen-api'].models.map(m => m.id)).toEqual(
+        expect.arrayContaining(['qwen3.8-max', 'qwen3.8-flash', 'qwen3.7-max']));
+      // China pay-per-use is a separate listing, not verified for 3.8.
+      expect(PROVIDERS['qwen-cn-api'].defaultModel).toBe('qwen3.7-max');
+      expect(PROVIDERS['qwen-cn-api'].models.map(m => m.id)).not.toContain('qwen3.8-max');
       expect(PROVIDERS['qwen-api'].models.map(m => m.id)).not.toContain('qwen3-coder-plus');
     });
     it('keeps Qwen Token Plan isolated from Coding Plan and pay-per-use', () => {
