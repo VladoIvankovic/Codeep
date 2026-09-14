@@ -213,3 +213,18 @@ describe('describeUnsendableKey', () => {
     expect(problem).not.toContain(secret);
   });
 });
+
+describe('fresh-install defaults', () => {
+  /// The default model stayed `glm-5.2` after Z.AI's catalogue default moved to
+  /// `glm-5.3`, so every new install started a flagship behind the website —
+  /// and nothing failed, because 5.2 still works. Tie the pair to the catalogue.
+  it("start on the default provider's own default model", async () => {
+    const { DEFAULT_PROVIDER, DEFAULT_MODEL } = await import('./index');
+    const { PROVIDERS } = await import('./providers');
+    const provider = PROVIDERS[DEFAULT_PROVIDER];
+    expect(provider, `default provider ${DEFAULT_PROVIDER} is not in PROVIDERS`).toBeTruthy();
+    expect(provider.models.map(m => m.id)).toContain(DEFAULT_MODEL);
+    expect(DEFAULT_MODEL).toBe(provider.defaultModel);
+  });
+});
+

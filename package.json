@@ -17,6 +17,7 @@
     "test:coverage": "vitest run --coverage",
     "version": "node scripts/gen-version.js && git add src/version.ts",
     "export:catalogue": "node --import tsx scripts/export-catalogue.ts",
+    "export:commands": "node --import tsx scripts/export-commands.ts",
     "release": "node scripts/release.js"
   },
   "repository": {

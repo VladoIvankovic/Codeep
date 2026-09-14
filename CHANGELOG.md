@@ -11,6 +11,73 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.3.1] — 2026-09-14
+
+> TL;DR — `/account` answered "Unknown command", `/stats` has printed the `/cost` report since June, fresh installs started on an older model, and 40 commands were missing from `/help`. All fixed, and each is now held by a test.
+
+A full audit of every slash command: whether it runs, and whether it is
+documented. Every command was checked against its handler, and the read-only ones
+were run through the real dispatcher.
+
+### Fixed
+
+- **`/account` answered "Unknown command".** The autocomplete offered it — "Link
+  this machine to your codeep.dev account" — and nothing handled it. It now shows
+  whether this machine is linked, and how to link it: linking runs in your shell
+  as `codeep account`, because the flow prints to the terminal and exits when it
+  is done, which cannot happen inside the TUI.
+
+- **`/stats` has printed the `/cost` report since June.** In June `stats` became an
+  alias of `/cost` in the command registry, and aliases are resolved before
+  dispatch — so its own handler, with the per-model breakdown, plan-aware totals
+  and the per-1M pricing table, never ran. `/stats` is its own command again.
+
+- **A fresh install started on GLM-5.2.** Z.AI's default moved to GLM-5.3 in
+  August, and the website says so; the config default did not follow. Nothing
+  failed, because 5.2 still works.
+
+- **40 commands were missing from `/help`**, including `/thinking`, `/telegram`,
+  `/audit`, `/tasks`, `/sync`, `/keysync`, `/telemetry`, `/cloud`, `/pr` and
+  `/changelog`. Three whole sections were absent — Cloud & Account, Code
+  Generation and Thinking. `/help` now lists every command the autocomplete does,
+  plus subcommands that were only on the website (`/tasks add`, `/profile load`,
+  `/skills install`, …).
+
+- The hint shown when a model has no thinking control listed DeepSeek V4, which
+  DeepSeek has retired.
+
+### Now held by tests
+
+The same mistakes can no longer ship silently. `registry.test.ts` fails when:
+
+- a command the autocomplete offers has **no handler** (`/account`);
+- a dispatcher `case` is labelled with an **alias**, which can never run
+  (`/stats`);
+- a visible command is **missing from `/help`**, or `/help` documents one that
+  **does not exist**;
+- a built-in skill is **shadowed** by a command of the same name.
+
+`index.test.ts` fails when the fresh-install default model is not the default
+provider's own default.
+
+Every test above was checked by putting the bug back and watching it fail.
+
+### Known, not yet decided
+
+Four built-in skills can never run, because a command takes the name first:
+`docs` (`/docs` opens the web docs), `model`, `rename` and `profile`. `/skills`
+still lists them. Which should own each name is an open decision; the website now
+omits them, and a fifth cannot appear without failing the suite.
+
+### For the website
+
+`npm run export:commands` generates the command reference behind
+codeep.dev/docs/commands from the same layout as `/help`. The hand-written page
+had drifted: it was missing 19 commands, documented `/scan status` and
+`/scan clear`, which do not exist, described `/agent` without a task as
+"interactive mode", misdescribed `/openrouter`, and claimed "over 40" commands
+against 114.
+
 ## [3.3.0] — 2026-09-11
 
 > TL;DR — DeepSeek V4.1 Flash replaces both V4 models before DeepSeek routes V4 Pro to it on 14 September. Qwen 3.8 Max and Flash, GLM-5.3 in China, and four cost figures corrected — DeepSeek's by more than four times.

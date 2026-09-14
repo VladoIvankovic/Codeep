@@ -325,7 +325,6 @@ export async function handleCommand(
       break;
     }
 
-    case 'effort':
     case 'thinking': {
       const providerId = config.get('provider');
       const model = config.get('model');
@@ -339,7 +338,7 @@ export async function handleCommand(
         if (sub === 'auto') {
           ctx.app.notify('Thinking effort: auto — each model uses its own default.');
         } else if (!supported) {
-          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 5, GPT-5.x, Gemini 3, DeepSeek V4, Kimi K3).`);
+          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 5, GPT-5.x or GPT-6, Gemini 3, DeepSeek V4.1 Flash, GLM-5.x, Kimi K3).`);
         } else {
           // Tell the user what THIS model will actually run (the tier may
           // collapse onto a level the model distinguishes, e.g. medium→high on Kimi K3).
@@ -403,7 +402,6 @@ export async function handleCommand(
       break;
     }
 
-    case 'd':
     case 'docs': {
       // Open per-command web docs in the system browser. Lets the inline
       // /help stay terse (single-line entries) while users who want the
@@ -1737,21 +1735,13 @@ Format: use headers per category, only include categories where you found issues
     }
 
     // Built-in skill shortcuts
-    case 'c':
     case 'commit':
-    case 't':
     case 'test':
-    case 'r':
     case 'refactor':
-    case 'f':
     case 'fix':
-    case 'e':
     case 'explain':
-    case 'o':
     case 'optimize':
-    case 'b':
     case 'debug':
-    case 'p':
     case 'push':
     case 'pull':
     case 'amend':
@@ -1949,6 +1939,24 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
             }
           }
         }
+      });
+      break;
+    }
+
+    case 'account': {
+      // Linking cannot run here: `codeep account` prints to stdout and exits the
+      // process when it finishes, which would tear down the TUI. Before this
+      // case existed the autocomplete offered /account and it answered
+      // "Unknown command" — so this says where the flow runs, and what state
+      // the machine is in now.
+      const { getSyncToken, getGithubId } = await import('../config/index');
+      const linked = Boolean(getSyncToken());
+      const githubId = getGithubId();
+      ctx.app.addMessage({
+        role: 'system',
+        content: linked
+          ? `## codeep.dev account\n\nThis machine is **linked**${githubId ? ` (GitHub id ${githubId})` : ''}. Usage and sessions sync to your dashboard.\n\nTo cut it off, use **Settings → Connected devices** on codeep.dev.`
+          : `## codeep.dev account\n\nThis machine is **not linked**.\n\nQuit Codeep and run this in your shell:\n\n\`\`\`bash\ncodeep account\n\`\`\`\n\nIt prints a one-time approval link. You can open it on **any** device where you are already signed in to codeep.dev — it does not have to be this machine, so there is no need to sign in to GitHub here.`,
       });
       break;
     }

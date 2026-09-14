@@ -1,11 +1,24 @@
 /**
- * Single source of truth for Codeep slash commands.
+ * Single source of truth for Codeep's TUI slash commands.
  *
- * Every other place that needs command metadata — the `/` autocomplete in
- * `App.ts`, the `/help` screen in `components/Help.ts`, the dispatcher in
- * `commands.ts`, and the ACP command handler in `acp/commands.ts` — derives
- * from this registry. Adding a command means adding one entry here; the
- * autocomplete list, help screen, and command index all pick it up.
+ * The `/` autocomplete in `App.ts` and alias resolution in the dispatcher
+ * (`commands.ts`) derive from this registry. Adding a command means:
+ *
+ * 1. an entry in `COMMANDS` below;
+ * 2. a handler — a `case` in `renderer/commands.ts`, a `case` in `App.ts`, or
+ *    a built-in skill of the same name;
+ * 3. a row in `HELP_LAYOUT` at the bottom of this file;
+ * 4. `npm run export:commands`, which regenerates the website's command
+ *    reference (`Codeep-web/src/data/commands.json`) from this file.
+ *
+ * `registry.test.ts` fails if 2 or 3 is missed: a command offered in the
+ * autocomplete with no handler answers "Unknown command" (this is how
+ * `/account` shipped broken), and one missing from `HELP_LAYOUT` is invisible
+ * in `/help` and on the website.
+ *
+ * The ACP server (VS Code, Zed) is NOT derived from here: it keeps its own
+ * `AVAILABLE_COMMANDS` list in `acp/server.ts` and resolves its own aliases,
+ * so a command added here is not automatically offered to editors.
  *
  * ## What lives here vs. elsewhere
  *
@@ -94,13 +107,12 @@ export const COMMANDS: CommandDef[] = [
   { name: 'settings', description: 'Open settings', category: 'general' },
   { name: 'version', description: 'Show version', category: 'general' },
   { name: 'update', description: 'Check for updates', category: 'general' },
-  {
-    name: 'cost',
-    aliases: ['stats'],
-    description: 'Token usage & cost this session',
-    category: 'general',
-    aliasListed: true,
-  },
+  { name: 'cost', description: 'Token usage & cost this session', category: 'general' },
+  // Its own command, not an alias of /cost. From 2026-06-24 it was
+  // `aliases: ['stats']` on /cost, and the dispatcher resolves aliases before
+  // the switch — so /stats printed the /cost report and its own handler (per-
+  // model breakdown, cache summary, pricing table) never ran.
+  { name: 'stats', description: 'Detailed session view — per-model breakdown, cache, and pricing table', category: 'general' },
   { name: 'clear', description: 'Clear chat', category: 'general', hidden: true },
   { name: 'exit', description: 'Quit application', category: 'general', hidden: true },
 
@@ -256,7 +268,7 @@ export const COMMANDS: CommandDef[] = [
   { name: 'web-cache', aliases: ['webcache'], description: 'Show @web fetch cache stats (alias: /web-cache clear)', category: 'extensions' },
 
   // ── cloud & account ────────────────────────────────────────────────────────
-  { name: 'account', description: 'Link this machine to your codeep.dev account', category: 'cloud' },
+  { name: 'account', description: 'Show whether this machine is linked to codeep.dev, and how to link it', category: 'cloud' },
   { name: 'tasks', description: 'List/add/done/delete codeep.dev tasks', category: 'cloud', usage: ['add <title> [--bug|--feature]'] },
   { name: 'sync', description: 'Sync learning preferences and profiles to codeep.dev', category: 'cloud' },
   { name: 'telemetry', description: 'Show or toggle automatic cloud telemetry (on/off)', category: 'cloud' },
@@ -265,7 +277,11 @@ export const COMMANDS: CommandDef[] = [
   { name: 'context-save', description: 'Save conversation', category: 'cloud', hidden: true },
   { name: 'context-load', description: 'Load conversation', category: 'cloud', hidden: true },
   { name: 'context-clear', description: 'Clear saved context', category: 'cloud', hidden: true },
-  { name: 'save', description: 'Save current session', category: 'cloud', hidden: true },
+  // ACP-only. acp/commands.ts handles /save (an editor has no autosave); the TUI
+  // saves sessions on its own and has no handler, so this stays hidden — offering
+  // it in the terminal would only answer "Unknown command". Registered because
+  // registry.test.ts requires every ACP case label to be.
+  { name: 'save', description: 'Save current session (VS Code / Zed only)', category: 'cloud', hidden: true },
 
   // ── code generation ────────────────────────────────────────────────────────
   { name: 'build', description: 'Build the project', category: 'codegen' },
@@ -374,7 +390,11 @@ export const ALL_ALIASES: ReadonlySet<string> = (() => {
 export interface HelpItemSpec {
   /** Visible key in `/help`, including the leading `/`. */
   key: string;
+  /** One line, sized for the terminal. */
   description: string;
+  /** Longer explanation used on the website's command reference instead of
+   *  `description`, where a terminal row is too short to say what matters. */
+  web?: string;
 }
 
 export interface HelpCategorySpec {
@@ -398,7 +418,10 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
       { key: '/settings', description: 'Open settings' },
       { key: '/version', description: 'Show version' },
       { key: '/update', description: 'Check for updates' },
-      { key: '/stats (/cost)', description: 'Token usage & cost this session' },
+      { key: '/cost', description: 'Token usage & cost this session',
+        web: 'Token usage and estimated cost this session, per provider and model, with prompt-cache savings' },
+      { key: '/stats', description: 'Detailed view — per-model breakdown, cache, pricing table',
+        web: 'Detailed session view — per-model breakdown, plan-aware totals, prompt-cache reads and writes, and the per-1M pricing table' },
       { key: '/clear', description: 'Clear chat' },
       { key: '/exit', description: 'Quit application' },
     ],
@@ -410,11 +433,15 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
       { key: '/new', description: 'Start new session' },
       { key: '/rename <name>', description: 'Rename current session' },
       { key: '/search <term>', description: 'Search the current session' },
-      { key: '/recall <query>', description: 'Search across ALL saved sessions (cross-session)' },
-      { key: '/recall … --resume', description: 'Load the top-matching session directly' },
+      { key: '/recall <query>', description: 'Search across ALL saved sessions (cross-session)',
+        web: 'Search across all saved sessions, ranked by relevance and recency' },
+      { key: '/recall … --resume', description: 'Load the top-matching session directly',
+        web: 'Load the top-matching session directly, skipping the picker' },
       { key: '/recall … --summarize', description: 'LLM recap of what you did across matches' },
+      { key: '/cloud', description: 'List and resume sessions synced from other devices' },
       { key: '/export [md|json|txt]', description: 'Export chat' },
-      { key: '/compact [keepN]', description: 'AI-summarize older messages to free up context (keeps last N)' },
+      { key: '/compact [keepN]', description: 'AI-summarize older messages to free up context (keeps last N)',
+        web: 'AI-summarize older messages to free up context, keeping the last N (default 4)' },
     ],
   },
   {
@@ -422,7 +449,8 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
     items: [
       { key: '/checkpoint [name]', description: 'Snapshot conversation + provider/model + git HEAD' },
       { key: '/checkpoints', description: 'List saved checkpoints in this workspace' },
-      { key: '/rewind <id>', description: 'Restore conversation from a checkpoint' },
+      { key: '/rewind <id>', description: 'Restore conversation from a checkpoint',
+        web: 'Restore a checkpoint — conversation and provider/model; files roll back via the git command printed afterwards' },
       { key: '/checkpoint delete <id>', description: 'Delete a saved checkpoint' },
     ],
   },
@@ -452,6 +480,9 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
       { key: '/amend', description: 'Amend last commit' },
       { key: '/branch', description: 'Create/manage branches' },
       { key: '/stash', description: 'Stash changes' },
+      { key: '/unstash', description: 'Apply and drop the most recent stash' },
+      { key: '/pr', description: 'Create a pull request description' },
+      { key: '/changelog', description: 'Generate changelog from recent commits' },
       { key: '/init', description: 'Initialize project (.codeep/ folder)' },
       { key: '/scan', description: 'Scan project structure' },
       { key: '/memory <note>', description: 'Add note to project intelligence' },
@@ -479,19 +510,58 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
     title: 'Skills (Shortcuts)',
     items: [
       { key: '/test (/t)', description: 'Generate/run tests' },
+      { key: '/test-fix', description: 'Fix failing tests' },
+      { key: '/coverage', description: 'Run/analyze test coverage' },
+      { key: '/e2e', description: 'Generate end-to-end tests' },
+      { key: '/mock', description: 'Generate mock data for testing' },
       { key: '/docs (/d)', description: 'Open web docs for a command' },
+      { key: '/readme', description: 'Generate or update README' },
+      { key: '/api-docs', description: 'Generate API documentation' },
       { key: '/refactor (/r)', description: 'Improve code quality' },
       { key: '/fix (/f)', description: 'Debug and fix issues' },
       { key: '/explain (/e)', description: 'Explain code' },
       { key: '/optimize (/o)', description: 'Optimize performance' },
       { key: '/debug (/b)', description: 'Debug problems' },
       { key: '/security', description: 'Security audit (SQLi, XSS, secrets, auth)' },
-      { key: '/coverage', description: 'Run/analyze test coverage' },
+      { key: '/types', description: 'Add or improve TypeScript types' },
+      { key: '/cleanup', description: 'Clean up code (remove unused, format)' },
+      { key: '/modernize', description: 'Update code to use modern syntax' },
+      { key: '/migrate', description: 'Migrate code to newer version' },
+      { key: '/split', description: 'Split a large file into smaller modules' },
+      { key: '/log', description: 'Add logging to code' },
+      { key: '/translate', description: 'Translate code comments to English' },
+      { key: '/skills', description: 'List all skills' },
+      { key: '/skills <query>', description: 'Search skills by keyword' },
+      { key: '/skills bundles', description: 'List skill bundles (project + global)' },
+      { key: '/skills create-bundle <name>', description: 'Scaffold a bundle in .codeep/skills/' },
+      { key: '/skills show <name>', description: "Print a bundle's SKILL.md" },
+      { key: '/skills browse [query]', description: 'Search the marketplace at codeep.dev/skills' },
+      { key: '/skills install <owner>/<slug>', description: 'Install a marketplace bundle into the project' },
+      { key: '/skills publish <name> [--public]', description: 'Share a bundle to codeep.dev' },
+      { key: '/skills unpublish <owner>/<slug>', description: 'Remove a bundle you published' },
+    ],
+  },
+  {
+    title: 'Code Generation',
+    items: [
       { key: '/component <name>', description: 'Generate UI component' },
       { key: '/api <name>', description: 'Generate API endpoint' },
+      { key: '/hook', description: 'Generate a React hook' },
+      { key: '/service', description: 'Generate a service/utility module' },
+      { key: '/page', description: 'Generate a new page/route' },
+      { key: '/form', description: 'Generate a form with validation' },
+      { key: '/crud', description: 'Generate full CRUD for an entity' },
       { key: '/docker', description: 'Generate Dockerfile + compose' },
-      { key: '/skills', description: 'List all 50+ skills' },
-      { key: '/skills <query>', description: 'Search skills by keyword' },
+      { key: '/ci', description: 'Generate CI/CD configuration' },
+      { key: '/env', description: 'Setup environment configuration' },
+      { key: '/k8s', description: 'Generate Kubernetes manifests' },
+      { key: '/terraform', description: 'Generate Terraform configuration' },
+      { key: '/nginx', description: 'Generate Nginx configuration' },
+      { key: '/monitor', description: 'Add monitoring and observability' },
+      { key: '/build', description: 'Build the project' },
+      { key: '/deploy', description: 'Build and deploy' },
+      { key: '/release', description: 'Create a new release' },
+      { key: '/publish', description: 'Publish package to npm' },
     ],
   },
   {
@@ -506,16 +576,33 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
       { key: '/login', description: 'Login with API key' },
       { key: '/logout', description: 'Logout from provider' },
       { key: '/profile save <name>', description: 'Save current provider+model as profile' },
+      { key: '/profile load <name>', description: 'Load a saved profile' },
       { key: '/profile list', description: 'List saved profiles' },
-      { key: '/openrouter', description: 'OpenRouter routing prefs (prefer/ignore providers, fallbacks, privacy)' },
+      { key: '/profile delete <name>', description: 'Delete a saved profile' },
+      { key: '/openrouter', description: 'OpenRouter routing prefs (prefer/ignore providers, fallbacks, privacy)',
+        web: 'OpenRouter routing preferences: show, prefer or ignore upstream providers, fallbacks on/off, privacy strict/allow, clear' },
       { key: '/personality', description: 'List personalities and custom bots with model, tools, and scope' },
       { key: '/personality <name>', description: 'Activate a personality or custom bot. /personality off to clear.' },
-      { key: '/me', description: 'Your user profile (reply language, style, stack) — adapts the agent to you' },
+      { key: '/me', description: 'Your user profile (reply language, style, stack) — adapts the agent to you',
+        web: 'Your user profile — reply language, style, stack — injected into every run on every surface' },
       { key: '/me init [project]', description: 'Scaffold a profile template (global, or for this project). /me off to disable' },
       { key: '/me learn [on|off]', description: 'Learn durable prefs from this session now; on/off toggles auto-learn. /me forget clears it' },
       { key: '/me sync', description: 'Push your profile to the codeep.dev dashboard (and pull on a fresh machine)' },
-      { key: '/agents', description: 'List sub-agents the agent can delegate to (researcher / reviewer / tester / your own)' },
+      { key: '/agents', description: 'List sub-agents the agent can delegate to (researcher / reviewer / tester / your own)',
+        web: 'List the sub-agents the agent can delegate to — planner, researcher, reviewer, tester, or your own in .codeep/agents/' },
       { key: '/insights [--days N]', description: 'Activity summary — runs, files, tools, projects over the last N days (default 7)' },
+      { key: '/telegram', description: 'Set up answering confirmations on your phone' },
+      { key: '/telegram on|off', description: 'Turn Telegram approvals on or off' },
+      { key: '/audit', description: 'What agents did here — runs, tools, and what the boundary refused' },
+      { key: '/audit on|off', description: 'Turn the project audit record on or off' },
+    ],
+  },
+  {
+    title: 'Thinking',
+    items: [
+      { key: '/thinking (/effort)', description: 'Show the thinking tier and what this model supports' },
+      { key: '/thinking <auto|low|medium|high|max>', description: 'Set how hard the model reasons',
+        web: "Set the reasoning-effort tier. Auto uses each model's own default; other tiers are clamped to the levels the current provider and model actually distinguish, so an unsupported value is never sent. Models with no graded control ignore it." },
     ],
   },
   {
@@ -533,6 +620,25 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
       { key: '/mcp prompt <server> <name>', description: 'Materialize a prompt with arguments (key=value)' },
       { key: '/hooks', description: 'List installed lifecycle hooks (.codeep/hooks/<event>.sh)' },
       { key: '/commands', description: 'List custom slash commands (.codeep/commands/*.md)' },
+      { key: '/web-cache', description: 'Show @web fetch cache stats' },
+      { key: '/web-cache clear', description: 'Clear the @web fetch cache' },
+    ],
+  },
+  {
+    title: 'Cloud & Account',
+    items: [
+      { key: '/account', description: 'Is this machine linked to codeep.dev? How to link it',
+        web: 'Show whether this machine is linked to codeep.dev. Linking runs in your shell as `codeep account`, and the approval link it prints can be opened on any device where you are already signed in' },
+      { key: '/tasks', description: 'List codeep.dev tasks' },
+      { key: '/tasks add <title> [--bug|--feature] [--desc <text>]', description: 'Create a task on the dashboard' },
+      { key: '/tasks done <n>', description: 'Mark task #n as done' },
+      { key: '/tasks delete <n>', description: 'Delete task #n' },
+      { key: '/sync', description: 'Sync learning preferences and profiles to codeep.dev' },
+      { key: '/sync learning', description: 'Sync only learning preferences' },
+      { key: '/sync profiles', description: 'Sync only saved profiles' },
+      { key: '/telemetry [on|off]', description: 'Show or toggle automatic cloud telemetry' },
+      { key: '/keysync [on|off]', description: 'Show or toggle syncing API keys to codeep.dev',
+        web: 'Show or toggle syncing API keys to codeep.dev. Off by default — keys stay in your OS keychain unless you opt in' },
     ],
   },
   {

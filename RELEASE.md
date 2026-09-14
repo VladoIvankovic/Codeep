@@ -25,8 +25,19 @@ vim package.json  # Change version number
 
 ```bash
 npm run build
-npm test  # If tests exist
+npm test
 ```
+
+If commands or models changed, regenerate what the website shows before you
+tag, and commit the JSON in the web repo:
+
+```bash
+npm run export:commands   # → Codeep-web/src/data/commands.json
+npm run export:catalogue  # → Codeep-web/src/data/catalogue.json
+```
+
+Deploy the website **after** the npm publish, so it never documents a command or
+default the published CLI does not have yet.
 
 ### 3. Commit & Push
 

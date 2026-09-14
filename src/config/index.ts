@@ -335,12 +335,21 @@ function isWritable(dir: string): boolean {
  * 1. Try standard Conf location (~/.config/codeep-nodejs on Linux, etc.)
  * 2. If not writable, use .codeep in current working directory
  */
+/**
+ * What a fresh install starts on. Exported so a test can hold the pair to the
+ * catalogue: the model had stayed `glm-5.2` after Z.AI's default moved to
+ * `glm-5.3`, so new users started a flagship behind what the website promised,
+ * and nothing failed because 5.2 still works.
+ */
+export const DEFAULT_PROVIDER = 'z.ai';
+export const DEFAULT_MODEL = 'glm-5.3';
+
 function createConfig(): Conf<ConfigSchema> {
   const defaults: ConfigSchema = {
     apiKey: '',
     migrationVersion: 0,
-    provider: 'z.ai',
-    model: 'glm-5.2',
+    provider: DEFAULT_PROVIDER,
+    model: DEFAULT_MODEL,
     agentMode: 'on',
     ollamaUrl: 'http://localhost:11434',
     ollamaNativeApi: false,

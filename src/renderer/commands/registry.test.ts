@@ -11,8 +11,15 @@ import {
   COMMAND_DESCRIPTIONS,
   ALL_COMMAND_NAMES,
   ALL_ALIASES,
+  HELP_LAYOUT,
   resolveCommand,
 } from './registry';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { getBuiltInSkills } from '../../utils/skills';
+
+const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+const topLevelCases = (src: string) => new Set([...src.matchAll(/^ {4}case '([^']+)':/gm)].map(m => m[1]));
 
 describe('command registry', () => {
   it('every command has a name, description, and valid category', () => {
@@ -180,4 +187,81 @@ describe('command registry', () => {
     const unknown = [...labels].filter(l => !ALL_COMMAND_NAMES.has(l));
     expect(unknown, `acp/commands.ts has cases with no registry entry: ${unknown.join(', ')}`).toEqual([]);
   });
+
+  /// The /account class of bug: offered in the autocomplete, answered "Unknown
+  /// command" because nothing handled it. A visible command needs a `case` in
+  /// the dispatcher, a `case` in App.ts (which intercepts /help, /clear…), or a
+  /// built-in skill of the same name.
+  it('every visible command has a handler', () => {
+    const dispatcher = topLevelCases(read('../commands.ts'));
+    const appSrc = read('../App.ts');
+    const appBody = appSrc.slice(appSrc.indexOf('private handleCommand(input: string)'));
+    const app = new Set([...appBody.slice(0, appBody.indexOf('default:')).matchAll(/case '([^']+)':/g)].map(m => m[1]));
+    const skills = new Set(getBuiltInSkills().flatMap(sk => [sk.name, ...(sk.shortcut ? [sk.shortcut] : [])]));
+    const unhandled = COMMANDS.filter(c => !c.hidden)
+      .map(c => c.name)
+      .filter(n => !dispatcher.has(n) && !app.has(n) && !skills.has(n));
+    expect(unhandled, `offered in autocomplete but nothing handles them: ${unhandled.join(', ')}`).toEqual([]);
+  });
+
+  /// The dispatcher resolves aliases to their canonical name BEFORE the switch,
+  /// so a `case` labelled with an alias can never run. That is how /stats
+  /// printed the /cost report for three months: `stats` was an alias of `cost`,
+  /// and its own handler below was dead.
+  it('no dispatcher case is labelled with an alias', () => {
+    const labels = topLevelCases(read('../commands.ts'));
+    const dead = [...labels].filter(l => ALL_ALIASES.has(l));
+    expect(dead, `unreachable alias cases in renderer/commands.ts: ${dead.join(', ')}`).toEqual([]);
+  });
+
+  it('/stats is its own command, not an alias of /cost', () => {
+    expect(resolveCommand('stats')?.name).toBe('stats');
+    expect(resolveCommand('cost')?.name).toBe('cost');
+  });
+
+  /// A command missing from HELP_LAYOUT is invisible in /help and on the
+  /// website, which is generated from it. 40 had drifted out before this test.
+  it('every visible command appears in /help', () => {
+    const listed = new Set<string>();
+    for (const cat of HELP_LAYOUT) for (const item of cat.items)
+      for (const m of item.key.matchAll(/\/([\w-]+)/g)) listed.add(m[1]);
+    const missing = COMMANDS.filter(c => !c.hidden)
+      .filter(c => !listed.has(c.name) && !(c.aliases ?? []).some(a => listed.has(a)))
+      .map(c => c.name);
+    expect(missing, `visible commands missing from HELP_LAYOUT: ${missing.join(', ')}`).toEqual([]);
+  });
+
+  /// The reverse: /help must not document a command that does not exist. Rows
+  /// that are not commands at all (an env var) are allowed; a row starting
+  /// with "/" must name a real command or alias.
+  it('/help documents no command that does not exist', () => {
+    const ghosts: string[] = [];
+    for (const cat of HELP_LAYOUT) for (const item of cat.items) {
+      const m = item.key.match(/^\/([\w-]+)/);
+      if (m && !ALL_COMMAND_NAMES.has(m[1])) ghosts.push(item.key);
+    }
+    expect(ghosts, `HELP_LAYOUT rows naming no real command: ${ghosts.join(', ')}`).toEqual([]);
+  });
+
+  /// A command and a built-in skill with the same name: the command wins and
+  /// the skill can never run, while /skills still lists it. These four predate
+  /// this test and are a naming decision still to be made; the test exists so
+  /// a fifth cannot appear silently.
+  it('no new built-in skill is shadowed by a command', () => {
+    const KNOWN_SHADOWED = new Set(['docs', 'model', 'rename', 'profile']);
+    const dispatcher = topLevelCases(read('../commands.ts'));
+    const dispatcherSrc = read('../commands.ts');
+    const shadowed = getBuiltInSkills().map(sk => sk.name).filter(name => {
+      if (!dispatcher.has(name)) return false;
+      // A case that hands straight to runSkill runs the skill, so it is not shadowing it.
+      const at = dispatcherSrc.search(new RegExp(`^ {4}case '${name}':`, 'm'));
+      const body = dispatcherSrc.slice(at, dispatcherSrc.indexOf('\n    }\n', at));
+      return !body.includes('runSkill(');
+    });
+    const unexpected = shadowed.filter(n => !KNOWN_SHADOWED.has(n));
+    expect(unexpected, `skills made unreachable by a command of the same name: ${unexpected.join(', ')}`).toEqual([]);
+    // If one of the four is resolved, drop it from KNOWN_SHADOWED.
+    expect(shadowed.sort()).toEqual([...KNOWN_SHADOWED].sort());
+  });
 });
+

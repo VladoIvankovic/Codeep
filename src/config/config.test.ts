@@ -91,10 +91,12 @@ describe('config utilities', () => {
 
   describe('config schema validation', () => {
     it('should have valid default values', () => {
+      // A local copy that only checks value types. The real defaults are held
+      // to the catalogue in index.test.ts ('fresh-install defaults').
       const defaults = {
         apiKey: '',
         provider: 'z.ai',
-        model: 'glm-5.2',
+        model: 'glm-5.3',
         protocol: 'openai',
         plan: 'lite',
         language: 'en',

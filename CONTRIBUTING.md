@@ -99,7 +99,10 @@ If you're new to the codebase, read in this order:
 1. **`README.md`** — feature tour and the "Architecture" / "Libraries" sections.
 2. **`src/renderer/main.ts`** — TUI entry point; the dispatch loop lives here.
 3. **`src/renderer/commands/registry.ts`** — the single source of truth for
-   slash-command metadata; `App.ts` and `Help.ts` both derive from it.
+   slash-command metadata and the `/help` layout; `App.ts`, `Help.ts` and the
+   website's command reference all derive from it. Its header lists the four
+   steps for adding a command, and `registry.test.ts` fails if one is missed.
+   The ACP server keeps its own list in `acp/server.ts`.
 4. **`src/config/index.ts`** — the on-disk config (`Conf<ConfigSchema>`) and
    every accessor/mutator. `ConfigSchema` is the exported type that other
    modules (e.g. `Settings.ts`) key off.

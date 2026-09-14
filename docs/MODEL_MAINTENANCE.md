@@ -46,6 +46,12 @@ Last full review: **2026-09-11**
   `CostEstimator` and `ContextWindowEstimator` for the old family name.
 - Update CLI context/pricing in `src/utils/tokenTracker.ts`.
 - Add an exact migration in `src/config/index.ts` for removed stored ids.
+- **Check the fresh-install default** — `DEFAULT_PROVIDER` / `DEFAULT_MODEL` in
+  `src/config/index.ts`. It stayed `glm-5.2` for a month after Z.AI's default
+  moved to `glm-5.3`, and nothing failed because 5.2 still works.
+  `index.test.ts` ('fresh-install defaults') now requires the default model to
+  be the default provider's own `defaultModel`, so moving one without the other
+  fails the suite.
 - Mirror the catalogue, tuning, context, and pricing in
   `Codeep-macOS/Packages/CodeepCore`.
 - Update the OpenRouter fallback in both clients.
