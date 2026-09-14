@@ -15,6 +15,8 @@ import {
   createTokenScope,
   runWithTokenScope,
   getCacheStats,
+  cacheReadRateFor,
+  formatCacheReadRates,
 } from './tokenTracker';
 
 beforeEach(() => {
@@ -269,6 +271,86 @@ describe('getCostBreakdown', () => {
       },
     });
     expect(usage?.cacheReadTokens).toBeUndefined();
+  });
+
+  /// The exact usage shape DeepSeek's API reference documents: the hit count
+  /// appears twice, nested and top-level. It must be read once, not summed.
+  it('reads a DeepSeek cache hit once, though DeepSeek reports it twice', () => {
+    const usage = extractOpenAIUsage({
+      usage: {
+        prompt_tokens: 10_000,
+        completion_tokens: 200,
+        total_tokens: 10_200,
+        prompt_tokens_details: { cached_tokens: 9_000 },
+        prompt_cache_hit_tokens: 9_000,
+        prompt_cache_miss_tokens: 1_000,
+      },
+    });
+    expect(usage?.cacheReadTokens).toBe(9_000);
+    expect(usage?.promptTokens).toBe(10_000);
+  });
+
+  it('falls back to DeepSeek\'s top-level hit field when the nested one is absent', () => {
+    const usage = extractOpenAIUsage({
+      usage: { prompt_tokens: 10_000, completion_tokens: 0, total_tokens: 10_000, prompt_cache_hit_tokens: 6_000 },
+    });
+    expect(usage?.cacheReadTokens).toBe(6_000);
+  });
+
+  /// With no DeepSeek entry the 0.1 default applied, and every cached token
+  /// billed at five times its price.
+  it('bills a DeepSeek V4.1 Flash cache read at 0.02×, not 0.1×', () => {
+    recordTokenUsage(
+      { promptTokens: 100_000, completionTokens: 0, totalTokens: 100_000, cacheReadTokens: 90_000 },
+      'deepseek-flash',
+      'deepseek',
+    );
+    // Uncached 10000 at $0.30/1M = 0.003; cached 90000 at $0.30 * 0.02 = 0.00054
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.00354, 8);
+  });
+
+  it('bills a historical DeepSeek V4 Pro cache read at its own 1/30 ratio', () => {
+    expect(cacheReadRateFor('deepseek-v4-pro', 'deepseek')).toBeCloseTo(0.044 / 1.32, 10);
+    expect(cacheReadRateFor('deepseek-flash', 'deepseek')).toBe(0.02);
+  });
+
+  /// Cost used the per-model rate; savings hardcoded 0.9. So for any provider
+  /// not priced like Anthropic, cost and "saved" disagreed with each other.
+  it('computes savings at the same rate the cost was billed at', () => {
+    recordTokenUsage(
+      { promptTokens: 100_000, completionTokens: 0, totalTokens: 100_000, cacheReadTokens: 100_000 },
+      'kimi-k2.7-code',
+      'kimi-api',
+    );
+    // Kimi reads at 0.2: saved = 100000/1M * $0.95 * (1 - 0.2) = 0.076, not 0.9's 0.0855.
+    expect(getCacheStats().estimatedSavingsUsd).toBeCloseTo(0.076, 8);
+
+    resetTokenTracking();
+    recordTokenUsage(
+      { promptTokens: 100_000, completionTokens: 0, totalTokens: 100_000, cacheReadTokens: 100_000 },
+      'deepseek-flash',
+      'deepseek',
+    );
+    // DeepSeek reads at 0.02: saved = 100000/1M * $0.30 * 0.98 = 0.0294
+    expect(getCacheStats().estimatedSavingsUsd).toBeCloseTo(0.0294, 8);
+  });
+
+  it('states the rate that applied instead of assuming 0.1×', () => {
+    recordTokenUsage(
+      { promptTokens: 50_000, completionTokens: 0, totalTokens: 50_000, cacheReadTokens: 40_000 },
+      'deepseek-flash',
+      'deepseek',
+    );
+    const report = formatCostReport();
+    expect(report).toContain('billed at 0.02× input rate');
+    expect(report).not.toContain('0.1×');
+  });
+
+  it('shows a range when a session mixes cache rates, because one number would be wrong', () => {
+    expect(formatCacheReadRates([0.02, 0.2, 0.02])).toBe(' (billed at 0.02×–0.2× input rate, by model)');
+    expect(formatCacheReadRates([0.1])).toBe(' (billed at 0.1× input rate)');
+    expect(formatCacheReadRates([0.044 / 1.32])).toBe(' (billed at 0.033× input rate)');
+    expect(formatCacheReadRates([])).toBe('');
   });
 
   it('bills a Kimi cache read at its own rate, not Anthropic\'s', () => {

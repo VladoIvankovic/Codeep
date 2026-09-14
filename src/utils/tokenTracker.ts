@@ -178,9 +178,10 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // rate, so it carries PEAK — an over-estimate by design. The previous rows
   // (0.435/0.87 and 0.14/0.28) were two to four and a half times below today's
   // peak and so under-reported, which is the one direction this table must not
-  // err in. Cache hits cost 2% of a miss, but DeepSeek reports them as
-  // `prompt_cache_hit_tokens`, which this tracker does not read — so every input
-  // token bills at the miss rate: an over-estimate again, not a gap.
+  // err in. Cache hits are read (DeepSeek reports them both nested as
+  // `prompt_tokens_details.cached_tokens` and top-level as
+  // `prompt_cache_hit_tokens`) and billed at DeepSeek's own hit rate — see
+  // CACHE_READ_RATE below.
   'deepseek-flash':    { inputPer1M: 0.30, outputPer1M: 1.20 },
   // Retired V4 Flash is served by V4.1 Flash and billed at its price.
   'deepseek-v4-flash': { inputPer1M: 0.30, outputPer1M: 1.20 },
@@ -328,8 +329,12 @@ export function extractOpenAIUsage(data: any): TokenUsage | null {
     // later. Reading only the nested form zeroed every Kimi cache hit, so the
     // cached portion of a run billed at the full cache-miss rate — five times
     // what it costs — with nothing anywhere to say so.
+    // DeepSeek sends the same number twice — nested `cached_tokens` and
+    // top-level `prompt_cache_hit_tokens` — so the nested read already covers
+    // it; the top-level field is a last resort, never added to the other.
     const nested = data.usage.prompt_tokens_details?.cached_tokens;
-    const cached = (typeof nested === 'number' ? nested : data.usage.cached_tokens) || 0;
+    const topLevel = data.usage.cached_tokens ?? data.usage.prompt_cache_hit_tokens;
+    const cached = (typeof nested === 'number' ? nested : topLevel) || 0;
     return {
       promptTokens: data.usage.prompt_tokens || 0,
       completionTokens: data.usage.completion_tokens || 0,
@@ -395,9 +400,17 @@ export interface ProviderCostBreakdown {
  */
 const MODEL_CACHE_READ_RATE: Record<string, number> = {
   'claude-fable-5-1': 0.025,
+  // V4 Pro's own ratio: $0.044 hit against $1.32 miss (peak; off-peak halves
+  // both, so the ratio holds). Historical — V4 Pro routes to V4.1 Flash from
+  // 2026-09-14 and configs holding it are migrated.
+  'deepseek-v4-pro': 0.044 / 1.32,
 };
 
 const CACHE_READ_RATE: Record<string, number> = {
+  // V4.1 Flash: $0.006 hit against $0.30 miss at peak, $0.003 against $0.15
+  // off-peak — 0.02 either way. Without an entry DeepSeek fell to the 0.1
+  // default and every cached token billed at five times its price.
+  'deepseek': 0.02,
   'kimi': 0.2,
   'kimi-api': 0.2,
   'qwen': 0.2,
@@ -409,6 +422,33 @@ const CACHE_READ_RATE: Record<string, number> = {
 
 /** Anthropic's ratio, and the safest guess for a provider we have not priced. */
 const DEFAULT_CACHE_READ_RATE = 0.1;
+
+/**
+ * What a cached prompt token costs, as a fraction of the model's input rate.
+ * Model first (a property of the model), then provider, then the default.
+ *
+ * One lookup for everything that needs it. Cost used this chain while savings
+ * hardcoded 0.1, so every provider priced differently from Anthropic had a
+ * cost and a "saved" figure that disagreed with each other.
+ */
+export function cacheReadRateFor(model: string, provider: string | undefined): number {
+  return MODEL_CACHE_READ_RATE[model]
+    ?? CACHE_READ_RATE[provider?.trim().toLowerCase() ?? '']
+    ?? DEFAULT_CACHE_READ_RATE;
+}
+
+/**
+ * The rate note for a report. One rate reads as "0.02×"; a session mixing
+ * providers reads as a range, because any single number there would be wrong
+ * for part of it.
+ */
+export function formatCacheReadRates(rates: readonly number[]): string {
+  const fmt = (r: number) => `${Number(r.toFixed(3))}×`;
+  const distinct = [...new Set(rates.map(r => Number(r.toFixed(4))))].sort((a, b) => a - b);
+  if (distinct.length === 0) return '';
+  if (distinct.length === 1) return ` (billed at ${fmt(distinct[0])} input rate)`;
+  return ` (billed at ${fmt(distinct[0])}–${fmt(distinct[distinct.length - 1])} input rate, by model)`;
+}
 
 /**
  * Get cost breakdown grouped by provider/model.
@@ -443,9 +483,7 @@ export function getCostBreakdown(startIndex = 0): ProviderCostBreakdown[] {
         // prompt tokens bill at the standard 1.0× rate.
         const cacheCreate = record.cacheCreationTokens ?? 0;
         const cacheRead = record.cacheReadTokens ?? 0;
-        const cacheReadRate = MODEL_CACHE_READ_RATE[record.model]
-          ?? CACHE_READ_RATE[record.provider?.trim().toLowerCase()]
-          ?? DEFAULT_CACHE_READ_RATE;
+        const cacheReadRate = cacheReadRateFor(record.model, record.provider);
         const uncachedPrompt = Math.max(0, record.promptTokens - cacheCreate - cacheRead);
         existing.estimatedCost +=
           (uncachedPrompt / 1_000_000) * pricing.inputPer1M
@@ -477,6 +515,9 @@ export interface CacheStats {
   /** True when EVERY cached token came from a flat-fee plan — there is no
    *  metered spend to have saved against. */
   isEntirelyFlatFeeCache: boolean;
+  /** The read rate of each metered record that read from cache, so a report
+   *  can state the rate that actually applied instead of assuming 0.1×. */
+  cacheReadRates: number[];
 }
 
 export function getCacheStats(): CacheStats {
@@ -485,6 +526,7 @@ export function getCacheStats(): CacheStats {
   let savings = 0;
   let flatFeeCached = 0;
   let meteredCached = 0;
+  const readRates: number[] = [];
   for (const record of currentRecords()) {
     const cached = (record.cacheCreationTokens ?? 0) + (record.cacheReadTokens ?? 0);
     cacheCreate += record.cacheCreationTokens ?? 0;
@@ -498,11 +540,15 @@ export function getCacheStats(): CacheStats {
     }
     meteredCached += cached;
     // Savings = what cache-read tokens would have cost at full input rate,
-    // minus what they actually cost at 0.1×. (Cache creation is a slight
-    // *penalty* of 0.25× — netted in for honest reporting.)
+    // minus what they cost at the model's own read rate. This hardcoded 0.9
+    // (a 0.1 read) for every provider, so Kimi and Qwen (0.2) over-reported
+    // savings while DeepSeek (0.02) and Fable 5.1 (0.025) under-reported them.
+    // (Cache creation is a slight *penalty* of 0.25× — netted in.)
     const pricing = MODEL_PRICING[record.model];
     if (pricing) {
-      const cReadSaved = ((record.cacheReadTokens ?? 0) / 1_000_000) * pricing.inputPer1M * 0.9;
+      const readRate = cacheReadRateFor(record.model, record.provider);
+      if ((record.cacheReadTokens ?? 0) > 0) readRates.push(readRate);
+      const cReadSaved = ((record.cacheReadTokens ?? 0) / 1_000_000) * pricing.inputPer1M * (1 - readRate);
       const cCreateCost = ((record.cacheCreationTokens ?? 0) / 1_000_000) * pricing.inputPer1M * 0.25;
       savings += cReadSaved - cCreateCost;
     }
@@ -513,6 +559,7 @@ export function getCacheStats(): CacheStats {
     estimatedSavingsUsd: Math.max(0, savings),
     hasFlatFeeCacheUsage: flatFeeCached > 0,
     isEntirelyFlatFeeCache: flatFeeCached > 0 && meteredCached === 0,
+    cacheReadRates: readRates,
   };
 }
 
@@ -634,7 +681,7 @@ export function formatCostReport(): string {
     // The billing multipliers only describe a metered account. On a plan
     // nothing is billed per token, so quoting a rate there would be as invented
     // as the per-model prices this report already refuses to show.
-    const readNote = cache.isEntirelyFlatFeeCache ? '' : ' (billed at 0.1× input rate)';
+    const readNote = cache.isEntirelyFlatFeeCache ? '' : formatCacheReadRates(cache.cacheReadRates);
     const writeNote = cache.isEntirelyFlatFeeCache ? '' : ' (billed at 1.25× input rate)';
     lines.push(`**Cache reads:** ${formatTokenCount(cache.cacheReadTokens)} tokens${readNote}`);
     if (cache.cacheCreationTokens > 0) {

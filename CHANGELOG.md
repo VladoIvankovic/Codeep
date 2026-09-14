@@ -11,6 +11,46 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.3.2] — 2026-09-14
+
+> TL;DR — DeepSeek cached tokens were billed at five times their price, and "saved via caching" was wrong for every provider not priced like Anthropic. Also a correction: 3.3.0 said Codeep could not read DeepSeek cache hits. It always could.
+
+### Fixed
+
+- **DeepSeek cache reads billed at 0.1× instead of 0.02×.** A cached DeepSeek V4.1
+  Flash token costs $0.006 against $0.30 for a miss — 2%. DeepSeek had no entry in
+  the cache-rate table, so it fell back to Anthropic's 0.1 and every cached token
+  was estimated at five times its price. In a long session where most input is
+  cached, that is most of the estimate. Historical V4 Pro records use its own
+  ratio, 1/30.
+
+- **"Estimated savings vs no caching" was wrong for most providers.** The cost of a
+  cached token used each model's own rate; the savings figure hardcoded 0.1 for
+  everyone. So the two numbers disagreed with each other: Kimi and Qwen (0.2)
+  over-reported their savings, and DeepSeek (0.02) and Claude Fable 5.1 (0.025)
+  under-reported them. Both now come from one lookup.
+
+- **`/cost` and `/stats` said "billed at 0.1× input rate" whatever the model.**
+  They now state the rate that actually applied — `0.02×` for DeepSeek — and a
+  range when a session mixes providers, because any single number would be wrong
+  for part of it.
+
+### Correction to 3.3.0
+
+The 3.3.0 notes, and a comment in the code, said DeepSeek reports cache hits in a
+field Codeep does not read. **That was wrong.** DeepSeek sends the same number
+twice — `prompt_tokens_details.cached_tokens` and `prompt_cache_hit_tokens` — and
+Codeep has always read the first. The real fault was the rate above. It came from
+trusting a summarised reading of DeepSeek's API reference, which had nested the
+two fields incorrectly; the raw reference settled it. The top-level field is now
+also read as a fallback, never added to the nested one.
+
+### Now held by tests
+
+Each of these was checked by putting the bug back: DeepSeek billed at 0.02×, V4
+Pro at 1/30, savings at the billed rate, the rate stated in `/cost` and `/stats`,
+and a DeepSeek hit count read once rather than summed from both fields.
+
 ## [3.3.1] — 2026-09-14
 
 > TL;DR — `/account` answered "Unknown command", `/stats` has printed the `/cost` report since June, fresh installs started on an older model, and 40 commands were missing from `/help`. All fixed, and each is now held by a test.

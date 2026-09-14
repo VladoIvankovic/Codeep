@@ -524,6 +524,21 @@ describe('formatStatsReport', () => {
     expect(out).toContain('Estimated savings vs no caching: $0.0100');
   });
 
+  /// /stats said "billed at 0.1× input rate" for every provider — wrong for
+  /// DeepSeek (0.02), Kimi and Qwen (0.2), and Fable 5.1 (0.025).
+  it('/stats quotes the cache rate that applied, never a hardcoded 0.1×', () => {
+    const base = {
+      totals: { requestCount: 1, totalTokens: 700, totalPromptTokens: 500, totalCompletionTokens: 200, estimatedCost: 0.01 },
+      breakdown: [], pricing: [], currentProvider: 'deepseek', fmt: idFmt,
+    };
+    const deepseek = formatStatsReport({ ...base, cache: { cacheReadTokens: 500, cacheCreationTokens: 0, estimatedSavingsUsd: 0, cacheReadRates: [0.02] } });
+    expect(deepseek).toContain('Cache reads: 500 tokens (billed at 0.02× input rate)');
+    expect(deepseek).not.toContain('0.1×');
+    // No rates supplied → say nothing about the rate rather than guess one.
+    const unknown = formatStatsReport({ ...base, cache: { cacheReadTokens: 500, cacheCreationTokens: 0, estimatedSavingsUsd: 0 } });
+    expect(unknown).toContain('Cache reads: 500 tokens\n');
+  });
+
   it('omits the caching section when there are no cache tokens', () => {
     const out = formatStatsReport({
       totals: { requestCount: 1, totalTokens: 100, totalPromptTokens: 50, totalCompletionTokens: 50, estimatedCost: 0.01 },

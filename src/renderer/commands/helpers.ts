@@ -9,6 +9,7 @@
  */
 
 import { isFlatFeeProvider } from '../../config/providers';
+import { formatCacheReadRates } from '../../utils/tokenTracker';
 
 // ─── Search snippet extraction ────────────────────────────────────────────────
 //
@@ -194,6 +195,10 @@ export interface StatsCache {
   cacheReadTokens: number;
   cacheCreationTokens: number;
   estimatedSavingsUsd: number;
+  /** Rates that applied, from getCacheStats. Absent → no rate is quoted rather
+   *  than assuming Anthropic's 0.1×, which was wrong for DeepSeek, Kimi, Qwen
+   *  and Fable 5.1. */
+  cacheReadRates?: number[];
 }
 
 export interface PricingRow {
@@ -258,7 +263,7 @@ export function formatStatsReport(args: {
     }
     if (cache.cacheReadTokens > 0 || cache.cacheCreationTokens > 0) {
       lines.push('', '### Prompt caching');
-      lines.push(`Cache reads: ${fmt(cache.cacheReadTokens)} tokens (billed at 0.1× input rate)`);
+      lines.push(`Cache reads: ${fmt(cache.cacheReadTokens)} tokens${formatCacheReadRates(cache.cacheReadRates ?? [])}`);
       if (cache.cacheCreationTokens > 0) {
         lines.push(`Cache writes: ${fmt(cache.cacheCreationTokens)} tokens (billed at 1.25× input rate)`);
       }

@@ -80,9 +80,19 @@ Last full review: **2026-09-11**
 - **DeepSeek V4.1 Flash is `deepseek-flash`** on DeepSeek's API but
   `deepseek/deepseek-v4.1-flash` on OpenRouter. From **2026-09-14 12:00 Beijing
   time** every `deepseek-v4-pro` request is routed to V4.1 Flash and billed at its
-  price until a V4.1 Pro exists; watch for that release. Cache hits cost 2% of a
-  miss but arrive as `prompt_cache_hit_tokens`, which the tracker does not read,
-  so DeepSeek estimates bill all input at the miss rate.
+  price until a V4.1 Pro exists; watch for that release.
+- **DeepSeek cache hits cost 2% of a miss** (V4.1 Flash: $0.006 against $0.30;
+  V4 Pro was 1/30). The count arrives twice — nested as
+  `prompt_tokens_details.cached_tokens` and top-level as
+  `prompt_cache_hit_tokens` — and is read once. *Corrected 2026-09-14:* this note
+  previously said the tracker could not read DeepSeek cache hits. It always
+  could; the fault was the rate, which had no DeepSeek entry and fell back to
+  0.1, billing cached tokens at five times their price. Checked against the raw
+  API reference, not a summary of it — the summary had nested the fields wrongly.
+- **DeepSeek's Anthropic-format endpoint** (`api.deepseek.com/anthropic`) does not
+  document its `usage` object. `extractAnthropicUsage` assumes Anthropic's
+  semantics there (input exclusive of cache reads); unverified. OpenAI format is
+  the default protocol for DeepSeek.
 - **GPT-5.6 Sol runs a promotional $4/$20** "at least through 2026-11-21" (list
   $5/$30). Long-context requests bill at a higher tier for Sol ($8/$30) and Astra
   ($20/$75); the table carries short-context only.
