@@ -84,11 +84,28 @@ describe('config API key storage — secure, no plaintext', () => {
     await setApiKey('sk-x', 'deepseek');
     expect(getApiKey('deepseek')).toBe('sk-x');
 
-    await clearApiKey('deepseek');
+    expect(await clearApiKey('deepseek')).toBe(true);
 
     expect(getApiKey('deepseek')).toBe('');
     expect(config.get('configuredProviderIds')).not.toContain('deepseek');
     expect(mockKeyring._store.has('codeep::api-key-deepseek')).toBe(false);
+  });
+
+  it('clearApiKey reports false and changes nothing when the keychain refuses the delete', async () => {
+    await setApiKey('sk-stuck', 'deepseek');
+    const store = mockKeyring._store;
+    mockKeyring.AsyncEntry = function (this: any, service: string, account: string) {
+      this.getPassword = async () => store.get(`${service}::${account}`) ?? null;
+      this.setPassword = async (pw: string) => { store.set(`${service}::${account}`, pw); };
+      this.deletePassword = async () => { throw new Error('User interaction is not allowed.'); };
+    };
+
+    expect(await clearApiKey('deepseek')).toBe(false);
+
+    // Still stored, so still usable and still listed — no silent half-logout.
+    expect(store.get('codeep::api-key-deepseek')).toBe('sk-stuck');
+    expect(getApiKey('deepseek')).toBe('sk-stuck');
+    expect(config.get('configuredProviderIds')).toContain('deepseek');
   });
 
   it('getConfiguredProviders reflects the non-secret index', async () => {

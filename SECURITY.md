@@ -65,6 +65,11 @@ discussion:
   until the user runs `/hooks trust` for that workspace. The ACP welcome
   banner flags any hooks or custom slash commands a workspace ships so the
   user sees them before invoking the agent.
+- **Network address guard**: `fetch_url`, curl/wget arguments in
+  `execute_command`, and `@web` redirects refuse loopback, private, link-local
+  (including cloud metadata), CGNAT and reserved addresses in any spelling
+  (`utils/ssrfGuard.ts`). `fetch_url` checks every redirect hop and pins the
+  connection to the checked address (`utils/guardedFetch.ts`).
 - **Secure key storage**: provider API keys live in the OS keychain
   (`utils/keychain.ts`) rather than plaintext on disk. Plaintext fallback
   exists only when the keychain is unavailable and is swept into it on the

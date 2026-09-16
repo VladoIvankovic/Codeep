@@ -229,6 +229,66 @@ describe('P1 security hardening', () => {
       expect(result.reason).toContain('blocked pattern'); // pipe-to-shell fires first
     });
 
+    it('blocks curl options that redirect the connection to a private address', async () => {
+      const pub = 'https://93.184.215.14/';
+      for (const args of [
+        ['--resolve', 'example.com:443:127.0.0.1', 'https://example.com/'],
+        ['--resolve=example.com:443:[::1]', 'https://example.com/'],
+        ['--resolve', '+example.com:443:93.184.215.14,10.0.0.1', 'https://example.com/'],
+        ['--connect-to', '::169.254.169.254:80', pub],
+        ['--connect-to=example.com:443:[::ffff:7f00:1]:8080', pub],
+        ['--unix-socket', '/var/run/docker.sock', pub],
+        ['--abstract-unix-socket=x', pub],
+        ['-x', 'http://127.0.0.1:8080', pub],
+        ['-x127.0.0.1:8080', pub],
+        ['--proxy=socks5://192.168.1.1:1080', pub],
+        ['--socks5-hostname', '10.0.0.2:1080', pub],
+      ]) {
+        const r = await validateCommandAsync('curl', args);
+        expect(r.valid, args.join(' ')).toBe(false);
+        expect(r.reason, args.join(' ')).toContain('Blocked curl option');
+      }
+    });
+
+    it('allows curl pinned to public addresses, including a bracketed IPv6 list', async () => {
+      const pub = 'https://93.184.215.14/';
+      expect((await validateCommandAsync('curl', ['-s', '--resolve', '93.184.215.14:443:93.184.215.14', pub])).valid).toBe(true);
+      expect((await validateCommandAsync('curl', ['--resolve', 'example.com:443:[2606:4700:4700::1111]', pub])).valid).toBe(true);
+      expect((await validateCommandAsync('curl', ['--resolve=example.com:443:[2606:4700:4700::1111],93.184.215.14', pub])).valid).toBe(true);
+    });
+
+    it('blocks numeric host spellings that resolve to loopback, and localhost with a port', async () => {
+      for (const arg of ['2130706433', '2130706433:8080/x', '0x7f000001', '017700000001', '0', '0x7f.1', 'localhost:8080/admin']) {
+        const r = await validateCommandAsync('curl', ['-s', arg]);
+        expect(r.valid, arg).toBe(false);
+      }
+      expect((await validateCommandAsync('curl', ['--url', 'http://127.0.0.1/'])).valid).toBe(false);
+      // A value attached to its flag (-m30) leaves the next argument positional.
+      expect((await validateCommandAsync('curl', ['-m30', 'http://127.0.0.1/'])).valid).toBe(false);
+      expect((await validateCommandAsync('curl', ['-sm30', '2130706433'])).valid).toBe(false);
+      expect((await validateCommandAsync('https', [':3000/api'])).valid).toBe(false);
+    });
+
+    it('does not mistake option values for hosts', async () => {
+      const pub = 'https://93.184.215.14/';
+      for (const args of [
+        ['-m', '30', '--max-filesize', '1000000', pub],
+        ['-sm', '30', pub],
+        ['-m30', pub],
+        ['-X', 'POST', '-d', '42', pub],
+        ['--retry', '3', '--connect-timeout', '5', pub],
+      ]) {
+        expect((await validateCommandAsync('curl', args)).valid, args.join(' ')).toBe(true);
+      }
+      expect((await validateCommandAsync('wget', ['-t', '3', '-T', '30', pub])).valid).toBe(true);
+    });
+
+    it('blocks IPv4-mapped IPv6 loopback in both spellings', async () => {
+      expect((await validateCommandAsync('curl', ['http://[::ffff:127.0.0.1]:8080/'])).valid).toBe(false);
+      expect((await validateCommandAsync('curl', ['http://[::ffff:7f00:1]:8080/'])).valid).toBe(false);
+      expect((await validateCommandAsync('curl', ['[::ffff:7f00:1]:8080/admin'])).valid).toBe(false);
+    });
+
     it('does not SSRF-check non-URL commands', async () => {
       const result = await validateCommandAsync('git', ['status']);
       expect(result.valid).toBe(true);

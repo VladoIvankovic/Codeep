@@ -824,15 +824,22 @@ export function keySyncForcedOffByEnv(): boolean {
 }
 
 /**
- * Clear API key for a specific provider
+ * Clear API key for a specific provider.
+ *
+ * Resolves `true` once the key is gone from secure storage. A keychain that
+ * refuses the delete is swallowed a layer down (keychain.ts logs it at debug),
+ * so the outcome is verified by reading the key back: when it is still there
+ * nothing is changed and this resolves `false` — the caller has to say so
+ * rather than report a logout that left the key on disk.
  */
-export async function clearApiKey(providerId: string): Promise<void> {
-  // Clear from cache
-  apiKeyCache.delete(providerId);
+export async function clearApiKey(providerId: string): Promise<boolean> {
+  const store = secureKeyStore();
+  try { await store.deleteApiKey(providerId); } catch { /* verified below */ }
+  if (await store.hasApiKey(providerId)) return false;
 
-  // Clear from secure storage + the non-secret index
-  try { await secureKeyStore().deleteApiKey(providerId); } catch { /* ignore */ }
+  apiKeyCache.delete(providerId);
   removeConfiguredProviderId(providerId);
+  return true;
 }
 
 export async function isConfiguredAsync(providerId?: string): Promise<boolean> {

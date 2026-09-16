@@ -21,6 +21,8 @@
  * sync `expandMentions` for files. Callers await it.
  */
 
+import { assertFetchUrlAllowed, isBlockedIp } from './ssrfGuard';
+
 /** Max bytes of text we'll inline from a fetched page (32 KB). */
 export const MAX_WEB_BYTES = 32 * 1024;
 
@@ -253,21 +255,16 @@ interface FetchFailure {
  * endpoint), and `.internal`-style names.
  *
  * A user typing `@web http://localhost:3000` is a documented, intended use, so
- * this is NOT a blanket block — it's only applied to where a fetch *ended up*
- * after redirects, so a public URL can't bounce us into the private network.
+ * this is NOT a blanket block — it only decides whether redirect hops get
+ * checked, so a public URL can't bounce us into the private network.
  */
 function isPrivateHost(hostname: string): boolean {
   const h = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal') || h.endsWith('.local')) return true;
-  if (h === '::1' || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80:')) return true;
-  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!m) return false;
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  return a === 127 || a === 10 || a === 0
-    || (a === 192 && b === 168)
-    || (a === 172 && b >= 16 && b <= 31)
-    || (a === 169 && b === 254);
+  return isBlockedIp(h);
 }
+
+const MAX_REDIRECTS = 5;
 
 /** Hard ceiling on bytes read from the network, before any text decoding. */
 const MAX_WEB_FETCH_BYTES = MAX_WEB_BYTES * 4;
@@ -282,28 +279,40 @@ async function safeFetch(
   // `finally` so a throw can't leak the timer either.
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
+    // Judged like the hops (names resolved, not just spelled), so a LAN host
+    // such as `nas.home` may still redirect within the LAN it lives on.
     const requestedPrivate = (() => {
       try { return isPrivateHost(new URL(url).hostname); } catch { return false; }
-    })();
+    })() || (await assertFetchUrlAllowed(url)) !== null;
 
-    const res = await fetchImpl(url, {
-      signal: controller.signal,
-      headers: { 'User-Agent': USER_AGENT, Accept: 'text/html, text/plain, */*' },
-      redirect: 'follow',
-    });
+    // Redirects are followed here, not by fetch: the user vouched for the host
+    // they typed, not for wherever it redirects. With `redirect: 'follow'`
+    // only the final URL could be checked, after every hop — private ones
+    // included — had already been requested.
+    let current = url;
+    let res: Response;
+    for (let hop = 0; ; hop++) {
+      if (hop > 0 && !requestedPrivate && await assertFetchUrlAllowed(current)) {
+        return { ok: false, reason: 'redirected to a private/internal address — refused' };
+      }
+      res = await fetchImpl(current, {
+        signal: controller.signal,
+        headers: { 'User-Agent': USER_AGENT, Accept: 'text/html, text/plain, */*' },
+        redirect: 'manual',
+      });
+      const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+      if (!location) break;
+      if (hop >= MAX_REDIRECTS) return { ok: false, reason: `too many redirects (more than ${MAX_REDIRECTS})` };
+      try { await res.body?.cancel(); } catch { /* nothing to drain */ }
+      try {
+        current = new URL(location, current).href;
+      } catch {
+        return { ok: false, reason: `HTTP ${res.status} with an invalid redirect` };
+      }
+    }
 
     if (!res.ok) {
       return { ok: false, reason: `HTTP ${res.status}` };
-    }
-
-    // SSRF guard: the user vouched for the host they typed, not for wherever
-    // it redirected us. Refuse a public → private hop (cloud metadata, LAN).
-    if (!requestedPrivate && res.url) {
-      try {
-        if (isPrivateHost(new URL(res.url).hostname)) {
-          return { ok: false, reason: 'redirected to a private/internal address — refused' };
-        }
-      } catch { /* unparseable res.url — fall through */ }
     }
 
     const declared = Number(res.headers.get('content-length') ?? '');

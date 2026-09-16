@@ -23,7 +23,7 @@ import { isMcpToolName, callSessionTool, isVirtualMcpToolName, callSessionVirtua
 // shared with shell.ts for curl/wget URL checks. Re-exported here so the
 // existing tests that import it from toolExecution keep working.
 export { isBlockedIp, assertFetchUrlAllowed } from './ssrfGuard';
-import { assertFetchUrlAllowed } from './ssrfGuard';
+import { fetchUrlGuarded } from './guardedFetch';
 
 const debug = (...args: unknown[]) => {
   if (process.env.CODEEP_DEBUG === '1') {
@@ -617,27 +617,22 @@ async function dispatchTool(
         const url = parameters.url as string;
         if (!url) return { success: false, output: '', error: 'Missing required parameter: url', tool, parameters };
 
-        const blockedReason = await assertFetchUrlAllowed(url);
-        if (blockedReason) return { success: false, output: '', error: blockedReason, tool, parameters };
-
-        // Restrict to http/https on the initial request AND redirects, and cap
-        // redirect hops — defends against protocol-smuggling and limits
-        // redirect-based SSRF reach (initial host is already IP-checked above).
-        const result = await executeCommandAsync('curl', ['-s', '-L', '--proto', '=http,https', '--proto-redir', '=http,https', '--max-redirs', '5', '-m', '30', '-A', 'Codeep/1.0', '--max-filesize', '1000000', url], {
+        // Every redirect hop is SSRF-checked and pinned — see guardedFetch.ts.
+        const result = await fetchUrlGuarded(url, (args) => executeCommandAsync('curl', args, {
           cwd: projectRoot,
           projectRoot,
           timeout: 35000,
-        });
+        }));
 
-        if (result.success) {
-          let content = result.stdout;
+        if (result.ok) {
+          let content = result.body;
           if (content.includes('<html') || content.includes('<!DOCTYPE')) {
             content = htmlToText(content);
           }
           if (content.length > 10000) content = content.substring(0, 10000) + '\n\n... (truncated)';
           return { success: true, output: content, tool, parameters };
         }
-        return { success: false, output: '', error: result.stderr || 'Failed to fetch URL', tool, parameters };
+        return { success: false, output: '', error: result.error, tool, parameters };
       }
 
       // === Z.AI MCP Tools ===

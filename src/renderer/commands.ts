@@ -1166,23 +1166,33 @@ Format: use headers per category, only include categories where you found issues
         .filter(p => !!getApiKey(p.id))
         .map(p => ({ id: p.id, name: p.name, isCurrent: p.id === currentProvider.id }));
       if (configuredProviders.length === 0) { ctx.app.notify('No providers configured'); return; }
-      ctx.app.showLogoutPicker(configuredProviders, (result) => {
+      ctx.app.showLogoutPicker(configuredProviders, async (result) => {
         if (result === null) return;
-        if (result === 'all') {
-          for (const p of configuredProviders) void clearApiKey(p.id);
+        const targets = result === 'all' ? configuredProviders : configuredProviders.filter(p => p.id === result);
+        const removed: typeof configuredProviders = [];
+        const kept: string[] = [];
+        // Awaited one by one: reporting "Logged out" before the keychain
+        // answered is how a refused delete used to pass for a logout.
+        for (const p of targets) {
+          if (await clearApiKey(p.id)) removed.push(p);
+          else kept.push(p.name);
+        }
+        if (kept.length > 0) {
+          ctx.app.notify(`Could not remove the stored key for ${kept.join(', ')} — still logged in. Delete the "codeep" item from your system keychain, then run /logout again.`);
+        }
+        if (removed.length === 0) return;
+        if (result === 'all' && kept.length === 0) {
           ctx.app.notify('Logged out from all providers. Use /login to sign in.');
         } else {
-          void clearApiKey(result);
-          const provider = configuredProviders.find(p => p.id === result);
-          ctx.app.notify(`Logged out from ${provider?.name || result}`);
-          if (result === currentProvider.id) {
-            const remaining = configuredProviders.filter(p => p.id !== result);
-            if (remaining.length > 0) {
-              setProvider(remaining[0].id);
-              ctx.app.notify(`Switched to ${remaining[0].name}`);
-            } else {
-              ctx.app.notify('No providers configured. Use /login to sign in.');
-            }
+          ctx.app.notify(`Logged out from ${removed.map(p => p.name).join(', ')}`);
+        }
+        if (removed.some(p => p.id === currentProvider.id)) {
+          const remaining = configuredProviders.filter(p => !removed.includes(p));
+          if (remaining.length > 0) {
+            setProvider(remaining[0].id);
+            ctx.app.notify(`Switched to ${remaining[0].name}`);
+          } else if (result !== 'all') {
+            ctx.app.notify('No providers configured. Use /login to sign in.');
           }
         }
       });

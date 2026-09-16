@@ -5,7 +5,8 @@
 import { spawnSync, spawn, SpawnSyncOptions } from 'child_process';
 import { resolve, relative, isAbsolute } from 'path';
 import { existsSync } from 'fs';
-import { assertFetchUrlAllowed } from './ssrfGuard';
+import { isIP } from 'net';
+import { assertFetchUrlAllowed, isBlockedIp } from './ssrfGuard';
 
 export interface CommandResult {
   success: boolean;
@@ -146,35 +147,151 @@ function hasInlineEval(command: string, args: string[]): boolean {
 // controlled URL could just be passed to curl instead.
 const URL_CARRYING_COMMANDS = new Set(['curl', 'wget', 'http', 'https']);
 
+// curl options that consume the next argument as their value — generated
+// from `curl --help all` (every entry with a <value>), plus the proxy flags
+// whose value is shown without brackets. Knowing them is what lets a bare
+// number be read as a host: `curl 2130706433:8080` connects to 127.0.0.1,
+// while the `30` in `curl -m 30 …` is a timeout.
+const CURL_VALUE_OPTIONS = new Set((
+  '--abstract-unix-socket --alt-svc --aws-sigv4 --cacert --capath --cert --cert-type --ciphers --config ' +
+  '--connect-timeout --connect-to --continue-at --cookie --cookie-jar --create-file-mode --crlfile --curves ' +
+  '--data --data-ascii --data-binary --data-raw --data-urlencode --delegation --dns-interface --dns-ipv4-addr ' +
+  '--dns-ipv6-addr --dns-servers --doh-url --dump-header --egd-file --engine --etag-compare --etag-save ' +
+  '--expect100-timeout --form --form-string --ftp-account --ftp-alternative-to-user --ftp-method --ftp-port ' +
+  '--ftp-ssl-ccc-mode --happy-eyeballs-timeout-ms --haproxy-clientip --header --hostpubmd5 --hostpubsha256 ' +
+  '--hsts --interface --ipfs-gateway --json --keepalive-time --key --key-type --krb --libcurl --limit-rate ' +
+  '--local-port --login-options --mail-auth --mail-from --mail-rcpt --max-filesize --max-redirs --max-time ' +
+  '--netrc-file --noproxy --oauth2-bearer --output --output-dir --parallel-max --pass --pinnedpubkey --proto ' +
+  '--proto-default --proto-redir --proxy-cacert --proxy-capath --proxy-cert --proxy-cert-type --proxy-ciphers ' +
+  '--proxy-crlfile --proxy-header --proxy-key --proxy-key-type --proxy-pass --proxy-pinnedpubkey ' +
+  '--proxy-service-name --proxy-tls13-ciphers --proxy-tlsauthtype --proxy-tlspassword --proxy-tlsuser ' +
+  '--proxy-user --proxy1.0 --pubkey --quote --random-file --range --rate --referer --request --request-target ' +
+  '--resolve --retry --retry-delay --retry-max-time --sasl-authzid --service-name --socks4 --socks4a --socks5 ' +
+  '--socks5-gssapi-service --socks5-hostname --speed-limit --speed-time --stderr --telnet-option --tftp-blksize ' +
+  '--time-cond --tls-max --tls13-ciphers --tlsauthtype --tlspassword --tlsuser --trace --trace-ascii ' +
+  '--trace-config --unix-socket --upload-file --url --url-query --user --user-agent --variable --write-out ' +
+  '--proxy --preproxy'
+).split(' '));
+const CURL_VALUE_SHORT = new Set('ACDEFHKPQTUXYbcdemortuwxyz'.split(''));
+// wget spells most values `--opt=value`; these are the ones commonly split.
+const WGET_VALUE_OPTIONS = new Set(['-O', '-o', '-a', '-t', '-T', '-w', '-e', '-P', '-U', '-Q', '-l', '-A', '-R', '-D', '-X', '-I', '-i', '-B',
+  '--output-document', '--output-file', '--tries', '--timeout', '--wait', '--execute', '--directory-prefix',
+  '--user-agent', '--header', '--user', '--password', '--input-file', '--base', '--limit-rate', '--max-redirect']);
+
+/** True when `arg` (an option) makes the NEXT argument its value. */
+function optionTakesNextArg(command: string, arg: string): boolean {
+  if (arg.includes('=')) return false;
+  if (command === 'curl') {
+    if (arg.startsWith('--')) return CURL_VALUE_OPTIONS.has(arg);
+    // Short cluster: `-sm 30` — only the last letter may take the next arg;
+    // an earlier value-taking letter swallows the rest of the cluster (`-m30`).
+    for (let i = 1; i < arg.length; i++) {
+      if (CURL_VALUE_SHORT.has(arg[i])) return i === arg.length - 1;
+    }
+    return false;
+  }
+  if (command === 'wget') return WGET_VALUE_OPTIONS.has(arg);
+  return false;
+}
+
+const PORT_PATH = String.raw`(:\d+)?([\/?#].*)?`;
+// Scheme-less host forms the tools accept: localhost, dotted/bracketed IP
+// literals, named hosts, and the numeric spellings libc resolves —
+// `2130706433`, `0x7f000001`, `017700000001`, `0` are all 127.0.0.1/0.0.0.0.
+const SCHEMELESS_HOST = new RegExp(
+  '^(' + [
+    `localhost${PORT_PATH}`,
+    String.raw`\[[0-9a-f:.%]+\]` + PORT_PATH,
+    String.raw`(0x[0-9a-f]+|\d+)(\.(0x[0-9a-f]+|\d+)){0,3}` + PORT_PATH,
+    String.raw`[a-z0-9-]+(\.[a-z0-9-]+)+` + PORT_PATH,
+    String.raw`[a-z0-9-]+:\d+([\/?#].*)?`,
+  ].join('|') + ')$',
+  'i',
+);
+
 // Heuristic: extract URL-looking arguments. curl/wget accept URLs with or
 // without a scheme (curl example.com works), and URLs may also ride in
-// option values (`--url=…`, `-d @url`, header values like
-// `Host: internal.corp`). We normalize scheme-less hosts so the guard sees
-// what curl will actually connect to.
-function extractUrlCandidates(args: string[]): string[] {
+// option values (`--url …`). Scheme-less hosts are normalized so the guard
+// sees what the tool will actually connect to; option values are skipped so
+// a timeout or a data payload isn't mistaken for a host.
+function extractUrlCandidates(command: string, args: string[]): string[] {
   const urls: string[] = [];
-  for (const arg of args) {
-    if (arg.startsWith('-')) {
-      // Option values: --url=x, --output=y are paths not URLs, but
-      // --header="Host: x" can smuggle a host. Keep it simple: only check
-      // --url= style options that plausibly carry a URL.
-      const m = arg.match(/^--url=(.+)$/i);
-      if (m) urls.push(m[1]);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('-') && arg.length > 1) {
+      const eq = arg.match(/^--url=(.+)$/i);
+      if (eq) { urls.push(eq[1]); continue; }
+      if (optionTakesNextArg(command, arg)) {
+        if (arg === '--url' && args[i + 1]) urls.push(args[i + 1]);
+        i++; // the value is not a positional URL
+      }
       continue;
     }
     if (/^https?:\/\//i.test(arg)) {
       urls.push(arg);
-    } else if (
-      // scheme-less host forms curl accepts: literal IPs (with optional
-      // port/path), 'localhost', and named hosts (example.com, internal.corp).
-      // Anything else (plain filenames, package names) is left alone.
-      /^(localhost([\/?#].*)?|\d{1,3}(\.\d{1,3}){3}(:\d+)?([\/?#].*)?|[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?([\/?#].*)?)$/i.test(arg)
-    ) {
-      // scheme-less host or host/path — what curl will connect to
+    } else if ((command === 'http' || command === 'https') && /^:\d*([\/?#].*)?$/.test(arg)) {
+      // httpie shorthand: `http :3000/api` is localhost:3000
+      urls.push(`http://localhost${arg}`);
+    } else if (SCHEMELESS_HOST.test(arg)) {
       urls.push(`http://${arg}`);
     }
   }
   return urls;
+}
+
+// curl options that change WHERE the connection goes without changing the
+// URL the guard looks at: `--resolve example.com:80:127.0.0.1 http://example.com`
+// passes a URL-only check and then talks to loopback. Each one is judged by
+// the address it actually points curl at.
+const CURL_TARGET_FLAGS = new Set(['--resolve', '--connect-to', '--unix-socket', '--abstract-unix-socket', '-x', '--proxy', '--preproxy', '--socks4', '--socks4a', '--socks5', '--socks5-hostname']);
+
+function curlTargetOverrides(args: string[]): { flag: string; value: string }[] {
+  const out: { flag: string; value: string }[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const eq = arg.indexOf('=');
+    if (arg.startsWith('--') && eq !== -1 && CURL_TARGET_FLAGS.has(arg.slice(0, eq))) {
+      out.push({ flag: arg.slice(0, eq), value: arg.slice(eq + 1) });
+    } else if (CURL_TARGET_FLAGS.has(arg)) {
+      out.push({ flag: arg, value: args[i + 1] ?? '' });
+      i++;
+    } else if (/^-x./.test(arg)) {
+      out.push({ flag: '-x', value: arg.slice(2) });
+    }
+  }
+  return out;
+}
+
+async function curlTargetOverrideProblem(args: string[]): Promise<string | null> {
+  for (const { flag, value } of curlTargetOverrides(args)) {
+    if (flag === '--unix-socket' || flag === '--abstract-unix-socket') {
+      return `${flag} is not allowed — it bypasses the network address check`;
+    }
+    if (flag === '--resolve') {
+      // [+]host:port:addr[,addr]… — every address must be public.
+      const addrs = value.replace(/^\+/, '').split(':').slice(2).join(':');
+      for (const addr of addrs.split(',')) {
+        if (!addr || isBlockedIp(addr)) return `--resolve points at a private/internal address (${addr || 'empty'})`;
+        if (!isIP(addr.replace(/^\[|\]$/g, ''))) return `--resolve needs a numeric address (got ${addr})`;
+      }
+      continue;
+    }
+    let target: string;
+    if (flag === '--connect-to') {
+      // HOST1:PORT1:HOST2:PORT2 — an empty HOST2 keeps the URL's host.
+      const m = value.match(/^(\[[^\]]*\]|[^:]*):[^:]*:(\[[^\]]*\]|[^:]*)(?::.*)?$/);
+      if (!m) return `--connect-to value not understood: ${value}`;
+      if (!m[2]) continue;
+      target = `http://${m[2]}/`;
+    } else {
+      // Proxy flags: judge the proxy host. Any scheme is rewritten to http so
+      // the guard parses the host the same way for socks5:// and friends.
+      target = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value.replace(/^[a-z][a-z0-9+.-]*:/i, 'http:') : `http://${value}`;
+    }
+    const blocked = await assertFetchUrlAllowed(target);
+    if (blocked) return `${flag} ${blocked}`;
+  }
+  return null;
 }
 
 // Exec-escapes: whitelisted utilities that can run ARBITRARY other commands
@@ -376,7 +493,11 @@ export async function validateCommandAsync(
   if (!sync.valid) return sync;
 
   if (URL_CARRYING_COMMANDS.has(command)) {
-    for (const url of extractUrlCandidates(args)) {
+    if (command === 'curl') {
+      const problem = await curlTargetOverrideProblem(args);
+      if (problem) return { valid: false, reason: `Blocked curl option: ${problem}` };
+    }
+    for (const url of extractUrlCandidates(command, args)) {
       const blocked = await assertFetchUrlAllowed(url);
       if (blocked) {
         return { valid: false, reason: `Blocked URL in ${command} arguments: ${blocked}` };

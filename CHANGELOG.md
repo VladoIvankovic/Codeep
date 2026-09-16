@@ -11,6 +11,51 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.3.3] — 2026-09-15
+
+> TL;DR — Security release. A web page could redirect `fetch_url` into your own machine or network (localhost, cloud metadata, Tailscale), and the agent runs that tool without asking. Update now.
+
+### Security
+
+- **`fetch_url` followed redirects into private addresses.** The tool checked the URL
+  the model asked for, then let curl follow redirects unchecked. A public page
+  answering `302 Location: http://127.0.0.1:…` — or the cloud metadata endpoint, or a
+  LAN or Tailscale address — had that target fetched and its response handed back to
+  the model. `fetch_url` runs without a confirmation prompt, so a prompt injection in
+  a file or web page the agent read was enough to trigger it. Codeep now follows
+  redirects itself, checks every hop before requesting it, and pins each connection
+  to the address it checked, so a second DNS answer can't swap in a private one. One
+  30-second budget covers the whole redirect chain.
+
+- **IPv6 spellings of private IPv4 addresses passed the address check.** The URL parser
+  rewrites `[::ffff:127.0.0.1]` as `[::ffff:7f00:1]`, and the check only recognised the
+  dotted form — so `http://[::ffff:127.0.0.1]:PORT/` reached local services directly.
+  Addresses are now classified by their bytes, which covers every spelling as well as
+  NAT64 and 6to4 wrappers. CGNAT `100.64.0.0/10` (where Tailscale lives), multicast and
+  reserved ranges are now blocked too.
+
+- **curl commands could slip past the same check.** `execute_command` asks before it
+  runs by default, but the check it applies to curl was easy to sidestep: `--resolve`,
+  `--connect-to`, `--unix-socket` and the proxy flags send curl somewhere other than
+  the URL that was checked, and numeric hosts (`2130706433` and `0x7f000001` are both
+  127.0.0.1), `localhost:8080` and httpie's `:3000` weren't recognised as hosts at all.
+  All of these are now checked, or refused.
+
+- **`@web` redirects were checked only at the end of the chain**, after every
+  intermediate hop had already been requested. Each hop is now checked first. A URL you
+  type on localhost or your own network can still redirect within it.
+
+- **Dependencies.** js-yaml 4.3.2: a crafted `.codeep/review.yml` could pin a CPU core,
+  which matters where the GitHub Action reviews pull requests from forks. fast-uri 3.1.8,
+  pulled in by the config library.
+
+### Fixed
+
+- **`/logout` reported success before the keychain answered.** A refused delete was
+  ignored, so the key stayed in the system keychain while Codeep said you were logged
+  out. It now waits, and if the key can't be removed it tells you and leaves you logged
+  in, rather than reporting a logout that didn't happen.
+
 ## [3.3.2] — 2026-09-14
 
 > TL;DR — DeepSeek cached tokens were billed at five times their price, and "saved via caching" was wrong for every provider not priced like Anthropic. Also a correction: 3.3.0 said Codeep could not read DeepSeek cache hits. It always could.

@@ -9,6 +9,16 @@ import {
   webCacheStats,
 } from './webFetch';
 
+// DNS for the redirect guard: only names listed here resolve.
+const dns = vi.hoisted(() => ({ table: new Map<string, string[]>([['nas.home', ['192.168.1.20']]]) }));
+vi.mock('dns/promises', () => ({
+  lookup: async (host: string) => {
+    const addrs = dns.table.get(host);
+    if (!addrs) throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${host}`), { code: 'ENOTFOUND' });
+    return addrs.map((address) => ({ address, family: 4 }));
+  },
+}));
+
 // ─── extractWebMentions (pure) ────────────────────────────────────────────────
 
 describe('extractWebMentions', () => {
@@ -212,6 +222,53 @@ describe('expandWebMentions', () => {
     const r = await expandWebMentions('@web x.com and @web x.com again', { fetchImpl });
     expect(r.loaded).toHaveLength(1);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a redirect into a private address without requesting it', async () => {
+    const seen: string[] = [];
+    const fetchImpl = vi.fn(async (input: any) => {
+      const url = String(input);
+      seen.push(url);
+      if (url === 'https://93.184.215.14/r') return new Response('', { status: 302, headers: { location: 'http://[::ffff:7f00:1]:2375/containers/json' } });
+      return new Response('SECRET', { status: 200, headers: { 'content-type': 'text/plain' } });
+    }) as unknown as typeof fetch;
+    const r = await expandWebMentions('see @web https://93.184.215.14/r', { fetchImpl });
+    expect(seen).toEqual(['https://93.184.215.14/r']);
+    expect(r.enrichedPrompt).not.toContain('SECRET');
+    expect(JSON.stringify(r)).toContain('private/internal');
+  });
+
+  it('follows a public redirect', async () => {
+    const fetchImpl = vi.fn(async (input: any) => {
+      const url = String(input);
+      if (url === 'https://93.184.215.14/old') return new Response('', { status: 301, headers: { location: '/new' } });
+      if (url === 'https://93.184.215.14/new') return new Response('<title>New</title><p>moved here</p>', { status: 200, headers: { 'content-type': 'text/html' } });
+      return new Response('nope', { status: 404 });
+    }) as unknown as typeof fetch;
+    const r = await expandWebMentions('@web https://93.184.215.14/old', { fetchImpl });
+    expect(r.enrichedPrompt).toContain('moved here');
+  });
+
+  it('lets a URL the user typed on localhost redirect within localhost', async () => {
+    const fetchImpl = vi.fn(async (input: any) => {
+      const url = String(input);
+      if (url === 'http://localhost:3000/') return new Response('', { status: 302, headers: { location: 'http://127.0.0.1:3000/login' } });
+      if (url === 'http://127.0.0.1:3000/login') return new Response('login page', { status: 200, headers: { 'content-type': 'text/plain' } });
+      return new Response('nope', { status: 404 });
+    }) as unknown as typeof fetch;
+    const r = await expandWebMentions('@web http://localhost:3000/', { fetchImpl });
+    expect(r.enrichedPrompt).toContain('login page');
+  });
+
+  it('lets a LAN name the user typed redirect within the LAN', async () => {
+    const fetchImpl = vi.fn(async (input: any) => {
+      const url = String(input);
+      if (url === 'http://nas.home/') return new Response('', { status: 302, headers: { location: 'http://nas.home/login' } });
+      if (url === 'http://nas.home/login') return new Response('nas login', { status: 200, headers: { 'content-type': 'text/plain' } });
+      return new Response('nope', { status: 404 });
+    }) as unknown as typeof fetch;
+    const r = await expandWebMentions('@web http://nas.home/', { fetchImpl });
+    expect(r.enrichedPrompt).toContain('nas login');
   });
 
   it('reports a failure for HTTP error status', async () => {
