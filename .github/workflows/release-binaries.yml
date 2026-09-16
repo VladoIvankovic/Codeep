@@ -173,17 +173,19 @@ jobs:
       - name: Wait for npm registry, fetch tarball, compute SHA256
         id: hash
         run: |
-          # npm publish is eventually consistent across registry mirrors; give
-          # it up to 60s before giving up. Each retry is 5s apart.
+          # npm publish is eventually consistent across registry mirrors, and
+          # "may take a few minutes to become available" is literal: 3.3.3 took
+          # 7.5 minutes, so the old 60s budget failed a publish that had in fact
+          # succeeded. Wait up to 12 minutes, 15s apart.
           VERSION="${{ steps.ver.outputs.version }}"
           URL="https://registry.npmjs.org/codeep/-/codeep-${VERSION}.tgz"
-          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+          for i in $(seq 1 48); do
             if curl -fsSL "$URL" -o codeep.tgz; then
-              echo "Fetched on attempt $i"
+              echo "Fetched on attempt $i ($(( (i - 1) * 15 ))s after the first try)"
               break
             fi
-            echo "Attempt $i failed, sleeping 5s..."
-            sleep 5
+            echo "Attempt $i failed, sleeping 15s..."
+            sleep 15
           done
           if [ ! -s codeep.tgz ]; then
             echo "::error::Could not fetch $URL"

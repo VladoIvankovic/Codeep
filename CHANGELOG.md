@@ -49,6 +49,9 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
   which matters where the GitHub Action reviews pull requests from forks. fast-uri 3.1.8,
   pulled in by the config library.
 
+
+Tracked as [GHSA-r5xg-83pj-f659](https://github.com/VladoIvankovic/Codeep/security/advisories/GHSA-r5xg-83pj-f659).
+
 ### Fixed
 
 - **`/logout` reported success before the keychain answered.** A refused delete was
