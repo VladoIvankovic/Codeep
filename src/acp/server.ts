@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import { basename as pathBasename } from 'path';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
-import { StdioTransport } from './transport.js';
+import { StdioTransport, AcpRequestError } from './transport.js';
 import {
   InitializeParams, InitializeResult,
   SessionNewParams, SessionNewResult,
@@ -15,22 +15,25 @@ import {
   SessionCancelParams,
   SessionModeState, SessionConfigOption,
   JsonRpcRequest, JsonRpcNotification,
-  RequestPermissionResult,
+  RequestPermissionParams, RequestPermissionResult, PermissionOption,
   ListPersonalitiesParams, ListPersonalitiesResult,
   SetPersonalityParams, SetPersonalityResult,
   SyncPersonalitiesParams, SyncPersonalitiesResult,
-  TerminalCreateResult, TerminalOutputResult, TerminalWaitForExitResult,
+  TerminalCreateResult, TerminalOutputResult,
   McpServer,
 } from './protocol.js';
 import { runAgentSession } from './session.js';
 import { loadCustomCommands } from '../utils/customCommands.js';
 import { registerSessionServers, disposeAllSessions as disposeAllMcpSessions } from '../utils/mcpRegistry.js';
-import { loadMcpServerConfigSplit, isWorkspaceMcpTrusted, mergeMcpServers } from '../utils/mcpConfig.js';
+import { selectSessionMcpServers } from '../utils/mcpConfig.js';
 import { handleMcpSamplingRequest } from '../utils/mcpSamplingBridge.js';
-import { executeCommandAsync } from '../utils/shell.js';
+import { executeCommandAsync, validateCommandAsync } from '../utils/shell.js';
+import { checkCommandRateLimit } from '../utils/ratelimit.js';
+import { recordCommand } from '../utils/history.js';
 import { PermissionOutcome } from '../utils/agent.js';
 import { ToolCall } from '../utils/tools.js';
-import { initWorkspace, loadWorkspace, handleCommand, AcpSession } from './commands.js';
+import { initWorkspace, loadWorkspace, handleCommand, type AcpSession, type AcpAgentRunOptions } from './commands.js';
+import { beginTurn } from './turns.js';
 import {
   handleSetMode as handleSetModeExternal,
   handleSetConfigOption as handleSetConfigOptionExternal,
@@ -39,7 +42,7 @@ import {
   handleListProviders as handleListProvidersExternal,
   type AcpHandlerDeps,
 } from './serverHandlers.js';
-import { autoSaveSession, config, getApiKey, getConfiguredProviders } from '../config/index.js';
+import { saveSession, startNewSession, config, getApiKey, getConfiguredProviders } from '../config/index.js';
 import { ApiError } from '../api/index.js';
 import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
@@ -93,7 +96,7 @@ const AVAILABLE_COMMANDS = [
   { name: 'insights',  description: 'Activity summary over the last N days (default 7)', input: { hint: '[--days N]' } },
   // Project intelligence
   { name: 'scan',      description: 'Scan project structure and generate summary' },
-  { name: 'review',    description: 'Run code review on project or specific files', input: { hint: '[file…]' } },
+  { name: 'review',    description: 'AI review of git changes (--staged), or static analysis (--static / files)', input: { hint: '[--staged | --static | file…]' } },
   { name: 'learn',     description: 'Learn coding preferences from project files' },
   { name: 'memory',    description: 'Project memory notes — add / list / remove / clear', input: { hint: '<note> | list | remove <n> | clear' } },
   { name: 'profile',   description: 'Save / load / delete provider+model presets', input: { hint: 'save | load | delete | list | <name>' } },
@@ -423,13 +426,185 @@ export function resolvePersonalitySelection(personalityId: unknown, workspaceRoo
   return personality && isPersonalityAvailable(personality, workspaceRoot) ? personality : null;
 }
 
+// ─── execute_command ─────────────────────────────────────────────────────────
+
+export interface AcpCommandOutcome {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+/** Per-command budget, the same one a local run gets. */
+export const ACP_COMMAND_TIMEOUT_MS = 120_000;
+
+export interface AcpCommandContext {
+  transport: Pick<StdioTransport, 'request'>;
+  sessionId: string;
+  clientSupportsTerminal: boolean;
+  /** The prompt's signal: firing it kills a command in the client terminal. */
+  signal: AbortSignal;
+  timeoutMs?: number;
+}
+
+/**
+ * Read the exit code from a terminal/wait_for_exit answer. ACP sends
+ * `{ exitCode, signal }`; older clients nest `{ type, code }` under
+ * `exitStatus`. Returns null when the answer carries no exit status.
+ *
+ * Exported for unit testing (see server.command.test.ts).
+ */
+export function exitCodeFromWaitResult(result: unknown): number | null {
+  if (!result || typeof result !== 'object') return null;
+  const outer = result as Record<string, unknown>;
+  const status = (outer.exitStatus && typeof outer.exitStatus === 'object' ? outer.exitStatus : outer) as Record<string, unknown>;
+  if (typeof status.exitCode === 'number') return status.exitCode;
+  if (status.type === 'exited' && typeof status.code === 'number') return status.code;
+  // Ended by a signal
+  if (status.type === 'killed' || (typeof status.signal === 'string' && status.signal)) return 1;
+  return null;
+}
+
+/**
+ * Run an execute_command tool call for an ACP session, in the client's
+ * terminal when it offers one, otherwise locally.
+ *
+ * Never throws: the agent loop reports a throw to the model as a failed
+ * command, which hides whether the client terminal already ran it. A
+ * failure comes back as exitCode -1 with the reason instead.
+ *
+ * Exported for unit testing (see server.command.test.ts).
+ */
+export async function executeAcpCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+  ctx: AcpCommandContext,
+): Promise<AcpCommandOutcome> {
+  const fail = (stderr: string, stdout = ''): AcpCommandOutcome => ({ stdout, stderr, exitCode: -1 });
+  const timeoutMs = ctx.timeoutMs ?? ACP_COMMAND_TIMEOUT_MS;
+
+  // A cancelled prompt runs nothing more, wherever it would run, and a
+  // command that never ran is neither recorded nor counted.
+  if (ctx.signal.aborted) return fail('Command cancelled');
+
+  // The same checks and bookkeeping as a local execute_command. They come
+  // before the terminal branch: the client's terminal is another place to
+  // run the command, not a way around the whitelist, the blocked patterns
+  // or the SSRF guard.
+  const validation = await validateCommandAsync(command, args, { cwd, projectRoot: cwd });
+  if (!validation.valid) return fail(validation.reason || 'Command validation failed');
+  const cmdRate = checkCommandRateLimit();
+  if (!cmdRate.allowed) return fail(cmdRate.message || 'Command rate limit exceeded');
+  recordCommand(command, args);
+
+  // Cancelling the prompt kills a local command too, and reports it as the
+  // client terminal branch does.
+  const runLocally = async (): Promise<AcpCommandOutcome> => {
+    const r = await executeCommandAsync(command, args, { cwd, projectRoot: cwd, timeout: timeoutMs, signal: ctx.signal });
+    if (r.cancelled) return fail('Command cancelled', r.stdout ?? '');
+    return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 0 };
+  };
+
+  // Per ACP spec, only call terminal/* if the client advertised the
+  // capability in initialize. Otherwise execute locally.
+  if (!ctx.clientSupportsTerminal) return runLocally();
+
+  const { transport, sessionId, signal } = ctx;
+  let terminalId: string;
+  try {
+    const created = await transport.request('terminal/create', {
+      sessionId,
+      command,
+      args,
+      cwd,
+      outputByteLimit: 1_000_000,
+    }) as TerminalCreateResult | null;
+    if (!created || typeof created.terminalId !== 'string') {
+      return fail('terminal/create returned no terminalId');
+    }
+    terminalId = created.terminalId;
+  } catch (err) {
+    // The client refused to create the terminal, so nothing ran there and
+    // running the command here cannot run it twice. Without an answer that
+    // is unknown, so report the failure instead.
+    if (err instanceof AcpRequestError) return runLocally();
+    return fail(`Client terminal unavailable: ${(err as Error).message}`);
+  }
+
+  const ref = { sessionId, terminalId };
+  // Stop waiting when the prompt is cancelled or the command outlives its
+  // budget. The transport's own timeout does not apply here: the command,
+  // not the client, decides how long wait_for_exit takes.
+  const stopWait = new AbortController();
+  let stopped: 'cancelled' | 'timeout' | null = null;
+  const stop = (why: 'cancelled' | 'timeout') => {
+    stopped ??= why;
+    stopWait.abort();
+  };
+  const onAbort = () => stop('cancelled');
+  if (signal.aborted) onAbort();
+  else signal.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => stop('timeout'), timeoutMs);
+
+  try {
+    let exitCode: number | null = null;
+    let waitError = '';
+    try {
+      // Spec method is snake_case `terminal/wait_for_exit` and takes
+      // only { sessionId, terminalId } — no timeoutMs.
+      const waitResult = await transport.request('terminal/wait_for_exit', ref, { timeoutMs: 0, signal: stopWait.signal });
+      exitCode = exitCodeFromWaitResult(waitResult);
+      if (exitCode === null) waitError = 'terminal/wait_for_exit returned no exit status';
+    } catch (err) {
+      if (!stopped) waitError = (err as Error).message;
+    }
+
+    if (stopped === 'cancelled') {
+      transport.request('terminal/kill', ref).catch(() => null);
+      return fail('Command cancelled');
+    }
+    if (stopped === 'timeout') {
+      await transport.request('terminal/kill', ref).catch(() => null);
+    }
+
+    const outputResult = await transport.request('terminal/output', ref).catch(() => null) as TerminalOutputResult | null;
+    const output = typeof outputResult?.output === 'string' ? outputResult.output : '';
+    if (stopped === 'timeout') return fail(`Command timed out after ${timeoutMs}ms`, output);
+    if (exitCode === null) return fail(`Client terminal failed: ${waitError}`, output);
+    return { stdout: output, stderr: '', exitCode };
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', onAbort);
+    transport.request('terminal/release', ref).catch(() => null);
+  }
+}
+
 // ─── Server ───────────────────────────────────────────────────────────────────
 
-export function startAcpServer(): Promise<void> {
-  const transport = new StdioTransport();
+type AcpServerSessionState = AcpSession & {
+  // One controller per prompt still running. A client can start a second
+  // prompt before the first ends, and session/cancel must stop both.
+  activePrompts: Set<AbortController>;
+  currentModeId: string;
+  titleSent: boolean;
+  hadHistory: boolean;
+  tokenRecords?: TokenScope;
+};
 
+/**
+ * Save a session's history under its own id. The id travels with the ACP
+ * session (a reopened thread, a second thread in the same editor), so the
+ * global current-session id may name another conversation. Written right
+ * away: the editor may stop the agent at any moment after a turn.
+ */
+function persistSessionHistory(session: AcpSession): void {
+  if (!config.get('autoSave') || session.history.length === 0) return;
+  saveSession(session.codeepSessionId, session.history, session.workspaceRoot);
+}
+
+export function startAcpServer(transport: StdioTransport = new StdioTransport()): Promise<void> {
   // ACP sessionId → full AcpSession (includes history + codeep session tracking)
-  const sessions = new Map<string, AcpSession & { abortController: AbortController | null; currentModeId: string; titleSent: boolean; hadHistory: boolean; tokenRecords?: TokenScope }>();
+  const sessions = new Map<string, AcpServerSessionState>();
 
   // Shared deps object for the extracted handlers in serverHandlers.ts.
   // Handlers read transport + sessions off this; stubbing both in a test
@@ -458,11 +633,13 @@ export function startAcpServer(): Promise<void> {
     if (process.listenerCount(sig) === 0) process.on(sig, onShutdown);
   }
 
-  transport.start((msg: JsonRpcRequest | JsonRpcNotification) => {
+  // A handler that throws, or an async one that rejects, is answered with a
+  // JSON-RPC error by the transport — so async handlers return their promise.
+  transport.start((msg: JsonRpcRequest | JsonRpcNotification): Promise<void> | undefined => {
     // Notifications have no id — handle separately
     if (!('id' in msg)) {
       handleNotification(msg as JsonRpcNotification);
-      return;
+      return undefined;
     }
     const req = msg as JsonRpcRequest;
     switch (req.method) {
@@ -472,7 +649,7 @@ export function startAcpServer(): Promise<void> {
       case 'session/new':          handleSessionNew(req);           break;
       case 'session/load':         handleSessionLoad(req);          break;
       case 'session/resume':       handleSessionResume(req);        break;
-      case 'session/prompt':       handleSessionPrompt(req);        break;
+      case 'session/prompt':       return handleSessionPrompt(req);
       case 'session/set_mode':     handleSetMode(req);              break;
       case 'session/set_config_option': handleSetConfigOption(req); break;
       case 'session/list':             handleSessionList(req);          break;
@@ -480,11 +657,12 @@ export function startAcpServer(): Promise<void> {
       case 'session/list_providers':   handleListProviders(req);        break;
       case 'session/list_personalities': handleListPersonalities(req);  break;
       case 'session/set_personality':    handleSetPersonality(req);     break;
-      case 'session/sync_personalities': handleSyncPersonalities(req);  break;
+      case 'session/sync_personalities': return handleSyncPersonalities(req);
       default:
         process.stderr.write(`[codeep-acp] Unknown method: ${req.method}\n`);
         transport.error(req.id, -32601, `Method not found: ${req.method}`);
     }
+    return undefined;
   });
 
   // ── Notification handler (no id, no response) ──────────────────────────────
@@ -492,7 +670,8 @@ export function startAcpServer(): Promise<void> {
   function handleNotification(msg: JsonRpcNotification): void {
     if (msg.method === 'session/cancel') {
       const { sessionId } = (msg.params ?? {}) as SessionCancelParams;
-      sessions.get(sessionId)?.abortController?.abort();
+      const session = sessions.get(sessionId);
+      if (session) for (const controller of session.activePrompts) controller.abort();
     }
   }
 
@@ -596,18 +775,16 @@ export function startAcpServer(): Promise<void> {
     // with the repo, so they spawn only for workspaces the user has trusted
     // (same gate the TUI prompts for at startup). ACP-provided servers are
     // the editor's own config and global ~/.codeep entries are the user's —
-    // both spawn unconditionally.
-    const { global: globalServers, workspace: workspaceServers } = loadMcpServerConfigSplit(cwd);
-    const workspaceTrusted = isWorkspaceMcpTrusted(cwd);
-    if (workspaceServers.length > 0 && !workspaceTrusted) {
+    // both spawn unconditionally. /mcp in commands.ts selects the same way.
+    const { servers: merged, skipped } = selectSessionMcpServers(cwd, { fromClient: acpServers });
+    if (skipped.length > 0) {
       process.stderr.write(
-        `[codeep-acp] MCP (${label}): skipped ${workspaceServers.length} workspace server(s) — untrusted workspace. ` +
+        `[codeep-acp] MCP (${label}): skipped ${skipped.length} workspace server(s) — untrusted workspace. ` +
         `Run /mcp trust (or \`codeep\` in the repo once) to enable.\n`,
       );
     }
-    const fromConfig = workspaceTrusted ? [...globalServers, ...workspaceServers] : globalServers;
-    const merged = mergeMcpServers(fromConfig, acpServers);
-    if (merged.length === 0) return;
+    // Registered even when empty: on a reload that stops the servers the
+    // session no longer has.
     registerSessionServers(acpSessionId, merged, {
       workspaceRoot: cwd,
       // Servers that opted into the `sampling` capability can ask us to
@@ -630,14 +807,43 @@ export function startAcpServer(): Promise<void> {
 
   // ── session/new ─────────────────────────────────────────────────────────────
 
+  /**
+   * Check the fields a session request cannot do without, answering
+   * -32602 for the first one missing. Without this a missing cwd surfaced
+   * as a raw Node error, and a missing sessionId registered a session
+   * under `undefined`.
+   */
+  function hasSessionParams(msg: JsonRpcRequest, needSessionId: boolean): boolean {
+    const p = (msg.params ?? {}) as { cwd?: unknown; sessionId?: unknown };
+    if (needSessionId && (typeof p.sessionId !== 'string' || !p.sessionId)) {
+      transport.error(msg.id, -32602, 'sessionId is required');
+      return false;
+    }
+    if (typeof p.cwd !== 'string' || !p.cwd) {
+      transport.error(msg.id, -32602, 'cwd is required');
+      return false;
+    }
+    return true;
+  }
+
   function handleSessionNew(msg: JsonRpcRequest): void {
+    if (!hasSessionParams(msg, false)) return;
     const params = msg.params as SessionNewParams;
     const acpSessionId = randomUUID();
 
-    // Spin up MCP servers in the background. Errors surface via /mcp.
-    spawnMcpServersForSession(acpSessionId, params.cwd, params.mcpServers, 'session/new');
-
-    const { codeepSessionId, history, welcomeText } = initWorkspace(params.cwd, params.fresh);
+    const workspace = initWorkspace(params.cwd, params.fresh);
+    const { history } = workspace;
+    let { codeepSessionId, welcomeText } = workspace;
+    // Two threads bound to one saved conversation would overwrite each
+    // other's file on every turn: a resume of a conversation that another
+    // thread already has open continues under a new name.
+    const inUse = [...sessions.values()].some(
+      (s) => s.codeepSessionId === codeepSessionId && s.workspaceRoot === params.cwd,
+    );
+    if (inUse) {
+      codeepSessionId = startNewSession();
+      welcomeText += `\n\n_That conversation is open in another thread, so this one continues as \`${codeepSessionId}\`._`;
+    }
 
     sessions.set(acpSessionId, {
       sessionId: acpSessionId,
@@ -645,7 +851,8 @@ export function startAcpServer(): Promise<void> {
       history,
       codeepSessionId,
       addedFiles: new Map(),
-      abortController: null,
+      clientMcpServers: params.mcpServers,
+      activePrompts: new Set(),
       currentModeId: 'auto',
       titleSent: false,
       hadHistory: history.length > 0,
@@ -660,6 +867,12 @@ export function startAcpServer(): Promise<void> {
       modes: AGENT_MODES,
       configOptions: buildConfigOptions(),
     };
+
+    // Spin up MCP servers in the background. Errors surface via /mcp.
+    // Started only now: if setting up the session throws, the client gets
+    // an error and no session id, so nothing could ever dispose them.
+    spawnMcpServersForSession(acpSessionId, params.cwd, params.mcpServers, 'session/new');
+
     transport.respond(msg.id, result);
 
     // Advertise slash commands AFTER a short delay. Zed processes
@@ -727,6 +940,7 @@ export function startAcpServer(): Promise<void> {
   // ── session/load ────────────────────────────────────────────────────────────
 
   function handleSessionLoad(msg: JsonRpcRequest): void {
+    if (!hasSessionParams(msg, true)) return;
     const params = msg.params as SessionLoadParams;
 
     // Try to restore existing Codeep session or fall back to fresh workspace
@@ -736,8 +950,13 @@ export function startAcpServer(): Promise<void> {
       existing.workspaceRoot = params.cwd;
       // Re-spawn any MCP servers the client passed in (they may have changed
       // since session/new; old ones get disposed by registerSessionServers).
-      spawnMcpServersForSession(params.sessionId, params.cwd, params.mcpServers, 'session/load (warm)');
+      existing.clientMcpServers = params.mcpServers ?? existing.clientMcpServers;
+      spawnMcpServersForSession(params.sessionId, params.cwd, existing.clientMcpServers, 'session/load (warm)');
+      // A load replays the conversation, warm or cold: clients such as the
+      // VS Code extension clear the chat and show what this returns.
       const result: SessionLoadResult = {
+        sessionId: params.sessionId,
+        history: existing.history.filter(m => m.role === 'user' || m.role === 'assistant'),
         modes: AGENT_MODES,
         configOptions: buildConfigOptions(),
       };
@@ -745,9 +964,11 @@ export function startAcpServer(): Promise<void> {
       return;
     }
 
-    // Session not in memory — try to load from disk
+    // Session not in memory — try to load from disk. It is registered under
+    // the id the client asked for: ACP clients keep using that id for
+    // prompts and route updates by it.
     const { codeepSessionId, history, welcomeText } = loadWorkspace(params.cwd, params.sessionId);
-    const acpSessionId = randomUUID();
+    const acpSessionId = params.sessionId;
     spawnMcpServersForSession(acpSessionId, params.cwd, params.mcpServers, 'session/load (cold)');
 
     sessions.set(acpSessionId, {
@@ -756,7 +977,8 @@ export function startAcpServer(): Promise<void> {
       history,
       codeepSessionId,
       addedFiles: new Map(),
-      abortController: null,
+      clientMcpServers: params.mcpServers,
+      activePrompts: new Set(),
       titleSent: true,
       hadHistory: history.length > 0,
       currentModeId: 'auto',
@@ -775,11 +997,11 @@ export function startAcpServer(): Promise<void> {
     sendCommandsDelayed(acpSessionId, params.cwd);
 
     // Send title immediately so Zed "Recent" panel shows something useful
-    sendSessionTitle(params.sessionId, history, pathBasename(params.cwd));
+    sendSessionTitle(acpSessionId, history, pathBasename(params.cwd));
 
     // Send restored session welcome
     transport.notify('session/update', {
-      sessionId: params.sessionId,
+      sessionId: acpSessionId,
       update: {
         sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: welcomeText },
@@ -794,6 +1016,7 @@ export function startAcpServer(): Promise<void> {
   // Falls back to `session/load` semantics if the session isn't in memory yet.
 
   function handleSessionResume(msg: JsonRpcRequest): void {
+    if (!hasSessionParams(msg, true)) return;
     const params = msg.params as SessionResumeParams;
 
     const existing = sessions.get(params.sessionId);
@@ -801,7 +1024,8 @@ export function startAcpServer(): Promise<void> {
       existing.workspaceRoot = params.cwd;
       // Resume can carry an updated mcpServers list (e.g. workspace switched
       // config) — re-register so old servers are torn down and new ones spawn.
-      spawnMcpServersForSession(params.sessionId, params.cwd, params.mcpServers, 'session/resume (warm)');
+      existing.clientMcpServers = params.mcpServers ?? existing.clientMcpServers;
+      spawnMcpServersForSession(params.sessionId, params.cwd, existing.clientMcpServers, 'session/resume (warm)');
       const result: SessionResumeResult = {
         sessionId: params.sessionId,
         modes: AGENT_MODES,
@@ -815,8 +1039,9 @@ export function startAcpServer(): Promise<void> {
 
     // Session not in memory — load from disk but skip the welcome banner and
     // the history echo (resume contract: client already has history).
+    // Registered under the requested id, as in session/load.
     const { codeepSessionId, history } = loadWorkspace(params.cwd, params.sessionId);
-    const acpSessionId = randomUUID();
+    const acpSessionId = params.sessionId;
     spawnMcpServersForSession(acpSessionId, params.cwd, params.mcpServers, 'session/resume (cold)');
     sessions.set(acpSessionId, {
       sessionId: acpSessionId,
@@ -824,7 +1049,8 @@ export function startAcpServer(): Promise<void> {
       history,
       codeepSessionId,
       addedFiles: new Map(),
-      abortController: null,
+      clientMcpServers: params.mcpServers,
+      activePrompts: new Set(),
       titleSent: true,
       hadHistory: history.length > 0,
       currentModeId: 'auto',
@@ -1012,7 +1238,7 @@ export function startAcpServer(): Promise<void> {
         });
         session.history.push({ role: 'user', content: prompt ? `[Image] ${prompt}` : '[Image pasted from clipboard]' });
         session.history.push({ role: 'assistant', content: description });
-        autoSaveSession(session.history, session.workspaceRoot);
+        persistSessionHistory(session);
       } catch (err) {
         transport.notify('session/update', {
           sessionId: params.sessionId,
@@ -1023,7 +1249,7 @@ export function startAcpServer(): Promise<void> {
     }
 
     const abortController = new AbortController();
-    session.abortController = abortController;
+    session.activePrompts.add(abortController);
 
     // Plan tracking: build a live plan from tool calls as the agent works
     // ACP spec: send complete list on every update, client replaces current plan
@@ -1038,11 +1264,6 @@ export function startAcpServer(): Promise<void> {
       });
     };
 
-    // Manual mode gates write/edit for THIS run via a per-call option passed to
-    // runAgentSession (extraDangerousTools, below) — NOT by mutating the global
-    // `agentConfirmWriteFile` config, which leaked the session's mode into the
-    // TUI/other processes and raced on a non-atomic restore.
-
     const agentResponseChunks: string[] = [];
     const sendChunk = (text: string) => {
       agentResponseChunks.push(text);
@@ -1055,6 +1276,115 @@ export function startAcpServer(): Promise<void> {
       });
     };
 
+    // Ask the user through the client. A person answers this: wait as long
+    // as the dialog is open. Only cancelling the prompt stops the wait. No
+    // answer (error, cancelled prompt, a reply without an outcome) is null,
+    // which callers must treat as a refusal.
+    const askUser = (toolCall: RequestPermissionParams['toolCall'], options: PermissionOption[]) =>
+      transport.request('session/request_permission', {
+        sessionId: params.sessionId,
+        toolCall,
+        options,
+      }, {
+        timeoutMs: 0,
+        signal: abortController.signal,
+      }).then(
+        (reply) => {
+          const outcome = (reply as Partial<RequestPermissionResult> | null)?.outcome;
+          return outcome && typeof outcome === 'object' ? reply as RequestPermissionResult : null;
+        },
+        () => null,
+      );
+
+    // How the agent runs for this prompt. Built once so slash commands that
+    // run the agent (/go, custom commands, skill agent steps) run it exactly
+    // like a plain prompt.
+    const manualMode = session.currentModeId === 'manual';
+    const agentRun: AcpAgentRunOptions = {
+      // Manual mode gates write_file/edit_file for this run only, per call —
+      // NOT by mutating the global `agentConfirmWriteFile` config, which
+      // leaked the session's mode into the TUI/other processes and raced on
+      // a non-atomic restore.
+      extraDangerousTools: manualMode ? ['write_file', 'edit_file'] : undefined,
+      // Only request permission in Manual mode
+      onRequestPermission: manualMode
+        ? async (toolCall: ToolCall): Promise<PermissionOutcome> => {
+            const result = await askUser({
+              toolCallId: `perm_${randomUUID()}`,
+              toolName: toolCall.tool,
+              toolInput: formatToolInputForPermission(toolCall.tool, toolCall.parameters as Record<string, unknown>),
+              status: 'pending',
+              content: [],
+            }, [
+              { optionId: 'allow_once',    name: 'Allow once',    kind: 'allow_once' },
+              { optionId: 'allow_always',  name: 'Allow always',  kind: 'allow_always' },
+              { optionId: 'reject_once',   name: 'Reject once',   kind: 'reject_once' },
+              { optionId: 'reject_always', name: 'Reject always', kind: 'reject_always' },
+            ]);
+
+            // Map ACP outcome back to PermissionOutcome. No answer
+            // (error, cancelled prompt) denies.
+            if (!result || result.outcome.type === 'cancelled') return 'reject_once';
+            return result.outcome.optionId as PermissionOutcome;
+          }
+        : undefined,
+      // A skill's confirm step ("Deploy to production?") — a one-off
+      // question, so no "always" answers.
+      confirm: manualMode
+        ? async (message: string): Promise<boolean> => {
+            const result = await askUser({
+              toolCallId: `confirm_${randomUUID()}`,
+              toolName: 'confirm',
+              toolInput: { question: message },
+              status: 'pending',
+              content: [],
+            }, [
+              { optionId: 'allow_once',  name: 'Yes', kind: 'allow_once' },
+              { optionId: 'reject_once', name: 'No',  kind: 'reject_once' },
+            ]);
+            return result?.outcome.type === 'selected' && result.outcome.optionId === 'allow_once';
+          }
+        : undefined,
+      // Per ACP spec, `fs/read_text_file` and `fs/write_text_file` are
+      // CLIENT methods — only safe to call when the client advertised
+      // the capability in `initialize`. Routing through the client
+      // means the editor's dirty buffers + undo history stay correct
+      // (otherwise an in-editor unsaved change would be invisible to
+      // the agent, or worse, silently overwritten).
+      fs: {
+        readTextFile: clientSupportsFsRead
+          ? async (absolutePath: string): Promise<string> => {
+              const result = await transport.request('fs/read_text_file', {
+                sessionId: params.sessionId,
+                path: absolutePath,
+              }) as { content: string } | null;
+              if (!result || typeof result.content !== 'string') {
+                throw new Error('fs/read_text_file returned no content');
+              }
+              return result.content;
+            }
+          : undefined,
+        writeTextFile: clientSupportsFsWrite
+          ? async (absolutePath: string, content: string): Promise<void> => {
+              // Rejects when the client refuses the write, so the tool
+              // never reports a file it did not write.
+              await transport.request('fs/write_text_file', {
+                sessionId: params.sessionId,
+                path: absolutePath,
+                content,
+              });
+            }
+          : undefined,
+      },
+      onExecuteCommand: (command: string, args: string[], cwd: string) =>
+        executeAcpCommand(command, args, cwd, {
+          transport,
+          sessionId: params.sessionId,
+          clientSupportsTerminal,
+          signal: abortController.signal,
+        }),
+    };
+
     // Try slash commands first.
     // Run the whole prompt lifecycle inside THIS ACP session's token scope so
     // (a) concurrent sessions on one process can't mix usage totals, and
@@ -1064,7 +1394,7 @@ export function startAcpServer(): Promise<void> {
     session.tokenRecords ??= createTokenScope();
     runWithTokenScope(session.tokenRecords, () => {
     const tokenReportStart = getRecordCount();
-    return handleCommand(prompt, session, sendChunk, abortController.signal)
+    return handleCommand(prompt, session, sendChunk, abortController.signal, agentRun)
       .then((cmd) => {
         if (cmd.handled) {
           if (cmd.response) sendChunk(cmd.response);
@@ -1083,7 +1413,10 @@ export function startAcpServer(): Promise<void> {
             session.titleSent = true;
             sendSessionTitle(params.sessionId, [{ role: 'user', content: prompt }]);
           }
-          transport.respond(msg.id, { stopReason: 'end_turn' });
+          session.activePrompts.delete(abortController);
+          // A command that runs the agent (/go, skills) or the model (/diff,
+          // /compact) can be cancelled part way; the client must hear so.
+          transport.respond(msg.id, { stopReason: abortController.signal.aborted ? 'cancelled' : 'end_turn' });
           return;
         }
 
@@ -1097,6 +1430,8 @@ export function startAcpServer(): Promise<void> {
           enrichedPrompt = parts.join('\n') + '\n\n' + prompt;
         }
 
+        // Captured now: the user may move to another conversation before this ends.
+        const recordTurn = beginTurn(session);
         runAgentSession({
           prompt: enrichedPrompt,
           workspaceRoot: session.workspaceRoot,
@@ -1157,114 +1492,17 @@ export function startAcpServer(): Promise<void> {
               }
             }
           },
-          // Manual mode gates write_file/edit_file for this run only (per-call,
-          // no global config mutation).
-          extraDangerousTools: session.currentModeId === 'manual' ? ['write_file', 'edit_file'] : undefined,
-          // Only request permission in Manual mode
-          onRequestPermission: session.currentModeId === 'manual'
-            ? async (toolCall: ToolCall): Promise<PermissionOutcome> => {
-                const permToolCallId = `perm_${randomUUID()}`;
-                const result = await transport.request('session/request_permission', {
-                  sessionId: params.sessionId,
-                  toolCall: {
-                    toolCallId: permToolCallId,
-                    toolName: toolCall.tool,
-                    toolInput: formatToolInputForPermission(toolCall.tool, toolCall.parameters as Record<string, unknown>),
-                    status: 'pending',
-                    content: [],
-                  },
-                  options: [
-                    { optionId: 'allow_once',    name: 'Allow once',    kind: 'allow_once' },
-                    { optionId: 'allow_always',  name: 'Allow always',  kind: 'allow_always' },
-                    { optionId: 'reject_once',   name: 'Reject once',   kind: 'reject_once' },
-                    { optionId: 'reject_always', name: 'Reject always', kind: 'reject_always' },
-                  ],
-                }) as RequestPermissionResult | null;
-
-                // Map ACP outcome back to PermissionOutcome
-                if (!result || result.outcome.type === 'cancelled') return 'reject_once';
-                return result.outcome.optionId as PermissionOutcome;
-              }
-            : undefined,
-          // Per ACP spec, `fs/read_text_file` and `fs/write_text_file` are
-          // CLIENT methods — only safe to call when the client advertised
-          // the capability in `initialize`. Routing through the client
-          // means the editor's dirty buffers + undo history stay correct
-          // (otherwise an in-editor unsaved change would be invisible to
-          // the agent, or worse, silently overwritten).
-          fs: {
-            readTextFile: clientSupportsFsRead
-              ? async (absolutePath: string): Promise<string> => {
-                  const result = await transport.request('fs/read_text_file', {
-                    sessionId: params.sessionId,
-                    path: absolutePath,
-                  }) as { content: string } | null;
-                  if (!result || typeof result.content !== 'string') {
-                    throw new Error('fs/read_text_file returned no content');
-                  }
-                  return result.content;
-                }
-              : undefined,
-            writeTextFile: clientSupportsFsWrite
-              ? async (absolutePath: string, content: string): Promise<void> => {
-                  await transport.request('fs/write_text_file', {
-                    sessionId: params.sessionId,
-                    path: absolutePath,
-                    content,
-                  });
-                }
-              : undefined,
-          },
-          onExecuteCommand: async (command: string, args: string[], cwd: string) => {
-            // Per ACP spec, only call terminal/* if the client advertised the
-            // capability in initialize. Otherwise execute locally.
-            if (!clientSupportsTerminal) {
-              const r = await executeCommandAsync(command, args, { cwd, projectRoot: cwd, timeout: 120000 });
-              return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 0 };
-            }
-            try {
-              const createResult = await transport.request('terminal/create', {
-                sessionId: params.sessionId,
-                command,
-                args,
-                cwd,
-                outputByteLimit: 1_000_000,
-              }) as TerminalCreateResult;
-
-              const { terminalId } = createResult;
-
-              // Spec method is snake_case `terminal/wait_for_exit` and takes
-              // only { sessionId, terminalId } — no timeoutMs.
-              const waitResult = await transport.request('terminal/wait_for_exit', {
-                sessionId: params.sessionId,
-                terminalId,
-              }) as TerminalWaitForExitResult;
-
-              const outputResult = await transport.request('terminal/output', {
-                sessionId: params.sessionId,
-                terminalId,
-              }) as TerminalOutputResult;
-
-              await transport.request('terminal/release', {
-                sessionId: params.sessionId,
-                terminalId,
-              });
-
-              const exitCode = waitResult.exitStatus.type === 'exited' ? waitResult.exitStatus.code : 1;
-              return { stdout: outputResult.output ?? '', stderr: '', exitCode };
-            } catch (err) {
-              // Client terminal failed — fall back to local execution
-              const r = await executeCommandAsync(command, args, { cwd, projectRoot: cwd, timeout: 120000 });
-              return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 0 };
-            }
-          },
+          onRequestPermission: agentRun.onRequestPermission,
+          extraDangerousTools: agentRun.extraDangerousTools,
+          fs: agentRun.fs,
+          onExecuteCommand: agentRun.onExecuteCommand,
+          // Earlier turns only: the prompt joins the history once it ran.
+          chatHistory: [...session.history],
         }).then(() => {
-          session.history.push({ role: 'user', content: prompt });
           const agentResponse = agentResponseChunks.join('');
-          if (agentResponse) {
-            session.history.push({ role: 'assistant', content: agentResponse });
-          }
-          autoSaveSession(session.history, session.workspaceRoot);
+          recordTurn(agentResponse
+            ? [{ role: 'user', content: prompt }, { role: 'assistant', content: agentResponse }]
+            : [{ role: 'user', content: prompt }]);
 
           // Report token usage to dashboard
           const projectCtx = getProjectContext(session.workspaceRoot);
@@ -1310,9 +1548,11 @@ export function startAcpServer(): Promise<void> {
             sendSessionTitle(params.sessionId, [{ role: 'user', content: prompt }]);
           }
 
-          transport.respond(msg.id, { stopReason: 'end_turn' });
+          transport.respond(msg.id, { stopReason: abortController.signal.aborted ? 'cancelled' : 'end_turn' });
         }).catch((err: Error) => {
-          if (err.name === 'AbortError') {
+          // Once the user cancelled, the answer is "cancelled", whatever the
+          // run failed with on the way out.
+          if (err.name === 'AbortError' || abortController.signal.aborted) {
             // Clear plan UI on the client side when session is cancelled
             if (planEntries.size > 0) {
               planEntries.clear();
@@ -1329,12 +1569,16 @@ export function startAcpServer(): Promise<void> {
             transport.error(msg.id, -32000, err.message);
           }
         }).finally(() => {
-          if (session) session.abortController = null;
+          session.activePrompts.delete(abortController);
           planEntries.clear();
         });
       })
       .catch((err: Error) => {
-        if (err.message?.includes('API key not configured') || err.message?.includes('API key') || (err instanceof ApiError && err.status === 401)) {
+        // A command that streams (/review, /diff) stops with an AbortError
+        // when cancelled. The client asked for that, so it is not an error.
+        if (err.name === 'AbortError' || abortController.signal.aborted) {
+          transport.respond(msg.id, { stopReason: 'cancelled' });
+        } else if (err.message?.includes('API key not configured') || err.message?.includes('API key') || (err instanceof ApiError && err.status === 401)) {
           sendChunk(`❌ No API key configured. Use /login <provider> <key> or set the environment variable (e.g. ZAI_API_KEY, ANTHROPIC_API_KEY).`);
           transport.respond(msg.id, { stopReason: 'end_turn' });
         } else if (err instanceof ApiError && err.status >= 500) {
@@ -1343,7 +1587,7 @@ export function startAcpServer(): Promise<void> {
         } else {
           transport.error(msg.id, -32000, err.message);
         }
-        if (session) session.abortController = null;
+        session.activePrompts.delete(abortController);
       });
     });
   }

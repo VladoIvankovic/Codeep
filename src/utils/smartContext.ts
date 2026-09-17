@@ -2,10 +2,12 @@
  * Smart Context - automatically gather relevant files for better understanding
  */
 
-import { existsSync, readFileSync, statSync } from 'fs';
+import { existsSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { join, dirname, basename, extname, relative } from 'path';
+import { StringDecoder } from 'string_decoder';
 import { ProjectContext } from './project';
 import { loadIgnoreRules, isIgnored } from './gitignore';
+import { isRefusedMention, isSensitiveFile, looksLikeKeyMaterial, resolvesWithin } from './mentions';
 import { logger } from './logger';
 
 export interface RelatedFile {
@@ -26,6 +28,64 @@ export interface SmartContextResult {
 // Max context size (characters)
 const MAX_CONTEXT_SIZE = 50000;
 const MAX_FILES = 15;
+
+/**
+ * Read at most `maxBytes` of a file for the context block, or null when it
+ * isn't a regular text file or may hold secrets.
+ *
+ * statSync follows symlinks, so a repo that commits `tsconfig.json ->
+ * /dev/zero` (or a FIFO) is refused here: readFileSync on either never
+ * returns, and every agent run would freeze while memory climbs. Reading only
+ * the budget keeps a multi-MB log out of memory and out of the system prompt.
+ * The budget is in characters and a UTF-8 character is at least one byte, so
+ * the cut never overshoots it.
+ *
+ * Nothing here was named by the user as an attachment, and the result goes
+ * into the system prompt unseen. So a symlink is judged by what it points at
+ * (`.env.example -> .env`), it must stay inside the project (`tsconfig.json
+ * -> ~/.zsh_history`), and key material is refused whatever the file is called.
+ */
+function readContextFile(
+  filePath: string,
+  maxBytes: number,
+  projectRoot: string
+): { content: string; size: number; truncated: boolean } | null {
+  let fd: number | undefined;
+  try {
+    const stat = statSync(filePath);
+    if (!stat.isFile()) return null;
+    if (isSensitiveFile(filePath) || !resolvesWithin(filePath, projectRoot)) return null;
+    fd = openSync(filePath, 'r');
+    const buf = Buffer.alloc(Math.min(stat.size, Math.max(0, maxBytes)));
+    let read = 0;
+    while (read < buf.length) {
+      const n = readSync(fd, buf, read, buf.length - read, read);
+      if (n === 0) break;
+      read += n;
+    }
+    const data = buf.subarray(0, read);
+    // Same binary sniff as @-mentions: a NUL byte in the first 8 KB.
+    if (data.subarray(0, 8192).includes(0)) return null;
+    // StringDecoder holds back a multi-byte character split by the cut
+    // instead of emitting a replacement character.
+    const content = new StringDecoder('utf8').write(data);
+    if (looksLikeKeyMaterial(content)) return null;
+    return {
+      content,
+      size: stat.size,
+      truncated: stat.size > read,
+    };
+  } catch (err) {
+    logger.debug('smartContext: failed to read context file', { path: filePath, err: String(err) });
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* already closed */ }
+    }
+  }
+}
+
+const TRUNCATED_MARKER = '\n... (truncated)';
 
 // File extensions we care about
 /**
@@ -340,16 +400,24 @@ export function gatherSmartContext(
   const projectRoot = projectContext.root || process.cwd();
   const ignoreRules = loadIgnoreRules(projectRoot);
   const allRelated: Map<string, RelatedFile> = new Map();
+  let targetTruncated = false;
   
   // If we have a target file, analyze it
   if (targetFile) {
     const targetPath = join(projectRoot, targetFile);
     
-    if (existsSync(targetPath)) {
+    // A secrets file is never pulled in implicitly, not even read for its
+    // imports. The target is any path-like word in the prompt, including one
+    // left behind after the @-mention guard refused it, so `.env.local` would
+    // otherwise reach the provider without the user ever seeing it.
+    const target = existsSync(targetPath) && !isRefusedMention(targetPath)
+      ? readContextFile(targetPath, MAX_CONTEXT_SIZE, projectRoot)
+      : null;
+    if (target) {
       try {
-        const content = readFileSync(targetPath, 'utf-8');
+        const content = target.truncated ? target.content + TRUNCATED_MARKER : target.content;
         const ext = extname(targetPath);
-        const stat = statSync(targetPath);
+        targetTruncated = target.truncated;
         
         // Add the target file itself
         allRelated.set(targetPath, {
@@ -358,14 +426,14 @@ export function gatherSmartContext(
           reason: 'target file',
           priority: 10,
           content,
-          size: stat.size,
+          size: target.size,
         });
         
         // Extract and resolve imports
         const imports = extractImports(content, ext);
         for (const imp of imports) {
           const resolved = resolveImportPath(imp, targetPath, projectRoot);
-          if (resolved && !allRelated.has(resolved)) {
+          if (resolved && !allRelated.has(resolved) && !isSensitiveFile(resolved)) {
             try {
               const impStat = statSync(resolved);
               allRelated.set(resolved, {
@@ -434,30 +502,33 @@ export function gatherSmartContext(
   
   // Load content for files that don't have it
   let totalSize = 0;
-  let truncated = false;
+  let truncated = targetTruncated;
+  const unreadable = new Set<RelatedFile>();
   
   for (const file of files) {
     if (!file.content && totalSize < MAX_CONTEXT_SIZE) {
-      try {
-        const content = readFileSync(file.path, 'utf-8');
-        if (totalSize + content.length <= MAX_CONTEXT_SIZE) {
-          file.content = content;
-          totalSize += content.length;
-        } else {
-          // Truncate this file
-          const remaining = MAX_CONTEXT_SIZE - totalSize;
-          file.content = content.slice(0, remaining) + '\n... (truncated)';
-          totalSize = MAX_CONTEXT_SIZE;
-          truncated = true;
-        }
-      } catch (err) {
-        logger.debug('smartContext: readFileSync failed for context file', { path: file.path, err: String(err) });
+      const read = readContextFile(file.path, MAX_CONTEXT_SIZE - totalSize, projectRoot);
+      if (!read) {
+        unreadable.add(file);
+      } else if (!read.truncated) {
+        file.content = read.content;
+        totalSize += read.content.length;
+      } else {
+        // Truncate this file
+        file.content = read.content + TRUNCATED_MARKER;
+        totalSize = MAX_CONTEXT_SIZE;
+        truncated = true;
       }
     } else if (file.content) {
       totalSize += file.content.length;
     }
   }
   
+  // Devices, FIFOs and binaries were never readable context
+  if (unreadable.size > 0) {
+    files = files.filter(f => !unreadable.has(f));
+  }
+
   // Remove files without content if we're at limit
   if (truncated) {
     files = files.filter(f => f.content);
@@ -487,7 +558,7 @@ function extractMentionedFiles(
     const filePath = match[1];
     const fullPath = join(projectRoot, filePath);
     
-    if (existsSync(fullPath)) {
+    if (existsSync(fullPath) && !isRefusedMention(fullPath)) {
       try {
         const stat = statSync(fullPath);
         if (stat.isFile()) {

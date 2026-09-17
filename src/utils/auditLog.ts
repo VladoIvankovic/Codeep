@@ -14,16 +14,18 @@
  * Format is JSON Lines. Appending one line per event survives a crash mid-run,
  * needs no read-modify-write, and stays greppable without a parser.
  *
- * PRIVACY: entries carry command lines and file paths, not file contents. A
- * command can still contain a secret someone typed into it, exactly as shell
- * history can — treat the directory like shell history, not like source.
+ * PRIVACY: entries carry command lines, file paths and MCP tool arguments, not
+ * file contents. A command or an argument can still contain a secret someone
+ * typed into it, exactly as shell history can — treat the directory like shell
+ * history, not like source.
  *
  * It sits under `.codeep/`, which most projects already ignore, but Codeep does
  * not edit anyone's `.gitignore` and this module must not claim otherwise. If a
  * project tracks `.codeep/`, the audit log will be committed with it.
  */
 
-import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { appendProjectFile } from './projectPaths.js';
 import { join } from 'path';
 import { randomBytes } from 'crypto';
 import { config } from '../config/index.js';
@@ -50,12 +52,98 @@ export interface AuditEvent {
   prompt?: string;
 }
 
+/** Arguments that carry a file body. They are never part of a target. Names
+ *  are compared without `_`/`-` and case, so `newText` is `new_text`. */
+const CONTENT_ARGUMENTS = new Set([
+  'content', 'contents', 'filecontent', 'filecontents', 'filetext', 'body',
+  'oldstring', 'newstring', 'oldstr', 'newstr', 'oldtext', 'newtext',
+  'oldcontent', 'newcontent', 'replacement', 'patch', 'diff',
+]);
+/** Argument names whose value is a credential, compared without `_`/`-` and
+ *  case. `token` is judged separately: most `*_token` arguments are secrets,
+ *  but a page or continuation token is a cursor the user should see. */
+const SECRET_ARGUMENT = /passw|passphrase|secret|apikey|accesskey|privatekey|authorization|credential|cookie/;
+const CURSOR_TOKEN_QUALIFIERS = new Set(['page', 'next', 'prev', 'previous', 'continuation', 'cursor', 'sync', 'max', 'min', 'num', 'total', 'count']);
+/**
+ * Values shaped like a well-known credential, whatever the argument is called.
+ * Each alternative consumes the whole credential, because only the matched
+ * text is replaced: a pattern that stopped after the prefix would leave the
+ * rest of the key on screen.
+ */
+const SECRET_VALUE = /\b[sr]k[-_](?:live|test|proj|ant)[-_][\w-]+|\bsk-[\w-]{20,}|\bgh[pousr]_\w{20,}|\bgithub_pat_\w{20,}|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[\w-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)|\bBearer\s+[\w.~+/=-]{16,}/gi;
+/** Longest single argument shown. The permission prompt lays out what is
+ *  left and says what it drops, so this only bounds a pathological value. */
+const MAX_ARGUMENT = 2000;
+
+/** The words of an argument name: `page_token`, `pageToken`, `PAGE-TOKEN`. */
+function nameWords(key: string): string[] {
+  return key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[\s_-]+/).filter(Boolean);
+}
+
+/** True when an argument's name says its value is a credential. */
+function isCredentialName(key: string): boolean {
+  const words = nameWords(key);
+  if (SECRET_ARGUMENT.test(words.join(''))) return true;
+  return words.some((w, i) => (w === 'token' || w === 'tokens') && !(i > 0 && CURSOR_TOKEN_QUALIFIERS.has(words[i - 1])));
+}
+
+/** A plain value as it should appear: flattened, known credential shapes
+ *  replaced where they occur, the rest left readable. */
+function showValue(value: string | number | boolean): string {
+  let text = String(value).replace(SECRET_VALUE, '[redacted]').replace(/\s+/g, ' ').trim();
+  if (text.length > MAX_ARGUMENT) text = `${text.slice(0, MAX_ARGUMENT)}…[+${text.length - MAX_ARGUMENT} chars]`;
+  return text;
+}
+
+function isPlain(value: unknown): value is string | number | boolean {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+}
+
+/**
+ * An MCP tool's arguments, as `name=value` pairs in the order given. The
+ * argument names are the server's, not the built-in `command`/`path`/`url`
+ * ones: `postgres__query` carries its SQL in `sql`, and a call described by
+ * its name alone would be approved in the permission prompt unseen.
+ *
+ * Plain values and lists of plain values are shown — an exec tool's `args`
+ * is what it will run. A list holding objects, or an object, is where servers
+ * put file bodies under names of their own (`files[].content`,
+ * `edits[].newText`), so it is counted, never printed.
+ */
+function describeMcpArguments(p: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(p)) {
+    const name = key.toLowerCase().replace(/[-_]/g, '');
+    if (CONTENT_ARGUMENTS.has(name) || value === undefined || value === null) continue;
+    if (isCredentialName(key) && (isPlain(value) || Array.isArray(value))) {
+      parts.push(`${key}=[redacted]`);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      parts.push(value.every(isPlain)
+        ? `${key}=${value.map(showValue).join(' ')}`
+        : `${key}=[${value.length} ${value.length === 1 ? 'item' : 'items'}]`);
+      continue;
+    }
+    if (typeof value === 'object') {
+      const size = Object.keys(value).length;
+      parts.push(`${key}={${size} ${size === 1 ? 'key' : 'keys'}}`);
+      continue;
+    }
+    parts.push(`${key}=${showValue(value as string | number | boolean)}`);
+  }
+  return parts.join(', ');
+}
+
 /** A one-line, content-free description of what a tool call was aimed at.
  *  Paths, commands and URLs are the point of the record; file bodies are not,
  *  and `content`/`old_string` style arguments are never read here. */
 export function describeAuditTarget(call: { tool: string; parameters: Record<string, unknown> }): string {
   const p = call.parameters ?? {};
   const str = (k: string) => (typeof p[k] === 'string' ? p[k] as string : undefined);
+
+  // MCP tools (`<server>__<tool>`; no built-in name contains `__`).
+  if (call.tool.includes('__')) return describeMcpArguments(p) || call.tool;
 
   const command = str('command');
   if (command) {
@@ -100,8 +188,6 @@ export function isAuditEnabled(): boolean {
 export function recordAuditEvent(projectRoot: string, event: AuditEvent): void {
   if (!isAuditEnabled()) return;
   try {
-    const dir = auditDir(projectRoot);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const line: AuditEvent = {
       ...event,
       target: clip(event.target, MAX_TARGET),
@@ -112,9 +198,10 @@ export function recordAuditEvent(projectRoot: string, event: AuditEvent): void {
     const compact = Object.fromEntries(
       Object.entries(line).filter(([, v]) => v !== undefined),
     );
-    appendFileSync(auditFile(projectRoot), JSON.stringify(compact) + '\n');
+    // .codeep/ can come with a cloned repo: never append through a symlink.
+    appendProjectFile(projectRoot, auditFile(projectRoot), JSON.stringify(compact) + '\n');
   } catch {
-    /* an unwritable audit log must never fail the run */
+    /* an unwritable (or symlinked) audit log must never fail the run */
   }
 }
 

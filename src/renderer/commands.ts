@@ -23,6 +23,7 @@ import {
   listSessionsWithInfo,
   deleteSession,
   renameSession,
+  sessionNameProblem,
   setProjectPermission,
   saveProfile,
   loadProfile,
@@ -38,9 +39,9 @@ import { getCurrentVersion } from '../utils/update';
 import { getProviderList, getProvider, modelSupportsReasoningEffort, reasoningParamsFor, availableReasoningTiers, resolveReasoningTier, REASONING_TIERS, type ReasoningTier } from '../config/providers';
 import { setProjectContext } from '../api/index';
 import { AppExecutionContext, runSkill, runCommandChain } from './agentExecution';
-import { loadProjectIntelligence, saveProjectIntelligence } from '../utils/projectIntelligence';
+import { loadProjectIntelligence, saveProjectIntelligence, INTELLIGENCE_NOT_SAVED } from '../utils/projectIntelligence';
 import { ollamaModelHint } from './ollamaHint';
-import { buildSearchSnippets, parseKeepRecent, joinSessionName, parseTaskAddArgs, formatTaskList, formatProfileList, formatMemoryList, formatStatsReport, extractCodeBlocks, resolveBlockIndex, extractFileChanges, formatApplyDiffLine, parsePromptArgs, formatMcpReloadReport, formatMcpResourcesList, formatMcpResourceRead, formatMcpPromptsList, formatMcpPromptResult, formatMcpServerList, parseInsightsDays, formatCloudSessionLabel, formatMeSyncReport, formatMeLearnResult, formatMeInitResult, formatSkillsShow, formatSkillsBrowseEmpty, formatSkillsPublishResult } from './commands/helpers';
+import { buildSearchSnippets, parseKeepRecent, joinSessionName, parseTaskAddArgs, formatTaskList, formatProfileList, formatMemoryList, formatStatsReport, extractCodeBlocks, resolveBlockIndex, extractFileChanges, formatApplyDiffLine, parsePromptArgs, formatMcpReloadReport, formatMcpResourcesList, formatMcpResourceRead, formatMcpPromptsList, formatMcpPromptResult, formatMcpServerList, parseInsightsDays, formatCloudSessionLabel, formatMeSyncReport, formatUndoAllReport, formatMeLearnResult, formatMeInitResult, formatSkillsShow, formatSkillsBrowseEmpty, formatSkillsPublishResult } from './commands/helpers';
 import { resolveCommand } from './commands/registry';
 import { telemetryCommand } from '../commands/core/telemetry';
 import { keysyncCommand } from '../commands/core/keysync';
@@ -49,6 +50,8 @@ import { keysyncCommand } from '../commands/core/keysync';
 
 export interface AppCommandContext extends AppExecutionContext {
   sessionId: string;
+  /** Switch the conversation. Also records it as config's currentSessionId,
+   *  which autosave and the next launch read. */
   setSessionId: (id: string) => void;
   setProjectContext: (ctx: ReturnType<typeof getProjectContext>) => void;
   setHasWriteAccess: (v: boolean) => void;
@@ -553,11 +556,13 @@ export async function handleCommand(
       if (sub === 'sync') {
         const { getSyncToken } = await import('../config/index');
         if (!getSyncToken()) { ctx.app.notify('Not linked to codeep.dev. Run: codeep account'); break; }
-        const { pushUserProfile, pullUserProfile } = await import('../utils/codeepCloud');
+        const { pushUserProfileResult, pullUserProfileResult, describeSyncFailure } = await import('../utils/codeepCloud');
         ctx.app.notify('Syncing your profile with codeep.dev…');
-        const pushed = await pushUserProfile();
-        const pulled = await pullUserProfile();
-        ctx.app.addMessage({ role: 'system', content: formatMeSyncReport(pushed, pulled) });
+        // Push first: the pull may create the local file, and pushing that
+        // back would be pointless.
+        const pushed = await pushUserProfileResult();
+        const pulled = await pullUserProfileResult();
+        ctx.app.addMessage({ role: 'system', content: formatMeSyncReport(pushed, pulled, describeSyncFailure) });
         break;
       }
       if (sub === 'init') {
@@ -622,10 +627,16 @@ export async function handleCommand(
       }
       if (ctx.isAgentRunning()) { ctx.app.notify('Agent already running. Use /stop first.'); return; }
       const prompt = composeExecutionPrompt(cur);
-      clearPendingPlan();
-      ctx.app.notify(`Executing plan for: ${cur.task.slice(0, 80)}${cur.task.length > 80 ? '…' : ''}`);
+      ctx.app.notify(`Executing plan for: ${cur.task.slice(0, 80)}${cur.task.length > 80 ? '…' : ''} — it stays pending until it has run successfully`);
       const { runAgentTask } = await import('./agentExecution');
-      runAgentTask(prompt, false, ctx, () => null, () => {});
+      // The plan stays pending until it has run: a failed, stopped or
+      // declined run can be started again with /go.
+      runAgentTask(prompt, false, ctx, () => null, () => {}, {
+        onFinished: (outcome) => {
+          // A /plan issued meanwhile replaced it; that one has not run.
+          if (outcome === 'success' && getPendingPlan() === cur) clearPendingPlan();
+        },
+      });
       break;
     }
 
@@ -777,7 +788,6 @@ export async function handleCommand(
             if (local && local.length > 0) {
               ctx.app.setMessages(local);
               ctx.setSessionId(localName);
-              config.set('currentSessionId', localName);
               ctx.setSessionDisplayName?.(selected.sessionName ?? null);
               ctx.app.notify('Local copy is newer than the cloud record — loaded the local session instead.');
               return;
@@ -787,11 +797,11 @@ export async function handleCommand(
         saveSession(localName, history, ctx.projectPath);
         ctx.app.setMessages(history);
         // Keep ALL session-identity state in step, not just the renderer's
-        // copy: autosave + agent-mode sync read config.currentSessionId, and
-        // the next syncSession reads the display name — leaving either stale
-        // writes/renames the pulled history under the PREVIOUS session.
+        // copy: autosave + agent-mode sync read config.currentSessionId (which
+        // setSessionId updates), and the next syncSession reads the display
+        // name — leaving either stale writes/renames the pulled history under
+        // the PREVIOUS session.
         ctx.setSessionId(localName);
-        config.set('currentSessionId', localName);
         ctx.setSessionDisplayName?.(selected.sessionName ?? null);
         ctx.app.notify(`Resumed from cloud: ${selected.sessionName || localName}`);
       };
@@ -841,7 +851,8 @@ export async function handleCommand(
 
     case 'undo': {
       import('../utils/agent').then(({ undoLastAction }) => {
-        const result = undoLastAction();
+        // Only a run in this workspace; the agent records runs under this root.
+        const result = undoLastAction(ctx.projectContext?.root || ctx.projectPath);
         ctx.app.notify(result.success ? `Undo: ${result.message}` : `Cannot undo: ${result.message}`);
       });
       break;
@@ -849,8 +860,12 @@ export async function handleCommand(
 
     case 'undo-all': {
       import('../utils/agent').then(({ undoAllActions }) => {
-        const result = undoAllActions();
-        ctx.app.notify(result.success ? `Undone ${result.results.length} action(s)` : 'Nothing to undo');
+        const result = undoAllActions(ctx.projectContext?.root || ctx.projectPath);
+        if (!result.success && result.results.length <= 1) {
+          ctx.app.notify(result.results[0] ?? 'Nothing to undo');
+        } else {
+          ctx.app.addMessage({ role: 'system', content: formatUndoAllReport(result) });
+        }
       });
       break;
     }
@@ -870,9 +885,12 @@ export async function handleCommand(
     case 'scan': {
       if (!ctx.projectContext) { ctx.app.notify('No project context'); return; }
       ctx.app.notify('Scanning project...');
-      import('../utils/projectIntelligence').then(({ scanProject, saveProjectIntelligence, generateContextFromIntelligence }) => {
+      import('../utils/projectIntelligence').then(({ scanProject, saveProjectIntelligence, generateContextFromIntelligence, INTELLIGENCE_NOT_SAVED }) => {
         scanProject(ctx.projectContext!.root).then(intelligence => {
-          saveProjectIntelligence(ctx.projectContext!.root, intelligence);
+          if (!saveProjectIntelligence(ctx.projectContext!.root, intelligence)) {
+            ctx.app.notify(INTELLIGENCE_NOT_SAVED);
+            return;
+          }
           const context = generateContextFromIntelligence(intelligence);
           ctx.app.addMessage({ role: 'assistant', content: `# Project Scan Complete\n\n${context}` });
           ctx.app.notify(`Scanned: ${intelligence.structure.totalFiles} files`);
@@ -964,6 +982,8 @@ Format: use headers per category, only include categories where you found issues
     case 'rename': {
       if (!args.length) { ctx.app.notify('Usage: /rename <new-name>'); return; }
       const newName = joinSessionName(args);
+      const nameProblem = sessionNameProblem(newName);
+      if (nameProblem) { ctx.app.notify(nameProblem); return; }
       const messages = ctx.app.getMessages();
       if (messages.length === 0) { ctx.app.notify('No messages to save. Start a conversation first.'); return; }
       saveSession(ctx.sessionId, messages, ctx.projectPath);
@@ -983,7 +1003,14 @@ Format: use headers per category, only include categories where you found issues
           });
         }).catch(() => {});
       } else {
-        ctx.app.notify('Failed to rename session');
+        // renameSession refuses to replace another saved conversation. Looked
+        // up only now: a case-only rename finds this same file and succeeds.
+        const { existsSync } = await import('fs');
+        const { join } = await import('path');
+        const { getSessionsDir } = await import('../config/index');
+        ctx.app.notify(existsSync(join(getSessionsDir(ctx.projectPath), `${newName}.json`))
+          ? `A session named "${newName}" already exists — pick another name`
+          : 'Failed to rename session');
       }
       break;
     }
@@ -1494,7 +1521,8 @@ Format: use headers per category, only include categories where you found issues
 
     case 'changes': {
       import('../utils/agent').then(({ getCurrentSessionActions }) => {
-        const actions = getCurrentSessionActions();
+        // Changes of the run /undo acts on, in this project.
+        const actions = getCurrentSessionActions(ctx.projectContext?.root || ctx.projectPath);
         if (actions.length === 0) { ctx.app.notify('No changes in current session'); return; }
         const summary = actions.map(a => `• ${a.type}: ${a.target} (${a.result})`).join('\n');
         ctx.app.addMessage({ role: 'system', content: `# Session Changes\n\n${summary}` });
@@ -1555,19 +1583,25 @@ Format: use headers per category, only include categories where you found issues
       const name = args.join(' ').trim() || undefined;
       const provider = getCurrentProvider();
       const filesTouched = Array.from(new Set(
-        getCurrentSessionActions()
-          .filter(a => a.target && (a.type === 'write' || a.type === 'edit' || a.type === 'delete' || a.type === 'mkdir'))
+        getCurrentSessionActions(ctx.projectContext?.root || ctx.projectPath)
+          .filter(a => a.target && a.result !== 'undone' && (a.type === 'write' || a.type === 'edit' || a.type === 'delete' || a.type === 'mkdir'))
           .map(a => a.target),
       ));
-      const cp = createCheckpoint({
-        workspaceRoot: ctx.projectPath,
-        sessionId: ctx.sessionId,
-        provider: provider.id,
-        model: config.get('model') as string,
-        messages: ctx.app.getMessages(),
-        filesTouched,
-        name,
-      });
+      let cp: ReturnType<typeof createCheckpoint>;
+      try {
+        cp = createCheckpoint({
+          workspaceRoot: ctx.projectPath,
+          sessionId: ctx.sessionId,
+          provider: provider.id,
+          model: config.get('model') as string,
+          messages: ctx.app.getMessages(),
+          filesTouched,
+          name,
+        });
+      } catch (err) {
+        ctx.app.notify(`Could not save the checkpoint: ${(err as Error).message}`);
+        break;
+      }
       ctx.app.addMessage({
         role: 'system',
         content: `# Checkpoint created\n\n\`${cp.id}\`${cp.name ? ` — **${cp.name}**` : ''}\n\nCaptured ${cp.messages.length} message${cp.messages.length === 1 ? '' : 's'}, ${cp.filesTouched.length} file${cp.filesTouched.length === 1 ? '' : 's'} touched${cp.gitHead ? `, git \`${cp.gitHead}\`` : ''}.\n\nUse \`/rewind ${cp.id}\` to restore.`,
@@ -1705,7 +1739,7 @@ Format: use headers per category, only include categories where you found issues
       }
       if (args[0] === 'rule' && args.length > 1) {
         import('../utils/learning').then(({ addCustomRule }) => {
-          addCustomRule(ctx.projectPath, args.slice(1).join(' '));
+          addCustomRule(args.slice(1).join(' '), ctx.projectPath);
           ctx.app.notify('Custom rule added');
         }).catch(() => ctx.app.notify('Learning module not available'));
         return;
@@ -1907,6 +1941,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
     case 'skill': {
       import('../utils/skills').then(({
         findSkill, formatSkillHelp, createSkillTemplate, saveCustomSkill, deleteCustomSkill,
+        customSkillFileExists, getSkippedCustomSkills, formatSkippedCustomSkills,
       }) => {
         const subCommand = args[0]?.toLowerCase();
         const skillName = args[1];
@@ -1922,6 +1957,17 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
           case 'create': {
             if (!skillName) { ctx.app.notify('Usage: /skill create <name>'); return; }
             if (findSkill(skillName)) { ctx.app.notify(`Skill "${skillName}" already exists`); return; }
+            // A file that does not load is not found above, and is still the
+            // user's work.
+            if (customSkillFileExists(skillName)) {
+              const skipped = getSkippedCustomSkills().filter(f => f.file === `${skillName}.json`);
+              ctx.app.addMessage({
+                role: 'system',
+                content: `~/.codeep/skills/${skillName}.json already exists — not replaced.`
+                  + (skipped.length ? `\n\n${formatSkippedCustomSkills(skipped)}` : ''),
+              });
+              return;
+            }
             const template = createSkillTemplate(skillName);
             saveCustomSkill(template);
             ctx.app.addMessage({
@@ -2191,9 +2237,15 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       // Sync the hand-written user profile (~/.codeep/profile.md). Push sends
       // the local file; pull is additive (writes only if no local profile).
       if (subCmd === 'all' || subCmd === 'profile') {
-        const { pushUserProfile, pullUserProfile } = await import('../utils/codeepCloud');
-        if (await pushUserProfile()) results.push('✓ Your profile (about you) pushed');
-        if ((await pullUserProfile()) === 1) results.push('✓ Your profile pulled to this machine');
+        const { pushUserProfileResult, pullUserProfileResult, describeSyncFailure } = await import('../utils/codeepCloud');
+        // Without a local profile there is nothing to push, which is not a
+        // failure. Pushed before the pull, which may create the file.
+        const pushedProfile = await pushUserProfileResult();
+        if (!pushedProfile.ok) results.push(`✗ Failed to push your profile (about you) — ${describeSyncFailure(pushedProfile.reason)}`);
+        else if (pushedProfile.count > 0) results.push('✓ Your profile (about you) pushed');
+        const pulledProfile = await pullUserProfileResult();
+        if (!pulledProfile.ok) results.push(`✗ Failed to pull your profile (about you) — ${describeSyncFailure(pulledProfile.reason)}`);
+        else if (pulledProfile.count > 0) results.push('✓ Your profile pulled to this machine');
       }
 
       ctx.app.addMessage({
@@ -2252,7 +2304,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
           break;
         }
         const removed = intelligence.notes.splice(idx - 1, 1)[0];
-        saveProjectIntelligence(projectRoot, intelligence);
+        if (!saveProjectIntelligence(projectRoot, intelligence)) { ctx.app.notify(INTELLIGENCE_NOT_SAVED); break; }
         import('../utils/codeepCloud.js').then(({ syncMemoryNotes }) => syncMemoryNotes(projectCtx?.name || '', intelligence.notes)).catch(() => {});
         ctx.app.notify(`Removed: "${removed}"`);
         break;
@@ -2261,7 +2313,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       if (sub === 'clear') {
         const count = intelligence.notes.length;
         intelligence.notes = [];
-        saveProjectIntelligence(projectRoot, intelligence);
+        if (!saveProjectIntelligence(projectRoot, intelligence)) { ctx.app.notify(INTELLIGENCE_NOT_SAVED); break; }
         import('../utils/codeepCloud.js').then(({ syncMemoryNotes }) => syncMemoryNotes(projectCtx?.name || '', [])).catch(() => {});
         ctx.app.notify(`Cleared ${count} memory note${count !== 1 ? 's' : ''}.`);
         break;
@@ -2274,7 +2326,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         break;
       }
       intelligence.notes.push(note);
-      saveProjectIntelligence(projectRoot, intelligence);
+      if (!saveProjectIntelligence(projectRoot, intelligence)) { ctx.app.notify(INTELLIGENCE_NOT_SAVED); break; }
       import('../utils/codeepCloud.js').then(({ syncMemoryNotes }) => syncMemoryNotes(projectCtx?.name || '', intelligence.notes)).catch(() => {});
       ctx.app.notify(`Memory saved (${intelligence.notes.length} total): "${note}"`);
       break;
@@ -2328,8 +2380,33 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         return true;
       };
 
-      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfig, loadMcpServerConfigSplit, isWorkspaceMcpTrusted, trustWorkspaceMcp, untrustWorkspaceMcp } = await import('../utils/mcpConfig');
+      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfigSplit, selectSessionMcpServers, isWorkspaceMcpTrusted, trustWorkspaceMcp, untrustWorkspaceMcp } = await import('../utils/mcpConfig');
       const { registerSessionServers } = await import('../utils/mcpRegistry');
+
+      // The servers this session may run, chosen by the same rule startup and
+      // ACP use: workspace entries arrive with the repo and start only once the
+      // workspace is trusted. `addedHere` is an entry the user just typed into
+      // /mcp add or /mcp install; starting that one needs no further consent.
+      // registerSessionServers replaces the whole session, so everything that
+      // should keep running has to be in the list.
+      const serversToStart = (addedHere?: string) =>
+        selectSessionMcpServers(projectPath!, { userAdded: addedHere ? [addedHere] : [] });
+      const untrustedNote = ({ servers, skipped }: ReturnType<typeof serversToStart>): string => {
+        if (skipped.length === 0) return '';
+        const n = skipped.length;
+        let note = `\n\n${n} workspace MCP server${n === 1 ? '' : 's'} not started — this workspace isn't trusted. Run \`/mcp trust\` to start ${n === 1 ? 'it' : 'them'}.`;
+        // A repo entry that shares a name with one of the user's own servers
+        // can keep that one from starting too; say so rather than let it look
+        // like the user's server just vanished.
+        const running = new Set(servers.map(s => s.name));
+        const globalNames = new Set(loadMcpServerConfigSplit(undefined).global.map(s => s.name));
+        const shadowed = skipped.map(s => s.name).filter(name => globalNames.has(name) && !running.has(name));
+        if (shadowed.length > 0) {
+          const list = shadowed.map(name => `\`${name}\``).join(', ');
+          note += `\n\nYour own server${shadowed.length === 1 ? '' : 's'} ${list} ${shadowed.length === 1 ? 'is' : 'are'} not running either: this workspace defines a server with the same name, which takes its place once trusted.`;
+        }
+        return note;
+      };
 
       if (sub === 'trust') {
         if (!requireProject()) break;
@@ -2343,8 +2420,8 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
           ctx.app.notify('Workspace trusted — no workspace MCP servers defined yet.');
           break;
         }
-        ctx.app.notify(`Workspace trusted. Spawning ${workspace.length} MCP server(s)…`);
-        const { registered, errors } = await registerSessionServers(TUI_SESSION, workspace, { workspaceRoot: projectPath });
+        ctx.app.notify(`Workspace trusted. Restarting MCP servers with ${workspace.length} from this workspace…`);
+        const { registered, errors } = await registerSessionServers(TUI_SESSION, serversToStart().servers, { workspaceRoot: projectPath });
         if (registered.length > 0) ctx.app.notify(`MCP: ${registered.length} tool(s) ready. Type /mcp.`);
         for (const e of errors) ctx.app.notifyWarn(`MCP server "${e.server}" failed: ${e.error}`);
         break;
@@ -2353,7 +2430,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       if (sub === 'untrust') {
         if (!requireProject()) break;
         untrustWorkspaceMcp(projectPath!);
-        ctx.app.notify('Workspace MCP trust revoked — workspace servers won\'t spawn on next start. (Running servers stop when you exit.)');
+        ctx.app.notify('Workspace MCP trust revoked — workspace servers won\'t start again. Those running now stop at the next /mcp reload, add or remove, or when you exit.');
         break;
       }
 
@@ -2368,15 +2445,15 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         const extraArgs = args.slice(3);
         addProjectMcpServer(projectPath!, { name, command, args: extraArgs });
         ctx.app.notify(`Saved MCP server ${name} to .codeep/mcp_servers.json. Spawning…`);
-        const merged = loadMcpServerConfig(projectPath!);
-        const { registered, errors } = await registerSessionServers(TUI_SESSION, merged, { workspaceRoot: projectPath });
+        const selection = serversToStart(name);
+        const { registered, errors } = await registerSessionServers(TUI_SESSION, selection.servers, { workspaceRoot: projectPath });
         const ok = registered.filter(t => t.serverName === name);
         const failed = errors.find(e => e.server === name);
         ctx.app.addMessage({
           role: 'system',
-          content: failed
+          content: (failed
             ? `Saved \`${name}\` but spawn failed: \`${failed.error}\``
-            : `Added \`${name}\` (${ok.length} tool${ok.length === 1 ? '' : 's'} available).`,
+            : `Added \`${name}\` (${ok.length} tool${ok.length === 1 ? '' : 's'} available).`) + untrustedNote(selection),
         });
         break;
       }
@@ -2390,9 +2467,9 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
           ctx.app.addMessage({ role: 'system', content: `No project-scoped MCP server named \`${name}\`.` });
           break;
         }
-        const merged = loadMcpServerConfig(projectPath!);
-        await registerSessionServers(TUI_SESSION, merged, { workspaceRoot: projectPath });
-        ctx.app.addMessage({ role: 'system', content: `Removed \`${name}\` from project config and stopped its process.` });
+        const selection = serversToStart();
+        await registerSessionServers(TUI_SESSION, selection.servers, { workspaceRoot: projectPath });
+        ctx.app.addMessage({ role: 'system', content: `Removed \`${name}\` from project config and stopped its process.` + untrustedNote(selection) });
         break;
       }
 
@@ -2437,8 +2514,8 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
           headers: entry.server.headers,
         });
         ctx.app.notify(`Saved ${entry.id} to project config. Spawning…`);
-        const merged = loadMcpServerConfig(projectPath!);
-        const { registered, errors } = await registerSessionServers(TUI_SESSION, merged, { workspaceRoot: projectPath });
+        const selection = serversToStart(entry.id);
+        const { registered, errors } = await registerSessionServers(TUI_SESSION, selection.servers, { workspaceRoot: projectPath });
         const failed = errors.find(e => e.server === entry.id);
         const lines: string[] = [];
         if (failed) {
@@ -2454,16 +2531,16 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
             lines.push(`- \`${e.name}\`${req} — ${e.description}`);
           }
         }
-        ctx.app.addMessage({ role: 'system', content: lines.join('\n') });
+        ctx.app.addMessage({ role: 'system', content: lines.join('\n') + untrustedNote(selection) });
         break;
       }
 
       if (sub === 'reload') {
         if (!requireProject()) break;
         ctx.app.notify('Reloading MCP server config…');
-        const merged = loadMcpServerConfig(projectPath!);
-        const { registered, errors } = await registerSessionServers(TUI_SESSION, merged, { workspaceRoot: projectPath });
-        ctx.app.addMessage({ role: 'system', content: formatMcpReloadReport(registered.length, merged.length, errors) });
+        const selection = serversToStart();
+        const { registered, errors } = await registerSessionServers(TUI_SESSION, selection.servers, { workspaceRoot: projectPath });
+        ctx.app.addMessage({ role: 'system', content: formatMcpReloadReport(registered.length, selection.servers.length, errors) + untrustedNote(selection) });
         break;
       }
 
@@ -2536,8 +2613,19 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         break;
       }
       // 2. Fall through to skill registry.
-      runSkill(command, args, ctx).then(handled => {
-        if (!handled) ctx.app.notify(`Unknown command: /${command}`);
+      runSkill(command, args, ctx).then(async handled => {
+        if (handled) return;
+        ctx.app.notify(`Unknown command: /${command}`);
+        // The command may be a custom skill whose file does not load. Scanned
+        // afresh here rather than trusting whatever the lookup left behind.
+        const { loadCustomSkills, getSkippedCustomSkills, formatSkippedCustomSkills } = await import('../utils/skills');
+        loadCustomSkills();
+        const skipped = getSkippedCustomSkills().filter(f => f.file.toLowerCase() === `${command.toLowerCase()}.json`);
+        if (skipped.length > 0) {
+          ctx.app.addMessage({ role: 'system', content: `Unknown command: /${command}\n\n${formatSkippedCustomSkills(skipped)}` });
+        }
+      }).catch(err => {
+        ctx.app.notify(`Skill error: ${(err as Error).message}`);
       });
     }
   }

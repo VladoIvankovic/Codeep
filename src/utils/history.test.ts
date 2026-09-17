@@ -11,6 +11,7 @@ vi.mock('fs', async (importOriginal) => {
     unlinkSync: vi.fn(),
     mkdirSync: vi.fn(),
     rmSync: vi.fn(),
+    rmdirSync: vi.fn(),
     statSync: vi.fn(),
     readdirSync: vi.fn(),
   };
@@ -21,7 +22,7 @@ vi.mock('os', () => ({
   homedir: vi.fn(() => '/home/test'),
 }));
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, statSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, statSync, readdirSync, rmdirSync } from 'fs';
 import {
   startSession,
   endSession,
@@ -30,6 +31,7 @@ import {
   recordDelete,
   recordMkdir,
   recordCommand,
+  discardAction,
   getCurrentSession,
   undoLastAction,
   undoAllActions,
@@ -45,11 +47,22 @@ const mockWriteFileSync = writeFileSync as ReturnType<typeof vi.fn>;
 const mockUnlinkSync = unlinkSync as ReturnType<typeof vi.fn>;
 const mockStatSync = statSync as ReturnType<typeof vi.fn>;
 const mockReaddirSync = readdirSync as ReturnType<typeof vi.fn>;
+const mockRmdirSync = rmdirSync as ReturnType<typeof vi.fn>;
 
-// Reset module-level currentSession between tests by calling endSession
+// Reset module-level state between tests: endSession closes any open run,
+// clearHistory forgets the finished run undo would otherwise fall back to.
+// Both only touch the mocked fs; the calls are cleared afterwards.
 function resetSession() {
-  // endSession sets currentSession = null; avoid writing to disk by not having actions
   endSession();
+  clearHistory();
+  vi.clearAllMocks();
+}
+
+/** The last history record written, parsed. */
+function lastHistoryWrite() {
+  const call = [...mockWriteFileSync.mock.calls].reverse()
+    .find(([path]) => String(path).includes('.codeep/history'));
+  return call ? JSON.parse(call[1] as string) : undefined;
 }
 
 describe('startSession / getCurrentSession', () => {
@@ -269,6 +282,37 @@ describe('recordCommand', () => {
   });
 });
 
+describe('discardAction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetSession();
+  });
+
+  // A write that never happened must not be undone later: undo would put
+  // its saved content over whatever the file holds by then.
+  it('drops only the given record, so undo reaches the change before it', () => {
+    startSession('task', '/project');
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValueOnce('a before').mockReturnValueOnce('b before');
+    recordWrite('/project/a.ts');
+    const phantom = recordEdit('/project/b.ts');
+    discardAction(phantom);
+
+    expect(getCurrentSession()!.actions.map(a => a.path)).toEqual(['/project/a.ts']);
+    expect(undoLastAction()).toEqual({ success: true, message: 'Restored: /project/a.ts' });
+    expect(mockWriteFileSync).toHaveBeenCalledWith('/project/a.ts', 'a before');
+    expect(mockWriteFileSync).not.toHaveBeenCalledWith('/project/b.ts', expect.anything());
+  });
+
+  it('ignores a missing record', () => {
+    startSession('task', '/project');
+    recordCommand('ls', []);
+    expect(() => discardAction(null)).not.toThrow();
+    expect(() => discardAction(undefined)).not.toThrow();
+    expect(getCurrentSession()!.actions).toHaveLength(1);
+  });
+});
+
 describe('undoLastAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -328,7 +372,8 @@ describe('undoLastAction', () => {
     mockStatSync.mockReturnValue({ isDirectory: () => false });
     mockReadFileSync.mockReturnValue('deleted content');
     const record = recordDelete('/project/del.ts');
-    mockExistsSync.mockReturnValue(true); // dir exists
+    // The directory is there; the deleted file is not (nothing took its place).
+    mockExistsSync.mockImplementation((p: string) => p !== '/project/del.ts');
 
     const result = undoLastAction();
     expect(result.success).toBe(true);
@@ -365,6 +410,172 @@ describe('undoLastAction', () => {
     expect(result.success).toBe(false);
     expect(result.message).toContain('already undone');
   });
+
+  it('removes an empty directory the run created', () => {
+    startSession('task', '/project');
+    mockExistsSync.mockReturnValue(false);
+    const record = recordMkdir('/project/newdir');
+    mockExistsSync.mockReturnValue(true);
+
+    const result = undoLastAction();
+    expect(result).toEqual({ success: true, message: 'Removed directory: /project/newdir' });
+    expect(mockRmdirSync).toHaveBeenCalledWith('/project/newdir');
+    expect(record!.undone).toBe(true);
+  });
+
+  it('leaves a directory that is no longer empty', () => {
+    startSession('task', '/project');
+    mockExistsSync.mockReturnValue(false);
+    recordMkdir('/project/newdir');
+    mockExistsSync.mockReturnValue(true);
+    mockRmdirSync.mockImplementationOnce(() => { throw new Error('ENOTEMPTY'); });
+
+    const result = undoLastAction();
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('non-empty');
+  });
+});
+
+describe('undo after the run has ended', () => {
+  // Every agent run ends (and closes its session) before the user can type
+  // /undo, so this is the only way undo is ever used.
+  beforeEach(() => {
+    resetSession();
+    mockExistsSync.mockReturnValue(true);
+  });
+
+  function finishedRun(...paths: string[]) {
+    startSession('task', '/project');
+    for (const path of paths) {
+      mockReadFileSync.mockReturnValueOnce(`original ${path}`);
+      recordEdit(path);
+    }
+    endSession();
+    mockWriteFileSync.mockClear();
+  }
+
+  it('undoes the last action of the finished run and records it as undone', () => {
+    finishedRun('/project/a.ts');
+
+    const result = undoLastAction();
+    expect(result).toEqual({ success: true, message: 'Restored: /project/a.ts' });
+    expect(mockWriteFileSync).toHaveBeenCalledWith('/project/a.ts', 'original /project/a.ts');
+    expect(lastHistoryWrite()?.actions[0].undone).toBe(true);
+
+    expect(undoLastAction().message).toContain('already undone');
+  });
+
+  it('undoes every action of the finished run', () => {
+    finishedRun('/project/a.ts', '/project/b.ts');
+
+    const result = undoAllActions();
+    expect(result.success).toBe(true);
+    expect(result.results).toEqual(['Restored: /project/b.ts', 'Restored: /project/a.ts']);
+    expect(lastHistoryWrite()?.actions.every((a: { undone?: boolean }) => a.undone)).toBe(true);
+  });
+
+  it('still reports the finished run as the current changes', () => {
+    finishedRun('/project/a.ts');
+    expect(getCurrentSession()?.actions.map(a => a.path)).toEqual(['/project/a.ts']);
+  });
+
+  it('keeps the edits undoable after a follow-up run that changed nothing', () => {
+    finishedRun('/project/a.ts');
+    startSession('just explain it', '/project');
+    endSession();
+
+    expect(undoLastAction()).toEqual({ success: true, message: 'Restored: /project/a.ts' });
+  });
+
+  it('acts on the run in progress while there is one', () => {
+    finishedRun('/project/a.ts');
+    startSession('second', '/project');
+    mockReadFileSync.mockReturnValueOnce('original b');
+    recordEdit('/project/b.ts');
+
+    expect(undoLastAction()).toEqual({ success: true, message: 'Restored: /project/b.ts' });
+    // The open run is written when it ends, not on every undo.
+    expect(lastHistoryWrite()).toBeUndefined();
+  });
+
+  it('undoes the edit of a run that ended by running a command', () => {
+    // The everyday run: edit, then run the tests.
+    startSession('fix it', '/project');
+    mockReadFileSync.mockReturnValueOnce('original a');
+    recordEdit('/project/a.ts');
+    recordCommand('npm', ['test']);
+    endSession();
+
+    expect(undoLastAction()).toEqual({ success: true, message: 'Restored: /project/a.ts' });
+    expect(mockWriteFileSync).toHaveBeenCalledWith('/project/a.ts', 'original a');
+    expect(undoLastAction()).toEqual({ success: false, message: 'All actions already undone' });
+  });
+
+  it('reports everything undone after undo-all even though the command stays', () => {
+    startSession('fix it', '/project');
+    mockReadFileSync.mockReturnValueOnce('original a');
+    recordEdit('/project/a.ts');
+    recordCommand('npm', ['test']);
+    endSession();
+
+    expect(undoAllActions().success).toBe(true);
+    expect(undoLastAction()).toEqual({ success: false, message: 'All actions already undone' });
+  });
+
+  it('keeps the edits undoable after a follow-up run that only ran a command', () => {
+    finishedRun('/project/a.ts');
+    startSession('run the tests again', '/project');
+    recordCommand('npm', ['test']);
+    endSession();
+
+    expect(undoLastAction()).toEqual({ success: true, message: 'Restored: /project/a.ts' });
+  });
+
+  it('reaches the finished run while a new run has not changed anything yet', () => {
+    finishedRun('/project/a.ts');
+    startSession('still starting', '/project');
+
+    expect(undoLastAction()).toEqual({ success: true, message: 'Restored: /project/a.ts' });
+    expect(lastHistoryWrite()?.actions[0].undone).toBe(true);
+  });
+
+  it('reaches the finished run past a new run that has only run a command', () => {
+    finishedRun('/project/a.ts');
+    startSession('still starting', '/project');
+    recordCommand('npm', ['test']);
+
+    expect(undoAllActions()).toEqual({ success: true, results: ['Restored: /project/a.ts'] });
+  });
+
+  it('leaves a run in another workspace alone', () => {
+    finishedRun('/project/a.ts');
+
+    expect(undoLastAction('/elsewhere')).toEqual({ success: false, message: 'No actions to undo' });
+    expect(undoAllActions('/elsewhere')).toEqual({ success: false, results: ['No actions to undo'] });
+    expect(getCurrentSession('/elsewhere')).toBeNull();
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+
+    // The same workspace, however it is spelled, still reaches it.
+    expect(getCurrentSession('/project/')?.actions).toHaveLength(1);
+    expect(undoLastAction('/project/')).toEqual({ success: true, message: 'Restored: /project/a.ts' });
+  });
+
+  it('leaves a run in progress in another workspace alone', () => {
+    startSession('elsewhere', '/project');
+    mockReadFileSync.mockReturnValueOnce('original a');
+    recordEdit('/project/a.ts');
+
+    expect(undoLastAction('/elsewhere')).toEqual({ success: false, message: 'No actions to undo' });
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it('has nothing to undo once history is cleared', () => {
+    finishedRun('/project/a.ts');
+    clearHistory();
+
+    expect(undoLastAction()).toEqual({ success: false, message: 'No actions to undo' });
+    expect(getCurrentSession()).toBeNull();
+  });
 });
 
 describe('undoAllActions', () => {
@@ -391,15 +602,36 @@ describe('undoAllActions', () => {
     expect(mockWriteFileSync).toHaveBeenCalledTimes(2);
   });
 
-  it('reports partial success when some actions cannot be undone', () => {
+  it('reports success when files were restored even if a command cannot be undone', () => {
+    // The UI shows "Nothing to undo" for success: false, which would be
+    // false once the file below is back.
     startSession('task', '/project');
     mockReadFileSync.mockReturnValue('content');
     recordEdit('/project/file.ts');
     recordCommand('npm', ['install']);
 
     const result = undoAllActions();
+    expect(result.success).toBe(true);
+    expect(result.results).toEqual(['Cannot undo command: npm install', 'Restored: /project/file.ts']);
+    expect(mockWriteFileSync).toHaveBeenCalledWith('/project/file.ts', 'content');
+  });
+
+  it('reports failure when nothing could be restored', () => {
+    startSession('task', '/project');
+    recordCommand('npm', ['install']);
+
+    const result = undoAllActions();
     expect(result.success).toBe(false);
-    expect(result.results).toHaveLength(2);
+    expect(result.results).toEqual(['Cannot undo command: npm install']);
+  });
+
+  it('reports failure when everything is already undone', () => {
+    startSession('task', '/project');
+    mockReadFileSync.mockReturnValue('content');
+    recordEdit('/project/file.ts');
+    undoAllActions();
+
+    expect(undoAllActions()).toEqual({ success: false, results: [] });
   });
 });
 

@@ -2,9 +2,10 @@
  * Agent action history for undo/rollback functionality
  */
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync, statSync, readdirSync } from 'fs';
-import { dirname, join } from 'path';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmdirSync, statSync, readdirSync } from 'fs';
+import { dirname, join, resolve } from 'path';
 import { homedir } from 'os';
+import { createHash } from 'crypto';
 
 // Types of reversible actions
 export interface ActionRecord {
@@ -17,6 +18,9 @@ export interface ActionRecord {
   previousExisted?: boolean;     // Did file exist before?
   wasDirectory?: boolean;        // Was it a directory?
   deletedContent?: string;       // Content of deleted file
+  /** Hash of what the agent left in the file (write/edit). Undo only puts
+   *  the old content back while the file still holds exactly that. */
+  resultHash?: string;
   // Command info
   command?: string;
   args?: string[];
@@ -36,6 +40,10 @@ export interface ActionSession {
 // In-memory current session
 let currentSession: ActionSession | null = null;
 
+// The last finished run that changed something. Every run ends before the
+// user can type /undo, so undo has to reach back to it.
+let lastSession: ActionSession | null = null;
+
 // History storage path
 const HISTORY_DIR = join(homedir(), '.codeep', 'history');
 
@@ -45,6 +53,49 @@ const HISTORY_DIR = join(homedir(), '.codeep', 'history');
 function ensureHistoryDir(): void {
   if (!existsSync(HISTORY_DIR)) {
     mkdirSync(HISTORY_DIR, { recursive: true });
+  }
+}
+
+function writeSessionFile(session: ActionSession): void {
+  ensureHistoryDir();
+  writeFileSync(join(HISTORY_DIR, `${session.id}.json`), JSON.stringify(session, null, 2));
+}
+
+/** Whether a run recorded anything undo can put back. Commands never can. */
+function hasFileActions(session: ActionSession): boolean {
+  return session.actions.some(a => a.type !== 'command');
+}
+
+/**
+ * The session undo and the change listings act on: the run in progress, or
+ * else the last finished run that changed something.
+ *
+ * A run in progress that has not touched a file yet does not hide the
+ * finished one: /undo typed while a run is still winding down would
+ * otherwise find nothing. `projectRoot` keeps one workspace's /undo away
+ * from a run in another; without it any run is in reach.
+ */
+function undoableSession(projectRoot?: string): ActionSession | null {
+  const inScope = (session: ActionSession | null): ActionSession | null =>
+    session && (projectRoot === undefined || resolve(session.projectRoot) === resolve(projectRoot))
+      ? session
+      : null;
+  const current = inScope(currentSession);
+  if (current && hasFileActions(current)) return current;
+  return inScope(lastSession) ?? current;
+}
+
+/**
+ * Keep a finished run's saved record in step with what has been undone.
+ * The run in progress is written when it ends.
+ */
+function saveUndone(session: ActionSession): void {
+  if (session === currentSession) return;
+  try {
+    writeSessionFile(session);
+  } catch {
+    // The files are already restored. A record that could not be updated
+    // must not turn that into a reported failure.
   }
 }
 
@@ -80,10 +131,12 @@ export function endSession(): void {
   
   // Only save if there were actions
   if (currentSession.actions.length > 0) {
-    ensureHistoryDir();
-    const filename = `${currentSession.id}.json`;
-    const filepath = join(HISTORY_DIR, filename);
-    writeFileSync(filepath, JSON.stringify(currentSession, null, 2));
+    writeSessionFile(currentSession);
+  }
+  // Only a run that changed a file replaces the one to undo: a read-only or
+  // command-only follow-up must not put the previous edits out of reach.
+  if (hasFileActions(currentSession)) {
+    lastSession = currentSession;
   }
   
   currentSession = null;
@@ -208,28 +261,81 @@ export function recordCommand(command: string, args: string[]): ActionRecord | n
   return record;
 }
 
-/**
- * Get current session
- */
-export function getCurrentSession(): ActionSession | null {
-  return currentSession;
+function contentHash(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
 }
 
 /**
- * Undo the last action in current session
+ * Note what a write or edit left in the file, once it happened.
  */
-export function undoLastAction(): { success: boolean; message: string } {
-  if (!currentSession || currentSession.actions.length === 0) {
+export function recordResult(record: ActionRecord | null | undefined, content: string): void {
+  if (record) record.resultHash = contentHash(content);
+}
+
+/**
+ * Why putting a file back would lose someone else's change, or null. The
+ * user (or a later command) may have edited the file since the run; undo
+ * must not overwrite that, or delete a file that has become theirs.
+ */
+function changedSince(action: ActionRecord): string | null {
+  const path = action.path!;
+  if ((action.type === 'write' || action.type === 'edit') && action.resultHash !== undefined && existsSync(path)) {
+    let now: string | null = null;
+    try { now = readFileSync(path, 'utf-8'); } catch { /* unreadable: treat as changed */ }
+    if (now === null || contentHash(now) !== action.resultHash) {
+      return `Not undone: ${path} has changed since the agent wrote it. Use git to restore it if you need to.`;
+    }
+  }
+  if (action.type === 'delete' && !action.wasDirectory && existsSync(path)) {
+    return `Not undone: ${path} exists again, and restoring the deleted copy would overwrite it.`;
+  }
+  return null;
+}
+
+/**
+ * Drop a record whose change never happened (the write failed or the
+ * editor refused it). Left in place, undo would write its saved content
+ * over whatever the file holds by then.
+ */
+export function discardAction(record: ActionRecord | null | undefined): void {
+  if (!record || !currentSession) return;
+  const i = currentSession.actions.indexOf(record);
+  if (i !== -1) currentSession.actions.splice(i, 1);
+}
+
+/**
+ * Get the run in progress, or else the last finished run that changed
+ * something. Pass the workspace to leave out runs from another one.
+ */
+export function getCurrentSession(projectRoot?: string): ActionSession | null {
+  return undoableSession(projectRoot);
+}
+
+/**
+ * Undo the most recent file change of the run undo acts on. Pass the
+ * workspace the user is in so a run in another one is left alone.
+ */
+export function undoLastAction(projectRoot?: string): { success: boolean; message: string } {
+  const session = undoableSession(projectRoot);
+  if (!session || session.actions.length === 0) {
     return { success: false, message: 'No actions to undo' };
   }
   
-  // Find last non-undone action
-  const action = [...currentSession.actions].reverse().find(a => !a.undone);
+  // Commands cannot be undone, so they are passed over: a run that edits and
+  // then runs the tests must still have its edits undoable.
+  const pending = [...session.actions].reverse().filter(a => !a.undone);
+  const action = pending.find(a => a.type !== 'command');
   if (!action) {
-    return { success: false, message: 'All actions already undone' };
+    // Only commands are left. Once the file changes are undone that is
+    // "all undone"; a run that only ran commands says why nothing happens.
+    return hasFileActions(session) || pending.length === 0
+      ? { success: false, message: 'All actions already undone' }
+      : undoAction(pending[0]);
   }
   
-  return undoAction(action);
+  const result = undoAction(action);
+  if (result.success) saveUndone(session);
+  return result;
 }
 
 /**
@@ -237,6 +343,8 @@ export function undoLastAction(): { success: boolean; message: string } {
  */
 export function undoAction(action: ActionRecord): { success: boolean; message: string } {
   try {
+    const conflict = action.path ? changedSince(action) : null;
+    if (conflict) return { success: false, message: conflict };
     switch (action.type) {
       case 'write':
         if (action.previousExisted && action.previousContent !== undefined) {
@@ -279,9 +387,9 @@ export function undoAction(action: ActionRecord): { success: boolean; message: s
         
       case 'mkdir':
         if (!action.previousExisted && existsSync(action.path!)) {
-          // Only remove if empty
+          // Only remove if empty (rmdirSync refuses anything else)
           try {
-            rmSync(action.path!, { recursive: false });
+            rmdirSync(action.path!);
             action.undone = true;
             return { success: true, message: `Removed directory: ${action.path}` };
           } catch {
@@ -302,27 +410,32 @@ export function undoAction(action: ActionRecord): { success: boolean; message: s
 }
 
 /**
- * Undo all actions in current session
+ * Undo every action of the run undo acts on. Pass the workspace the user is
+ * in so a run in another one is left alone.
  */
-export function undoAllActions(): { success: boolean; results: string[] } {
-  if (!currentSession || currentSession.actions.length === 0) {
+export function undoAllActions(projectRoot?: string): { success: boolean; results: string[] } {
+  const session = undoableSession(projectRoot);
+  if (!session || session.actions.length === 0) {
     return { success: false, results: ['No actions to undo'] };
   }
   
   const results: string[] = [];
-  let allSuccess = true;
+  let restored = 0;
   
   // Undo in reverse order
-  const actions = [...currentSession.actions].reverse();
+  const actions = [...session.actions].reverse();
   for (const action of actions) {
     if (action.undone) continue;
     
     const result = undoAction(action);
     results.push(result.message);
-    if (!result.success) allSuccess = false;
+    if (result.success) restored++;
   }
   
-  return { success: allSuccess, results };
+  if (restored > 0) saveUndone(session);
+  // Success means something was put back. A command in the run can never be
+  // undone, and must not make restored files read as "Nothing to undo".
+  return { success: restored > 0, results };
 }
 
 /**
@@ -399,6 +512,8 @@ export function formatSession(session: ActionSession): string {
  * Clear all history
  */
 export function clearHistory(): void {
+  // The finished run's record goes with the files.
+  lastSession = null;
   ensureHistoryDir();
   
   try {

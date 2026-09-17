@@ -16,11 +16,13 @@ import { takeRunFromPhone } from '../utils/telegramInbox';
 import { isFlatFeeProvider } from '../config/providers';
 import { raceApproval, type RaceParticipant } from '../utils/approvalRace';
 import { describeAuditTarget } from '../utils/auditLog';
+import { charWidth } from './ansi';
 import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
 import { getGitStatus, isGitRepository } from '../utils/git';
 import { getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
+import { createFileDiff, createEditDiff, formatDiffForDisplay } from '../utils/diffPreview';
 
 export function getActionType(toolName: string): string {
   return toolName.includes('write') ? 'write' :
@@ -47,6 +49,12 @@ export interface AppExecutionContext {
   setAbortController: (ctrl: AbortController | null) => void;
   formatAddedFilesContext: () => string;
   handleCommand: (command: string, args: string[]) => Promise<void>;
+  /** The conversation this run belongs to. Saved under this id; the global
+   *  currentSessionId is only a fallback and can name a different one. */
+  sessionId?: string;
+  /** The conversation on screen now. A run can outlive a switch to another
+   *  one (/new, /sessions, /rename), since tools do not stop on abort. */
+  getSessionId?: () => string;
   sessionDisplayName?: string;
   setSessionDisplayName?: (name: string | null) => void;
 }
@@ -75,7 +83,8 @@ export function requestToolConfirmation(
     (parameters.command as string) ||
     (parameters.pattern as string) ||
     'unknown';
-  const shortTarget = target.length > 50 ? '...' + target.slice(-47) : target;
+  const safeTarget = showControls(target);
+  const shortTarget = safeTarget.length > 50 ? '...' + safeTarget.slice(-47) : safeTarget;
   app.showConfirm({
     title: '⚠️  Confirm Action',
     message: [
@@ -93,6 +102,58 @@ export function requestToolConfirmation(
   });
 }
 
+/**
+ * Model-written text shown in a permission dialog, with every character that
+ * could change how the rest of it looks spelled out: an ESC sequence would be
+ * read as a style (conceal, black on black) and a bidi override or zero-width
+ * character reorders or hides text, so the user could approve a command they
+ * were not shown. Newlines are left for the caller to lay out.
+ */
+export function showControls(text: string): string {
+  return text.replace(
+    /[\x00-\x09\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g,
+    (c) => {
+      const code = c.charCodeAt(0);
+      return code <= 0xff ? `\\x${code.toString(16).padStart(2, '0')}` : `\\u${code.toString(16).padStart(4, '0')}`;
+    },
+  );
+}
+
+/**
+ * The target of a tool call as dialog lines, each `width` terminal columns at
+ * most. Shown whole where it fits: an MCP call's arguments or a long command
+ * matter from the first character. Past `maxLines` the middle gives way, and a
+ * line says how much of it is not shown.
+ */
+export function wrapConfirmTarget(target: string, width: number, maxLines = 6): string[] {
+  const w = Math.max(20, Math.floor(width));
+  const lines: string[] = [];
+  for (const part of target.split(/\r?\n/)) {
+    const text = showControls(part);
+    if (text.length === 0) { lines.push(''); continue; }
+    // By columns, not UTF-16 units: the screen drops what passes the edge, so
+    // a line of wide characters cut by length would lose its end unmarked.
+    // Iterating code points also keeps a surrogate pair whole.
+    let line = '';
+    let cols = 0;
+    for (const ch of text) {
+      const cw = charWidth(ch);
+      if (cols + cw > w && line) {
+        lines.push(line);
+        line = '';
+        cols = 0;
+      }
+      line += ch;
+      cols += cw;
+    }
+    lines.push(line);
+  }
+  const max = Math.max(3, maxLines);
+  if (lines.length <= max) return lines;
+  const hidden = lines.length - (max - 1);
+  return [...lines.slice(0, max - 2), `… ${hidden} more line${hidden === 1 ? '' : 's'} …`, lines[lines.length - 1]];
+}
+
 // ─── Interactive mode state ───────────────────────────────────────────────────
 
 export interface PendingInteractiveContext {
@@ -103,25 +164,43 @@ export interface PendingInteractiveContext {
 
 // ─── Agent task execution ─────────────────────────────────────────────────────
 
+/** How a run ended. 'not-started' covers a run that was refused, declined at
+ *  a confirmation, or held for clarifying questions. */
+export type AgentRunOutcome = 'success' | 'failed' | 'aborted' | 'interrupted' | 'not-started';
+
+export interface RunAgentTaskOptions {
+  /** Called once, when the run has ended or will not start. */
+  onFinished?: (outcome: AgentRunOutcome) => void;
+}
+
 export async function runAgentTask(
   task: string,
   dryRun: boolean,
   ctx: AppExecutionContext,
   getPendingInteractive: () => PendingInteractiveContext | null,
   setPendingInteractive: (v: PendingInteractiveContext | null) => void,
+  opts: RunAgentTaskOptions = {},
 ): Promise<void> {
   const { app, projectContext } = ctx;
+  const notStarted = () => opts.onFinished?.('not-started');
+  // executeAgentTask catches its own errors, so this always settles.
+  const execute = () => {
+    void executeAgentTask(task, dryRun, ctx).then(outcome => opts.onFinished?.(outcome));
+  };
 
   if (!projectContext) {
     app.notify('Agent requires project context');
+    notStarted();
     return;
   }
   if (!ctx.hasWriteAccess && !dryRun) {
     app.notify('Agent requires write access. Use /grant first.');
+    notStarted();
     return;
   }
   if (ctx.isAgentRunning()) {
     app.notify('Agent already running. Use /stop to cancel.');
+    notStarted();
     return;
   }
 
@@ -133,13 +212,14 @@ export async function runAgentTask(
       setPendingInteractive({ originalTask: task, context: interactiveContext, dryRun });
       app.addMessage({ role: 'assistant', content: formatQuestions(interactiveContext) });
       app.notify('Answer questions or type "proceed" to continue');
+      notStarted();
       return;
     }
   }
 
   const confirmationMode = config.get('agentConfirmation') || 'dangerous';
   if (confirmationMode === 'never' || dryRun) {
-    executeAgentTask(task, dryRun, ctx);
+    execute();
     return;
   }
 
@@ -157,8 +237,8 @@ export async function runAgentTask(
       ],
       confirmLabel: 'Run Agent',
       cancelLabel: 'Cancel',
-      onConfirm: () => executeAgentTask(task, dryRun, ctx),
-      onCancel: () => app.notify('Agent task cancelled'),
+      onConfirm: execute,
+      onCancel: () => { app.notify('Agent task cancelled'); notStarted(); },
     });
     return;
   }
@@ -179,44 +259,50 @@ export async function runAgentTask(
       ],
       confirmLabel: 'Proceed',
       cancelLabel: 'Cancel',
-      onConfirm: () => executeAgentTask(task, dryRun, ctx),
-      onCancel: () => app.notify('Agent task cancelled'),
+      onConfirm: execute,
+      onCancel: () => { app.notify('Agent task cancelled'); notStarted(); },
     });
     return;
   }
 
-  executeAgentTask(task, dryRun, ctx);
+  execute();
 }
 
 export async function executeAgentTask(
   task: string,
   dryRun: boolean,
   ctx: AppExecutionContext,
-): Promise<void> {
+): Promise<AgentRunOutcome> {
   const { app, projectContext } = ctx;
 
   if (!projectContext) {
     app.notify('Agent requires project context');
-    return;
+    return 'not-started';
   }
 
   // Guard against concurrent execution — set flag immediately before any await
   if (ctx.isAgentRunning()) {
     app.notify('Agent already running. Use /stop to cancel.');
-    return;
+    return 'not-started';
   }
   ctx.setAgentRunning(true);
   const abortController = new AbortController();
   ctx.setAbortController(abortController);
+  // Read once, at the start: by the time the run ends the global id may name
+  // another conversation.
+  const sessionId = ctx.sessionId || getCurrentSessionId();
   // Marker for cloud reporting: report only this run's tokens to the dashboard
   // without wiping the session-cumulative store the status bar and `/cost` read.
   const tokenReportStart = getRecordCount();
 
   const prefix = dryRun ? '[DRY RUN] ' : '[AGENT] ';
-  app.addMessage({ role: 'user', content: prefix + task });
+  // Kept by reference: while it is on screen, so is this run's conversation.
+  const runMessage = { role: 'user' as const, content: prefix + task };
+  app.addMessage(runMessage);
   app.setAgentRunning(true);
 
   const context = projectContext;
+  let outcome: AgentRunOutcome = 'failed';
 
   try {
     const fileContext = ctx.formatAddedFilesContext();
@@ -227,13 +313,16 @@ export async function executeAgentTask(
     app.setAgentMaxIterations(Math.max(5, rawIterations));
 
     const confirmationMode = config.get('agentConfirmation') || 'dangerous';
+    // 'always' asks before every action that changes something: at least what
+    // 'dangerous' asks about, plus writes, edits and new directories.
+    const asksPerTool = confirmationMode === 'dangerous' || confirmationMode === 'always';
 
     // Read the Telegram credentials once for the whole run rather than per tool
     // call: they come from the OS keychain, and paying that on every dangerous
     // tool would put a keychain round-trip in front of each confirmation.
     // Null means the feature is off or half-configured, and the terminal is
     // then the only place the question appears — exactly as before.
-    const telegramCredentials = confirmationMode === 'dangerous'
+    const telegramCredentials = asksPerTool
       ? await loadTelegramCredentials()
       : null;
 
@@ -244,7 +333,7 @@ export async function executeAgentTask(
     const noticeCredentials = telegramCredentials ?? await loadTelegramCredentials();
     const runStartedAt = Date.now();
 
-    const onRequestPermission = confirmationMode === 'dangerous'
+    const onRequestPermission = asksPerTool
       ? async (toolCall: import('../utils/tools').ToolCall): Promise<PermissionOutcome> => {
           // `parameters.command` is the binary alone — `git`, not `git status`.
           // Showing that asks someone to approve a command they have not been
@@ -252,7 +341,9 @@ export async function executeAgentTask(
           // record already joins the binary with its arguments; reuse it rather
           // than writing a second, subtly different answer.
           const target = describeAuditTarget(toolCall);
-          const shortTarget = target.length > 50 ? '...' + target.slice(-47) : target;
+          // Indented by two in the dialog.
+          const targetLines = wrapConfirmTarget(target, (process.stdout.columns || 80) - 4)
+            .map(line => `  ${line}`);
 
           const inTerminal: RaceParticipant<PermissionOutcome> = {
             answer: new Promise<PermissionOutcome | null>((resolve) => {
@@ -261,8 +352,8 @@ export async function executeAgentTask(
                 message: [
                   'The agent wants to execute:',
                   '',
-                  `  ${toolCall.tool}`,
-                  `  ${shortTarget}`,
+                  `  ${showControls(toolCall.tool)}`,
+                  ...targetLines,
                   '',
                   telegramCredentials ? 'Allow this action? (or answer on Telegram)' : 'Allow this action?',
                 ],
@@ -314,6 +405,7 @@ export async function executeAgentTask(
     const result: AgentResult = await runAgent(enrichedTask, context, {
       dryRun,
       onRequestPermission,
+      extraDangerousTools: confirmationMode === 'always' ? ['write_file', 'edit_file', 'delete_file', 'execute_command', 'create_directory'] : undefined,
       chatHistory: app.getChatHistory(),
       // Route MCP-prefixed tool calls through the shared TUI session id.
       // Servers were registered against this id at app startup (see
@@ -352,7 +444,6 @@ export async function executeAgentTask(
         if (actionType === 'write' && tool.parameters.content) {
           const filePath = tool.parameters.path as string;
           try {
-            const { createFileDiff, formatDiffForDisplay } = require('../utils/diffPreview');
             const diff = createFileDiff(filePath, tool.parameters.content as string, context.root);
             const diffText = formatDiffForDisplay(diff);
             const additions = diff.hunks.reduce((sum: number, h: { lines: Array<{ type: string }> }) => sum + h.lines.filter((l) => l.type === 'add').length, 0);
@@ -371,7 +462,6 @@ export async function executeAgentTask(
         } else if (actionType === 'edit' && tool.parameters.new_text) {
           const filePath = tool.parameters.path as string;
           try {
-            const { createEditDiff, formatDiffForDisplay } = require('../utils/diffPreview');
             const diff = createEditDiff(filePath, tool.parameters.old_text as string, tool.parameters.new_text as string, context.root);
             if (diff) {
               const additions = diff.hunks.reduce((sum: number, h: { lines: Array<{ type: string }> }) => sum + h.lines.filter((l) => l.type === 'add').length, 0);
@@ -423,6 +513,11 @@ export async function executeAgentTask(
     ctx.setAgentRunning(false);
     ctx.setAbortController(null);
     app.setAgentRunning(false);
+
+    outcome = result.success ? 'success'
+      : result.aborted ? 'aborted'
+      : result.interrupted ? 'interrupted'
+      : 'failed';
 
     if (result.success) {
       const fileChanges = result.actions.filter(a => a.type === 'write' || a.type === 'edit' || a.type === 'delete');
@@ -491,11 +586,23 @@ export async function executeAgentTask(
       }
     }
 
-    autoSaveSession(app.getMessages(), ctx.projectPath);
+    // The messages on screen belong to whatever conversation is on screen.
+    // If the user moved to another one while the run was finishing, saving
+    // them under this run's id would replace that conversation's file with
+    // the new one's contents; the terminal saves the new one itself.
+    const switched = ctx.getSessionId !== undefined && ctx.getSessionId() !== sessionId;
+    if (!switched) {
+      autoSaveSession(app.getMessages(), ctx.projectPath, sessionId);
+    } else if (app.getMessages().includes(runMessage)) {
+      // /rename: the same conversation, still on screen, under its new id.
+      // /new, /sessions and the other loads replace the messages, so a run
+      // left behind by one of those never gets here. (Whether the old file
+      // is gone says nothing: a case-only rename keeps it on macOS.)
+      autoSaveSession(app.getMessages(), ctx.projectPath, ctx.getSessionId!());
+    }
 
     // Report stats to codeep.dev (fire-and-forget, only if github_id is set)
     const { getCurrentVersion } = await import('../utils/update.js');
-    const sessionId = getCurrentSessionId();
     // Auto-name from the task if no display name is set yet.
     //
     // The derived name is kept in a local rather than read back off ctx.
@@ -519,16 +626,20 @@ export async function executeAgentTask(
     let displayName = ctx.sessionDisplayName;
     if (!displayName) {
       displayName = shortLabel(task);
-      ctx.setSessionDisplayName?.(displayName);
+      // Naming the conversation on screen after this run would be wrong
+      // once it is a different one.
+      if (!switched) ctx.setSessionDisplayName?.(displayName);
     }
     if (!displayName) displayName = sessionId;
-    syncSession({
-      sessionId,
-      sessionName: displayName,
-      projectName: ctx.projectContext?.name,
-      projectId:   ctx.projectPath ? generateProjectId(ctx.projectPath) : undefined,
-      messages: app.getMessages(),
-    });
+    if (!switched) {
+      syncSession({
+        sessionId,
+        sessionName: displayName,
+        projectName: ctx.projectContext?.name,
+        projectId:   ctx.projectPath ? generateProjectId(ctx.projectPath) : undefined,
+        messages: app.getMessages(),
+      });
+    }
     // Report per-model so tokens are attributed to the correct model/provider
     // even if the user switched model mid-session. Only this run's delta
     // (since tokenReportStart) is reported; the cumulative store is preserved.
@@ -604,6 +715,7 @@ export async function executeAgentTask(
 
   } catch (error) {
     const err = error as Error;
+    outcome = 'failed';
     app.addMessage({ role: 'assistant', content: `Agent error: ${err.message}` });
     app.notify(`Agent error: ${err.message}`, 5000);
   } finally {
@@ -613,6 +725,7 @@ export async function executeAgentTask(
     app.setAgentRunning(false);
     app.render();
   }
+  return outcome;
 }
 
 // ─── Skill execution ──────────────────────────────────────────────────────────
@@ -688,7 +801,18 @@ export async function runSkill(
             reject(new Error('Agent requires project context'));
             return;
           }
-          executeAgentTask(task, false, ctx).then(() => resolve('Agent completed')).catch(reject);
+          // A later step (commit, push, deploy) must not run after an agent
+          // step that failed, was stopped or left checks failing.
+          executeAgentTask(task, false, ctx).then((outcome) => {
+            if (outcome === 'success') {
+              resolve('Agent completed');
+            } else if (outcome === 'aborted') {
+              // The wording runSkill already treats as the user's own stop.
+              reject(new Error('Cancelled by user'));
+            } else {
+              reject(new Error(outcome === 'not-started' ? 'Agent step did not run' : 'Agent step did not finish successfully'));
+            }
+          }).catch(reject);
         });
       },
 

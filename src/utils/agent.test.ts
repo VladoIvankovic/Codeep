@@ -475,7 +475,7 @@ vi.mock('./taskPlanner', () => ({
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { readAuditRuns } from './auditLog';
-import { runAgent } from './agent';
+import { runAgent, getCurrentSessionActions } from './agent';
 import { executeTool } from './tools';
 
 describe('personalityOverride', () => {
@@ -742,7 +742,9 @@ describe('onExecuteCommand callback', () => {
     });
   });
 
-  it('falls back to executeTool when onExecuteCommand callback throws', async () => {
+  // The callback owns the choice of where a command runs. When it throws, the
+  // command may already have run in the editor, so it must not run here too.
+  it('reports a failure without running the command locally when onExecuteCommand throws', async () => {
     mockAgentChat
       .mockResolvedValueOnce({
         content: '',
@@ -788,13 +790,12 @@ describe('onExecuteCommand callback', () => {
     // Callback was called but threw
     expect(onExecuteCommand).toHaveBeenCalledOnce();
 
-    // executeTool fallback should have been used
-    expect(executeTool).toHaveBeenCalledOnce();
+    expect(executeTool).not.toHaveBeenCalled();
 
-    // onToolResult should reflect the fallback result
     expect(onToolResult).toHaveBeenCalledOnce();
     const [toolResult] = onToolResult.mock.calls[0];
-    expect(toolResult).toMatchObject({ output: 'fallback output' });
+    expect(toolResult).toMatchObject({ success: false, tool: 'execute_command' });
+    expect(toolResult.error).toContain('terminal unavailable');
   });
 });
 
@@ -898,5 +899,32 @@ describe('classifyPermissionOutcome (fail-closed permission gate)', () => {
     for (const bad of ['maybe', '', 'ALLOW', 'allow', 'yes', '0', undefined, null]) {
       expect(classifyPermissionOutcome(bad as unknown as string)).toBe('deny-once');
     }
+  });
+});
+
+describe('getCurrentSessionActions', () => {
+  it('asks history for the given workspace and marks undone actions as undone', async () => {
+    const { getCurrentSession } = await import('./history');
+    vi.mocked(getCurrentSession).mockReturnValueOnce({
+      id: 's', startTime: 0, prompt: 'p', projectRoot: '/ws',
+      actions: [
+        { id: '1', timestamp: 0, type: 'write', path: 'a.ts', undone: true },
+        { id: '2', timestamp: 0, type: 'edit', path: 'b.ts' },
+        { id: '3', timestamp: 0, type: 'command', command: 'npm' },
+      ],
+    });
+
+    const actions = getCurrentSessionActions('/ws');
+
+    expect(vi.mocked(getCurrentSession)).toHaveBeenLastCalledWith('/ws');
+    expect(actions).toEqual([
+      { type: 'write', target: 'a.ts', result: 'undone' },
+      { type: 'edit', target: 'b.ts', result: 'success' },
+      { type: 'command', target: '', result: 'success' },
+    ]);
+  });
+
+  it('returns nothing when there is no run', () => {
+    expect(getCurrentSessionActions()).toEqual([]);
   });
 });

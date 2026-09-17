@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+
+// Real fs, with readFileSync recorded so a test can prove a file was never read.
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
+
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -67,6 +74,22 @@ describe('loadSkillBundles', () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'SKILL.md'), '---\ndescription: Has no name field\n---\nBody');
     expect(loadSkillBundles(workspaceRoot)[0].name).toBe('no-name');
+  });
+
+  it('checks the kind and size of SKILL.md before reading it', () => {
+    // A cloned repo can commit `SKILL.md -> /dev/zero` (or a FIFO), and
+    // readFileSync on either never returns. /dev/null takes the same path but
+    // returns at once.
+    const device = join(workspaceRoot, '.codeep', 'skills', 'device');
+    mkdirSync(device, { recursive: true });
+    symlinkSync('/dev/null', join(device, 'SKILL.md'));
+    writeSkill({ root: 'project', name: 'huge', body: FRONT('x'.repeat(256 * 1024)) });
+    writeSkill({ root: 'project', name: 'deploy', body: '---\nname: deploy\ndescription: Ships\n---\nGo.' });
+    vi.mocked(readFileSync).mockClear();
+
+    expect(loadSkillBundles(workspaceRoot).map((b) => b.name)).toEqual(['deploy']);
+    const read = vi.mocked(readFileSync).mock.calls.map((c) => String(c[0]));
+    expect(read).toEqual([join(workspaceRoot, '.codeep', 'skills', 'deploy', 'SKILL.md')]);
   });
 
   it('skips bundles with no description (catalog noise guard)', () => {

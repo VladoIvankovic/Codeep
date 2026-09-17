@@ -10,7 +10,7 @@
 import { existsSync, readdirSync, statSync, lstatSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync, realpathSync } from 'fs';
 import { join, dirname, relative, resolve, isAbsolute, sep } from 'path';
 import { executeCommandAsync } from './shell';
-import { recordWrite, recordEdit, recordDelete, recordMkdir, recordCommand } from './history';
+import { recordWrite, recordEdit, recordDelete, recordMkdir, recordCommand, discardAction, recordResult, type ActionRecord } from './history';
 import { loadIgnoreRules, isIgnored } from './gitignore';
 import { normalizeToolName } from './toolParsing';
 import { getZaiMcpConfig, getZaiVisionConfig, getMinimaxMcpConfig, callZaiMcp, callZaiVisionApi, callMinimaxApi } from './mcpIntegration';
@@ -24,6 +24,7 @@ import { isMcpToolName, callSessionTool, isVirtualMcpToolName, callSessionVirtua
 // existing tests that import it from toolExecution keep working.
 export { isBlockedIp, assertFetchUrlAllowed } from './ssrfGuard';
 import { fetchUrlGuarded } from './guardedFetch';
+import { AcpRequestError } from '../acp/transport.js';
 
 const debug = (...args: unknown[]) => {
   if (process.env.CODEEP_DEBUG === '1') {
@@ -199,6 +200,10 @@ function htmlToText(html: string): string {
  * read/write through the client instead of touching disk directly — that
  * way the client's unsaved buffers, undo history, and virtual filesystems
  * stay authoritative. Callbacks must already use absolute paths.
+ *
+ * A writeTextFile that rejects with AcpRequestError means the client
+ * answered and refused the write; the tool then fails instead of writing
+ * to disk behind the editor.
  */
 export interface FsCallbacks {
   readTextFile?: (absolutePath: string) => Promise<string>;
@@ -211,13 +216,17 @@ export interface FsCallbacks {
  * `fs` is optional — if provided and the relevant method is defined, file
  * read/write is delegated to the client. Otherwise we fall back to direct
  * disk I/O. A delegated call that throws also falls back to disk so a
- * single client hiccup doesn't kill the agent loop.
+ * single client hiccup doesn't kill the agent loop — except a write the
+ * client explicitly refused, which fails the tool (see isRefusedWrite).
+ *
+ * `signal` stops a running execute_command when it fires.
  */
 export async function executeTool(
   toolCall: ToolCall,
   projectRoot: string,
   fs?: FsCallbacks,
   mcpSessionId?: string,
+  signal?: AbortSignal,
 ): Promise<ToolResult> {
   const tool = normalizeToolName(toolCall.tool);
   const parameters = toolCall.parameters;
@@ -298,7 +307,7 @@ export async function executeTool(
 
   // Wrap the original dispatch so we can run on_error / post_edit hooks
   // around it without indenting every case.
-  const result = await dispatchTool(tool, parameters, projectRoot, fs, toolCall);
+  const result = await dispatchTool(tool, parameters, projectRoot, fs, toolCall, signal);
 
   if (!result.success) {
     runHook({
@@ -325,12 +334,27 @@ export async function executeTool(
   return result;
 }
 
+/**
+ * True when the client answered fs/write_text_file with an error, i.e. it
+ * received the write and said no (read-only buffer, rejected by the user…).
+ * Writing the file to disk anyway would leave the editor and the disk
+ * disagreeing, and the editor's next save would silently undo the change.
+ * "Method not found" is the exception: the client does not implement the
+ * method after all, which is the same as having no delegation. A timeout
+ * or a broken transport is not an answer either, so both keep the disk
+ * fallback.
+ */
+function isRefusedWrite(err: unknown): err is AcpRequestError {
+  return err instanceof AcpRequestError && err.code !== -32601;
+}
+
 async function dispatchTool(
   tool: string,
   parameters: Record<string, unknown>,
   projectRoot: string,
   fs: FsCallbacks | undefined,
   toolCall: ToolCall,
+  signal: AbortSignal | undefined,
 ): Promise<ToolResult> {
   try {
     switch (tool) {
@@ -392,26 +416,38 @@ async function dispatchTool(
         // and lint-on-save reactions consistent. The client is responsible
         // for creating parent directories — VS Code's WorkspaceEdit does;
         // for the disk fallback below we do it ourselves.
+        // The undo record is taken before the write, so it holds what the
+        // file was, and once only: a delegation that falls through to disk
+        // keeps it. A write that never happens must not leave it behind.
+        let rec: ActionRecord | null = null;
         if (fs?.writeTextFile) {
           try {
             const existed = existsSync(validation.absolutePath);
+            rec = recordWrite(validation.absolutePath);
             await fs.writeTextFile(validation.absolutePath, content);
-            // Only record after the write actually succeeded — otherwise a
-            // failed delegation that falls through to disk would double-log.
-            recordWrite(validation.absolutePath);
+            recordResult(rec, content);
             return { success: true, output: `${existed ? 'Updated' : 'Created'} file: ${path}`, tool, parameters };
           } catch (err) {
+            if (isRefusedWrite(err)) {
+              discardAction(rec);
+              return { success: false, output: '', error: `The editor refused to write ${path}: ${err.message}`, tool, parameters };
+            }
             debug('fs/write_text_file delegation failed, falling back to disk:', err);
             // fall through to disk write
           }
         }
 
-        const dir = dirname(validation.absolutePath);
-        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
         const existed = existsSync(validation.absolutePath);
-        writeFileSync(validation.absolutePath, content, 'utf-8');
-        recordWrite(validation.absolutePath);
+        if (!rec) rec = recordWrite(validation.absolutePath);
+        try {
+          const dir = dirname(validation.absolutePath);
+          if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+          writeFileSync(validation.absolutePath, content, 'utf-8');
+        } catch (err) {
+          discardAction(rec);
+          throw err;
+        }
+        recordResult(rec, content);
         return { success: true, output: `${existed ? 'Updated' : 'Created'} file: ${path}`, tool, parameters };
       }
 
@@ -460,7 +496,8 @@ async function dispatchTool(
           return { success: false, output: '', error: `old_text matches ${matchCount} locations in the file. Provide more surrounding context to make it unique (only 1 match allowed).`, tool, parameters };
         }
 
-        recordEdit(validation.absolutePath);
+        // Recorded before the write; dropped again if the write never happens.
+        const rec = recordEdit(validation.absolutePath);
         // Function replacer so newText is written literally — a plain-string
         // replacement interprets $&, $1, $$ etc., which silently corrupts any
         // edit whose new_text contains `$` (shell vars, template literals, regex).
@@ -469,8 +506,13 @@ async function dispatchTool(
         if (fs?.writeTextFile) {
           try {
             await fs.writeTextFile(validation.absolutePath, updated);
+            recordResult(rec, updated);
             return { success: true, output: `Edited file: ${path}`, tool, parameters };
           } catch (err) {
+            if (isRefusedWrite(err)) {
+              discardAction(rec);
+              return { success: false, output: '', error: `The editor refused to write ${path}: ${err.message}`, tool, parameters };
+            }
             debug('fs/write_text_file (in edit_file) failed, falling back to disk:', err);
             // If we read through the client but write back to disk, the
             // editor's dirty buffer could be discarded next save. Log and
@@ -478,7 +520,13 @@ async function dispatchTool(
             if (readDelegated) debug('warning: edit_file read via client but writing to disk');
           }
         }
-        writeFileSync(validation.absolutePath, updated, 'utf-8');
+        try {
+          writeFileSync(validation.absolutePath, updated, 'utf-8');
+        } catch (err) {
+          discardAction(rec);
+          throw err;
+        }
+        recordResult(rec, updated);
         return { success: true, output: `Edited file: ${path}`, tool, parameters };
       }
 
@@ -555,6 +603,7 @@ async function dispatchTool(
           cwd: projectRoot,
           projectRoot,
           timeout: 120000,
+          signal,
         });
 
         if (result.success) return { success: true, output: result.stdout || '(no output)', tool, parameters };

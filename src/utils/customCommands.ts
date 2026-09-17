@@ -29,6 +29,7 @@
 import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { leadsOutsideProject } from './projectPaths';
 
 export interface CustomCommand {
   /** Slash name without the leading `/` */
@@ -80,7 +81,7 @@ function parseFrontmatter(raw: string): { meta: ParsedFrontmatter; body: string 
   return { meta, body: match[2].trimStart() };
 }
 
-function loadFromDir(dir: string, scope: 'project' | 'global'): CustomCommand[] {
+function loadFromDir(dir: string, scope: 'project' | 'global', projectRoot?: string): CustomCommand[] {
   if (!existsSync(dir)) return [];
   let entries: string[];
   try {
@@ -94,6 +95,9 @@ function loadFromDir(dir: string, scope: 'project' | 'global'): CustomCommand[] 
     if (!entry.endsWith('.md')) continue;
     const fullPath = join(dir, entry);
     try {
+      // A project's files come with the repo: a link out of it would put an
+      // arbitrary file of the user's (credentials, history) into the prompt.
+      if (projectRoot && leadsOutsideProject(fullPath, projectRoot)) continue;
       const stat = statSync(fullPath);
       if (!stat.isFile()) continue;
       // Sanity ceiling — a slash-command template above 64KB is almost
@@ -126,7 +130,7 @@ function loadFromDir(dir: string, scope: 'project' | 'global'): CustomCommand[] 
 export function loadCustomCommands(workspaceRoot?: string): CustomCommand[] {
   const global = loadFromDir(join(homedir(), '.codeep', 'commands'), 'global');
   const project = workspaceRoot
-    ? loadFromDir(join(workspaceRoot, '.codeep', 'commands'), 'project')
+    ? loadFromDir(join(workspaceRoot, '.codeep', 'commands'), 'project', workspaceRoot)
     : [];
 
   // Project wins on name collisions; collapse to a single map keyed by name.

@@ -19,7 +19,10 @@ import {
   setProjectPermission,
   hasWritePermission,
   hasReadPermission,
+  sessionNameProblem,
+  sessionNameTaken,
 } from '../config/index.js';
+import { symlinkedCodeepNotice } from '../utils/projectPaths.js';
 import { getProviderList, getProvider } from '../config/providers.js';
 import { telemetryCommand } from '../commands/core/telemetry.js';
 import { keysyncCommand } from '../commands/core/keysync.js';
@@ -31,7 +34,11 @@ import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { Message } from '../config/index.js';
 import { chat } from '../api/index.js';
-import { runAgent } from '../utils/agent.js';
+import { runAgent, classifyPermissionOutcome, buildDangerousTools } from '../utils/agent.js';
+import type { McpServer } from './protocol.js';
+import type { AgentSessionOptions } from './session.js';
+import type { PendingPlan } from '../utils/planMode.js';
+import { beginTurn } from './turns.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,7 +51,26 @@ export interface AcpSession {
   codeepSessionId: string;
   /** Files added to context via /add */
   addedFiles: Map<string, { relativePath: string; content: string }>;
+  /** MCP servers the client passed on session/new, load or resume. */
+  clientMcpServers?: McpServer[];
+  /** Bumped whenever the thread moves to another conversation (/session
+   *  new, /session load, /rewind), so a turn still running can tell. */
+  conversation?: number;
 }
+
+/**
+ * How the agent runs for the current prompt: the session mode's permission
+ * prompts and the client's fs and terminal. The server builds it once per
+ * prompt so a slash command that runs the agent gets what a plain prompt
+ * gets.
+ */
+export type AcpAgentRunOptions = Pick<
+  AgentSessionOptions,
+  'onRequestPermission' | 'extraDangerousTools' | 'onExecuteCommand' | 'fs'
+> & {
+  /** Ask the user a yes/no question. Unset: the mode runs without asking. */
+  confirm?: (message: string) => Promise<boolean>;
+};
 
 export interface CommandResult {
   /** true if the input was a slash command (even if it failed) */
@@ -55,6 +81,17 @@ export interface CommandResult {
   streaming?: boolean;
   /** If true, server should re-send configOptions to client (provider/model changed) */
   configOptionsChanged?: boolean;
+}
+
+/** Pending plans a /go is executing right now. */
+const plansRunning = new Set<PendingPlan>();
+
+/**
+ * Save the session after a turn a command added, as a plain prompt's turn
+ * is saved: only while autosave is on.
+ */
+function turnMessages(prompt: string, response: string | undefined): Message[] {
+  return response ? [{ role: 'user', content: prompt }, { role: 'assistant', content: response }] : [{ role: 'user', content: prompt }];
 }
 
 // ─── Workspace / session init (called on session/new) ─────────────────────────
@@ -118,6 +155,10 @@ export function initWorkspace(workspaceRoot: string, fresh = false): {
       ? `**Project:** ${projectCtx.name} (${projectCtx.type})`
       : '**Project:** detected',
     hasWrite ? '**Access:** Read & Write' : '**Access:** Read only',
+    ...(() => {
+      const notice = symlinkedCodeepNotice(workspaceRoot);
+      return notice ? ['', `**⚠ ${notice}**`] : [];
+    })(),
     '',
     sessions.length > 0
       ? `**Session:** ${codeepSessionId} (${history.length} messages restored)`
@@ -255,12 +296,16 @@ export function loadWorkspace(workspaceRoot: string, acpSessionId: string): {
  *
  * onChunk is called for streaming output (skills). For simple commands
  * the full response is returned in CommandResult.response.
+ *
+ * agentRun carries the options commands that run the agent (/go, custom
+ * commands, skill agent steps) must run it with.
  */
 export async function handleCommand(
   input: string,
   session: AcpSession,
   onChunk: (text: string) => void,
   abortSignal?: AbortSignal,
+  agentRun?: AcpAgentRunOptions,
 ): Promise<CommandResult> {
   const trimmed = input.trim();
   if (!trimmed.startsWith('/')) return { handled: false, response: '' };
@@ -324,6 +369,7 @@ export async function handleCommand(
         const id = startNewSession();
         session.codeepSessionId = id;
         session.history = [];
+        session.conversation = (session.conversation ?? 0) + 1;
         return { handled: true, response: `New session started: \`${id}\`` };
       }
       if (sub === 'load' && args[1]) {
@@ -331,15 +377,23 @@ export async function handleCommand(
         if (loaded) {
           session.codeepSessionId = args[1];
           session.history = loaded as Message[];
+          session.conversation = (session.conversation ?? 0) + 1;
           return { handled: true, response: formatSessionPreview(args[1], session.history) };
         }
-        return { handled: true, response: `Session not found: \`${args[1]}\`` };
+        return { handled: true, response: sessionNameProblem(args[1]) ?? `Session not found: \`${args[1]}\`` };
       }
       return { handled: true, response: 'Usage: `/session` · `/session new` · `/session load <name>`' };
     }
 
     case 'save': {
       const name = args.length ? args.join('-') : session.codeepSessionId;
+      const nameProblem = sessionNameProblem(name);
+      if (nameProblem) return { handled: true, response: nameProblem };
+      // /save <name> is how a conversation gets a new name here; it must not
+      // replace a different saved conversation that already has that name.
+      if (sessionNameTaken(name, session.codeepSessionId, session.workspaceRoot)) {
+        return { handled: true, response: `A session named \`${name}\` already exists. Choose another name, or load it with \`/session load ${name}\`.` };
+      }
       if (saveSession(name, session.history, session.workspaceRoot)) {
         session.codeepSessionId = name;
         return { handled: true, response: `Session saved as: \`${name}\`` };
@@ -423,16 +477,25 @@ export async function handleCommand(
 
     // ─── Undo ──────────────────────────────────────────────────────────────────
 
+    // One server can hold sessions in several workspaces; undo only what
+    // ran in this one.
     case 'undo': {
       const { undoLastAction } = await import('../utils/agent.js');
-      const result = undoLastAction();
+      const result = undoLastAction(session.workspaceRoot);
       return { handled: true, response: result.success ? `Undo: ${result.message}` : `Cannot undo: ${result.message}` };
     }
 
     case 'undo-all': {
       const { undoAllActions } = await import('../utils/agent.js');
-      const result = undoAllActions();
-      return { handled: true, response: result.success ? `Undone ${result.results.length} action(s).` : 'Nothing to undo.' };
+      const result = undoAllActions(session.workspaceRoot);
+      // Each action is listed with its outcome: a run can mix restored
+      // files with commands that cannot be undone, and a count of both
+      // would overstate what was put back.
+      if (result.results.length === 0 || (!result.success && result.results.length === 1)) {
+        return { handled: true, response: result.results[0] ?? 'Nothing to undo.' };
+      }
+      const heading = result.success ? '## Undo all' : '## Nothing was undone';
+      return { handled: true, response: `${heading}\n\n${result.results.map(r => `- ${r}`).join('\n')}` };
     }
 
     case 'skills': {
@@ -587,10 +650,12 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
 
     case 'scan': {
       onChunk('_Scanning project…_\n\n');
-      const { scanProject, saveProjectIntelligence, generateContextFromIntelligence } = await import('../utils/projectIntelligence.js');
+      const { scanProject, saveProjectIntelligence, generateContextFromIntelligence, INTELLIGENCE_NOT_SAVED } = await import('../utils/projectIntelligence.js');
       try {
         const intelligence = await scanProject(session.workspaceRoot);
-        saveProjectIntelligence(session.workspaceRoot, intelligence);
+        if (!saveProjectIntelligence(session.workspaceRoot, intelligence)) {
+          return { handled: true, response: INTELLIGENCE_NOT_SAVED };
+        }
         const context = generateContextFromIntelligence(intelligence);
         onChunk(`## Project Scan\n\n${context}`);
         return { handled: true, response: '', streaming: true };
@@ -600,13 +665,50 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
     }
 
     case 'review': {
-      onChunk('_Running code review…_\n\n');
-      const { performCodeReview, formatReviewResult } = await import('../utils/codeReview.js');
+      // `--staged` / `-s` and `--static` pick the kind of review; any other
+      // argument names a file for static analysis.
+      const staged = args.includes('--staged') || args.includes('-s');
+      const staticOnly = args.includes('--static');
+      const files = args.filter(a => !a.startsWith('-'));
       const projectCtx = getProjectContext(session.workspaceRoot);
       if (!projectCtx) return { handled: true, response: 'No project context available.' };
-      const reviewFiles = args.length ? args : undefined;
-      const result = performCodeReview(projectCtx, reviewFiles);
-      return { handled: true, response: formatReviewResult(result) };
+
+      const staticReview = async (reviewFiles?: string[]): Promise<CommandResult> => {
+        const { performCodeReview, formatReviewResult } = await import('../utils/codeReview.js');
+        const result = performCodeReview(projectCtx, reviewFiles);
+        // Names that match no file leave nothing to review, which would
+        // otherwise read as a clean result.
+        if (reviewFiles && result.files.length === 0) {
+          return { handled: true, response: `Nothing reviewed: ${reviewFiles.map(f => `\`${f}\``).join(', ')} matched no reviewable file in the workspace.` };
+        }
+        return { handled: true, response: formatReviewResult(result) };
+      };
+
+      if (staticOnly || files.length > 0) {
+        onChunk('_Running static analysis…_\n\n');
+        return staticReview(files.length ? files : undefined);
+      }
+
+      // AI review of the git diff, as in the TUI.
+      const { getGitDiff } = await import('../utils/git.js');
+      const diffResult = getGitDiff(staged, session.workspaceRoot);
+      if (!diffResult.success || !diffResult.diff) {
+        onChunk(`_No ${staged ? 'staged' : 'unstaged'} changes found — running static analysis instead…_\n\n`);
+        return staticReview();
+      }
+      onChunk(`_Reviewing ${staged ? 'staged' : 'unstaged'} changes…_\n\n`);
+      const diffText = diffResult.diff.length > 12000
+        ? diffResult.diff.slice(0, 12000) + '\n\n[diff truncated]'
+        : diffResult.diff;
+      try {
+        await chat(buildDiffReviewPrompt(diffText), [], onChunk, undefined, projectCtx, abortSignal);
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') {
+          return { handled: true, response: '\n\n_Review cancelled._', streaming: true };
+        }
+        throw err;
+      }
+      return { handled: true, response: '', streaming: true };
     }
 
     case 'learn': {
@@ -640,7 +742,8 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
 
     case 'changes': {
       const { getCurrentSessionActions } = await import('../utils/agent.js');
-      const actions = getCurrentSessionActions();
+      // Changes of the run /undo acts on, in this workspace.
+      const actions = getCurrentSessionActions(session.workspaceRoot);
       if (!actions.length) return { handled: true, response: 'No changes in current session.' };
       const lines = ['## Session Changes', '', ...actions.map(a => `- **${a.type}**: \`${a.target}\` — ${a.result}`)];
       return { handled: true, response: lines.join('\n') };
@@ -799,14 +902,14 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       if (sub === 'sync') {
         const { getSyncToken } = await import('../config/index.js');
         if (!getSyncToken()) return { handled: true, response: 'Not linked to codeep.dev. Run `codeep account` in a terminal first.' };
-        const { pushUserProfile, pullUserProfile } = await import('../utils/codeepCloud.js');
-        const pushed = await pushUserProfile();
-        const pulled = await pullUserProfile();
-        const lines: string[] = [];
-        if (pushed) lines.push('✓ Profile pushed to the dashboard');
-        if (pulled === 1) lines.push('✓ Profile pulled to this machine');
-        if (lines.length === 0) lines.push('Nothing to sync yet — run `/me init` and fill in your profile first.');
-        return { handled: true, response: lines.join('\n') };
+        const { pushUserProfileResult, pullUserProfileResult, describeSyncFailure } = await import('../utils/codeepCloud.js');
+        const { formatMeSyncReport } = await import('../renderer/commands/helpers.js');
+        // Push first, as the TUI does: the pull may create the local file.
+        // Each result says why it failed, so a failed push of an existing
+        // profile is not reported as "nothing to sync".
+        const pushed = await pushUserProfileResult();
+        const pulled = await pullUserProfileResult();
+        return { handled: true, response: formatMeSyncReport(pushed, pulled, describeSyncFailure) };
       }
       return { handled: true, response: formatProfileView(session.workspaceRoot) };
     }
@@ -832,9 +935,11 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
     case 'plan': {
       // Identical contract to TUI /plan: generate a pre-execution plan,
       // surface it, hold as pending so /go can execute it without re-planning.
+      // Each ACP session has its own pending plan: /go in one thread must
+      // not run a plan made in another.
       if (!args.length) {
         const { getPendingPlan } = await import('../utils/planMode.js');
-        const cur = getPendingPlan();
+        const cur = getPendingPlan(session.sessionId);
         return {
           handled: true,
           response: cur
@@ -846,41 +951,56 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       onChunk(`_Generating plan for: ${task.slice(0, 80)}${task.length > 80 ? '…' : ''}_\n\n`);
       try {
         const { generatePlan } = await import('../utils/planMode.js');
-        const plan = await generatePlan(task);
+        const plan = await generatePlan(task, undefined, session.sessionId, abortSignal);
         return {
           handled: true,
           response: `${plan}\n\n---\nRun \`/go\` to execute this plan, or \`/plan <revised task>\` to refine it.`,
           streaming: true,
         };
       } catch (err) {
+        if ((err as Error).name === 'AbortError') {
+          return { handled: true, response: '_Plan generation cancelled._', streaming: true };
+        }
         return { handled: true, response: `Plan generation failed: ${(err as Error).message}`, streaming: true };
       }
     }
 
     case 'go': {
       const { getPendingPlan, composeExecutionPrompt, clearPendingPlan } = await import('../utils/planMode.js');
-      const cur = getPendingPlan();
+      const cur = getPendingPlan(session.sessionId);
       if (!cur) {
         return { handled: true, response: 'No pending plan. Run `/plan <task>` first.' };
       }
+      // The plan stays pending until it has run, so a failed or cancelled
+      // run can be started again. Meanwhile a second /go must not start it
+      // twice.
+      if (plansRunning.has(cur)) {
+        return { handled: true, response: 'This plan is already running.' };
+      }
       const prompt = composeExecutionPrompt(cur);
-      clearPendingPlan();
       onChunk(`_Executing approved plan…_\n\n`);
+      plansRunning.add(cur);
+      const recordTurn = beginTurn(session);
       try {
-        const { buildProjectContext } = await import('./session.js');
-        const ctx = buildProjectContext(session.workspaceRoot);
-        const agentResult = await runAgent(prompt, ctx, {
-          abortSignal,
-          onIteration: (_i: number, msg: string) => { onChunk(msg + '\n'); },
-          onThinking: (text: string) => { onChunk(text); },
-        });
+        const { response } = await runCommandAgent(prompt, session, onChunk, abortSignal, agentRun);
+        // A /plan issued meanwhile replaced it; that one has not run.
+        if (getPendingPlan(session.sessionId) === cur) clearPendingPlan(session.sessionId);
+        // The run is part of the conversation: a paused run's "say
+        // continue" needs the plan and what was done in the next turn.
+        recordTurn(turnMessages(prompt, response));
         return {
           handled: true,
-          response: agentResult.finalResponse || '_(plan executed; no final summary)_',
+          response: response || '_(plan executed; no final summary)_',
           streaming: true,
         };
       } catch (err) {
-        return { handled: true, response: `Plan execution failed: ${(err as Error).message}`, streaming: true };
+        const retry = 'The plan is still pending — run `/go` to start it again.';
+        if ((err as Error).name === 'AbortError') {
+          return { handled: true, response: `_Plan execution cancelled._ ${retry}`, streaming: true };
+        }
+        return { handled: true, response: `Plan execution failed: ${(err as Error).message}\n\n${retry}`, streaming: true };
+      } finally {
+        plansRunning.delete(cur);
       }
     }
 
@@ -915,13 +1035,15 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       onChunk('_Reviewing diff…_\n\n');
       const projectCtx = getProjectContext(session.workspaceRoot);
       let reviewText = '';
+      // A cancel stops the request; the server answers the prompt as
+      // cancelled.
       await chat(
         `Review this git diff and provide concise feedback:\n\n\`\`\`diff\n${preview}\n\`\`\``,
         session.history,
         (chunk) => { reviewText += chunk; onChunk(chunk); },
         undefined,
         projectCtx,
-        undefined,
+        abortSignal,
       );
       return { handled: true, response: '', streaming: true };
     }
@@ -937,7 +1059,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       // /memory list         show all notes
       // /memory remove <n>   remove note by 1-based index
       // /memory clear        wipe all notes
-      const { loadProjectIntelligence, saveProjectIntelligence } = await import('../utils/projectIntelligence.js');
+      const { loadProjectIntelligence, saveProjectIntelligence, INTELLIGENCE_NOT_SAVED } = await import('../utils/projectIntelligence.js');
       const intelligence = loadProjectIntelligence(session.workspaceRoot);
       if (!intelligence) {
         return { handled: true, response: 'No project intelligence found. Run `/scan` first.' };
@@ -957,14 +1079,14 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
           return { handled: true, response: 'Usage: `/memory remove <n>` — run `/memory list` first to see indices.' };
         }
         const removed = intelligence.notes.splice(idx - 1, 1)[0];
-        saveProjectIntelligence(session.workspaceRoot, intelligence);
+        if (!saveProjectIntelligence(session.workspaceRoot, intelligence)) return { handled: true, response: INTELLIGENCE_NOT_SAVED };
         return { handled: true, response: `Removed note ${idx}: _"${removed}"_` };
       }
 
       if (sub === 'clear') {
         const count = intelligence.notes.length;
         intelligence.notes = [];
-        saveProjectIntelligence(session.workspaceRoot, intelligence);
+        if (!saveProjectIntelligence(session.workspaceRoot, intelligence)) return { handled: true, response: INTELLIGENCE_NOT_SAVED };
         return { handled: true, response: count ? `Cleared ${count} note${count === 1 ? '' : 's'}.` : '_No notes to clear._' };
       }
 
@@ -974,7 +1096,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
         return { handled: true, response: 'Usage: `/memory <note>` · `/memory list` · `/memory remove <n>` · `/memory clear`' };
       }
       intelligence.notes.push(note);
-      saveProjectIntelligence(session.workspaceRoot, intelligence);
+      if (!saveProjectIntelligence(session.workspaceRoot, intelligence)) return { handled: true, response: INTELLIGENCE_NOT_SAVED };
       return { handled: true, response: `Memory saved (${intelligence.notes.length} total): _"${note}"_` };
     }
 
@@ -999,19 +1121,24 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       // Pull file paths the agent has touched in this session from the action
       // log. Used at /rewind time to scope the git restore suggestion.
       const filesTouched = Array.from(new Set(
-        getCurrentSessionActions()
-          .filter(a => a.target && (a.type === 'write' || a.type === 'edit' || a.type === 'delete' || a.type === 'mkdir'))
+        getCurrentSessionActions(session.workspaceRoot)
+          .filter(a => a.target && a.result !== 'undone' && (a.type === 'write' || a.type === 'edit' || a.type === 'delete' || a.type === 'mkdir'))
           .map(a => a.target),
       ));
-      const cp = createCheckpoint({
-        workspaceRoot: session.workspaceRoot,
-        sessionId: session.codeepSessionId,
-        provider: provider.id,
-        model: config.get('model'),
-        messages: session.history,
-        filesTouched,
-        name,
-      });
+      let cp: ReturnType<typeof createCheckpoint>;
+      try {
+        cp = createCheckpoint({
+          workspaceRoot: session.workspaceRoot,
+          sessionId: session.codeepSessionId,
+          provider: provider.id,
+          model: config.get('model'),
+          messages: session.history,
+          filesTouched,
+          name,
+        });
+      } catch (err) {
+        return { handled: true, response: `Could not save the checkpoint: ${(err as Error).message}` };
+      }
       const lines = [
         `Created checkpoint \`${cp.id}\`${cp.name ? ` — **${cp.name}**` : ''}`,
         `Captured ${cp.messages.length} message${cp.messages.length === 1 ? '' : 's'}, ${cp.filesTouched.length} file${cp.filesTouched.length === 1 ? '' : 's'} touched${cp.gitHead ? `, git \`${cp.gitHead}\`` : ''}.`,
@@ -1082,8 +1209,27 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
 
     case 'mcp': {
       const sub = args[0]?.toLowerCase();
-      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfig, loadMcpServerConfigSplit, isWorkspaceMcpTrusted, trustWorkspaceMcp, untrustWorkspaceMcp } = await import('../utils/mcpConfig.js');
+      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfigSplit, selectSessionMcpServers, isWorkspaceMcpTrusted, trustWorkspaceMcp, untrustWorkspaceMcp } = await import('../utils/mcpConfig.js');
       const { registerSessionServers } = await import('../utils/mcpRegistry.js');
+      const { handleMcpSamplingRequest } = await import('../utils/mcpSamplingBridge.js');
+
+      // Restart the session's servers from the current config. Registering
+      // replaces the whole set, so the selection keeps the servers the
+      // client passed, and the sampling bridge is wired as at session start.
+      // `userAdded` is a server the user just added by hand.
+      const restartServers = async (userAdded?: string) => {
+        const { servers, skipped } = selectSessionMcpServers(session.workspaceRoot, {
+          fromClient: session.clientMcpServers,
+          userAdded: userAdded ? [userAdded] : undefined,
+        });
+        const { registered, errors } = await registerSessionServers(session.sessionId, servers, {
+          workspaceRoot: session.workspaceRoot,
+          onSamplingRequest: handleMcpSamplingRequest,
+        });
+        const untrustedNote = skipped.length === 0 ? '' :
+          `\n\n${skipped.length} workspace MCP server${skipped.length === 1 ? '' : 's'} not started — this workspace isn't trusted. Run \`/mcp trust\` to start ${skipped.length === 1 ? 'it' : 'them'}.`;
+        return { servers, registered, errors, untrustedNote };
+      };
 
       if (sub === 'trust') {
         if (isWorkspaceMcpTrusted(session.workspaceRoot)) {
@@ -1095,8 +1241,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
           return { handled: true, response: '_Workspace trusted — no workspace MCP servers defined yet._' };
         }
         onChunk(`_Workspace trusted. Spawning ${workspace.length} MCP server(s)…_\n\n`);
-        const merged = loadMcpServerConfig(session.workspaceRoot);
-        const { registered, errors } = await registerSessionServers(session.sessionId, merged, { workspaceRoot: session.workspaceRoot });
+        const { registered, errors } = await restartServers();
         const lines = [`Trusted workspace MCP servers (${registered.length} tool(s) available).`];
         for (const e of errors) lines.push(`- \`${e.server}\` failed: ${e.error}`);
         return { handled: true, response: lines.join('\n') };
@@ -1104,7 +1249,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
 
       if (sub === 'untrust') {
         untrustWorkspaceMcp(session.workspaceRoot);
-        return { handled: true, response: '_Workspace MCP trust revoked — workspace servers won\'t spawn for new sessions._' };
+        return { handled: true, response: '_Workspace MCP trust revoked — workspace servers won\'t spawn again. Running ones stop at `/mcp reload` or when the session ends._' };
       }
 
       if (sub === 'add') {
@@ -1119,13 +1264,12 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
         onChunk(`_Saved MCP server **${name}** to \`.codeep/mcp_servers.json\`. Spawning…_\n\n`);
         // Live re-register so the new server is usable immediately, no
         // session restart needed. registerSessionServers is idempotent —
-        // it disposes the old set and brings up the merged one.
-        const merged = loadMcpServerConfig(session.workspaceRoot);
-        const { registered, errors } = await registerSessionServers(session.sessionId, merged, { workspaceRoot: session.workspaceRoot });
+        // it disposes the old set and brings up the selected one.
+        const { registered, errors, untrustedNote } = await restartServers(name);
         const ok = registered.filter(t => t.serverName === name);
         const failed = errors.find(e => e.server === name);
-        if (failed) return { handled: true, response: `Saved \`${name}\` but spawn failed: \`${failed.error}\``, streaming: true };
-        return { handled: true, response: `Added \`${name}\` (${ok.length} tool${ok.length === 1 ? '' : 's'} available).`, streaming: true };
+        if (failed) return { handled: true, response: `Saved \`${name}\` but spawn failed: \`${failed.error}\`${untrustedNote}`, streaming: true };
+        return { handled: true, response: `Added \`${name}\` (${ok.length} tool${ok.length === 1 ? '' : 's'} available).${untrustedNote}`, streaming: true };
       }
 
       if (sub === 'remove') {
@@ -1133,11 +1277,10 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
         if (!name) return { handled: true, response: 'Usage: `/mcp remove <name>`' };
         const removed = removeProjectMcpServer(session.workspaceRoot, name);
         if (!removed) return { handled: true, response: `No project-scoped MCP server named \`${name}\`.` };
-        // Re-register with the new (smaller) merged set so the dropped
-        // server is actually killed.
-        const merged = loadMcpServerConfig(session.workspaceRoot);
-        await registerSessionServers(session.sessionId, merged, { workspaceRoot: session.workspaceRoot });
-        return { handled: true, response: `Removed \`${name}\` from project config and stopped its process.` };
+        // Re-register with the new (smaller) set so the dropped server is
+        // actually killed.
+        const { untrustedNote } = await restartServers();
+        return { handled: true, response: `Removed \`${name}\` from project config and stopped its process.${untrustedNote}` };
       }
 
       if (sub === 'resources') {
@@ -1269,8 +1412,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
         addProjectMcpServer(session.workspaceRoot, server);
 
         onChunk(`_Saved \`${entry.id}\` to project config. Spawning…_\n\n`);
-        const merged = loadMcpServerConfig(session.workspaceRoot);
-        const { registered, errors } = await registerSessionServers(session.sessionId, merged, { workspaceRoot: session.workspaceRoot });
+        const { registered, errors, untrustedNote } = await restartServers(entry.id);
         const failed = errors.find(e => e.server === entry.id);
         const lines: string[] = [];
         if (failed) {
@@ -1286,7 +1428,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
             lines.push(`- \`${e.name}\`${req} — ${e.description}`);
           }
         }
-        return { handled: true, response: lines.join('\n'), streaming: true };
+        return { handled: true, response: lines.join('\n') + untrustedNote, streaming: true };
       }
 
       if (sub === 'reload') {
@@ -1294,18 +1436,17 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
         // edit of `.codeep/mcp_servers.json` outside the CLI — `/mcp add`
         // and `/mcp remove` already re-register automatically.
         onChunk(`_Reloading MCP server config…_\n\n`);
-        const merged = loadMcpServerConfig(session.workspaceRoot);
-        const { registered, errors } = await registerSessionServers(session.sessionId, merged, { workspaceRoot: session.workspaceRoot });
+        const { servers, registered, errors, untrustedNote } = await restartServers();
         const lines = [
           `## MCP reloaded`,
           '',
-          `**${registered.length}** tool${registered.length === 1 ? '' : 's'} from **${merged.length}** server${merged.length === 1 ? '' : 's'}.`,
+          `**${registered.length}** tool${registered.length === 1 ? '' : 's'} from **${servers.length}** server${servers.length === 1 ? '' : 's'}.`,
         ];
         if (errors.length > 0) {
           lines.push('', '### Failed servers');
           for (const e of errors) lines.push(`- **${e.server}** — \`${e.error}\``);
         }
-        return { handled: true, response: lines.join('\n'), streaming: true };
+        return { handled: true, response: lines.join('\n') + untrustedNote, streaming: true };
       }
 
       // Default: list (and 'list' / no-arg behave the same)
@@ -1371,6 +1512,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       // below tells the user how to restore them via git if they want.
       const replacedCount = session.history.length;
       session.history = cp.messages;
+      session.conversation = (session.conversation ?? 0) + 1;
       saveSession(session.codeepSessionId, session.history, session.workspaceRoot);
 
       // If the checkpoint captured a different provider/model, switch back.
@@ -1442,50 +1584,53 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       if (custom) {
         const expandedPrompt = expandCommand(custom, args);
         // Treat the expanded body as if the user had typed it manually:
-        // push it as a user message and run the agent (or chat if agent
-        // mode is off), then persist the assistant reply.
-        session.history.push({ role: 'user', content: expandedPrompt });
+        // run the agent (or chat if agent mode is off) on it, then record
+        // it as a user message with the assistant reply.
         onChunk(`_Running custom command **/${custom.name}** (${custom.scope})…_\n\n`);
 
         const projectCtx = getProjectContext(session.workspaceRoot);
         const agentMode = config.get('agentMode');
         let response = '';
+        const recordTurn = beginTurn(session);
 
         try {
           if (agentMode === 'on') {
-            const { buildProjectContext } = await import('./session.js');
-            const ctx = buildProjectContext(session.workspaceRoot);
-            const agentResult = await runAgent(expandedPrompt, ctx, {
-              abortSignal,
-              onIteration: (_i: number, msg: string) => { onChunk(msg + '\n'); },
-              onThinking: (text: string) => { onChunk(text); },
-            });
-            response = agentResult.finalResponse ?? '';
+            ({ response } = await runCommandAgent(expandedPrompt, session, onChunk, abortSignal, agentRun));
             if (response) onChunk(response);
           } else {
             await chat(
               expandedPrompt,
-              session.history.slice(0, -1), // exclude the just-pushed user message
+              session.history,
               (chunk) => { response += chunk; onChunk(chunk); },
               undefined,
               projectCtx,
-              undefined,
+              abortSignal,
             );
           }
-          if (response) session.history.push({ role: 'assistant', content: response });
-          saveSession(session.codeepSessionId, session.history, session.workspaceRoot);
+          // Recorded only once it ran: a failed run must not leave an
+          // unanswered message in the saved conversation.
+          recordTurn(turnMessages(expandedPrompt, response));
         } catch (err) {
-          onChunk(`\n\n_Custom command failed: ${(err as Error).message}_`);
+          onChunk((err as Error).name === 'AbortError'
+            ? '\n\n_Custom command cancelled._'
+            : `\n\n_Custom command failed: ${(err as Error).message}_`);
         }
 
         return { handled: true, response: '', streaming: true };
       }
 
       // 2. Built-in skill.
-      const { findSkill, parseSkillArgs, executeSkill, trackSkillUsage } = await import('../utils/skills.js');
+      const {
+        findSkill, parseSkillArgs, executeSkill, trackSkillUsage, getSkippedCustomSkills, formatSkippedCustomSkills,
+      } = await import('../utils/skills.js');
       const skill = findSkill(cmd);
       if (!skill) {
-        return { handled: true, response: `Unknown command: \`/${cmd}\`\n\nType \`/help\` for available commands, \`/skills\` to list all skills, or \`/commands\` for custom commands.` };
+        // A custom skill file of that name that did not load is why the
+        // command is unknown; say which file and what is wrong with it.
+        // findSkill has just read the skills directory.
+        const skipped = getSkippedCustomSkills().filter(s => s.file.toLowerCase() === `${cmd}.json`);
+        const why = skipped.length ? `\n\n${formatSkippedCustomSkills(skipped)}` : '';
+        return { handled: true, response: `Unknown command: \`/${cmd}\`${why}\n\nType \`/help\` for available commands, \`/skills\` to list all skills, or \`/commands\` for custom commands.` };
       }
 
       if (skill.requiresWriteAccess && !hasWritePermission(session.workspaceRoot)) {
@@ -1500,8 +1645,42 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       const { spawnSync } = await import('child_process');
       const projectCtx = getProjectContext(session.workspaceRoot);
 
+      // A cancelled prompt runs no further step: a /commit cancelled while
+      // its message was written must not go on to commit.
+      const stopIfCancelled = () => {
+        if (!abortSignal?.aborted) return;
+        const abortError = new Error('Skill cancelled');
+        abortError.name = 'AbortError';
+        throw abortError;
+      };
+
+      // "Allow always" holds for the rest of the skill, as it holds for the
+      // rest of an agent run.
+      let commandsAllowed = false;
+
       const skillResult = await executeSkill(skill, params, {
         onCommand: async (shellCmd: string) => {
+          stopIfCancelled();
+          // Manual mode treats a skill's shell line like the agent's
+          // execute_command: the command policy first, then the user's
+          // say-so unless they turned that question off. Auto mode runs it
+          // without asking, as that mode promises.
+          if (agentRun?.onRequestPermission) {
+            const refused = await checkSkillCommand(shellCmd, session.workspaceRoot);
+            if (refused) throw new Error(`\`${shellCmd}\` was refused: ${refused}`);
+            if (!commandsAllowed && buildDangerousTools(agentRun.extraDangerousTools).has('execute_command')) {
+              const outcome = await agentRun.onRequestPermission({
+                tool: 'execute_command',
+                parameters: { command: shellCmd, args: [] },
+              });
+              const decision = classifyPermissionOutcome(outcome);
+              if (decision === 'allow-always') commandsAllowed = true;
+              else if (decision !== 'allow-once') {
+                throw new Error(`User rejected permission for \`${shellCmd}\``);
+              }
+              stopIfCancelled();
+            }
+          }
           const proc = spawnSync(shellCmd, {
             cwd: session.workspaceRoot,
             encoding: 'utf-8',
@@ -1517,6 +1696,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
         },
 
         onPrompt: async (prompt: string) => {
+          stopIfCancelled();
           let response = '';
           await chat(
             prompt,
@@ -1524,34 +1704,34 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
             (chunk) => { response += chunk; onChunk(chunk); },
             undefined,
             projectCtx,
-            undefined,
+            abortSignal,
           );
           return response;
         },
 
+        // A failed run throws, which fails the step. So do checks that
+        // still fail once the work is done: the summary and the errors are
+        // shown, but the steps after it (a commit, a deploy) must not run
+        // on a broken build.
         onAgent: async (task: string) => {
-          const { buildProjectContext } = await import('./session.js');
-          const ctx = buildProjectContext(session.workspaceRoot);
-          let output = '';
-          const agentResult = await runAgent(task, ctx, {
-            abortSignal,
-            onIteration: (_i: number, msg: string) => { onChunk(msg + '\n'); },
-            onThinking: (text: string) => { onChunk(text); },
-          });
-          if (agentResult.finalResponse) {
-            output = agentResult.finalResponse;
-            onChunk(output);
-          }
+          stopIfCancelled();
+          const { response: output, failedChecks } = await runCommandAgent(task, session, onChunk, abortSignal, agentRun);
+          if (output) onChunk(output);
+          if (failedChecks) throw new Error(`Verification failed: ${failedChecks.join(', ')}`);
           return output;
         },
 
-        // Skills in ACP auto-confirm (no TUI)
-        onConfirm: async (_message: string) => true,
+        // Manual mode asks the user through the client. Auto mode runs
+        // without confirmation, as that mode promises.
+        onConfirm: agentRun?.confirm ?? (async (_message: string) => true),
 
         onNotify: (message: string) => { onChunk(`> ${message}\n`); },
       });
 
       if (!skillResult.success) {
+        if (abortSignal?.aborted) {
+          return { handled: true, response: `_Skill **${skill.name}** cancelled._`, streaming: true };
+        }
         return { handled: true, response: `Skill **${skill.name}** failed: ${skillResult.output}`, streaming: true };
       }
 
@@ -1560,7 +1740,237 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
   }
 }
 
+/**
+ * Run the agent for a slash command the way a plain prompt runs: with the
+ * session's permission mode, the client's fs and terminal, the session's
+ * MCP tools and its earlier turns.
+ *
+ * Resolves with the final response. runAgent reports failures in its
+ * result instead of throwing, so this throws for them — an AbortError when
+ * the run was cancelled — the way runAgentSession does. Two outcomes are
+ * not failures of the run itself, and resolve: a run paused at a safety
+ * limit (its notice is the response), and a run whose work is done but
+ * whose checks still fail. That response carries the ✗ block with the
+ * errors, and `failedChecks` names the checks. Throwing there would hide
+ * both and invite running the same work again on a tree that has it.
+ */
+async function runCommandAgent(
+  task: string,
+  session: AcpSession,
+  onChunk: (text: string) => void,
+  abortSignal: AbortSignal | undefined,
+  agentRun: AcpAgentRunOptions | undefined,
+): Promise<{ response: string; failedChecks?: string[] }> {
+  const { buildProjectContext, toAgentChatHistory } = await import('./session.js');
+  const result = await runAgent(task, buildProjectContext(session.workspaceRoot), {
+    abortSignal,
+    onIteration: (_i: number, msg: string) => { onChunk(msg + '\n'); },
+    onThinking: (text: string) => { onChunk(text); },
+    onRequestPermission: agentRun?.onRequestPermission,
+    extraDangerousTools: agentRun?.extraDangerousTools,
+    onExecuteCommand: agentRun?.onExecuteCommand,
+    fs: agentRun?.fs,
+    // Servers are registered under the ACP session id.
+    mcpSessionId: session.sessionId,
+    chatHistory: toAgentChatHistory(session.history),
+  });
+  if (result.aborted) {
+    const abortError = new Error('Agent session was cancelled');
+    abortError.name = 'AbortError';
+    throw abortError;
+  }
+  if (result.failedChecks?.length) {
+    return { response: result.finalResponse ?? '', failedChecks: result.failedChecks };
+  }
+  if (!result.success && !result.interrupted) {
+    throw new Error(result.error || result.finalResponse || 'Agent run failed without a specific error message');
+  }
+  return { response: result.finalResponse ?? '' };
+}
+
+/**
+ * Split a skill's shell line into the simple commands it runs, each as
+ * argv, so every one of them can go through the execute_command policy.
+ * `&&`, `||`, `;`, `|` and newlines separate commands. Redirections stay
+ * with their command as arguments (`2>&1`, `>`, `out.txt`), so the policy
+ * sees where output goes. Returns null for a line it cannot read with
+ * certainty — unbalanced quotes, subshells, background jobs, heredocs, and
+ * anything the shell would expand first (`$`, backticks, globs, braces, a
+ * leading `~`) — which the caller must refuse. So a `$` or backtick in the
+ * result is always plain text.
+ *
+ * Exported for unit testing (see commands.slash.test.ts).
+ */
+export function splitShellCommands(line: string, windows = process.platform === 'win32'): string[][] | null {
+  const commands: string[][] = [];
+  let words: string[] = [];
+  let word = '';
+  let inWord = false;
+  // After `&&`, `||` or `|` another command must follow.
+  let needCommand = false;
+  const endWord = () => {
+    if (inWord) words.push(word);
+    word = '';
+    inWord = false;
+  };
+  const endCommand = (): boolean => {
+    endWord();
+    if (words.length === 0) return false;
+    commands.push(words);
+    words = [];
+    needCommand = false;
+    return true;
+  };
+
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    const next = line[i + 1];
+    if (c === "'") {
+      const close = line.indexOf("'", i + 1);
+      if (close < 0) return null;
+      word += line.slice(i + 1, close);
+      inWord = true;
+      i = close;
+    } else if (c === '"') {
+      let j = i + 1;
+      for (; j < line.length && line[j] !== '"'; j++) {
+        if (line[j] === '\\' && j + 1 < line.length && '$`"\\'.includes(line[j + 1])) {
+          word += line[++j];
+        } else if (line[j] === '$' || line[j] === '`') {
+          // Expanded inside double quotes too.
+          return null;
+        } else {
+          word += line[j];
+        }
+      }
+      if (j >= line.length) return null;
+      inWord = true;
+      i = j;
+    } else if (c === '\\' && windows) {
+      // cmd.exe has no escape character here: `..\\x` is a path, and the
+      // checks below must see it as one.
+      word += c;
+      inWord = true;
+    } else if (c === '\\') {
+      if (next === undefined || next === '\n') return null;
+      word += next;
+      inWord = true;
+      i++;
+    } else if (c === ' ' || c === '\t') {
+      endWord();
+    } else if (c === '\n') {
+      if (!endCommand() && needCommand) return null;
+    } else if (c === ';') {
+      if (!endCommand()) return null;
+    } else if (c === '&' && next === '&') {
+      if (!endCommand()) return null;
+      needCommand = true;
+      i++;
+    } else if (c === '|') {
+      if (!endCommand()) return null;
+      needCommand = true;
+      if (next === '|' || next === '&') i++;
+    } else if (c === '>' || c === '<' || (c === '&' && next === '>')) {
+      // A file descriptor number written right before it is part of it.
+      let op = '';
+      if (inWord && /^\d+$/.test(word) && /\d/.test(line[i - 1])) {
+        op = word;
+        word = '';
+        inWord = false;
+      } else {
+        endWord();
+      }
+      if (c === '<' && next === '<') return null;
+      // One whole operator: `>` `>>` `>|` `<` `<>` `&>` `&>>`, or a
+      // duplication `>&N` `<&N` (N digits or `-`). It ends there, so a
+      // `&&`, `||` or `|` right after `2>&1` still starts the next command.
+      op += c;
+      if (c === '&') {
+        op += line[++i];
+        if (line[i + 1] === '>') op += line[++i];
+      } else if (c === '>' && (next === '>' || next === '|')) {
+        op += line[++i];
+      } else if (c === '<' && next === '>') {
+        op += line[++i];
+      } else if (next === '&') {
+        op += line[++i];
+        while (/[\d-]/.test(line[i + 1] ?? '')) op += line[++i];
+        // sh reads `>&1x` or `2>&1#…` as one redirect word, not as `>&1`
+        // followed by more text; what that does is not worth modelling.
+        if (line[i + 1] !== undefined && !/[\s;|&<>()]/.test(line[i + 1])) return null;
+      }
+      words.push(op);
+    } else if (c === '&' || c === '(' || c === ')') {
+      return null;
+    } else if (c === '#' && !inWord && (i === 0 || /[\s;|&()]/.test(line[i - 1]))) {
+      // A comment only where a word could start; `x>#y` or `>&1#` is not one.
+      const eol = line.indexOf('\n', i);
+      i = (eol < 0 ? line.length : eol) - 1;
+    } else if ('$`*?[{'.includes(c) || (c === '~' && (!inWord || /[=:]$/.test(word)))) {
+      // Expansions: variables, command substitution, globs, braces and a
+      // home directory. What they turn into is not in the line.
+      return null;
+    } else {
+      word += c;
+      inWord = true;
+    }
+  }
+  if (!endCommand() && needCommand) return null;
+  return commands;
+}
+
+/** Shell builtins that do nothing, as in `npm test || true`. */
+const SHELL_NO_OPS = new Set(['true', 'false', ':']);
+
+/**
+ * Check every command of a skill's shell line against the execute_command
+ * policy (whitelist, blocked patterns, paths, SSRF). Returns why the line
+ * is refused, or null when it may run.
+ */
+async function checkSkillCommand(line: string, cwd: string): Promise<string | null> {
+  // Skill lines run through spawnSync(..., { shell: true }), which is cmd.exe
+  // on Windows. The splitter reads sh: cmd.exe treats quotes, `^`, `%` and
+  // `!` differently, so a line that is one quoted argument here can be
+  // several commands there, and the rest would never be checked.
+  if (process.platform === 'win32' && /['"^%!&|<>]/.test(line)) {
+    return "it uses characters cmd.exe interprets differently (quotes, ^, %, !, &, |, <, >), so it cannot be checked on Windows";
+  }
+  const commands = splitShellCommands(line);
+  if (!commands || commands.length === 0) {
+    return 'it uses shell syntax that cannot be checked (`$`, backticks, globs, braces, `~`, subshells, background jobs, heredocs or unbalanced quotes)';
+  }
+  const { validateCommandAsync } = await import('../utils/shell.js');
+  // The splitter refused every `$` and backtick the shell would act on, so
+  // those left are quoted text (`git commit -m "fix \`foo\`"`). The
+  // policy's command-substitution patterns must not refuse them.
+  const plain = (word: string) => word.replace(/[$`]/g, '_');
+  for (const [command, ...args] of commands) {
+    if (SHELL_NO_OPS.has(command) && args.length === 0) continue;
+    const verdict = await validateCommandAsync(command, args.map(plain), { cwd, projectRoot: cwd });
+    if (!verdict.valid) return verdict.reason || 'command validation failed';
+  }
+  return null;
+}
+
 // ─── Renderers ────────────────────────────────────────────────────────────────
+
+/** The TUI's /review prompt, so both surfaces review a diff the same way. */
+function buildDiffReviewPrompt(diffText: string): string {
+  return `You are doing a code review. Analyze this git diff and give structured feedback.
+
+\`\`\`diff
+${diffText}
+\`\`\`
+
+Review for:
+1. **Bugs** — logic errors, off-by-one, null/undefined issues
+2. **Security** — injection, auth issues, exposed secrets, unsafe operations
+3. **Performance** — unnecessary loops, missing indexes, memory leaks
+4. **Edge cases** — unhandled inputs, missing error handling
+5. **Code quality** — readability, naming, duplication
+
+Format: use headers per category, only include categories where you found issues. End with a short overall verdict (1-2 sentences). Be concise and specific — reference file names and line numbers from the diff where possible.`;
+}
 
 function buildHelp(): string {
   // Keep this mirrored with the switch in handleSlashCommand above. Every `case`

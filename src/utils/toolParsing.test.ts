@@ -31,8 +31,17 @@ describe('normalizeToolName', () => {
   });
 
   it('passes unknown names through (lowercased, hyphens→underscores)', () => {
-    expect(normalizeToolName('Mcp__Foo')).toBe('mcp__foo');
     expect(normalizeToolName('custom-tool')).toBe('custom_tool');
+  });
+
+  // MCP names belong to the server. The registry looks the server up by exact
+  // name and the server looks its tool up the same way, so any rewrite here
+  // turns a working call into "No MCP server named …".
+  it('leaves MCP names exactly as the server advertised them', () => {
+    expect(normalizeToolName('Mcp__Foo')).toBe('Mcp__Foo');
+    expect(normalizeToolName('brave-search__brave_web_search')).toBe('brave-search__brave_web_search');
+    expect(normalizeToolName('context7__resolve-library-id')).toBe('context7__resolve-library-id');
+    expect(normalizeToolName('GitHub__getIssue')).toBe('GitHub__getIssue');
   });
 
   it('handles an empty string', () => {
@@ -67,6 +76,22 @@ describe('parseOpenAIToolCalls', () => {
       { id: 'a', function: { name: 'readFile', arguments: '{"path": "x"}' } },
     ]);
     expect(out[0].tool).toBe('read_file');
+  });
+
+  // Marketplace servers such as brave-search and ios-simulator have hyphens in
+  // their names. The model echoes the advertised name; the parser must hand it
+  // on unchanged or the call can never reach the server.
+  it('keeps MCP tool names exactly as the model sent them', () => {
+    const out = parseOpenAIToolCalls([
+      { id: 'a', function: { name: 'brave-search__brave_web_search', arguments: '{"query": "x"}' } },
+      { id: 'b', function: { name: 'context7__resolve-library-id', arguments: '{}' } },
+      { id: 'c', function: { name: 'GitHub__getIssue', arguments: '{}' } },
+    ]);
+    expect(out.map(t => t.tool)).toEqual([
+      'brave-search__brave_web_search',
+      'context7__resolve-library-id',
+      'GitHub__getIssue',
+    ]);
   });
 
   it('skips entries with an empty tool name', () => {
@@ -132,6 +157,14 @@ describe('parseAnthropicToolCalls', () => {
       { type: 'tool_use', name: 'WriteFile', input: {}, id: 'x' },
     ]);
     expect(out[0].tool).toBe('write_file');
+  });
+
+  it('keeps MCP tool names exactly as the model sent them', () => {
+    const out = parseAnthropicToolCalls([
+      { type: 'tool_use', name: 'chrome-devtools__take_snapshot', input: {}, id: 'x' },
+      { type: 'tool_use', name: 'ios-simulator__Tap', input: {}, id: 'y' },
+    ]);
+    expect(out.map(t => t.tool)).toEqual(['chrome-devtools__take_snapshot', 'ios-simulator__Tap']);
   });
 
   it('drops entries with an empty name after normalisation', () => {
@@ -241,5 +274,16 @@ describe('parseToolCalls (full pipeline)', () => {
     expect(out).toHaveLength(1);
     expect(out[0].tool).toBe('read_file');
     expect(out[0].parameters).toEqual({ path: '/x' });
+  });
+
+  it('keeps MCP tool names in text-format tool calls', () => {
+    const out = parseToolCalls('<tool_call>{"tool": "brave-search__brave_web_search", "parameters": {"query": "x"}}</tool_call>');
+    expect(out).toHaveLength(1);
+    expect(out[0].tool).toBe('brave-search__brave_web_search');
+  });
+
+  it('keeps the case of MCP names in the loose <toolcall> format', () => {
+    const out = parseToolCalls('<toolcall>GitHub__getIssue{"number": "1"}</toolcall>');
+    expect(out[0].tool).toBe('GitHub__getIssue');
   });
 });

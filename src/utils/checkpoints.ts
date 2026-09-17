@@ -34,7 +34,8 @@
  * }
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync, statSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, unlinkSync, statSync } from 'fs';
+import { isSafeProjectWriteTarget, writeProjectFile } from './projectPaths';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { execSync } from 'child_process';
@@ -65,9 +66,7 @@ export interface CheckpointMeta {
 }
 
 function getCheckpointsDir(workspaceRoot: string): string {
-  const dir = join(workspaceRoot, '.codeep', 'checkpoints');
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  return dir;
+  return join(workspaceRoot, '.codeep', 'checkpoints');
 }
 
 function readGitHead(workspaceRoot: string): string | undefined {
@@ -120,7 +119,8 @@ export function createCheckpoint(opts: {
   };
 
   const dir = getCheckpointsDir(opts.workspaceRoot);
-  writeFileSync(join(dir, `${checkpoint.id}.json`), JSON.stringify(checkpoint, null, 2));
+  // .codeep/ can come with a cloned repo: never write through a symlink.
+  writeProjectFile(opts.workspaceRoot, join(dir, `${checkpoint.id}.json`), JSON.stringify(checkpoint, null, 2));
   return checkpoint;
 }
 
@@ -184,6 +184,8 @@ export function deleteCheckpoint(workspaceRoot: string, id: string): boolean {
   if (!/^ck-\d{4}-\d{2}-\d{2}-[a-f0-9]{8}$/.test(id)) return false;
   const file = join(getCheckpointsDir(workspaceRoot), `${id}.json`);
   if (!existsSync(file)) return false;
+  // Through a symlinked .codeep/ the path would name a file elsewhere.
+  if (!isSafeProjectWriteTarget(workspaceRoot, file)) return false;
   try {
     unlinkSync(file);
     return true;

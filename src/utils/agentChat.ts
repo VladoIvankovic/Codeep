@@ -12,10 +12,12 @@
  *   TimeoutError             — distinguishes timeout from user abort
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { join } from 'path';
+import { StringDecoder } from 'string_decoder';
 import { createHash } from 'crypto';
 import { ProjectContext } from './project';
+import { UnsafeProjectPathError, leadsOutsideProject, writeProjectFile } from './projectPaths';
 import { config, getApiKey, Message, resolveBaseUrl } from '../config/index';
 import { loadProjectIntelligence, generateContextFromIntelligence } from './projectIntelligence';
 import { formatCommandIndex } from './commandIndex';
@@ -58,6 +60,37 @@ export class TimeoutError extends Error {
 }
 
 /**
+ * Read at most `maxBytes` of a project file, or null when it isn't a regular
+ * file inside the project. Rules and progress files arrive with a cloned
+ * repo, and statSync follows symlinks: a committed `AGENTS.md -> /dev/zero`
+ * (or a FIFO) never comes back from readFileSync, and every agent run would
+ * hang on it; `CODEEP.md -> ~/.aws/credentials` would put the user's
+ * credentials into every system prompt.
+ */
+function readProjectFile(filePath: string, maxBytes: number, projectRoot: string): { text: string; truncated: boolean } | null {
+  if (leadsOutsideProject(filePath, projectRoot)) return null;
+  const stat = statSync(filePath, { throwIfNoEntry: false });
+  if (stat && !stat.isFile()) return null;
+  // A path that vanished since the caller's existsSync is left to
+  // readFileSync to report.
+  if (!stat || stat.size <= maxBytes) return { text: readFileSync(filePath, 'utf-8'), truncated: false };
+  const fd = openSync(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(maxBytes);
+    let read = 0;
+    while (read < maxBytes) {
+      const n = readSync(fd, buf, read, maxBytes - read, read);
+      if (n === 0) break;
+      read += n;
+    }
+    // StringDecoder holds back a multi-byte character split by the cut.
+    return { text: new StringDecoder('utf8').write(buf.subarray(0, read)), truncated: true };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
  * Load project rules from .codeep/rules.md or CODEEP.md
  */
 export function loadProjectRules(projectRoot: string): string {
@@ -87,12 +120,13 @@ export function loadProjectRules(projectRoot: string): string {
   for (const filePath of candidates) {
     if (existsSync(filePath)) {
       try {
-        let content = readFileSync(filePath, 'utf-8').trim();
+        const file = readProjectFile(filePath, MAX_RULES_BYTES, projectRoot);
+        if (!file) continue;
+        let content = file.text.trim();
         if (content) {
-          if (content.length > MAX_RULES_BYTES) {
-            debug('Project rules truncated', filePath, `${content.length} > ${MAX_RULES_BYTES}`);
-            content = content.slice(0, MAX_RULES_BYTES)
-              + '\n\n[Rules truncated by Codeep — file exceeds the 64KB inline limit.]';
+          if (file.truncated) {
+            debug('Project rules truncated', filePath, `> ${MAX_RULES_BYTES} bytes`);
+            content += '\n\n[Rules truncated by Codeep — file exceeds the 64KB inline limit.]';
           }
           debug('Loaded project rules from', filePath);
           return `\n\n## Project Rules\nThe following rules are defined by the project owner. You MUST follow these rules:\n\n${content}`;
@@ -106,6 +140,9 @@ export function loadProjectRules(projectRoot: string): string {
   return '';
 }
 
+/** Largest progress log we'll inject (64 KB). */
+const MAX_PROGRESS_BYTES = 64 * 1024;
+
 /**
  * Load agent progress log from .codeep/progress.md
  * Injected into system prompt so agent knows what was previously done.
@@ -115,7 +152,12 @@ export function loadProgressLog(projectRoot: string): string {
   const progressFile = join(projectRoot, '.codeep', 'progress.md');
   if (!existsSync(progressFile)) return '';
   try {
-    const content = readFileSync(progressFile, 'utf-8').trim();
+    // Capped like the rules: this file can arrive with the repo too.
+    const file = readProjectFile(progressFile, MAX_PROGRESS_BYTES, projectRoot);
+    let content = file ? file.text.trim() : '';
+    if (content && file?.truncated) {
+      content += '\n\n[Progress log truncated by Codeep — file exceeds the 64KB inline limit.]';
+    }
     if (content) {
       return `\n\n## Previous Session Progress\nThe agent has previously worked on this project. Read this to understand what was already done and what still needs to be done:\n\n${content}`;
     }
@@ -123,6 +165,27 @@ export function loadProgressLog(projectRoot: string): string {
     debug('Failed to read progress log from', progressFile, err);
   }
   return '';
+}
+
+/** How much of the task the progress log keeps, split between its start and end. */
+const MAX_PROGRESS_TASK_CHARS = 4000;
+
+/**
+ * The task as the progress log records it. Callers pass the enriched prompt,
+ * with attached files in front of the user's words, so a long one keeps its
+ * start and its end: written whole, it filled the 64KB read budget and the
+ * Status and Summary sections below it never reached the next session.
+ */
+function progressTask(prompt: string): string {
+  if (prompt.length <= MAX_PROGRESS_TASK_CHARS) return prompt;
+  const half = MAX_PROGRESS_TASK_CHARS / 2;
+  // Don't cut a surrogate pair in two.
+  let head = half;
+  if (/[\uD800-\uDBFF]/.test(prompt[head - 1])) head--;
+  let tail = prompt.length - half;
+  if (/[\uDC00-\uDFFF]/.test(prompt[tail])) tail++;
+  const omitted = tail - head;
+  return `${prompt.slice(0, head)}\n[… ${omitted} characters of the task omitted …]\n${prompt.slice(tail)}`;
 }
 
 /**
@@ -150,7 +213,7 @@ export function writeProgressLog(
       `## Last Session: ${now}`,
       ``,
       `### Task`,
-      `${prompt}`,
+      progressTask(prompt),
       ``,
       `### Status`,
       result.success ? `✓ Completed (${result.iterations} iterations)` : `⚠ Incomplete — task may need to be continued`,
@@ -184,12 +247,14 @@ export function writeProgressLog(
     }
 
     const content = lines.join('\n');
-    writeFileSync(join(codeepDir, 'progress.md'), content, 'utf-8');
+    // .codeep/ comes with the repo: a symlinked progress.md (or .codeep) would
+    // have this overwrite whatever file the repo pointed it at.
+    writeProjectFile(projectRoot, join(codeepDir, 'progress.md'), content);
     if (projectName && projectRoot) {
       syncProgress({ projectName, projectId: generateProjectId(projectRoot), content });
     }
   } catch (err) {
-    debug('Failed to write progress log:', err);
+    debug(err instanceof UnsafeProjectPathError ? 'Not writing progress log:' : 'Failed to write progress log:', err);
   }
 }
 
@@ -500,6 +565,8 @@ export async function agentChat(
           temperature: requiresDefaultTemperature(providerId) ? undefined : Number(config.get('temperature')),
           timeoutMs,
           onChunk: useStreaming ? onChunk : undefined,
+          // Carries the user's Stop as well as this request's own timeout.
+          signal: controller.signal,
         });
         if (res.promptTokens != null && res.completionTokens != null) {
           recordTokenUsage(

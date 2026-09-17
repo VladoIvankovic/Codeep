@@ -1,10 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import {
   extractTargetFile,
   formatSmartContext,
+  gatherSmartContext,
+  clearImportResolutionCache,
   SmartContextResult,
   RelatedFile,
 } from './smartContext';
+import type { ProjectContext } from './project';
 
 // ---------------------------------------------------------------------------
 // Helper to build a SmartContextResult quickly
@@ -470,6 +476,225 @@ describe('formatSmartContext', () => {
 
       const result = formatSmartContext(ctx);
       expect(result).toContain('line1\nline2\nline3');
+    });
+  });
+});
+
+// ===========================================================================
+// gatherSmartContext (real files)
+// ===========================================================================
+describe('gatherSmartContext', () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'codeep-smartctx-'));
+    clearImportResolutionCache();
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // Mirrors runAgent: the target is whatever path-like word the prompt holds.
+  const gather = (prompt: string) =>
+    gatherSmartContext(extractTargetFile(prompt), { root } as ProjectContext, prompt);
+  const paths = (res: SmartContextResult) => res.files.map((f) => f.relativePath);
+
+  describe('secrets files', () => {
+    beforeEach(() => {
+      writeFileSync(join(root, '.gitignore'), '.env.local\n');
+      writeFileSync(join(root, '.env.local'), 'STRIPE_KEY=sk_live_SECRET123');
+      mkdirSync(join(root, 'config'));
+      writeFileSync(join(root, 'config', 'server.key'), '-----BEGIN PRIVATE KEY-----');
+      writeFileSync(join(root, 'package.json'), '{"name":"app"}');
+    });
+
+    it('never inlines a secrets file named in the prompt', () => {
+      // In ACP the @-mention guard refuses `@.env.local` and strips the `@`,
+      // so the agent still sees the bare path. Smart context must not then
+      // put the file into the system prompt behind the user's back.
+      for (const prompt of [
+        'the app ignores .env.local on startup, fix it',
+        "Why isn't my app picking up the values in .env.local",
+        'rotate the cert in config/server.key please',
+      ]) {
+        const res = gather(prompt);
+        const block = formatSmartContext(res);
+        expect(paths(res), prompt).not.toContain('.env.local');
+        expect(paths(res), prompt).not.toContain('config/server.key');
+        expect(block, prompt).not.toContain('sk_live_SECRET123');
+        expect(block, prompt).not.toContain('BEGIN PRIVATE KEY');
+      }
+    });
+
+    it('never inlines a secrets file mentioned alongside the target', () => {
+      writeFileSync(join(root, 'app.ts'), 'export const port = 3000;');
+      const res = gather('fix app.ts so it loads config/server.key');
+      expect(paths(res)).toContain('app.ts');
+      expect(paths(res)).not.toContain('config/server.key');
+      expect(formatSmartContext(res)).not.toContain('BEGIN PRIVATE KEY');
+    });
+
+    it('never inlines a secrets file the target imports', () => {
+      mkdirSync(join(root, 'src'));
+      writeFileSync(join(root, 'src', 'tls.ts'), "import pem from '../config/server.key';\nexport default pem;");
+      const res = gather('fix src/tls.ts');
+      expect(paths(res)).toContain('src/tls.ts');
+      expect(paths(res)).not.toContain('config/server.key');
+      expect(formatSmartContext(res)).not.toContain('BEGIN PRIVATE KEY');
+    });
+
+    it('still inlines ordinary files', () => {
+      writeFileSync(join(root, 'app.ts'), 'export const port = 3000;');
+      expect(formatSmartContext(gather('fix app.ts'))).toContain('export const port = 3000;');
+    });
+
+    it('judges a symlink by the file it points at', () => {
+      // Config files are picked up on every run, even when the prompt names
+      // nothing, and the name check only ever saw the link.
+      symlinkSync('.env.local', join(root, '.env.example'));
+      symlinkSync('.env.local', join(root, 'notes.md'));
+      symlinkSync(join('config', 'server.key'), join(root, 'tsconfig.json'));
+      for (const prompt of ['hello there', 'fix notes.md please']) {
+        const res = gather(prompt);
+        const block = formatSmartContext(res);
+        expect(paths(res), prompt).toEqual(['package.json']);
+        expect(block, prompt).not.toContain('sk_live_SECRET123');
+        expect(block, prompt).not.toContain('BEGIN PRIVATE KEY');
+      }
+    });
+
+    it('never follows a link out of the project', () => {
+      const outside = mkdtempSync(join(tmpdir(), 'codeep-smartctx-outside-'));
+      try {
+        writeFileSync(join(outside, 'tsconfig.json'), '{"token":"ghp_OUTSIDE"}');
+        writeFileSync(join(outside, 'notes.md'), 'export TOKEN=hunter2');
+        symlinkSync(join(outside, 'tsconfig.json'), join(root, 'tsconfig.json'));
+        symlinkSync(join(outside, 'notes.md'), join(root, 'notes.md'));
+        for (const prompt of ['hello there', 'fix notes.md please', `fix ../${outside.split('/').pop()}/notes.md`]) {
+          const res = gather(prompt);
+          const block = formatSmartContext(res);
+          expect(paths(res), prompt).toEqual(['package.json']);
+          expect(block, prompt).not.toContain('ghp_OUTSIDE');
+          expect(block, prompt).not.toContain('hunter2');
+        }
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('never inlines key material, whatever the file is called', () => {
+      const armour = '-----BEGIN ' + 'OPENSSH PRIVATE KEY-----';
+      writeFileSync(join(root, 'tsconfig.json'), `${armour}\nb3BlbnNzaC1rZXktdjEAAAAA\n`);
+      mkdirSync(join(root, 'deploy'));
+      writeFileSync(join(root, 'deploy', 'prod.txt'), `${armour}\nb3BlbnNzaC1rZXktdjEAAAAA\n`);
+      const res = gather('fix deploy/prod.txt');
+      expect(paths(res)).toEqual(['package.json']);
+      expect(formatSmartContext(res)).not.toContain('PRIVATE KEY');
+    });
+
+    it('finds key material anywhere in the part it reads', () => {
+      // The check used to stop at 8 KB; a service account JSON can carry
+      // its key further in.
+      const armour = '-----BEGIN ' + 'PRIVATE KEY-----';
+      writeFileSync(join(root, 'svc.json'), `{"pad":"${'x'.repeat(9000)}","private_key":"${armour}\\nLATEKEYSECRET\\n"}`);
+      const res = gather('fix svc.json please');
+      expect(paths(res)).toEqual(['package.json']);
+      expect(formatSmartContext(res)).not.toContain('LATEKEYSECRET');
+    });
+
+    it('keeps a source file that only names the key armour', () => {
+      mkdirSync(join(root, 'src'));
+      writeFileSync(join(root, 'src', 'pem.test.ts'), 'const fixture = "-----BEGIN ' + 'RSA PRIVATE KEY-----";\n');
+      const res = gather('fix src/pem.test.ts please');
+      expect(paths(res)).toContain('src/pem.test.ts');
+    });
+
+    it('treats a sibling whose name starts with the project name as outside', () => {
+      const sibling = `${root}-secrets`;
+      mkdirSync(sibling);
+      try {
+        writeFileSync(join(sibling, 'notes.md'), 'SIBLINGSECRET');
+        symlinkSync(join(sibling, 'notes.md'), join(root, 'notes.md'));
+        const res = gather('fix notes.md please');
+        expect(paths(res)).toEqual(['package.json']);
+        expect(formatSmartContext(res)).not.toContain('SIBLINGSECRET');
+      } finally {
+        rmSync(sibling, { recursive: true, force: true });
+      }
+    });
+
+    it('does not inline an .env template the @-mention guard refused', () => {
+      // expandMentions refuses `@config/.env.template` and leaves the bare path
+      // in the prompt; a template can still hold a real value.
+      writeFileSync(join(root, 'config', '.env.template'), 'STRIPE_KEY=sk_live_TEMPLATE_REAL');
+      for (const prompt of [
+        'why does config/.env.template break the build',
+        'compare src/app.ts with config/.env.template',
+      ]) {
+        const res = gather(prompt);
+        expect(paths(res), prompt).not.toContain('config/.env.template');
+        expect(formatSmartContext(res), prompt).not.toContain('TEMPLATE_REAL');
+      }
+    });
+
+    it('keeps a committed .env.example as context', () => {
+      writeFileSync(join(root, '.env.example'), 'STRIPE_KEY=');
+      expect(paths(gather('hello there'))).toEqual(['package.json', '.env.example']);
+    });
+  });
+
+  describe('size and file kind', () => {
+    it('caps an oversized target instead of inlining all of it', () => {
+      // The target was read up front and never counted against the budget,
+      // so a multi-MB log went into the system prompt in full.
+      writeFileSync(join(root, 'app.log'), 'x'.repeat(200_000));
+      const res = gather('find the stack trace in app.log');
+      const target = res.files.find((f) => f.relativePath === 'app.log');
+      expect(target).toBeDefined();
+      expect(target!.content!.length).toBeLessThanOrEqual(50_000 + 20);
+      expect(target!.content).toMatch(/\(truncated\)$/);
+      expect(res.truncated).toBe(true);
+      expect(res.totalSize).toBeLessThanOrEqual(50_000 + 20);
+      expect(formatSmartContext(res)).toContain('Some files were truncated');
+    });
+
+    it('caps an oversized related file the same way', () => {
+      writeFileSync(join(root, 'package.json'), `{"description":"${'y'.repeat(120_000)}"}`);
+      const res = gatherSmartContext(null, { root } as ProjectContext, 'hello there');
+      const pkg = res.files.find((f) => f.relativePath === 'package.json');
+      expect(pkg!.content!.length).toBeLessThanOrEqual(50_000 + 20);
+      expect(res.truncated).toBe(true);
+    });
+
+    it('does not decode a binary target into the prompt', () => {
+      mkdirSync(join(root, 'assets'));
+      writeFileSync(join(root, 'assets', 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0xff, 0xfe]));
+      const res = gather('update the icon in assets/logo.png');
+      expect(paths(res)).not.toContain('assets/logo.png');
+    });
+
+    it('does not keep a multi-byte character split by the cut', () => {
+      writeFileSync(join(root, 'notes.md'), 'a' + 'é'.repeat(30_000)); // the cut lands mid-character
+      const target = gather('fix notes.md').files.find((f) => f.relativePath === 'notes.md');
+      expect(target!.content).not.toContain('\uFFFD');
+    });
+
+    it('skips a target or config file that is not a regular file', () => {
+      // A cloned repo can commit `tsconfig.json -> /dev/zero`; reading that
+      // never returns. /dev/null takes the same path (a character device the
+      // old existsSync-then-read code opened) but returns at once, so it
+      // proves the file-kind check without hanging the test run.
+      symlinkSync('/dev/null', join(root, 'tsconfig.json'));
+      symlinkSync('/dev/null', join(root, 'notes.md'));
+      writeFileSync(join(root, 'package.json'), '{"name":"app"}');
+
+      const none = gatherSmartContext(null, { root } as ProjectContext, 'hello there');
+      expect(paths(none)).toEqual(['package.json']);
+
+      const targeted = gather('fix notes.md');
+      expect(paths(targeted)).not.toContain('notes.md');
+      expect(paths(targeted)).not.toContain('tsconfig.json');
     });
   });
 });

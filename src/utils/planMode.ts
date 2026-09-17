@@ -4,8 +4,9 @@
  * Flow:
  *   1. User runs `/plan <task>` — we ask the LLM for a numbered plan
  *      (no tool calls, no file changes) and surface it to the user.
- *   2. We hold the (task, plan) pair as the *pending* plan, scoped to
- *      the current process.
+ *   2. We hold the (task, plan) pair as the *pending* plan. Each
+ *      conversation has its own: callers that serve several at once (ACP
+ *      threads) pass a scope, and everything else shares the default one.
  *   3. User runs `/go` to execute, or `/plan <revised task>` to refine.
  *      `/go` hands the original task + approved plan to the regular
  *      agent loop as a single prompt, so the existing tool execution,
@@ -68,31 +69,52 @@ export interface PendingPlan {
   createdAt: number;
 }
 
-let pending: PendingPlan | null = null;
+/** The scope of callers that hold one conversation per process (the TUI). */
+export const DEFAULT_PLAN_SCOPE = 'default';
+
+// One pending plan per conversation. A process-wide slot let /go in one ACP
+// thread run the plan another thread had just made. Plans are returned as
+// stored, not copied: callers tell plans apart by identity.
+const pendingByScope = new Map<string, PendingPlan>();
 
 /**
  * Ask the model for a plan for the given task. Stores the (task, plan)
- * pair as the pending plan so a subsequent `/go` can execute it.
- * Throws on chat failure — caller renders the error.
+ * pair as the pending plan of `scope` so a subsequent `/go` there can
+ * execute it. Throws on chat failure — caller renders the error.
+ * `abortSignal` cancels the request; a cancelled plan is not stored.
  */
 export async function generatePlan(
   task: string,
   onChunk?: (text: string) => void,
+  scope: string = DEFAULT_PLAN_SCOPE,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   const history: Message[] = [
     { role: 'system', content: PLAN_SYSTEM_PROMPT },
   ];
-  const plan = await chat(task, history, onChunk);
-  pending = { task, plan, createdAt: Date.now() };
+  const plan = await chat(task, history, onChunk, undefined, undefined, abortSignal);
+  // A reply that arrives after the cancel is not a plan the user can /go.
+  if (abortSignal?.aborted) {
+    const abortError = new Error('Plan generation cancelled');
+    abortError.name = 'AbortError';
+    throw abortError;
+  }
+  pendingByScope.set(scope, { task, plan, createdAt: Date.now() });
   return plan;
 }
 
-export function getPendingPlan(): PendingPlan | null {
-  return pending;
+export function getPendingPlan(scope: string = DEFAULT_PLAN_SCOPE): PendingPlan | null {
+  return pendingByScope.get(scope) ?? null;
 }
 
-export function clearPendingPlan(): void {
-  pending = null;
+/** Replace the pending plan of `scope`; `null` clears it. */
+export function setPendingPlan(plan: PendingPlan | null, scope: string = DEFAULT_PLAN_SCOPE): void {
+  if (plan) pendingByScope.set(scope, plan);
+  else pendingByScope.delete(scope);
+}
+
+export function clearPendingPlan(scope: string = DEFAULT_PLAN_SCOPE): void {
+  pendingByScope.delete(scope);
 }
 
 /**

@@ -31,13 +31,15 @@ import {
   type LanguageCode,
 } from '../config/index.js';
 import { disposeSession as disposeMcpSession } from '../utils/mcpRegistry.js';
+import { clearPendingPlan } from '../utils/planMode.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 /** Session record held by the running server. Lives in server.ts; re-exposed
  *  here so handler signatures can name it without re-declaring the shape. */
 export interface AcpServerSession extends AcpSession {
-  abortController: AbortController | null;
+  /** Controllers of the prompts still running; session/cancel aborts all. */
+  activePrompts: Set<AbortController>;
   currentModeId: string;
   titleSent: boolean;
   hadHistory: boolean;
@@ -263,6 +265,8 @@ export function handleSessionDelete(
   const { sessionId, cwd } = (msg.params ?? {}) as DeleteSessionParams;
   // Remove from in-memory sessions map if present
   sessions.delete(sessionId);
+  // Its pending /plan goes with it.
+  clearPendingPlan(sessionId);
   // Tear down any MCP server processes attached to this session — leaks
   // children otherwise. Fire-and-forget; client doesn't wait on stop().
   disposeMcpSession(sessionId).catch(() => { /* logged inside */ });

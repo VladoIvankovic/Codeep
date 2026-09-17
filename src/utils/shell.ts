@@ -16,6 +16,16 @@ export interface CommandResult {
   duration: number;
   command: string;
   args: string[];
+  /** Set when the command was stopped through `CommandOptions.signal`. */
+  cancelled?: boolean;
+  /** Set when the command was killed at `CommandOptions.timeout`. Its partial
+   *  stdout and stderr are kept; the timeout note follows the stderr. */
+  timedOut?: boolean;
+}
+
+function timedOutStderr(stderr: string, timeout: number): string {
+  const note = `Command timed out after ${timeout}ms`;
+  return stderr.trim() ? `${stderr.replace(/\s+$/, '')}\n${note}` : note;
 }
 
 export interface CommandOptions {
@@ -23,6 +33,12 @@ export interface CommandOptions {
   timeout?: number;
   env?: Record<string, string>;
   projectRoot?: string; // For path validation
+  /**
+   * Stops the command when it fires: the child is killed and the result
+   * comes back at once with `cancelled: true`. Honoured by
+   * executeCommandAsync only — the sync runner cannot be interrupted.
+   */
+  signal?: AbortSignal;
 }
 
 // Dangerous command patterns that should never be executed
@@ -446,11 +462,12 @@ export function executeCommand(
       return {
         success: false,
         stdout: result.stdout?.toString() || '',
-        stderr: `Command timed out after ${timeout}ms`,
+        stderr: timedOutStderr(result.stderr?.toString() || '', timeout),
         exitCode: -1,
         duration,
         command,
         args,
+        timedOut: true,
       };
     }
     
@@ -551,6 +568,22 @@ export function executeCommandAsync(
         return;
       }
 
+      // Cancelled while the checks above ran: never start the process.
+      const signal = options?.signal;
+      if (signal?.aborted) {
+        resolve({
+          success: false,
+          stdout: '',
+          stderr: 'Command cancelled',
+          exitCode: -1,
+          duration: Date.now() - startTime,
+          command,
+          args,
+          cancelled: true,
+        });
+        return;
+      }
+
       const child = spawn(command, args, {
         cwd,
         env: { ...process.env, ...options?.env },
@@ -564,52 +597,47 @@ export function executeCommandAsync(
 
       let settled = false;
 
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        child.kill('SIGTERM');
-        const duration = Date.now() - startTime;
-        resolve({
-          success: false,
-          stdout,
-          stderr: `Command timed out after ${timeout}ms`,
-          exitCode: -1,
-          duration,
-          command,
-          args,
-        });
-      }, timeout);
-
-      child.on('close', (code: number | null) => {
+      // A caller's signal usually belongs to a whole prompt and outlives
+      // many commands, so the listener comes off as soon as this one ends.
+      const finish = (result: Omit<CommandResult, 'duration' | 'command' | 'args'>) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        const duration = Date.now() - startTime;
-        resolve({
-          success: code === 0,
-          stdout,
-          stderr,
-          exitCode: code ?? -1,
-          duration,
-          command,
-          args,
-        });
+        signal?.removeEventListener('abort', onAbort);
+        resolve({ ...result, duration: Date.now() - startTime, command, args });
+      };
+
+      // Settle before killing: kill() can emit 'error' synchronously, and
+      // that must not replace the verdict.
+      const onAbort = () => {
+        if (settled) return;
+        finish({ success: false, stdout, stderr: 'Command cancelled', exitCode: -1, cancelled: true });
+        child.kill('SIGTERM');
+        // A child that ignores SIGTERM must not keep running after the
+        // caller was told it stopped.
+        const force = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        }, 2000);
+        force.unref();
+        child.once('exit', () => clearTimeout(force));
+      };
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        // Keep what the command printed: a test runner reports its failures on
+        // stderr before it hangs, and a check needs them.
+        finish({ success: false, stdout, stderr: timedOutStderr(stderr, timeout), exitCode: -1, timedOut: true });
+        child.kill('SIGTERM');
+      }, timeout);
+
+      signal?.addEventListener('abort', onAbort, { once: true });
+
+      child.on('close', (code: number | null) => {
+        finish({ success: code === 0, stdout, stderr, exitCode: code ?? -1 });
       });
 
       child.on('error', (err: Error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        const duration = Date.now() - startTime;
-        resolve({
-          success: false,
-          stdout: '',
-          stderr: err.message,
-          exitCode: -1,
-          duration,
-          command,
-          args,
-        });
+        finish({ success: false, stdout: '', stderr: err.message, exitCode: -1 });
       });
     });
   });

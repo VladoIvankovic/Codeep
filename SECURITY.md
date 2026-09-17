@@ -57,7 +57,13 @@ These exist to reduce the attack surface; please don't regress them without
 discussion:
 
 - **Project permissions** (`config.projectPermissions`): workspaces are
-  read-only by default until the user grants write access (`/grant`).
+  read-only by default until the user grants write access (`/grant`). Grants
+  live only in the user's global config; a grant inside a repository's
+  `.codeep/config.json` is ignored.
+- **Repository-controlled `.codeep/`**: Codeep never writes, appends or deletes
+  through a symlinked `.codeep/` entry (`utils/projectPaths.ts`), and does not
+  read project rules, agents, personalities, commands, skill bundles or
+  profiles that link outside the project.
 - **Agent confirmation modes** (`always` / `dangerous` / `never`): the
   `dangerous` default asks before destructive tools (`delete_file`,
   `execute_command`, optionally `write_file` / `edit_file`).

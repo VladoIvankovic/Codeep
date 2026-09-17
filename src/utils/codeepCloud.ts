@@ -474,9 +474,11 @@ function writePulledPersonalityBundle(items: Record<string, string>): number {
  *  nothing had no way to tell which had happened. */
 export type SyncFailure =
   | 'not-linked'    // no sync token — the account was never linked
-  | 'unreachable'   // request failed, timed out, or the server answered non-2xx
-  | 'rejected'      // the server answered, but with ok:false
-  | 'malformed';    // the response was not the JSON we expect
+  | 'unreachable'   // request failed, timed out, or the server answered another non-2xx
+  | 'rejected'      // the server answered ok:false, 401 or 403
+  | 'malformed'     // the response was not the JSON we expect
+  | 'unreadable'    // the local file to push could not be read
+  | 'unwritable';   // the pulled file could not be saved locally
 
 /** Success carries a count (which may legitimately be 0 — nothing new), plus
  *  how many local agents the server's tombstone list removed. */
@@ -488,16 +490,24 @@ export function describeSyncFailure(reason: SyncFailure): string {
   switch (reason) {
     case 'not-linked':  return 'not linked to codeep.dev — run: codeep account';
     case 'unreachable': return "couldn't reach codeep.dev";
-    case 'rejected':    return 'codeep.dev refused the request — try signing in again';
+    case 'rejected':    return 'codeep.dev refused the request — sign in again with: codeep account';
     case 'malformed':   return 'codeep.dev sent a response this version cannot read';
+    case 'unreadable':  return 'the local file could not be read';
+    case 'unwritable':  return 'the downloaded file could not be saved on this machine';
   }
+}
+
+/** Why a request that got an answer failed. A revoked or unknown token is
+ *  answered with 401/403 and needs a new link, not a better connection. */
+function failureFor(res: Response | null): SyncFailure {
+  return res && (res.status === 401 || res.status === 403) ? 'rejected' : 'unreachable';
 }
 
 async function pullBundle(kind: 'personalities' | 'commands'): Promise<SyncResult> {
   const syncToken = getSyncToken();
   if (!syncToken) return { ok: false, reason: 'not-linked' };
   const res = await fetchWithRetry(`${API_BASE}/api/${kind}`, { headers: { 'x-sync-token': syncToken } });
-  if (!res?.ok) return { ok: false, reason: 'unreachable' };
+  if (!res?.ok) return { ok: false, reason: failureFor(res) };
   try {
     const data = await res.json() as {
       ok: boolean;
@@ -531,7 +541,7 @@ async function pushBundle(kind: 'personalities' | 'commands'): Promise<SyncResul
     headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
     body: JSON.stringify({ items }),
   });
-  return res?.ok ? { ok: true, count, removed: 0 } : { ok: false, reason: 'unreachable' };
+  return res?.ok ? { ok: true, count, removed: 0 } : { ok: false, reason: failureFor(res) };
 }
 
 export const pullPersonalities = () => pullBundle('personalities');
@@ -786,42 +796,70 @@ function userProfilePath(): string {
   return join(homedir(), '.codeep', 'profile.md');
 }
 
-/** Push the local global profile.md to the dashboard. */
-export async function pushUserProfile(): Promise<boolean> {
+/**
+ * Push the local global profile.md to the dashboard. `count` is 1 when it was
+ * pushed and 0 when there is no local profile to push.
+ */
+export async function pushUserProfileResult(): Promise<SyncResult> {
   const syncToken = getSyncToken();
-  if (!syncToken) return false;
+  if (!syncToken) return { ok: false, reason: 'not-linked' };
   const path = userProfilePath();
-  if (!existsSync(path)) return false;
+  if (!existsSync(path)) return { ok: true, count: 0, removed: 0 };
   let content = '';
-  try { content = readFileSync(path, 'utf8'); } catch { return false; }
+  try { content = readFileSync(path, 'utf8'); } catch { return { ok: false, reason: 'unreadable' }; }
   if (content.length > 32 * 1024) content = content.slice(0, 32 * 1024);
   const res = await fetchWithRetry(`${API_BASE}/api/sync/user-profile`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
     body: JSON.stringify({ content }),
   });
-  return res?.ok ?? false;
+  return res?.ok ? { ok: true, count: 1, removed: 0 } : { ok: false, reason: failureFor(res) };
+}
+
+/**
+ * Pull the dashboard profile.md — additive: writes only when no local profile
+ * exists. `count` is 1 when written and 0 when skipped (nothing on the
+ * dashboard, or a local profile already there).
+ */
+export async function pullUserProfileResult(): Promise<SyncResult> {
+  const syncToken = getSyncToken();
+  if (!syncToken) return { ok: false, reason: 'not-linked' };
+  const res = await fetchWithRetry(`${API_BASE}/api/sync/user-profile`, { headers: { 'x-sync-token': syncToken } });
+  if (!res?.ok) return { ok: false, reason: failureFor(res) };
+  let data: { ok: boolean; content: string | null };
+  try {
+    data = await res.json() as { ok: boolean; content: string | null };
+  } catch {
+    return { ok: false, reason: 'malformed' };
+  }
+  if (!data || typeof data !== 'object') return { ok: false, reason: 'malformed' };
+  const skipped: SyncResult = { ok: true, count: 0, removed: 0 };
+  if (!data.ok) return { ok: false, reason: 'rejected' };
+  if (!data.content) return skipped;
+  try {
+    const path = userProfilePath();
+    if (existsSync(path)) return skipped; // never clobber local
+    const dir = join(homedir(), '.codeep');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(path, data.content);
+    return { ok: true, count: 1, removed: 0 };
+  } catch {
+    return { ok: false, reason: 'unwritable' };
+  }
+}
+
+/** Push the local global profile.md to the dashboard. False when nothing was
+ *  pushed, for whatever reason — see pushUserProfileResult for which. */
+export async function pushUserProfile(): Promise<boolean> {
+  const result = await pushUserProfileResult();
+  return result.ok && result.count === 1;
 }
 
 /** Pull the dashboard profile.md — additive: writes only when no local profile
  *  exists. Returns 1 if written, 0 if skipped, null on error / not linked. */
 export async function pullUserProfile(): Promise<number | null> {
-  const syncToken = getSyncToken();
-  if (!syncToken) return null;
-  const res = await fetchWithRetry(`${API_BASE}/api/sync/user-profile`, { headers: { 'x-sync-token': syncToken } });
-  if (!res?.ok) return null;
-  try {
-    const data = await res.json() as { ok: boolean; content: string | null };
-    if (!data.ok || !data.content) return 0;
-    const path = userProfilePath();
-    if (existsSync(path)) return 0; // never clobber local
-    const dir = join(homedir(), '.codeep');
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(path, data.content);
-    return 1;
-  } catch {
-    return null;
-  }
+  const result = await pullUserProfileResult();
+  return result.ok ? result.count : null;
 }
 
 export async function syncMemoryNotes(projectName: string, notes: string[]): Promise<void> {

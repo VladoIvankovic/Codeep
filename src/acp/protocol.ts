@@ -405,13 +405,23 @@ export interface TerminalWaitForExitParams {
   timeoutMs?: number;
 }
 
-export type TerminalExitStatus =
+// ACP's exit status: `exitCode` is null when a signal ended the process.
+export interface TerminalExitStatus {
+  exitCode?: number | null;
+  signal?: string | null;
+}
+
+// Tagged shape this adapter used to expect. Still accepted from clients
+// that send it.
+export type LegacyTerminalExitStatus =
   | { type: 'exited'; code: number }
   | { type: 'killed'; signal?: string };
 
-export interface TerminalWaitForExitResult {
-  exitStatus: TerminalExitStatus;
-}
+// The spec flattens the exit status into the response; the legacy shape
+// nests it under `exitStatus`.
+export type TerminalWaitForExitResult =
+  | TerminalExitStatus
+  | { exitStatus: TerminalExitStatus | LegacyTerminalExitStatus };
 
 export interface TerminalOutputParams {
   sessionId: string;
@@ -421,8 +431,14 @@ export interface TerminalOutputParams {
 
 export interface TerminalOutputResult {
   output: string;
+  truncated?: boolean;
   /** Absent while the process is still running; present once the process has exited. */
-  exitStatus?: TerminalExitStatus;
+  exitStatus?: TerminalExitStatus | null;
+}
+
+export interface TerminalKillParams {
+  sessionId: string;
+  terminalId: string;
 }
 
 export interface TerminalReleaseParams {

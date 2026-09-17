@@ -182,6 +182,9 @@ export interface OllamaChatOptions {
   keepAlive?: string;
   temperature?: number;
   timeoutMs?: number;
+  /** Stops the request when it fires (Stop / cancel). The promise then
+   *  rejects with an error named 'AbortError', as fetch does. */
+  signal?: AbortSignal;
   onChunk?: (text: string) => void;
   /** Tool definitions in OpenAI function format. Ollama's /api/chat accepts the
    *  same `{type:'function',function:{...}}` shape and returns `tool_calls`. */
@@ -223,10 +226,38 @@ export function streamOllamaNativeChat(opts: OllamaChatOptions): Promise<OllamaC
     ...(opts.keepAlive ? { keep_alive: opts.keepAlive } : {}),
   });
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolveChat, rejectChat) => {
+    const signal = opts.signal;
+    // Settles once: a request destroyed on abort goes on to emit errors of
+    // its own, which must not replace the abort.
+    let settled = false;
+    const settle = () => {
+      if (settled) return false;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      return true;
+    };
+    const resolve = (result: OllamaChatResult) => { if (settle()) resolveChat(result); };
+    const reject = (error: unknown) => { if (settle()) rejectChat(error); };
+    const abortError = () => {
+      const error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+      return error;
+    };
+    const onAbort = () => {
+      reject(abortError());
+      req?.destroy();
+    };
+    let req: http.ClientRequest | undefined;
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+
     const u = new URL(url);
     const lib = u.protocol === 'https:' ? https : http;
-    const req = lib.request({
+    req = lib.request({
       hostname: u.hostname,
       port: u.port,
       path: u.pathname + u.search,
@@ -244,6 +275,7 @@ export function streamOllamaNativeChat(opts: OllamaChatOptions): Promise<OllamaC
       let acc = initialOllamaAccumulator();
       const decoder = new TextDecoder();
       res.on('data', (chunk: Buffer) => {
+        if (settled) return; // stopped: nothing more reaches the caller
         buffer += decoder.decode(chunk, { stream: true });
         const { lines, rest } = splitOllamaLines(buffer);
         buffer = rest;
@@ -263,7 +295,7 @@ export function streamOllamaNativeChat(opts: OllamaChatOptions): Promise<OllamaC
       res.on('error', reject);
     });
     req.on('error', reject);
-    req.on('timeout', () => { req.destroy(new Error('Ollama request timed out')); });
+    req.on('timeout', () => { req?.destroy(new Error('Ollama request timed out')); });
     req.write(body);
     req.end();
   });

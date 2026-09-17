@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import { executeTool, FsCallbacks } from './toolExecution';
 import { ToolCall } from './tools';
 import { trustWorkspaceHooks, untrustWorkspaceHooks } from './hooks';
+import { AcpRequestError, AcpRequestTimeoutError } from '../acp/transport';
 
 let tmpRoot: string;
 
@@ -210,6 +211,46 @@ describe('write_file — client delegation', () => {
     expect(result.success).toBe(true);
     expect(readFileSync(join(tmpRoot, 'a.txt'), 'utf-8')).toBe('hello');
   });
+
+  it('fails without touching disk when the client refuses the write', async () => {
+    const fs: FsCallbacks = {
+      writeTextFile: vi.fn().mockRejectedValue(new AcpRequestError('fs/write_text_file', -32603, 'Buffer is read-only')),
+    };
+    const result = await executeTool(
+      makeCall('write_file', { path: 'a.txt', content: 'hello' }),
+      tmpRoot,
+      fs,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Buffer is read-only');
+    expect(existsSync(join(tmpRoot, 'a.txt'))).toBe(false);
+  });
+
+  it('falls back to disk when the client does not implement the method', async () => {
+    const fs: FsCallbacks = {
+      writeTextFile: vi.fn().mockRejectedValue(new AcpRequestError('fs/write_text_file', -32601, 'Method not found')),
+    };
+    const result = await executeTool(
+      makeCall('write_file', { path: 'a.txt', content: 'hello' }),
+      tmpRoot,
+      fs,
+    );
+    expect(result.success).toBe(true);
+    expect(readFileSync(join(tmpRoot, 'a.txt'), 'utf-8')).toBe('hello');
+  });
+
+  it('falls back to disk when the client never answers', async () => {
+    const fs: FsCallbacks = {
+      writeTextFile: vi.fn().mockRejectedValue(new AcpRequestTimeoutError('fs/write_text_file', 30_000)),
+    };
+    const result = await executeTool(
+      makeCall('write_file', { path: 'a.txt', content: 'hello' }),
+      tmpRoot,
+      fs,
+    );
+    expect(result.success).toBe(true);
+    expect(readFileSync(join(tmpRoot, 'a.txt'), 'utf-8')).toBe('hello');
+  });
 });
 
 describe('list_files — symlink boundaries', () => {
@@ -317,6 +358,40 @@ describe('edit_file — client delegation', () => {
       'editor version with replaced',
     );
   });
+
+  it('fails without touching disk when the client refuses the write', async () => {
+    writeFileSync(join(tmpRoot, 'f.txt'), 'hello editor');
+    const fs: FsCallbacks = {
+      readTextFile: vi.fn().mockResolvedValue('hello editor'),
+      writeTextFile: vi.fn().mockRejectedValue(new AcpRequestError('fs/write_text_file', -32603, 'Buffer is read-only')),
+    };
+    const result = await executeTool(
+      makeCall('edit_file', { path: 'f.txt', old_text: 'hello', new_text: 'goodbye' }),
+      tmpRoot,
+      fs,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Buffer is read-only');
+    expect(readFileSync(join(tmpRoot, 'f.txt'), 'utf-8')).toBe('hello editor');
+  });
+});
+
+describe('execute_command — abort signal', () => {
+  it('stops the running command when the signal fires', async () => {
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 100);
+    const startedAt = Date.now();
+    const result = await executeTool(
+      makeCall('execute_command', { command: 'sleep', args: ['10'] }),
+      tmpRoot,
+      undefined,
+      undefined,
+      ac.signal,
+    );
+    expect(Date.now() - startedAt).toBeLessThan(3000);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Command cancelled');
+  }, 15_000);
 });
 
 describe('hooks + MCP integration', () => {

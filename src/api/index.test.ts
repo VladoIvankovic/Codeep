@@ -80,7 +80,13 @@ vi.mock('../utils/tokenTracker', () => ({
 }));
 
 // ─── Import after mocks ───────────────────────────────────────────────────────
+vi.mock('./ollamaNative.js', () => ({
+  getOllamaContextLength: vi.fn(async () => 8192),
+  streamOllamaNativeChat: vi.fn(),
+}));
+
 import { chat, validateApiKey, setProjectContext } from './index';
+import { streamOllamaNativeChat } from './ollamaNative.js';
 import { config, getApiKey, resolveBaseUrl } from '../config/index';
 import { getProviderBaseUrl, getProviderAuthHeader, getProvider, modelRejectsSamplingParams } from '../config/providers';
 import { withRetry } from '../utils/retry';
@@ -527,5 +533,36 @@ describe('setProjectContext()', () => {
       summary: 'A test project',
     };
     expect(() => setProjectContext(ctx)).not.toThrow();
+  });
+});
+
+
+describe('chat over the native Ollama API', () => {
+  it('passes the user\'s Stop to the request', async () => {
+    const settings: Record<string, unknown> = {
+      protocol: 'openai', model: 'llama3', provider: 'ollama', language: 'en',
+      apiTimeout: 30000, temperature: 0.7, maxTokens: 4096, ollamaNativeApi: true,
+    };
+    mockConfig.get.mockImplementation((key: string) => settings[key]);
+    let seen: AbortSignal | undefined;
+    vi.mocked(streamOllamaNativeChat).mockImplementation(async (opts) => {
+      seen = opts.signal;
+      await new Promise((_, reject) => opts.signal!.addEventListener('abort', () => {
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        reject(err);
+      }));
+      return { text: '', toolCalls: [] } as never;
+    });
+    try {
+      const stop = new AbortController();
+      const pending = chat('hi', [], undefined, undefined, undefined, stop.signal);
+      await vi.waitFor(() => expect(seen).toBeDefined());
+      stop.abort();
+      await expect(pending).rejects.toThrow();
+      expect(seen!.aborted).toBe(true);
+    } finally {
+      mockConfig.get.mockReset();
+    }
   });
 });

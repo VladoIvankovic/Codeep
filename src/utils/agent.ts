@@ -72,8 +72,9 @@ import {
 } from './tools';
 import { config, Message } from '../config/index';
 import { supportsNativeTools } from '../config/providers';
+import { isMcpToolName, isVirtualMcpToolName } from './mcpRegistry';
 import { startSession, endSession, undoLastAction, undoAllActions, getCurrentSession, getRecentSessions, formatSession, ActionSession } from './history';
-import { runAllVerifications, formatErrorsForAgent, hasVerificationErrors, getVerificationSummary, VerifyResult } from './verify';
+import { runAllVerifications, formatErrorsForAgent, hasVerificationErrors, getVerificationSummary, failedChecks, checksNotRun, VerifyResult } from './verify';
 import { gatherSmartContext, formatSmartContext, extractTargetFile } from './smartContext';
 import { planTasks, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
 import { getTaskContextPrompt } from './taskContext';
@@ -185,6 +186,85 @@ export function buildDangerousTools(extra: string[] = []): Set<string> {
   return tools;
 }
 
+/**
+ * Whether a tool call must go through the permission prompt this run.
+ *
+ * MCP tools (`<server>__<tool>`) can do anything their server can — write
+ * files, run SQL, drive a browser — and their names never appear in the
+ * built-in set, so a mode that confirms dangerous operations confirms these
+ * too. The resource/prompt wrappers only read, and stay unprompted.
+ */
+export function requiresPermission(tool: string, dangerousTools: ReadonlySet<string>): boolean {
+  return dangerousTools.has(tool) || (isMcpToolName(tool) && !isVirtualMcpToolName(tool));
+}
+
+/** Provider, model and protocol a run talks to. */
+export interface AgentModelRuntime {
+  providerId: string;
+  model: string;
+  protocol: 'openai' | 'anthropic';
+}
+
+/**
+ * Read a sub-agent's `model:` setting ("provider/model" or a bare model) as
+ * the runtime for its nested run. A known provider prefix switches provider;
+ * anything else is a model on the current provider. The protocol is kept when
+ * the provider stays the same and supports it, and is otherwise that
+ * provider's default.
+ */
+export async function resolveDelegateModel(spec: string, current: AgentModelRuntime): Promise<AgentModelRuntime> {
+  const slash = spec.indexOf('/');
+  if (slash < 0) return { ...current, model: spec };
+  const providerId = spec.slice(0, slash);
+  const model = spec.slice(slash + 1);
+  const { getProvider } = await import('../config/providers');
+  const provider = getProvider(providerId);
+  if (!provider) return { ...current, model };
+  const protocol = providerId === current.providerId && provider.protocols[current.protocol]
+    ? current.protocol
+    : provider.defaultProtocol;
+  // getApiKey() only reads the in-memory cache, so warm it for a provider the
+  // parent run has not used. Reading a key changes no settings.
+  try {
+    const { getApiKey, loadApiKey } = await import('../config/index');
+    if (!getApiKey(providerId)) await loadApiKey(providerId);
+  } catch { /* the request itself reports a missing key */ }
+  return { providerId, model, protocol };
+}
+
+/**
+ * The user-facing account of checks that still fail when verification stops.
+ * The command and the first few errors are enough to act on; the full output
+ * went to the model.
+ */
+function describeVerificationFailure(results: VerifyResult[]): string {
+  const failed = failedChecks(results);
+  const lines = [`✗ Verification failed: ${failed.length}/${results.length} checks`];
+  for (const r of failed) {
+    lines.push(`- ${r.type}: \`${r.command}\``);
+    for (const e of r.errors.slice(0, 5)) {
+      const where = e.file ? `${e.file}${e.line ? `:${e.line}` : ''}: ` : '';
+      const message = e.message.length > 200 ? e.message.slice(0, 200) + '…' : e.message;
+      lines.push(`  - ${where}${message}`);
+    }
+    if (r.errors.length > 5) lines.push(`  - …and ${r.errors.length - 5} more`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * The user-facing account of checks that could not be carried out, or '' when
+ * every check ran. They prove nothing either way, so the user is told the
+ * change was not verified by them rather than that it passed or failed.
+ */
+function describeChecksNotRun(results: VerifyResult[]): string {
+  const notRun = checksNotRun(results);
+  if (notRun.length === 0) return '';
+  const lines = [`⚠ Verification could not run: ${notRun.length}/${results.length} checks`];
+  for (const r of notRun) lines.push(`- ${r.type}: \`${r.command}\` — ${r.notRun}`);
+  return lines.join('\n');
+}
+
 export interface AgentOptions {
   maxIterations: number;
   maxDuration: number; // milliseconds
@@ -245,6 +325,15 @@ export interface AgentOptions {
   allowedTools?: string[];
   /** Role system-prompt addendum injected for a delegated sub-agent. */
   roleAddendum?: string;
+  /** "Always allow" / "always deny" answers shared with a delegating parent,
+   *  so a sub-agent neither asks again about a tool the user already decided
+   *  on nor runs one the user refused. */
+  permissionMemory?: { alwaysAllowed: Set<string>; alwaysRejected: Set<string> };
+  /** Provider/model for this run only, used in place of the global selection.
+   *  A sub-agent with its own `model:` runs on it this way; the global config
+   *  is saved to disk and read by every session in the process, so it is
+   *  never changed for a single run. */
+  modelOverride?: AgentModelRuntime;
 }
 
 /** Why a run stopped early at a safety limit — both are resumable, not errors. */
@@ -260,6 +349,24 @@ export interface AgentResult {
   /** Set when the run paused at a step/time safety limit. The caller can offer
    *  a "continue" affordance instead of treating it as a failure. */
   interrupted?: InterruptKind;
+  /** Commands of the verification checks that still failed when the run
+   *  ended. Set only when that is why the run did not succeed. */
+  failedChecks?: string[];
+  /**
+   * The end of `finalResponse` that runAgent wrote itself instead of taking
+   * it from the model's last reply: the verification passed / failed / could
+   * not run blocks and the auto-review section, or the whole notice when one
+   * replaced the reply (stopped, paused, API errors). None of it went through
+   * `onChunk`, so a client that streamed the reply sends exactly this after
+   * it, separated by a blank line. Trimmed; '' when `finalResponse` is only
+   * the model's reply. Set on every result runAgent returns.
+   */
+  unstreamedText?: string;
+}
+
+/** A result whose whole response is a notice runAgent wrote (see unstreamedText). */
+function asNotice(result: AgentResult): AgentResult {
+  return { ...result, unstreamedText: result.finalResponse.trim() };
 }
 
 /**
@@ -354,7 +461,7 @@ export async function runAgent(
   // A structured custom bot is resolved once per run. This keeps a cloud sync
   // or file edit from changing policy halfway through an in-flight request.
   const activePersonality = opts.personalityOverride ?? getActivePersonality(projectContext.root);
-  const currentRuntime = {
+  const currentRuntime: AgentModelRuntime = opts.modelOverride ?? {
     providerId: String(config.get('provider')),
     model: String(config.get('model')),
     protocol: config.get('protocol') as 'openai' | 'anthropic',
@@ -616,6 +723,13 @@ export async function runAgent(
   
   let iteration = 0;
   let finalResponse = '';
+  // What the loop added to finalResponse after the model's last reply (see
+  // AgentResult.unstreamedText). Reset whenever a reply replaces the response.
+  let appended = '';
+  const appendToResponse = (text: string) => {
+    finalResponse += text;
+    appended += text;
+  };
   // Initialised rather than merely declared: the `finally` reads it to decide
   // the audit outcome, and TypeScript is right that a throw before assignment
   // would leave it unset.
@@ -626,10 +740,11 @@ export async function runAgent(
   // once or twice. More retries than that usually means the model is stuck, not
   // that it needs a third chance — bail out instead of spamming identical hints.
   const maxIncompleteWorkRetries = 2;
-  // Track tools permanently allowed this session via allow_always
-  const alwaysAllowedTools = new Set<string>();
+  // Track tools permanently allowed this session via allow_always. A delegated
+  // sub-agent shares its parent's sets, so an answer holds across delegation.
+  const alwaysAllowedTools = opts.permissionMemory?.alwaysAllowed ?? new Set<string>();
   // Track tools permanently rejected this session via reject_always
-  const alwaysRejectedTools = new Set<string>();
+  const alwaysRejectedTools = opts.permissionMemory?.alwaysRejected ?? new Set<string>();
   // Tools that require permission when onRequestPermission is set (configurable)
   const dangerousTools = buildDangerousTools(opts.extraDangerousTools);
 
@@ -652,7 +767,11 @@ export async function runAgent(
 
     let roleAddendum = def?.prompt
       || 'You are a general-purpose sub-agent. Complete the task in your own context and return a concise, self-contained summary of what you did and the outcome.';
-    if (def?.tools) roleAddendum += `\n\nYou may use ONLY these tools: ${def.tools.join(', ')}.`;
+    if (def?.tools) {
+      roleAddendum += def.tools.length
+        ? `\n\nYou may use ONLY these tools: ${def.tools.join(', ')}.`
+        : '\n\nYou may not use any tools.';
+    }
     if (def?.personality) {
       try {
         const { findPersonality } = await import('./personalities.js');
@@ -665,21 +784,15 @@ export async function runAgent(
     opts.onIteration?.(iteration, `⤷ delegating to ${label}…`);
     const tag = (text: string) => `⤷ ${label}: ${text}`;
 
-    // Model override — swap config for the nested run, restore in finally.
-    const prevModel = config.get('model');
-    const prevProvider = config.get('provider');
-    let swapped = false;
+    // Model override for the nested run only. It travels as an option, never
+    // through config: config is saved to disk and read by every session in
+    // this process, so swapping it there leaked the sub-agent's model into
+    // concurrent runs, reset the user's protocol on the way back, and stayed
+    // behind if the process died mid-delegation.
+    let modelOverride = opts.modelOverride;
     if (def?.model) {
       try {
-        const m = String(def.model);
-        if (m.includes('/')) {
-          const { setProvider } = await import('../config/index');
-          setProvider(m.slice(0, m.indexOf('/')));
-          config.set('model', m.slice(m.indexOf('/') + 1));
-        } else {
-          config.set('model', m);
-        }
-        swapped = true;
+        modelOverride = await resolveDelegateModel(String(def.model), currentRuntime);
       } catch { /* keep parent's model */ }
     }
 
@@ -693,7 +806,13 @@ export async function runAgent(
         maxIterations: def?.maxIterations ?? Math.min(15, opts.maxIterations),
         maxDuration: opts.maxDuration,
         abortSignal: opts.abortSignal,
+        // The sub-agent works under the parent's rules: a dry run stays dry,
+        // tools gated for this run stay gated, and "always" answers carry over.
+        dryRun: opts.dryRun,
         onRequestPermission: opts.onRequestPermission,
+        extraDangerousTools: opts.extraDangerousTools,
+        permissionMemory: { alwaysAllowed: alwaysAllowedTools, alwaysRejected: alwaysRejectedTools },
+        modelOverride,
         onExecuteCommand: opts.onExecuteCommand,
         fs: opts.fs,
         mcpSessionId: opts.mcpSessionId,
@@ -706,15 +825,149 @@ export async function runAgent(
       return { success: sub.success, output: `[${label}] ${summary}`, tool: 'delegate', parameters: toolCall.parameters };
     } catch (err) {
       return fail(`Sub-agent "${label}" failed: ${(err as Error).message}`);
-    } finally {
-      if (swapped) {
-        try {
-          const { setProvider } = await import('../config/index');
-          setProvider(String(prevProvider));
-          config.set('model', prevModel as string);
-        } catch { /* ignore restore failure */ }
+    }
+  };
+
+  // One path from "the model asked for a tool" to "the tool ran", shared by
+  // the main loop and the verification fix loop, so a tool call cannot skip a
+  // gate by arriving through the other one. Returns the tool's result, plus
+  // `refusal` (the text for the model) when a gate stopped it. Either way the
+  // result has already been reported through onToolResult and logged.
+  const dispatchToolCall = async (toolCall: ToolCall): Promise<{ result: ToolResult; refusal?: string }> => {
+    const refuse = (error: string, refusal: string) => {
+      const result: ToolResult = {
+        success: false,
+        output: '',
+        error,
+        tool: toolCall.tool,
+        parameters: toolCall.parameters,
+      };
+      opts.onToolResult?.(result, toolCall);
+      actions.push(createActionLog(toolCall, result));
+      return { result, refusal };
+    };
+
+    // Structured custom-bot policy is a runtime security boundary, not a
+    // prompt suggestion. It runs before permission UI or external ACP
+    // terminal delegation, so disallowed commands cannot escape via a
+    // different execution surface.
+    if (activePersonality && !isPersonalityToolCallAllowed(activePersonality, toolCall, registeredMcpToolNames)) {
+      const allowed = activePersonality.declaredTools?.join(', ') || 'none';
+      const refused = refuse(
+        `Tool "${toolCall.tool}" is blocked by custom bot "${activePersonality.displayName}".`,
+        `Tool ${toolCall.tool} is blocked by the active custom bot. Allowed capabilities: ${allowed}.`,
+      );
+      // The one event nothing recorded before. A boundary you cannot audit
+      // is a boundary you have to take on faith.
+      recordAuditEvent(auditRoot, {
+        ts: Date.now(), run: auditRun, tool: toolCall.tool, action: 'refused',
+        target: describeAuditTarget(toolCall), outcome: 'refused',
+        detail: `blocked by custom bot "${activePersonality.displayName}"; allowed: ${allowed}`,
+      });
+      return refused;
+    }
+
+    // Tool scoping for delegated sub-agents: reject any tool outside the
+    // agent's allowlist up front — no permission prompt, no execution.
+    if (opts.allowedTools && !opts.allowedTools.includes(toolCall.tool)) {
+      return refuse(
+        `Tool "${toolCall.tool}" is not available to this sub-agent.`,
+        `Tool ${toolCall.tool} is not allowed for this sub-agent. Use only: ${opts.allowedTools.join(', ')}.`,
+      );
+    }
+
+    // Permission check for dangerous tools (only when callback is provided, e.g. ACP/Zed)
+    if (opts.onRequestPermission && requiresPermission(toolCall.tool, dangerousTools) && !alwaysAllowedTools.has(toolCall.tool)) {
+      const denied = () => refuse(
+        `User rejected permission for ${toolCall.tool}`,
+        `Tool ${toolCall.tool} was denied by user. Do not attempt this action again.`,
+      );
+
+      // Skip without asking if permanently rejected this session
+      if (alwaysRejectedTools.has(toolCall.tool)) return denied();
+
+      const outcome = await opts.onRequestPermission(toolCall);
+      // Fail CLOSED: allow ONLY on an explicit allow outcome; reject_* and
+      // any malformed/unknown outcome deny (see classifyPermissionOutcome).
+      const decision = classifyPermissionOutcome(outcome);
+      if (decision === 'allow-always') {
+        alwaysAllowedTools.add(toolCall.tool);
+      } else if (decision !== 'allow-once') {
+        if (decision === 'deny-always') alwaysRejectedTools.add(toolCall.tool);
+        return denied();
       }
     }
+
+    let toolResult: ToolResult;
+
+    // A dry run simulates every tool, delegation included — a sub-agent
+    // started from here would otherwise do the real work.
+    if (opts.dryRun) {
+      toolResult = {
+        success: true,
+        output: `[DRY RUN] Would execute: ${toolCall.tool}`,
+        tool: toolCall.tool,
+        parameters: toolCall.parameters,
+      };
+    } else if (toolCall.tool === 'delegate') {
+      toolResult = await runDelegate(toolCall);
+    } else if (opts.onExecuteCommand && toolCall.tool === 'execute_command') {
+      // Delegate to external terminal (e.g. Zed ACP terminal)
+      // Note: onExecuteCommand runs after the permission gate above
+      const command = toolCall.parameters.command as string;
+      const args = (toolCall.parameters.args as string[]) || [];
+      const cwd = projectContext.root || process.cwd();
+      if (!command) {
+        toolResult = {
+          success: false,
+          output: '',
+          error: 'execute_command called with missing command field',
+          tool: toolCall.tool,
+          parameters: toolCall.parameters,
+        };
+      } else {
+        try {
+          const commandResult = await opts.onExecuteCommand(command, args, cwd);
+          toolResult = {
+            success: commandResult.exitCode === 0,
+            output: commandResult.stdout || '(no output)',
+            error: commandResult.exitCode !== 0 ? (commandResult.stderr || `exited with code ${commandResult.exitCode}`) : undefined,
+            tool: toolCall.tool,
+            parameters: toolCall.parameters,
+          };
+        } catch (err) {
+          // The callback decides where the command runs and whether it can
+          // fall back to running here. When it throws, the command may already
+          // have run in the editor, so running it again locally could run it
+          // twice. Report the failure instead.
+          debug('onExecuteCommand callback threw:', err);
+          toolResult = {
+            success: false,
+            output: '',
+            error: `Command could not be run: ${(err as Error)?.message ?? String(err)}`,
+            tool: toolCall.tool,
+            parameters: toolCall.parameters,
+          };
+        }
+      }
+    } else {
+      toolResult = await executeTool(toolCall, projectContext.root || process.cwd(), opts.fs, opts.mcpSessionId, opts.abortSignal);
+    }
+
+    opts.onToolResult?.(toolResult, toolCall);
+
+    // Log action
+    const actionLog = createActionLog(toolCall, toolResult);
+    actions.push(actionLog);
+    // createActionLog already classified this; reuse its verdict rather than
+    // re-deriving the action type in a second place that could drift.
+    recordAuditEvent(auditRoot, {
+      ts: Date.now(), run: auditRun, tool: toolCall.tool, action: actionLog.type,
+      target: describeAuditTarget(toolCall),
+      outcome: toolResult.success ? 'ok' : 'error',
+      detail: toolResult.success ? undefined : toolResult.error,
+    });
+    return { result: toolResult };
   };
   const maxTimeoutRetries = 3;
   const maxConsecutiveTimeouts = 30; // Allow more consecutive timeouts before giving up
@@ -736,7 +989,7 @@ export async function runAgent(
       // Check timeout
       if (Date.now() - startTime > opts.maxDuration) {
         const durationMin = Math.round(opts.maxDuration / 60000);
-        result = buildPausedResult('time_limit', { iterations: iteration, actions, durationMin });
+        result = asNotice(buildPausedResult('time_limit', { iterations: iteration, actions, durationMin }));
         if (!opts.nested) writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
         return result;
       }
@@ -744,13 +997,13 @@ export async function runAgent(
       // Check abort signal
       if (opts.abortSignal?.aborted) {
         debug('Agent aborted at iteration', iteration);
-        result = {
+        result = asNotice({
           success: false,
           iterations: iteration,
           actions,
           finalResponse: 'Agent was stopped by user',
           aborted: true,
-        };
+        });
         return result;
       }
       
@@ -831,13 +1084,13 @@ export async function runAgent(
           
           // Handle user abort (not timeout)
           if (err.name === 'AbortError') {
-            result = {
+            result = asNotice({
               success: false,
               iterations: iteration,
               actions,
               finalResponse: 'Agent was stopped by user',
               aborted: true,
-            };
+            });
             return result;
           }
           
@@ -852,13 +1105,13 @@ export async function runAgent(
               // Too many retries for this iteration
               if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
                 // Too many consecutive timeouts overall, give up
-                result = {
+                result = asNotice({
                   success: false,
                   iterations: iteration,
                   actions,
                   finalResponse: 'Agent stopped due to repeated API timeouts',
                   error: `API timed out ${consecutiveTimeouts} times consecutively. Try increasing the timeout in settings or simplifying the task.`,
-                };
+                });
                 return result;
               }
 
@@ -880,13 +1133,13 @@ export async function runAgent(
 
           // Don't retry on 4xx client errors except 429 (rate limit)
           if (err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 429) {
-            result = {
+            result = asNotice({
               success: false,
               iterations: iteration,
               actions,
               finalResponse: '',
               error: err.message,
-            };
+            });
             return result;
           }
 
@@ -905,7 +1158,7 @@ export async function runAgent(
               // Rate limit exhausted — stop immediately, no point hammering a throttled API
               consecutiveRateLimits++;
               if (consecutiveRateLimits >= maxConsecutiveRateLimits) {
-                result = {
+                result = asNotice({
                   success: false,
                   iterations: iteration,
                   actions,
@@ -913,7 +1166,7 @@ export async function runAgent(
                     ? `Agent paused after ${actions.length} action(s) — API rate limit reached. Wait a moment and try again.`
                     : 'API rate limit reached. Wait a moment and run the agent again.',
                   error: `Rate limited (429) after ${maxTimeoutRetries} retries: ${err.message}`,
-                };
+                });
                 return result;
               }
             } else {
@@ -922,7 +1175,7 @@ export async function runAgent(
             // Don't throw — skip this iteration like timeouts do
             consecutiveTimeouts++;
             if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
-              result = {
+              result = asNotice({
                 success: false,
                 iterations: iteration,
                 actions,
@@ -930,7 +1183,7 @@ export async function runAgent(
                   ? `Agent made progress (${actions.length} actions) but API errors prevented completion. You can continue by running the agent again.`
                   : 'Agent could not complete the task due to repeated API errors. Check your API key and network connection.',
                 error: `API failed after ${maxTimeoutRetries} retries: ${err.message}`,
-              };
+              });
               return result;
             }
             messages.push({
@@ -958,7 +1211,8 @@ export async function runAgent(
         const lastUsage = getLastUsage();
         const inputTokens = lastUsage?.promptTokens ?? 0;
         if (inputTokens > 0) {
-          const contextWindow = getModelContextWindow(config.get('model') as string);
+          // The model this run talks to, which a sub-agent may have overridden.
+          const contextWindow = getModelContextWindow(String(chatRuntime.model ?? config.get('model')));
           const pct = Math.round(inputTokens / contextWindow * 100);
           const threshold = pct >= 95 ? 95 : pct >= 80 ? 80 : 0;
           if (threshold > 0 && threshold > lastBudgetWarning) {
@@ -984,7 +1238,7 @@ export async function runAgent(
 
       // Warn the user if Ollama model fails to produce tool calls early on
       if (toolCalls.length === 0 && iteration <= 2 && providerId === 'ollama') {
-        const model = config.get('model');
+        const model = String(chatRuntime.model ?? config.get('model'));
         const paramMatch = model.toLowerCase().match(/(\d+(?:\.\d+)?)b/);
         const params = paramMatch ? parseFloat(paramMatch[1]) : null;
         if (params !== null && params < 7) {
@@ -998,6 +1252,7 @@ export async function runAgent(
         
         // Remove <think>...</think> tags from response (some models include thinking)
         // Also remove Tool parameters/tool call artifacts that AI sometimes includes in text
+        appended = '';
         finalResponse = content
           .replace(/<think>[\s\S]*?<\/think>/gi, '')
           .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
@@ -1028,6 +1283,9 @@ export async function runAgent(
             role: 'user',
             content: 'Continue. Execute the tool calls now.'
           });
+          // The fragment is not an answer. Left in place, it would make a run
+          // that later hits the step limit look finished.
+          finalResponse = '';
           continue;
         }
         // Reset counter once model produces real output or we give up
@@ -1045,145 +1303,16 @@ export async function runAgent(
       const toolResults: string[] = [];
       
       for (const toolCall of toolCalls) {
+        // Stop kills a running command at once; the calls queued behind it in
+        // the same reply must not go ahead and write files after that.
+        if (opts.abortSignal?.aborted) break;
         opts.onToolCall?.(toolCall);
 
-        // Structured custom-bot policy is a runtime security boundary, not a
-        // prompt suggestion. It runs before permission UI or external ACP
-        // terminal delegation, so disallowed commands cannot escape via a
-        // different execution surface.
-        if (activePersonality && !isPersonalityToolCallAllowed(activePersonality, toolCall, registeredMcpToolNames)) {
-          const allowed = activePersonality.declaredTools?.join(', ') || 'none';
-          const denied: ToolResult = {
-            success: false,
-            output: '',
-            error: `Tool "${toolCall.tool}" is blocked by custom bot "${activePersonality.displayName}".`,
-            tool: toolCall.tool,
-            parameters: toolCall.parameters,
-          };
-          opts.onToolResult?.(denied, toolCall);
-          actions.push(createActionLog(toolCall, denied));
-          // The one event nothing recorded before. A boundary you cannot audit
-          // is a boundary you have to take on faith.
-          recordAuditEvent(auditRoot, {
-            ts: Date.now(), run: auditRun, tool: toolCall.tool, action: 'refused',
-            target: describeAuditTarget(toolCall), outcome: 'refused',
-            detail: `blocked by custom bot "${activePersonality.displayName}"; allowed: ${allowed}`,
-          });
-          toolResults.push(`Tool ${toolCall.tool} is blocked by the active custom bot. Allowed capabilities: ${allowed}.`);
+        const { result: toolResult, refusal } = await dispatchToolCall(toolCall);
+        if (refusal) {
+          toolResults.push(refusal);
           continue;
         }
-
-        // Tool scoping for delegated sub-agents: reject any tool outside the
-        // agent's allowlist up front — no permission prompt, no execution.
-        if (opts.allowedTools && !opts.allowedTools.includes(toolCall.tool)) {
-          const denied: ToolResult = {
-            success: false,
-            output: '',
-            error: `Tool "${toolCall.tool}" is not available to this sub-agent.`,
-            tool: toolCall.tool,
-            parameters: toolCall.parameters,
-          };
-          opts.onToolResult?.(denied, toolCall);
-          actions.push(createActionLog(toolCall, denied));
-          toolResults.push(`Tool ${toolCall.tool} is not allowed for this sub-agent. Use only: ${opts.allowedTools.join(', ')}.`);
-          continue;
-        }
-
-        // Permission check for dangerous tools (only when callback is provided, e.g. ACP/Zed)
-        if (opts.onRequestPermission && dangerousTools.has(toolCall.tool) && !alwaysAllowedTools.has(toolCall.tool)) {
-          const rejectResult = () => {
-            const toolResult: ToolResult = {
-              success: false,
-              output: '',
-              error: `User rejected permission for ${toolCall.tool}`,
-              tool: toolCall.tool,
-              parameters: toolCall.parameters,
-            };
-            opts.onToolResult?.(toolResult, toolCall);
-            actions.push(createActionLog(toolCall, toolResult));
-            toolResults.push(`Tool ${toolCall.tool} was denied by user. Do not attempt this action again.`);
-            return toolResult;
-          };
-
-          // Skip without asking if permanently rejected this session
-          if (alwaysRejectedTools.has(toolCall.tool)) {
-            rejectResult();
-            continue;
-          }
-
-          const outcome = await opts.onRequestPermission(toolCall);
-          // Fail CLOSED: allow ONLY on an explicit allow outcome; reject_* and
-          // any malformed/unknown outcome deny (see classifyPermissionOutcome).
-          const decision = classifyPermissionOutcome(outcome);
-          if (decision === 'allow-always') {
-            alwaysAllowedTools.add(toolCall.tool);
-          } else if (decision === 'allow-once') {
-            // proceed this once
-          } else {
-            if (decision === 'deny-always') alwaysRejectedTools.add(toolCall.tool);
-            rejectResult();
-            continue;
-          }
-        }
-
-        let toolResult: ToolResult;
-
-        if (toolCall.tool === 'delegate') {
-          toolResult = await runDelegate(toolCall);
-        } else if (opts.dryRun) {
-          toolResult = {
-            success: true,
-            output: `[DRY RUN] Would execute: ${toolCall.tool}`,
-            tool: toolCall.tool,
-            parameters: toolCall.parameters,
-          };
-        } else if (opts.onExecuteCommand && toolCall.tool === 'execute_command') {
-          // Delegate to external terminal (e.g. Zed ACP terminal)
-          // Note: onExecuteCommand runs after the permission gate above
-          const command = toolCall.parameters.command as string;
-          const args = (toolCall.parameters.args as string[]) || [];
-          const cwd = projectContext.root || process.cwd();
-          if (!command) {
-            toolResult = {
-              success: false,
-              output: '',
-              error: 'execute_command called with missing command field',
-              tool: toolCall.tool,
-              parameters: toolCall.parameters,
-            };
-          } else {
-            try {
-              const commandResult = await opts.onExecuteCommand(command, args, cwd);
-              toolResult = {
-                success: commandResult.exitCode === 0,
-                output: commandResult.stdout || '(no output)',
-                error: commandResult.exitCode !== 0 ? (commandResult.stderr || `exited with code ${commandResult.exitCode}`) : undefined,
-                tool: toolCall.tool,
-                parameters: toolCall.parameters,
-              };
-            } catch (err) {
-              debug('onExecuteCommand callback threw, falling back to local execution:', err);
-              // Fallback to local execution if callback throws
-              toolResult = await executeTool(toolCall, cwd, opts.fs, opts.mcpSessionId);
-            }
-          }
-        } else {
-          toolResult = await executeTool(toolCall, projectContext.root || process.cwd(), opts.fs, opts.mcpSessionId);
-        }
-        
-        opts.onToolResult?.(toolResult, toolCall);
-
-        // Log action
-        const actionLog = createActionLog(toolCall, toolResult);
-        actions.push(actionLog);
-        // createActionLog already classified this; reuse its verdict rather than
-        // re-deriving the action type in a second place that could drift.
-        recordAuditEvent(auditRoot, {
-          ts: Date.now(), run: auditRun, tool: toolCall.tool, action: actionLog.type,
-          target: describeAuditTarget(toolCall),
-          outcome: toolResult.success ? 'ok' : 'error',
-          detail: toolResult.success ? undefined : toolResult.error,
-        });
 
         // ── Infinite loop detection for write/edit ──────────────────────────
         if (toolCall.tool === 'write_file' || toolCall.tool === 'edit_file') {
@@ -1243,7 +1372,7 @@ export async function runAgent(
     
     // Check if we hit max iterations — build partial summary from actions log
     if (iteration >= opts.maxIterations && !finalResponse) {
-      result = buildPausedResult('iteration_limit', { iterations: iteration, actions, maxIterations: opts.maxIterations });
+      result = asNotice(buildPausedResult('iteration_limit', { iterations: iteration, actions, maxIterations: opts.maxIterations }));
       if (!opts.nested) writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
       return result;
     }
@@ -1262,6 +1391,10 @@ export async function runAgent(
       runLint: false,
     };
     const hasPermittedVerification = verificationPolicy.runBuild || verificationPolicy.runTest || verificationPolicy.runTypecheck;
+    // Set when the checks still fail as verification stops, whatever stopped
+    // it: attempts used up, the step limit, or a fix request that errored.
+    let verificationFailure: string | undefined;
+    let stillFailing: string[] = [];
 
     if (autoVerify !== 'off' && !opts.dryRun && hasPermittedVerification) {
       // Check if we made any file changes worth verifying
@@ -1272,6 +1405,10 @@ export async function runAgent(
       if (hasFileChanges) {
         let fixAttempt = 0;
         let previousErrorSignature = '';
+        // The latest failing verification, cleared once a later one passes.
+        let unresolved: VerifyResult[] | null = null;
+        // Set once a verification finishes with no failing check.
+        let verified = false;
 
         while (fixAttempt < maxFixAttempts) {
           // Check abort signal
@@ -1282,52 +1419,69 @@ export async function runAgent(
           opts.onIteration?.(iteration, `Verification attempt ${fixAttempt + 1}/${maxFixAttempts}`);
 
           // Run verifications based on selected mode
-          const verifyResults = await runAllVerifications(projectContext.root || process.cwd(), verificationPolicy);
+          const verifyResults = await runAllVerifications(projectContext.root || process.cwd(), {
+            ...verificationPolicy,
+            signal: opts.abortSignal,
+          });
+          // Stopping kills the running checks, which then read as "could not
+          // run". That is not a verdict: the run was stopped (handled below).
+          if (opts.abortSignal?.aborted) break;
 
           opts.onVerification?.(verifyResults);
 
-          // Filter errors: only keep those related to files the agent touched
+          // Point the agent at errors in files it touched, so it doesn't wander
+          // off into unrelated code. This only narrows what the agent is shown;
+          // a failing check stays failed. When nothing would be left — every
+          // error is in a file this run didn't touch (a rename breaks an
+          // importer, a test file fails) or the output couldn't be parsed —
+          // the full list stays, since hiding it would pass a broken build.
           const touchedFiles = new Set(
             actions
               .filter(a => a.type === 'write' || a.type === 'edit')
               .map(a => a.target)
           );
+          let errorsOutsideTouchedFiles = false;
           for (const vr of verifyResults) {
-            vr.errors = vr.errors.filter(e => {
+            if (vr.success) continue;
+            const related = vr.errors.filter(e => {
               if (!e.file) return true; // Keep errors without file info (build failures etc)
               return touchedFiles.has(e.file) || [...touchedFiles].some(f => e.file!.endsWith(f) || f.endsWith(e.file!));
             });
-            // Update success based on remaining errors
-            if (vr.errors.filter(e => e.severity === 'error').length === 0) {
-              vr.success = true;
+            if (related.some(e => e.severity === 'error')) {
+              vr.errors = related;
+            } else if (vr.errors.some(e => e.file)) {
+              errorsOutsideTouchedFiles = true;
             }
           }
 
-          // Check if all passed (after filtering)
+          // Checks that could not run are reported, not fixed: there is
+          // nothing in them for the model to act on, and they say nothing
+          // about whether the change is right.
           if (!hasVerificationErrors(verifyResults)) {
+            unresolved = null;
+            verified = true;
             const summary = getVerificationSummary(verifyResults);
-            finalResponse += `\n\n✓ Verification passed: ${summary.passed}/${summary.total} checks`;
+            if (summary.passed > 0) {
+              appendToResponse(`\n\n✓ Verification passed: ${summary.passed}/${summary.total} checks`);
+            }
+            const notRun = describeChecksNotRun(verifyResults);
+            if (notRun) appendToResponse(`\n\n${notRun}`);
             break;
           }
 
+          unresolved = verifyResults;
           fixAttempt++;
 
-          // If we've exceeded fix attempts, hand back to the main agent loop
-          // instead of stopping — let it keep working freely without the verification constraint
+          // Out of attempts: stop here and report the failure below.
           if (fixAttempt >= maxFixAttempts) {
-            const errorMessage = formatErrorsForAgent(verifyResults);
-            messages.push({ role: 'assistant', content: finalResponse });
-            messages.push({
-              role: 'user',
-              content: `${errorMessage}\n\nVerification has failed ${fixAttempt} time(s). Stop trying the same approach. Step back, re-read ALL relevant files, and think about the root cause from scratch. Try a fundamentally different solution.`,
-            });
-            // Re-enter the main agent loop — it will continue until maxIterations
-            iteration++;
             break;
           }
 
           // Detect if the same errors are repeating (previous fix attempt didn't help)
-          const errorMessage = formatErrorsForAgent(verifyResults);
+          let errorMessage = formatErrorsForAgent(verifyResults);
+          if (errorsOutsideTouchedFiles) {
+            errorMessage += '\n\nSome of these errors are in files you did not change and may predate this task. Fix them only if your change caused them.';
+          }
           const currentErrorSignature = errorMessage.slice(0, 200);
           const errorsRepeating = previousErrorSignature !== '' && currentErrorSignature === previousErrorSignature;
           previousErrorSignature = currentErrorSignature;
@@ -1370,6 +1524,7 @@ export async function runAgent(
             if (fixToolCalls.length === 0) {
               // Agent gave up or thinks it's fixed
               finalResponse = fixContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+              appended = '';
               continue; // Re-run verification
             }
             
@@ -1378,57 +1533,16 @@ export async function runAgent(
             const fixResults: string[] = [];
             
             for (const toolCall of fixToolCalls) {
+              if (opts.abortSignal?.aborted) break;
               opts.onToolCall?.(toolCall);
 
-              if (activePersonality && !isPersonalityToolCallAllowed(activePersonality, toolCall, registeredMcpToolNames)) {
-                const denied: ToolResult = {
-                  success: false,
-                  output: '',
-                  error: `Tool "${toolCall.tool}" is blocked by custom bot "${activePersonality.displayName}".`,
-                  tool: toolCall.tool,
-                  parameters: toolCall.parameters,
-                };
-                opts.onToolResult?.(denied, toolCall);
-                actions.push(createActionLog(toolCall, denied));
-                // The one event nothing recorded before. A boundary you cannot audit
-                // is a boundary you have to take on faith.
-                recordAuditEvent(auditRoot, {
-                  ts: Date.now(), run: auditRun, tool: toolCall.tool, action: 'refused',
-                  target: describeAuditTarget(toolCall), outcome: 'refused',
-                  detail: `blocked by custom bot "${activePersonality.displayName}"`,
-                });
-                fixResults.push(`Tool ${toolCall.tool} blocked by the active custom bot.`);
+              // Same gates as the main loop: a fix is still a tool call.
+              const { result: toolResult, refusal } = await dispatchToolCall(toolCall);
+              if (refusal) {
+                fixResults.push(refusal);
                 continue;
               }
 
-              if (opts.allowedTools && !opts.allowedTools.includes(toolCall.tool)) {
-                const denied: ToolResult = {
-                  success: false,
-                  output: '',
-                  error: `Tool "${toolCall.tool}" is not available to this sub-agent.`,
-                  tool: toolCall.tool,
-                  parameters: toolCall.parameters,
-                };
-                opts.onToolResult?.(denied, toolCall);
-                actions.push(createActionLog(toolCall, denied));
-                fixResults.push(`Tool ${toolCall.tool} is not allowed for this sub-agent.`);
-                continue;
-              }
-
-              const toolResult = await executeTool(toolCall, projectContext.root || process.cwd(), opts.fs, opts.mcpSessionId);
-              opts.onToolResult?.(toolResult, toolCall);
-              
-              const actionLog = createActionLog(toolCall, toolResult);
-              actions.push(actionLog);
-              // createActionLog already classified this; reuse its verdict rather than
-              // re-deriving the action type in a second place that could drift.
-              recordAuditEvent(auditRoot, {
-                ts: Date.now(), run: auditRun, tool: toolCall.tool, action: actionLog.type,
-                target: describeAuditTarget(toolCall),
-                outcome: toolResult.success ? 'ok' : 'error',
-                detail: toolResult.success ? undefined : toolResult.error,
-              });
-              
               if (toolResult.success) {
                 const truncated = truncateToolResult(toolResult.output, toolCall.tool);
                 fixResults.push(`Tool ${toolCall.tool} succeeded:\n${truncated}`);
@@ -1446,6 +1560,33 @@ export async function runAgent(
             // If fix attempt failed, continue to next attempt
             break;
           }
+        }
+
+        // Stopped by the user before verification had its answer: that is a
+        // stopped run, whatever the last check said.
+        if (!verified && opts.abortSignal?.aborted) {
+          debug('Agent aborted during verification');
+          const stopped = finalResponse ? '\n\nAgent was stopped by user before verification finished' : 'Agent was stopped by user';
+          result = {
+            success: false,
+            iterations: iteration,
+            actions,
+            finalResponse: `${finalResponse}${stopped}`,
+            aborted: true,
+            unstreamedText: `${appended}${stopped}`.trim(),
+          };
+          return result;
+        }
+
+        // Never end a run whose checks still fail as if it had passed: say so
+        // in the response and fail the run, so nothing downstream (the
+        // completion notice, auto-commit, the progress log) treats it as done.
+        if (unresolved) {
+          appendToResponse(`\n\n${describeVerificationFailure(unresolved)}`);
+          const notRun = describeChecksNotRun(unresolved);
+          if (notRun) appendToResponse(`\n\n${notRun}`);
+          stillFailing = failedChecks(unresolved).map(r => r.command);
+          verificationFailure = `Verification failed: ${stillFailing.join(', ')}`;
         }
       }
     }
@@ -1469,17 +1610,19 @@ export async function runAgent(
           parameters: { agent: 'reviewer', task: reviewTask },
         } as ToolCall);
         const body = (review.output || '').replace(/^\[reviewer\]\s*/, '').trim();
-        if (body) finalResponse += `\n\n---\n### Auto-review (reviewer)\n${body}`;
+        if (body) appendToResponse(`\n\n---\n### Auto-review (reviewer)\n${body}`);
       } catch {
         // A failed review must never fail the run.
       }
     }
 
     result = {
-      success: true,
+      success: !verificationFailure,
       iterations: iteration,
       actions,
       finalResponse,
+      ...(verificationFailure ? { error: verificationFailure, failedChecks: stillFailing } : {}),
+      unstreamedText: appended.trim(),
     };
     if (!opts.nested) writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
     return result;
@@ -1487,13 +1630,13 @@ export async function runAgent(
   } catch (error) {
     const err = error as Error;
     auditFailure = err.message;
-    result = {
+    result = asNotice({
       success: false,
       iterations: iteration,
       actions,
       finalResponse: '',
       error: err.message,
-    };
+    });
     return result;
   } finally {
     // End session and save history. Skipped for nested runs so we don't write
@@ -1578,14 +1721,16 @@ export function getAgentHistory(): Array<{
 }
 
 /**
- * Get current session actions
+ * Actions of the run undo acts on (see getCurrentSession). Pass the workspace
+ * to leave out a run in another one. `result` is 'undone' for an action that
+ * has since been undone, 'success' otherwise.
  */
-export function getCurrentSessionActions(): Array<{ type: string; target: string; result: string }> {
-  const session = getCurrentSession();
+export function getCurrentSessionActions(projectRoot?: string): Array<{ type: string; target: string; result: 'success' | 'undone' }> {
+  const session = getCurrentSession(projectRoot);
   if (!session) return [];
   return session.actions.map(a => ({
     type: a.type,
     target: a.path || '',
-    result: 'success',
+    result: a.undone ? 'undone' : 'success',
   }));
 }

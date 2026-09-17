@@ -35,9 +35,10 @@
  *   - Persists across sessions until cleared with `/personality off`.
  */
 
-import { readFileSync, readdirSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
 import { basename, join } from 'path';
 import { homedir } from 'os';
+import { leadsOutsideProject } from './projectPaths.js';
 import { config } from '../config/index.js';
 import { getProvider } from '../config/providers.js';
 import type { ToolCall } from './tools.js';
@@ -381,7 +382,7 @@ The user wants this merged today:
 ];
 
 /** Load custom personalities from a `.codeep/personalities/` directory. */
-function loadFromDir(dir: string, scope: PersonalityScope): Personality[] {
+function loadFromDir(dir: string, scope: PersonalityScope, projectRoot?: string): Personality[] {
   if (!existsSync(dir)) return [];
   const out: Personality[] = [];
   let entries: string[];
@@ -391,8 +392,16 @@ function loadFromDir(dir: string, scope: PersonalityScope): Personality[] {
     const name = entry.slice(0, -3).toLowerCase();
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) continue; // skip weirdly-named files
     try {
-      const raw = readFileSync(join(dir, entry), 'utf8');
-      if (raw.length > 64 * 1024) continue; // cap at 64 KB
+      const file = join(dir, entry);
+      // A project's files come with the repo: a link out of it would put an
+      // arbitrary file of the user's (credentials, history) into the prompt.
+      if (projectRoot && leadsOutsideProject(file, projectRoot)) continue;
+      // Cap at 64 KB, and check before reading: statSync follows symlinks,
+      // and a committed link to /dev/zero (or a FIFO) never comes back from
+      // readFileSync.
+      const stat = statSync(file);
+      if (!stat.isFile() || stat.size > 64 * 1024) continue;
+      const raw = readFileSync(file, 'utf8');
       out.push(parsePersonalityMarkdown(raw, name, scope));
     } catch {
       // Skip broken files — never crash personality loading.
@@ -709,7 +718,7 @@ export function resolvePersonalityRuntimeModel(
 
 export function loadAllPersonalities(workspaceRoot?: string): Personality[] {
   const project = workspaceRoot
-    ? loadFromDir(join(workspaceRoot, '.codeep', 'personalities'), 'project')
+    ? loadFromDir(join(workspaceRoot, '.codeep', 'personalities'), 'project', workspaceRoot)
     : [];
   const global = loadFromDir(join(homedir(), '.codeep', 'personalities'), 'global');
 

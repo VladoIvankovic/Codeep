@@ -1,11 +1,12 @@
 import Conf from 'conf';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync, statSync } from 'fs';
-import { join, dirname } from 'path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync, statSync, renameSync } from 'fs';
+import { join, dirname, resolve, sep, isAbsolute } from 'path';
 import { randomUUID } from 'crypto';
 
 import { PROVIDERS, getProvider, getProviderBaseUrl, replacementModelFor } from './providers';
 import { logSession } from '../utils/logger';
 import { createSecureStorage, type SecureStorage } from '../utils/keychain';
+import { isSafeProjectDir, leadsOutsideProject, writeFileNoFollow, writeProjectFile } from '../utils/projectPaths';
 
 interface Session {
   name: string;
@@ -200,24 +201,16 @@ export type { LanguageCode };
 export function getSessionsDir(projectPath?: string): string {
   if (projectPath && isProjectDirectory(projectPath)) {
     const localDir = join(projectPath, '.codeep', 'sessions');
-    if (!existsSync(localDir)) {
-      mkdirSync(localDir, { recursive: true });
+    // .codeep/ can come with a cloned repo; a symlinked sessions directory
+    // would have every save written wherever it points.
+    if (isSafeProjectDir(projectPath, localDir)) {
+      if (!existsSync(localDir)) {
+        mkdirSync(localDir, { recursive: true });
+      }
+      return localDir;
     }
-    return localDir;
   }
   return GLOBAL_SESSIONS_DIR;
-}
-
-/**
- * Get local project config path
- */
-function getLocalConfigPath(projectPath: string): string | null {
-  if (!isProjectDirectory(projectPath)) return null;
-  const configDir = join(projectPath, '.codeep');
-  if (!existsSync(configDir)) {
-    mkdirSync(configDir, { recursive: true });
-  }
-  return join(configDir, 'config.json');
 }
 
 /**
@@ -274,19 +267,14 @@ export function hasStandardProjectMarkers(path: string): boolean {
  */
 export function initializeAsProject(path: string): boolean {
   try {
-    const codeepDir = join(path, '.codeep');
-    if (!existsSync(codeepDir)) {
-      mkdirSync(codeepDir, { recursive: true });
-    }
-    
-    const projectFile = join(codeepDir, 'project.json');
+    const projectFile = join(path, '.codeep', 'project.json');
     const projectData = {
       name: path.split('/').pop() || 'project',
       initializedAt: new Date().toISOString(),
       version: '1.0',
     };
     
-    writeFileSync(projectFile, JSON.stringify(projectData, null, 2));
+    writeProjectFile(path, projectFile, JSON.stringify(projectData, null, 2));
     return true;
   } catch {
     return false;
@@ -1049,18 +1037,36 @@ export function startNewSession(): string {
   return sessionId;
 }
 
-// Auto-save debounce state
+// Auto-save debounce state. The target session is fixed when the save is
+// requested, not when the timer fires: by then the user may have loaded or
+// started another conversation, and this history would overwrite its file.
 let autoSaveTimeout: ReturnType<typeof setTimeout> | null = null;
-let pendingAutoSave: { history: Message[]; projectPath?: string } | null = null;
+let pendingAutoSave: { history: Message[]; projectPath?: string; sessionId: string } | null = null;
 
-// Auto-save current session (debounced - saves max every 5 seconds)
-export function autoSaveSession(history: Message[], projectPath?: string): boolean {
+function writePendingAutoSave(): boolean {
+  if (!pendingAutoSave) return false;
+  const { sessionId, history, projectPath } = pendingAutoSave;
+  pendingAutoSave = null;
+  return saveSession(sessionId, history, projectPath);
+}
+
+// Auto-save a conversation (debounced - saves max every 5 seconds).
+// Pass the id of the conversation the history belongs to. The global
+// currentSessionId is only the fallback: it names one conversation, and
+// callers holding another (a loaded session, a second ACP thread) would
+// otherwise save over it.
+export function autoSaveSession(history: Message[], projectPath?: string, sessionId?: string): boolean {
   if (!config.get('autoSave') || history.length === 0) {
     return false;
   }
-  
-  // Store pending save data
-  pendingAutoSave = { history, projectPath };
+
+  const target = sessionId || getCurrentSessionId();
+  // Only one save is held back at a time. One queued for a different
+  // conversation would be dropped by the overwrite below, so write it now.
+  if (pendingAutoSave && (pendingAutoSave.sessionId !== target || pendingAutoSave.projectPath !== projectPath)) {
+    writePendingAutoSave();
+  }
+  pendingAutoSave = { history, projectPath, sessionId: target };
   
   // If already scheduled, don't reschedule
   if (autoSaveTimeout) {
@@ -1069,33 +1075,53 @@ export function autoSaveSession(history: Message[], projectPath?: string): boole
   
   // Schedule save after 5 seconds
   autoSaveTimeout = setTimeout(() => {
-    if (pendingAutoSave) {
-      const sessionId = getCurrentSessionId();
-      saveSession(sessionId, pendingAutoSave.history, pendingAutoSave.projectPath);
-      pendingAutoSave = null;
-    }
     autoSaveTimeout = null;
+    writePendingAutoSave();
   }, 5000);
   
   return true;
 }
 
-// Force immediate save (for explicit save commands)
+// Write any debounced save now. Anything about to exit must call this: the
+// 5-second timer never fires once the process is gone.
 export function flushAutoSave(): boolean {
   if (autoSaveTimeout) {
     clearTimeout(autoSaveTimeout);
     autoSaveTimeout = null;
   }
-  if (pendingAutoSave) {
-    const sessionId = getCurrentSessionId();
-    const result = saveSession(sessionId, pendingAutoSave.history, pendingAutoSave.projectPath);
-    pendingAutoSave = null;
-    return result;
-  }
-  return false;
+  return writePendingAutoSave();
 }
 
 // Session management
+
+/**
+ * Why a session name cannot be used, or null when it can. A session is kept
+ * as <name>.json inside the sessions directory, so a name holding a path
+ * separator (`../../x`, `feature/auth`) would read or write a file elsewhere.
+ * A backslash is a separator only on Windows; elsewhere it is an ordinary
+ * filename character, and sessions named with one already exist.
+ */
+export function sessionNameProblem(name: string): string | null {
+  if (!name || !name.trim()) return 'Session name cannot be empty.';
+  if (sep === '\\') {
+    if (/[\/\\]/.test(name)) return `Session name "${name}" cannot contain "/" or "\\".`;
+  } else if (name.includes('/')) {
+    return `Session name "${name}" cannot contain "/".`;
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f]/.test(name)) return 'Session name cannot contain control characters.';
+  if (name === '.' || name === '..') return `Session name "${name}" is not allowed.`;
+  return null;
+}
+
+/** The file a session is kept in, or null for a name that would leave the sessions directory. */
+function sessionFile(name: string, projectPath?: string): string | null {
+  if (sessionNameProblem(name)) return null;
+  const sessionsDir = getSessionsDir(projectPath);
+  const filePath = join(sessionsDir, `${name}.json`);
+  return dirname(resolve(filePath)) === resolve(sessionsDir) ? filePath : null;
+}
+
 export function saveSession(name: string, history: Message[], projectPath?: string): boolean {
   try {
     // Derive a human-readable title from the first user message
@@ -1103,8 +1129,11 @@ export function saveSession(name: string, history: Message[], projectPath?: stri
     const title = firstUserMsg
       ? firstUserMsg.content.replace(/\n/g, ' ').trim().slice(0, 60)
       : name;
-    const sessionsDir = getSessionsDir(projectPath);
-    const filePath = join(sessionsDir, `${name}.json`);
+    const filePath = sessionFile(name, projectPath);
+    if (!filePath) {
+      logSession('save', name, false);
+      return false;
+    }
     // Preserve an existing aiTitle across re-saves so we don't regenerate.
     let existingAiTitle: string | undefined;
     if (existsSync(filePath)) {
@@ -1120,7 +1149,7 @@ export function saveSession(name: string, history: Message[], projectPath?: stri
       history,
       createdAt: new Date().toISOString(),
     };
-    writeFileSync(filePath, JSON.stringify(session, null, 2));
+    writeFileNoFollow(filePath, JSON.stringify(session, null, 2));
     logSession('save', name, true);
 
     // Fire-and-forget: generate an AI title once the session has enough
@@ -1162,9 +1191,8 @@ const titlesInFlight = new Set<string>();
  */
 export async function maybeGenerateSessionTitle(name: string, projectPath?: string): Promise<void> {
   if (titlesInFlight.has(name)) return;
-  const sessionsDir = getSessionsDir(projectPath);
-  const filePath = join(sessionsDir, `${name}.json`);
-  if (!existsSync(filePath)) return;
+  const filePath = sessionFile(name, projectPath);
+  if (!filePath || !existsSync(filePath)) return;
 
   let data: Session;
   try {
@@ -1184,7 +1212,7 @@ export async function maybeGenerateSessionTitle(name: string, projectPath?: stri
       try {
         const fresh = JSON.parse(readFileSync(filePath, 'utf-8')) as Session;
         fresh.aiTitle = aiTitle;
-        writeFileSync(filePath, JSON.stringify(fresh, null, 2));
+        writeFileNoFollow(filePath, JSON.stringify(fresh, null, 2));
       } catch { /* ignore */ }
     }
   } finally {
@@ -1194,9 +1222,8 @@ export async function maybeGenerateSessionTitle(name: string, projectPath?: stri
 
 export function loadSession(name: string, projectPath?: string): Message[] | null {
   try {
-    const sessionsDir = getSessionsDir(projectPath);
-    const filePath = join(sessionsDir, `${name}.json`);
-    if (existsSync(filePath)) {
+    const filePath = sessionFile(name, projectPath);
+    if (filePath && existsSync(filePath)) {
       const data = JSON.parse(readFileSync(filePath, 'utf-8')) as Session;
       logSession('load', name, true);
       return data.history;
@@ -1223,9 +1250,8 @@ export function listSessions(projectPath?: string): string[] {
 
 export function deleteSession(name: string, projectPath?: string): boolean {
   try {
-    const sessionsDir = getSessionsDir(projectPath);
-    const filePath = join(sessionsDir, `${name}.json`);
-    if (existsSync(filePath)) {
+    const filePath = sessionFile(name, projectPath);
+    if (filePath && existsSync(filePath)) {
       unlinkSync(filePath);
       logSession('delete', name, true);
       return true;
@@ -1238,30 +1264,74 @@ export function deleteSession(name: string, projectPath?: string): boolean {
   }
 }
 
+/**
+ * True when `name` already belongs to a saved conversation other than
+ * `currentName`'s. A name differing only in case can resolve to the same file
+ * on a case-insensitive disk; that is the same conversation, not a clash.
+ * Inodes are compared as bigints: on Windows they can exceed 2^53.
+ */
+export function sessionNameTaken(name: string, currentName: string, projectPath?: string): boolean {
+  if (name === currentName) return false;
+  const target = sessionFile(name, projectPath);
+  if (!target || !existsSync(target)) return false;
+  const current = sessionFile(currentName, projectPath);
+  if (!current || !existsSync(current)) return true;
+  const a = statSync(target, { bigint: true });
+  const b = statSync(current, { bigint: true });
+  return a.ino !== b.ino || a.dev !== b.dev;
+}
+
 export function renameSession(oldName: string, newName: string, projectPath?: string): boolean {
   try {
     const sessionsDir = getSessionsDir(projectPath);
-    const oldPath = join(sessionsDir, `${oldName}.json`);
-    const newPath = join(sessionsDir, `${newName}.json`);
+    const oldPath = sessionFile(oldName, projectPath);
+    const newPath = sessionFile(newName, projectPath);
     
-    if (!existsSync(oldPath)) {
+    if (!oldPath || !newPath || !existsSync(oldPath)) {
       logSession('rename', `${oldName} -> ${newName}`, false);
       return false;
     }
     
+    // Renaming onto itself changes nothing.
+    if (newName === oldName) {
+      logSession('rename', `${oldName} -> ${newName}`, true);
+      return true;
+    }
+
+    // Never replace another saved conversation: it would be gone for good.
+    if (sessionNameTaken(newName, oldName, projectPath)) {
+      logSession('rename', `${oldName} -> ${newName}`, false);
+      return false;
+    }
+
     // Read existing session
     const data = JSON.parse(readFileSync(oldPath, 'utf-8')) as Session;
-    
-    // Update name and save to new path
     data.name = newName;
-    writeFileSync(newPath, JSON.stringify(data, null, 2));
-    
-    // Delete old file
-    unlinkSync(oldPath);
+
+    // Write the renamed copy aside, move the session, then put the copy in
+    // place. The old file is not touched until the move: writing the new
+    // name into it first left a failed move (`feature/auth`) with a session
+    // that lists under a name it cannot be loaded by. Writing the new path
+    // and unlinking the old one would delete the session when a case-only
+    // rename makes both one file.
+    const staged = join(sessionsDir, `.${randomUUID()}.rename.tmp`);
+    writeFileSync(staged, JSON.stringify(data, null, 2));
+    try {
+      renameSync(oldPath, newPath);
+      renameSync(staged, newPath);
+    } finally {
+      if (existsSync(staged)) unlinkSync(staged);
+    }
     
     // Update current session ID if it was the renamed one
     if (config.get('currentSessionId') === oldName) {
       config.set('currentSessionId', newName);
+    }
+
+    // A debounced save still aimed at the old name would bring the old file
+    // back beside the renamed one.
+    if (pendingAutoSave?.sessionId === oldName && getSessionsDir(pendingAutoSave.projectPath) === sessionsDir) {
+      pendingAutoSave.sessionId = newName;
     }
     
     logSession('rename', `${oldName} -> ${newName}`, true);
@@ -1274,9 +1344,8 @@ export function renameSession(oldName: string, newName: string, projectPath?: st
 
 export function getSessionInfo(name: string, projectPath?: string): { name: string; createdAt: string; messageCount: number } | null {
   try {
-    const sessionsDir = getSessionsDir(projectPath);
-    const filePath = join(sessionsDir, `${name}.json`);
-    if (existsSync(filePath)) {
+    const filePath = sessionFile(name, projectPath);
+    if (filePath && existsSync(filePath)) {
       const data = JSON.parse(readFileSync(filePath, 'utf-8')) as Session;
       return {
         name: data.name,
@@ -1344,97 +1413,78 @@ export function listSessionsWithInfo(projectPath?: string): SessionInfo[] {
 }
 
 // Project permission management
-/**
- * Get project permission from local .codeep/config.json or global config
- */
-export function getProjectPermission(projectPath: string): ProjectPermission | null {
-  // First try local .codeep/config.json (for recognized projects)
-  const configPath = getLocalConfigPath(projectPath);
-  if (configPath && existsSync(configPath)) {
-    try {
-      const data = JSON.parse(readFileSync(configPath, 'utf-8')) as LocalProjectConfig;
-      if (data.permission && typeof data.permission === 'object') return data.permission;
-    } catch {
-      // Fall through to global config
-    }
-  }
-  
-  // Fallback to global config for non-project folders
-  const permissions = config.get('projectPermissions') || [];
-  return permissions.find((p: ProjectPermission) => p.path === projectPath) || null;
+//
+// Grants live only in the user's global config, which no repository can
+// write. Older versions also stored them in the project's own
+// `.codeep/config.json`; that file can arrive with a cloned repo, and no rule
+// about its contents holds up (a relative `path` resolves against wherever
+// Codeep was started), so a grant there no longer counts. A user who granted
+// access with an older version is asked once more.
+
+/** The project's own config file, without creating anything. */
+function localConfigFile(projectPath: string): string | null {
+  return isProjectDirectory(projectPath) ? join(projectPath, '.codeep', 'config.json') : null;
+}
+
+function grantMatches(perm: unknown, projectPath: string): perm is ProjectPermission {
+  return !!perm && typeof perm === 'object'
+    && typeof (perm as ProjectPermission).path === 'string'
+    && isAbsolute((perm as ProjectPermission).path)
+    && resolve((perm as ProjectPermission).path) === resolve(projectPath);
 }
 
 /**
- * Set project permission in local .codeep/config.json or global config
+ * Get the permission the user granted for a project.
+ */
+export function getProjectPermission(projectPath: string): ProjectPermission | null {
+  const permissions: ProjectPermission[] = config.get('projectPermissions') || [];
+  return permissions.find((p) => grantMatches(p, projectPath)) ?? null;
+}
+
+/**
+ * Record a permission grant in the global config.
  */
 export function setProjectPermission(projectPath: string, read: boolean, write: boolean): void {
   const permission: ProjectPermission = {
-    path: projectPath,
+    path: resolve(projectPath),
     readPermission: read,
     writePermission: write,
     grantedAt: new Date().toISOString(),
   };
-  
-  // Try to save to local .codeep/config.json (for recognized projects)
-  const configPath = getLocalConfigPath(projectPath);
-  if (configPath) {
-    let data: LocalProjectConfig = {};
-    if (existsSync(configPath)) {
-      try {
-        data = JSON.parse(readFileSync(configPath, 'utf-8')) as LocalProjectConfig;
-      } catch {
-        // Invalid JSON, start fresh
-      }
-    }
-
-    data.permission = permission;
-    writeFileSync(configPath, JSON.stringify(data, null, 2));
-    return;
-  }
-  
-  // Fallback to global config for non-project folders
-  const permissions = config.get('projectPermissions') || [];
-  const existingIndex = permissions.findIndex((p: ProjectPermission) => p.path === projectPath);
-  
-  if (existingIndex >= 0) {
-    permissions[existingIndex] = permission;
-  } else {
-    permissions.push(permission);
-  }
-  
+  const permissions: ProjectPermission[] = (config.get('projectPermissions') || []).filter(
+    (p: ProjectPermission) => !grantMatches(p, projectPath),
+  );
+  permissions.push(permission);
   config.set('projectPermissions', permissions);
 }
 
 /**
- * Remove project permission from local .codeep/config.json or global config
+ * Remove a project's permission from the global config. A grant an older
+ * version wrote into the project for this same directory is removed too, so
+ * it does not linger in a file that may be committed.
  */
 export function removeProjectPermission(projectPath: string): boolean {
-  // Try to remove from local .codeep/config.json
-  const configPath = getLocalConfigPath(projectPath);
-  if (configPath && existsSync(configPath)) {
+  let removed = false;
+  const permissions: ProjectPermission[] = config.get('projectPermissions') || [];
+  const kept = permissions.filter((p) => !grantMatches(p, projectPath));
+  if (kept.length !== permissions.length) {
+    config.set('projectPermissions', kept);
+    removed = true;
+  }
+
+  const configPath = localConfigFile(projectPath);
+  if (configPath && existsSync(configPath) && !leadsOutsideProject(configPath, projectPath)) {
     try {
       const data = JSON.parse(readFileSync(configPath, 'utf-8')) as LocalProjectConfig;
-      if (data.permission) {
+      if (data && typeof data === 'object' && grantMatches(data.permission, projectPath)) {
         delete data.permission;
-        writeFileSync(configPath, JSON.stringify(data, null, 2));
-        return true;
+        writeProjectFile(projectPath, configPath, JSON.stringify(data, null, 2));
       }
     } catch {
-      // Fall through to global config
+      // Unreadable, symlinked or unwritable: it no longer grants anything.
     }
   }
-  
-  // Try to remove from global config
-  const permissions = config.get('projectPermissions') || [];
-  const existingIndex = permissions.findIndex((p: ProjectPermission) => p.path === projectPath);
-  
-  if (existingIndex >= 0) {
-    permissions.splice(existingIndex, 1);
-    config.set('projectPermissions', permissions);
-    return true;
-  }
-  
-  return false;
+  return removed;
 }
 
 export function hasReadPermission(projectPath: string): boolean {

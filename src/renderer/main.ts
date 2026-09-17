@@ -19,6 +19,7 @@ import {
   loadAllApiKeys,
   getCurrentProvider,
   autoSaveSession,
+  flushAutoSave,
   startNewSession,
   getCurrentSessionId,
   loadSession,
@@ -42,7 +43,7 @@ import { getCurrentVersion, checkForUpdates, getUpdateInstructions } from '../ut
 import { getProviderList, isNoApiKeyProvider, resolveReasoningTier } from '../config/providers';
 import { getSessionStats, getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
 import { getGitStatus, isGitRepository } from '../utils/git';
-import { reportStats, syncSession, generateProjectId, ensureDeviceRegistered } from '../utils/codeepCloud';
+import { reportStats, syncSession, syncSessionAsync, generateProjectId, ensureDeviceRegistered } from '../utils/codeepCloud';
 import { expandFileAndFolderMentions, expandGitMentions } from '../utils/mentions';
 import { expandWebMentions } from '../utils/webFetch';
 import { handleCommand as dispatchCommand, AppCommandContext } from './commands';
@@ -56,6 +57,8 @@ import {
   runAgentTask,
   PendingInteractiveContext,
 } from './agentExecution';
+import type { McpServer } from '../acp/protocol';
+import { symlinkedCodeepNotice } from '../utils/projectPaths';
 
 // ─── Global state ─────────────────────────────────────────────────────────────
 
@@ -69,6 +72,14 @@ let sessionId = getCurrentSessionId();
 let app: App;
 /** Human-readable session name derived from the first user message */
 let sessionDisplayName: string | null = null;
+
+/** Switch the conversation this terminal is on. The config copy is kept in
+ *  step because the next launch resumes from it, and anything still reading
+ *  the global id would otherwise save into the conversation left behind. */
+function setSessionId(id: string): void {
+  sessionId = id;
+  config.set('currentSessionId', id);
+}
 
 const addedFiles: Map<string, { relativePath: string; content: string }> = new Map();
 
@@ -86,6 +97,45 @@ export function deriveSessionName(message: string): string {
   const clean = message.replace(/\s+/g, ' ').trim();
   const words = clean.split(' ').slice(0, 5).join(' ');
   return words.length > 48 ? words.slice(0, 45) + '…' : words;
+}
+
+/**
+ * Start the MCP servers this terminal may run, under the fixed session id
+ * `codeep-tui`: the global servers (~/.codeep, the user's own) plus the
+ * workspace ones once the workspace is trusted. Registering replaces the
+ * session's whole set, so they go in one call; starting the global list and
+ * then the workspace list stopped the global servers. Returns the workspace
+ * servers left out because the workspace is not trusted yet.
+ */
+export async function startTuiMcpServers(
+  root: string,
+  ui: Pick<App, 'notify' | 'notifyWarn'>,
+): Promise<McpServer[]> {
+  const { selectSessionMcpServers } = await import('../utils/mcpConfig');
+  const { registerSessionServers } = await import('../utils/mcpRegistry');
+  const { servers, skipped } = selectSessionMcpServers(root);
+  if (servers.length > 0) {
+    const { registered, errors } = await registerSessionServers('codeep-tui', servers, { workspaceRoot: root });
+    if (registered.length > 0) {
+      ui.notify(`MCP: ${registered.length} tool(s) from ${servers.length} server(s) ready. Type /mcp.`);
+    }
+    for (const e of errors) {
+      ui.notifyWarn(`MCP server "${e.server}" failed: ${e.error}`);
+    }
+  }
+  return skipped;
+}
+
+/** Start the servers of a workspace the user has just trusted. A failure is
+ *  shown, not swallowed: the user asked for these servers. */
+export function startTrustedWorkspaceMcp(
+  root: string,
+  ui: Pick<App, 'notify' | 'notifyWarn'>,
+): Promise<void> {
+  return startTuiMcpServers(root, ui).then(
+    () => {},
+    (err) => ui.notifyWarn(`MCP: could not start workspace servers: ${(err as Error).message}`),
+  );
 }
 
 let isAgentRunningFlag = false;
@@ -120,7 +170,8 @@ function makeCtx(): AppCommandContext {
     setAbortController: (ctrl) => { agentAbortController = ctrl; },
     formatAddedFilesContext,
     handleCommand: (cmd, args) => dispatchCommand(cmd, args, makeCtx()),
-    setSessionId: (id) => { sessionId = id; },
+    setSessionId,
+    getSessionId: () => sessionId,
     setSessionDisplayName: (name) => { sessionDisplayName = name; },
     setProjectContext: (ctx) => {
       projectContext = ctx;
@@ -328,7 +379,7 @@ async function handleSubmit(message: string): Promise<void> {
     const enrichedMessage = fileContext ? fileContext + webExpanded : webExpanded;
     await chat(enrichedMessage, history, (chunk) => app.addStreamChunk(chunk), undefined, projectContext, undefined);
     app.endStreaming();
-    autoSaveSession(app.getMessages(), projectPath);
+    autoSaveSession(app.getMessages(), projectPath, sessionId);
 
     // Sync to dashboard after every successful manual chat (not just on shutdown).
     // Mirrors the agent-mode behaviour in agentExecution.ts so dashboard stays
@@ -474,7 +525,7 @@ function showSessionPickerInline(): void {
       } else {
         const messages = loadSession(selectedName, projectPath);
         if (messages) {
-          sessionId = selectedName;
+          setSessionId(selectedName);
           app.setMessages(messages as Message[]);
           app.notify(`Loaded: ${selectedName}`);
         } else {
@@ -489,7 +540,9 @@ function showSessionPickerInline(): void {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-async function main(): Promise<void> {
+/** The CLI entry point. Exported so tests can drive a command without the
+ *  module starting the app on import. */
+export async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
   // Headless, deterministic code review for CI (no API key, no TUI). Handled
@@ -582,7 +635,7 @@ Commands (in chat):
       // Also pull portable personal config — personalities + custom commands +
       // the user profile. Web-edited personalities replace their local copy
       // after a safety backup; commands/profile retain additive merge rules.
-      const { pullPersonalities, pullCommands, pullUserProfile, getLastPersonalityPullBackupCount } = await import('../utils/codeepCloud.js');
+      const { pullPersonalities, pullCommands, pullUserProfileResult, getLastPersonalityPullBackupCount } = await import('../utils/codeepCloud.js');
       // Report all three outcomes, not just the interesting one. Printing only
       // on count > 0 made a failed sync look identical to a sync with nothing
       // new — silence meant either, and the user could not tell which.
@@ -606,8 +659,10 @@ Commands (in chat):
       } else if (commands.count > 0) {
         console.log(`  Pulled ${commands.count} custom command${commands.count === 1 ? '' : 's'}.`);
       }
-      const profPulled = await pullUserProfile();
-      if (profPulled === 1) {
+      const profile = await pullUserProfileResult();
+      if (!profile.ok) {
+        console.log(`  Could not pull your profile (about you) — ${describeSyncFailure(profile.reason)}.`);
+      } else if (profile.count > 0) {
         console.log('  Pulled your profile (about you).');
       }
       console.log('');
@@ -647,7 +702,7 @@ Commands (in chat):
       }
 
       // Also push portable personal config — personalities + commands + profile.
-      const { pushPersonalities, pushCommands, pushUserProfile } = await import('../utils/codeepCloud.js');
+      const { pushPersonalities, pushCommands, pushUserProfileResult } = await import('../utils/codeepCloud.js');
       const { describeSyncFailure } = await import('../utils/codeepCloud.js');
       const personalities = await pushPersonalities();
       if (!personalities.ok) {
@@ -661,11 +716,19 @@ Commands (in chat):
       } else if (commands.count > 0) {
         console.log(`  Pushed ${commands.count} custom command${commands.count === 1 ? '' : 's'}.`);
       }
-      if (await pushUserProfile()) {
+      // No local profile is nothing to push, not a failure.
+      const profile = await pushUserProfileResult();
+      const profilePushFailed = !profile.ok;
+      if (!profile.ok) {
+        console.log(`  Could not push your profile (about you) — ${describeSyncFailure(profile.reason)}.`);
+      } else if (profile.count > 0) {
         console.log('  Pushed your profile (about you).');
       }
       console.log('');
-      process.exit(keyPushFailed ? 1 : 0);
+      // Any push that was reported as failed fails the command, so a script
+      // running it can tell.
+      const anyFailed = keyPushFailed || !personalities.ok || !commands.ok || profilePushFailed;
+      process.exit(anyFailed ? 1 : 0);
     }
 
     if (sub === 'purge-keys') {
@@ -836,6 +899,9 @@ Commands (in chat):
 
   app.start();
 
+  const codeepNotice = symlinkedCodeepNotice(projectPath);
+  if (codeepNotice) app.notifyWarn(codeepNotice);
+
   // Let the phone send instructions, if it has been switched on. Started after
   // app.start() so a prompt that arrives immediately has somewhere to land.
   void (async () => {
@@ -874,33 +940,14 @@ Commands (in chat):
   if (projectPath) {
     (async () => {
       try {
-        const { loadMcpServerConfigSplit, isWorkspaceMcpTrusted, trustWorkspaceMcp } = await import('../utils/mcpConfig');
-        const { registerSessionServers } = await import('../utils/mcpRegistry');
-        const { global: globalServers, workspace: workspaceServers } = loadMcpServerConfigSplit(projectPath);
-
-        const spawnServers = async (servers: typeof globalServers) => {
-          if (servers.length === 0) return;
-          const { registered, errors } = await registerSessionServers('codeep-tui', servers, { workspaceRoot: projectPath });
-          if (registered.length > 0) {
-            app.notify(`MCP: ${registered.length} tool(s) from ${servers.length} server(s) ready. Type /mcp.`);
-          }
-          for (const e of errors) {
-            app.notifyWarn(`MCP server "${e.server}" failed: ${e.error}`);
-          }
-        };
-
-        // ~/.codeep servers are the user's own machine-wide config — spawn.
-        await spawnServers(globalServers);
+        const { trustWorkspaceMcp } = await import('../utils/mcpConfig');
+        const workspaceServers = await startTuiMcpServers(projectPath, app);
 
         // Workspace files (.codeep/mcp_servers.json, .mcp.json) travel WITH
         // the repo — a cloned project could otherwise execute arbitrary
         // commands at startup. One-time per-workspace approval, mirroring
         // the trustedHookProjects gate for hooks.
         if (workspaceServers.length === 0) return;
-        if (isWorkspaceMcpTrusted(projectPath)) {
-          await spawnServers(workspaceServers);
-          return;
-        }
         const preview = workspaceServers.slice(0, 5).map(s =>
           `  ${s.name}: ${s.command ? [s.command, ...(s.args ?? [])].join(' ') : s.url ?? ''}`);
         if (workspaceServers.length > 5) preview.push(`  …and ${workspaceServers.length - 5} more`);
@@ -916,7 +963,7 @@ Commands (in chat):
           cancelLabel: 'Not now',
           onConfirm: () => {
             trustWorkspaceMcp(projectPath);
-            void spawnServers(workspaceServers);
+            void startTrustedWorkspaceMcp(projectPath, app);
           },
           onCancel: () => {
             app.notify('Workspace MCP servers skipped. Run /mcp trust to enable them.');
@@ -1061,10 +1108,13 @@ async function gracefulShutdown() {
 
   if (!app) return;
 
+  // Write the conversation before anything that can fail or take time: the
+  // process exits as soon as this returns or throws, and a debounced save
+  // left on its timer never happens.
   const messages = app.getMessages();
-  autoSaveSession(messages, projectPath);
+  autoSaveSession(messages, projectPath, sessionId);
+  flushAutoSave();
 
-  const { syncSessionAsync, generateProjectId } = require('../utils/codeepCloud.js');
   const projectId = projectPath ? generateProjectId(projectPath) : undefined;
   // Successful manual and agent turns report their token deltas immediately.
   // Re-sending the cumulative session total here would count every token a
@@ -1079,38 +1129,47 @@ async function gracefulShutdown() {
 }
 
 // ─── Last-resort crash handlers ───────────────────────────────────────────────
-// Without these, a stray throw or rejected promise (deep in the agent loop or a
-// background cloud sync) crashes Node with the terminal still in raw mode +
-// alternate screen — leaving the user's shell garbled — or vanishes silently.
+// A test that imports this module for its helpers must not start the app:
+// main() reads the OS keychain, draws the TUI and goes to the network, and
+// these handlers would exit the test worker. Every real launch — node, the
+// npm bin, the bun-compiled binaries — runs this module as the program.
+if (!process.env.VITEST) {
+  // Without these, a stray throw or rejected promise (deep in the agent loop or a
+  // background cloud sync) crashes Node with the terminal still in raw mode +
+  // alternate screen — leaving the user's shell garbled — or vanishes silently.
 
-process.on('uncaughtException', (error) => {
-  logAppError(error instanceof Error ? error : new Error(String(error)), 'uncaughtException');
-  // After an uncaught exception the process state is undefined; Node's guidance
-  // is to clean up synchronously and exit rather than limp on. Restore the
-  // terminal and best-effort save the conversation so the crash doesn't lose it.
-  try { if (app) app.stop(); } catch { /* ignore */ }
-  try { process.stdout.write('\x1b[2J\x1b[3J\x1b[H'); } catch { /* ignore */ }
-  console.error('Fatal error:', error);
-  try { if (app) autoSaveSession(app.getMessages(), projectPath); } catch { /* ignore */ }
-  process.exit(1);
-});
+  process.on('uncaughtException', (error) => {
+    logAppError(error instanceof Error ? error : new Error(String(error)), 'uncaughtException');
+    // After an uncaught exception the process state is undefined; Node's guidance
+    // is to clean up synchronously and exit rather than limp on. Restore the
+    // terminal and best-effort save the conversation so the crash doesn't lose it.
+    try { if (app) app.stop(); } catch { /* ignore */ }
+    try { process.stdout.write('\x1b[2J\x1b[3J\x1b[H'); } catch { /* ignore */ }
+    console.error('Fatal error:', error);
+    try {
+      if (app) autoSaveSession(app.getMessages(), projectPath, sessionId);
+      flushAutoSave();
+    } catch { /* ignore */ }
+    process.exit(1);
+  });
 
-process.on('unhandledRejection', (reason) => {
-  logAppError(reason instanceof Error ? reason : new Error(String(reason)), 'unhandledRejection');
-  // A rejected promise is usually recoverable (failed background sync, network
-  // blip), so surface it and keep the TUI alive instead of tearing it down.
-  // Fall back to stderr if the app isn't up yet.
-  const message = reason instanceof Error ? reason.message : String(reason);
-  if (app) app.notifyWarn(`Background error: ${message}`);
-  else console.error('Unhandled rejection:', reason);
-});
+  process.on('unhandledRejection', (reason) => {
+    logAppError(reason instanceof Error ? reason : new Error(String(reason)), 'unhandledRejection');
+    // A rejected promise is usually recoverable (failed background sync, network
+    // blip), so surface it and keep the TUI alive instead of tearing it down.
+    // Fall back to stderr if the app isn't up yet.
+    const message = reason instanceof Error ? reason.message : String(reason);
+    if (app) app.notifyWarn(`Background error: ${message}`);
+    else console.error('Unhandled rejection:', reason);
+  });
 
-process.on('SIGINT', () => {
-  gracefulShutdown().finally(() => process.exit(0));
-});
+  process.on('SIGINT', () => {
+    gracefulShutdown().finally(() => process.exit(0));
+  });
 
-main().catch((error) => {
-  logAppError(error instanceof Error ? error : new Error(String(error)), 'main');
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+  main().catch((error) => {
+    logAppError(error instanceof Error ? error : new Error(String(error)), 'main');
+    console.error('Fatal error:', error);
+    process.exit(1);
+  });
+}

@@ -11,6 +11,163 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.4.0] — 2026-09-17
+
+> TL;DR — Security and reliability release: a repo can no longer grant itself access or start MCP servers, secrets stay out of prompts, MCP tools ask first, and /commit, /scan, /undo and sessions stop losing work.
+
+A wide bug hunt across the CLI and the editor integration (VS Code, Zed): five
+independent audits, every finding reproduced before it was fixed, and a
+regression test for each fix that was shown to fail without it.
+
+### Upgrade notes
+
+- **You may be asked once more to allow access to a project.** Earlier versions
+  also stored the grant in the project's own `.codeep/config.json`, a file a
+  cloned repository can ship. Grants now live only in your own config.
+- **MCP tools now ask before they run** in the default *Dangerous* confirmation
+  mode (and in Manual mode in editors). Read-only resource and prompt lookups
+  still run without asking. *Always* mode now asks before every write, edit,
+  delete and command, as its description always said.
+- **`pre_tool_call` hooks see MCP tool names as the server spells them**
+  (`brave-search__brave_web_search`, not `brave_search__…`). Update a hook that
+  matched the old form.
+- **On Windows, editor Manual mode refuses skill command lines** that contain
+  quotes, `^`, `%`, `!`, `&`, `|`, `<` or `>`: cmd.exe reads them differently
+  from the check, so they cannot be checked.
+
+### Security
+
+- **A cloned repository could grant itself read and write access.** A
+  `.codeep/config.json` in the repo was read as your permission grant, so the
+  "Allow access?" question never appeared. Only grants you made count now.
+- **`/mcp add`, `remove`, `reload`, `install` and `trust` started MCP servers
+  from untrusted repositories**, in the terminal and in editors, although
+  opening the project skipped them. They now apply the same trust rule, and a
+  repo server can no longer stop or replace one of your own.
+- **Commands sent to the editor's terminal skipped every command check** — the
+  allow-list, blocked patterns and the network address guard — and in the
+  default mode nobody was asked. They are now checked like local commands.
+- **MCP tools never went through the permission prompt**, even in Manual or
+  Dangerous mode, while a local file write in the same session did.
+- **Secrets could reach the model without being attached on purpose.** Smart
+  context put `.env.local` or `server.key` into the system prompt whenever the
+  prompt mentioned them — even after the `@` mention was refused — and
+  `@dir ~/.ssh` attached private keys. Now:
+  - secrets files are never inlined implicitly;
+  - private keys are recognised by content, whatever the file is called and
+    however it is written (PEM, OpenSSH, PGP, PuTTY, on one line, in JSON or in
+    string literals);
+  - `.git-credentials`, `.pypirc` and the Docker, kube and gh credential files
+    are refused;
+  - a symlink is judged by the file it points at;
+  - a refused `@.env.template` stays out of smart context too.
+- **Repository files could pull your files into the prompt through a symlink.**
+  A committed `CODEEP.md -> ~/.aws/credentials`, or an agent, personality,
+  custom command, skill bundle, profile or progress file linked outside the
+  project, is no longer read.
+- **Codeep could write, append to or delete files outside the project through
+  a symlinked `.codeep/`.** Sessions, project config, the audit log, logs,
+  checkpoints, memory notes, the progress log, the project profile, the MCP
+  config and installed skill bundles are never written through a symlink; a
+  symlinked `.codeep` is announced and sessions go to `~/.codeep/sessions`.
+- **A committed link to `/dev/zero` (or a FIFO)** in place of a rules file,
+  `.gitignore`, `SKILL.md`, personality or context file hung every run.
+- **Skill bundles and custom skills could reach outside their directory**:
+  `/skill delete ../mcp_servers` deleted `~/.codeep/mcp_servers.json`, and a
+  bundle name from the server chose where files were written.
+- **The permission prompt could hide what it asked you to approve.** Escape and
+  bidi characters are shown literally, long commands and MCP calls are shown
+  from their first character, an exec tool's arguments are listed, and a
+  credential is replaced only where it appears — not the whole value.
+- **Delegated sub-agents ignored dry-run and the permission rules** of the run
+  that started them.
+- **Editor Manual mode** now asks before a skill runs a shell command and checks
+  every command in the line, including after redirects such as `2>&1`.
+- **On Windows**, model text placed into skill commands is made safe for
+  cmd.exe.
+- The address guard behind `fetch_url` and `@web` (3.3.3) is unchanged.
+
+Tracked as [GHSA-q466-ch7g-2322](https://github.com/VladoIvankovic/Codeep/security/advisories/GHSA-q466-ch7g-2322).
+
+### Fixed — lost or overwritten work
+
+- **`/commit` committed with the message "confirmed"** instead of the generated
+  one (and in editors without asking); `/commit <message>` is committed as typed
+  and shown before it runs; `/branch` always failed.
+- **`/scan` erased every `/memory` note.**
+- **Sessions were saved under the wrong name.** Loading a session and chatting
+  overwrote another conversation (terminal and editors), two editor threads
+  wrote over each other's file, and a turn that finished after you switched
+  conversations landed in the new one.
+- **`/rename` and editor `/save` could replace another saved conversation**, and
+  `/rename` right after a reply brought the old file back.
+- **`/undo` could never undo a finished run.** It can now — and it refuses to
+  overwrite a file you changed since, or a deleted file that exists again.
+- **Leaving or crashing did not write the pending autosave.**
+- **The installed CLI crashed where it used `require()`**: the write/edit diff
+  preview, graceful shutdown and `/skill delete`.
+- **A write the editor refused was written to disk behind it**, and a failed
+  write was reported as a success.
+- **`/memory` and `/scan` said "saved"** when the file could not be written.
+
+### Fixed — the agent loop
+
+- **Auto-verify reported success while checks were failing** (errors in files
+  the run did not touch, output it could not parse, fix attempts used up), and
+  a run that hit its iteration limit counted as a success.
+- **A check that timed out after printing failures** — on stdout or stderr —
+  counts as failed again; one that only timed out is reported as not run.
+- **Stop now stops at once**: it kills a running command or check, skips the
+  tool calls queued behind it, and cancels Ollama's native API requests.
+  Processes a command started itself keep running, as they do when a command
+  times out.
+- **MCP tools with a hyphen or capital in their name** (for example
+  `brave-search`) could not be called.
+- **A skill kept going after its agent step failed** or was stopped, so a
+  following commit or deploy step still ran.
+- `codeep review --fix` lists the files it edited alongside the checks that
+  still fail.
+
+### Fixed — terminal
+
+- Starting in a project with its own MCP servers stopped your global ones.
+- `/review --staged` and `--static` were read as file names.
+- `/go` threw away the approved plan when the run failed.
+- `/learn rule` saved the project path instead of the rule.
+- One malformed custom skill file broke every custom skill; failed files are
+  now listed under "Not loaded".
+- `/undo-all` lists what it restored and what it could not; `/changes` no
+  longer lists undone changes.
+- `@dir` says what it skipped and why, and works on folders whose contents are
+  gitignored.
+- Profile sync failures read as "Nothing to sync yet"; `codeep account push`
+  and `sync` now say why a profile sync failed and exit non-zero.
+- Session names containing `/` (or `\` on Windows) are refused with a reason.
+
+### Fixed — VS Code and Zed
+
+- Cancelling a prompt, including `/review`, `/diff` and skills, always ends the
+  turn as cancelled.
+- A permission question no longer times out after 30 seconds.
+- A command that ran longer than 30 seconds in the editor's terminal was run a
+  second time locally.
+- Loading a session a second time showed an empty chat; a loaded session is
+  registered under the id the editor asked for.
+- The agent now receives the conversation history, and `/go` runs are part of
+  it.
+- Verification results, the auto-review section and closing notices are shown
+  at the end of a reply.
+- `/go` reported success when the run failed; each thread has its own pending
+  `/plan`.
+- `@./file` and `@dir .` resolve against the workspace.
+- Errors inside a request reach the editor instead of being dropped.
+- The `/review` menu entry describes what it does now.
+
+### Internal
+
+- Tests run with a throwaway home directory and an in-memory keychain, and
+  importing the CLI entry module no longer starts the app.
+
 ## [3.3.3] — 2026-09-15
 
 > TL;DR — Security release. A web page could redirect `fetch_url` into your own machine or network (localhost, cloud metadata, Tailscale), and the agent runs that tool without asking. Update now.

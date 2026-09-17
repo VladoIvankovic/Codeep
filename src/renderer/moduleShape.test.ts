@@ -50,4 +50,19 @@ describe('module shape', () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  it('calls no bare require(), which does not exist in the ESM build', () => {
+    // The package is `"type": "module"` and tsc emits ESM, so `require` is
+    // undefined in dist while vitest supplies one — tests pass and the CLI
+    // throws. Inside a try the throw is swallowed and the feature just stops.
+    const offenders: string[] = [];
+    for (const file of sourceFiles('src')) {
+      readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+        const code = line.trim();
+        if (code.startsWith('//') || code.startsWith('*')) return;
+        if (/(^|[^.\w$])require\s*\(/.test(code)) offenders.push(`${file}:${i + 1}`);
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
 });

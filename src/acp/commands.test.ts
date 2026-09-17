@@ -21,6 +21,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { initWorkspace } from './commands';
+import { hasReadPermission, hasWritePermission } from '../config/index';
 
 let workspaceRoot: string;
 
@@ -45,16 +46,14 @@ describe('initWorkspace — filesystem bootstrap', () => {
     expect(existsSync(join(workspaceRoot, '.codeep'))).toBe(true);
   });
 
-  it('writes a project config under .codeep/config.json (marks as initialized)', () => {
+  it('marks the workspace as a project and grants access in the user\'s own config', () => {
     initWorkspace(workspaceRoot);
-    const cfgPath = join(workspaceRoot, '.codeep', 'config.json');
-    expect(existsSync(cfgPath)).toBe(true);
-    // Should be valid JSON; project permission block is the contract.
-    const parsed = JSON.parse(readFileSync(cfgPath, 'utf8'));
-    expect(parsed.permission).toBeTruthy();
-    expect(parsed.permission.readPermission).toBe(true);
-    expect(parsed.permission.writePermission).toBe(true);
-    expect(parsed.permission.path).toBe(workspaceRoot);
+    const marker = JSON.parse(readFileSync(join(workspaceRoot, '.codeep', 'project.json'), 'utf8'));
+    expect(typeof marker.initializedAt).toBe('string');
+    expect(hasReadPermission(workspaceRoot)).toBe(true);
+    expect(hasWritePermission(workspaceRoot)).toBe(true);
+    // The grant is not written into the repo, where a clone would carry it.
+    expect(existsSync(join(workspaceRoot, '.codeep', 'config.json'))).toBe(false);
   });
 });
 

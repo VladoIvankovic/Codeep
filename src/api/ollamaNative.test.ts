@@ -1,4 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import http from 'http';
+import type { AddressInfo } from 'net';
 import {
   parseOllamaChatLine,
   foldOllamaDelta,
@@ -6,6 +8,7 @@ import {
   initialOllamaAccumulator,
   extractContextLength,
   extractOllamaToolCalls,
+  streamOllamaNativeChat,
 } from './ollamaNative';
 
 describe('parseOllamaChatLine', () => {
@@ -141,5 +144,61 @@ describe('parseOllamaChatLine + fold — tool calls', () => {
 
   it('accumulator starts with an empty toolCalls array', () => {
     expect(initialOllamaAccumulator().toolCalls).toEqual([]);
+  });
+});
+
+describe('streamOllamaNativeChat — stopping', () => {
+  // A local stand-in for Ollama that sends one line and then never finishes.
+  let server: http.Server | undefined;
+  let closed: Promise<void>;
+  const hangingServer = async () => {
+    let onClose!: () => void;
+    closed = new Promise(r => { onClose = r; });
+    server = http.createServer((req, res) => {
+      req.resume();
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+      res.write('{"message":{"content":"Hel"},"done":false}\n');
+      res.on('close', onClose);
+    });
+    await new Promise<void>(r => server!.listen(0, '127.0.0.1', r));
+    return `http://127.0.0.1:${(server!.address() as AddressInfo).port}`;
+  };
+
+  afterEach(async () => {
+    server?.closeAllConnections();
+    await new Promise(r => server ? server.close(r) : r(undefined));
+    server = undefined;
+  });
+
+  it('rejects with an AbortError and closes the request when the signal fires', async () => {
+    const baseUrl = await hangingServer();
+    const controller = new AbortController();
+    const chunks: string[] = [];
+    const started = Date.now();
+
+    const request = streamOllamaNativeChat({
+      baseUrl, model: 'm', messages: [{ role: 'user', content: 'hi' }], timeoutMs: 5000,
+      signal: controller.signal,
+      onChunk: (t) => { chunks.push(t); if (chunks.length === 1) controller.abort(); },
+    });
+
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(chunks).toEqual(['Hel']);
+    await closed; // the server saw the connection go away
+  });
+
+  it('does not send a request when already stopped', async () => {
+    const baseUrl = await hangingServer();
+    let requests = 0;
+    server!.on('request', () => { requests++; });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(streamOllamaNativeChat({
+      baseUrl, model: 'm', messages: [], signal: controller.signal,
+    })).rejects.toMatchObject({ name: 'AbortError' });
+    await new Promise(r => setTimeout(r, 50));
+    expect(requests).toBe(0);
   });
 });

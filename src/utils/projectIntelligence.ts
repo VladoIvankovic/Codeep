@@ -3,7 +3,8 @@
  * Scans project once and caches important information for faster AI context
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, statSync, readdirSync } from 'fs';
+import { writeProjectFile } from './projectPaths';
 import { join, basename, extname, relative } from 'path';
 import { loadIgnoreRules, isIgnored, type IgnoreRules } from './gitignore';
 
@@ -127,6 +128,23 @@ const FRAMEWORK_INDICATORS: Record<string, string[]> = {
 // ============================================================================
 
 /**
+ * Notes from an existing intelligence file. Parsed directly rather than through
+ * loadProjectIntelligence, which returns null for an older schema version —
+ * the rescan that follows a version bump would otherwise drop every note.
+ */
+function readSavedNotes(projectPath: string): string[] {
+  try {
+    const filePath = join(projectPath, '.codeep', INTELLIGENCE_FILE);
+    if (!existsSync(filePath)) return [];
+    const data = JSON.parse(readFileSync(filePath, 'utf-8'));
+    const notes = data && typeof data === 'object' ? data.notes : undefined;
+    return Array.isArray(notes) ? notes.filter((n: unknown): n is string => typeof n === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Scan project and generate intelligence
  */
 export async function scanProject(projectPath: string): Promise<ProjectIntelligence> {
@@ -169,7 +187,9 @@ export async function scanProject(projectPath: string): Promise<ProjectIntellige
       testDirectory: null,
       hasTests: false,
     },
-    notes: [],
+    // /memory notes live in the same file a rescan overwrites; they are the
+    // user's, not something a scan can rediscover
+    notes: readSavedNotes(projectPath),
   };
 
   // Load .gitignore rules once — used by scan and endpoint detection
@@ -199,18 +219,17 @@ export async function scanProject(projectPath: string): Promise<ProjectIntellige
   return intelligence;
 }
 
+/** What to tell the user when saveProjectIntelligence returns false. */
+export const INTELLIGENCE_NOT_SAVED =
+  'Not saved: .codeep/intelligence.json could not be written (is .codeep a symlink, or read-only?).';
+
 /**
  * Save intelligence to .codeep/intelligence.json
  */
 export function saveProjectIntelligence(projectPath: string, intelligence: ProjectIntelligence): boolean {
   try {
-    const codeepDir = join(projectPath, '.codeep');
-    if (!existsSync(codeepDir)) {
-      mkdirSync(codeepDir, { recursive: true });
-    }
-    
-    const filePath = join(codeepDir, INTELLIGENCE_FILE);
-    writeFileSync(filePath, JSON.stringify(intelligence, null, 2));
+    // .codeep/ can come with a cloned repo: never write through a symlink.
+    writeProjectFile(projectPath, join(projectPath, '.codeep', INTELLIGENCE_FILE), JSON.stringify(intelligence, null, 2));
     return true;
   } catch {
     return false;

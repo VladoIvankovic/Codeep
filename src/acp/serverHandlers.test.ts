@@ -30,6 +30,7 @@ import {
   type SessionMap,
 } from './serverHandlers';
 import { config } from '../config/index';
+import { setPendingPlan, getPendingPlan, clearPendingPlan } from '../utils/planMode';
 import type { JsonRpcRequest } from './protocol';
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -64,7 +65,7 @@ function makeSession(overrides: Partial<AcpServerSession> = {}): AcpServerSessio
     history: [],
     codeepSessionId: 'codeep-session-id',
     addedFiles: new Map(),
-    abortController: null,
+    activePrompts: new Set(),
     currentModeId: 'auto',
     titleSent: true,
     hadHistory: false,
@@ -321,6 +322,20 @@ describe('handleSessionDelete', () => {
 
     expect(sessions.size).toBe(0);
     expect(calls).toEqual([{ kind: 'respond', id: 1, result: {} }]);
+  });
+
+  it('drops the pending plan of that session, and only that one', () => {
+    const { deps } = makeDeps([['plan-scope-s1', makeSession()]]);
+    setPendingPlan({ task: 'mine', plan: '1. edit', createdAt: 0 }, 'plan-scope-s1');
+    setPendingPlan({ task: 'other', plan: '1. edit', createdAt: 0 }, 'plan-scope-s2');
+    try {
+      handleSessionDelete(makeRequest(4, 'session/delete', { sessionId: 'plan-scope-s1', cwd: tmpDir }), deps);
+      expect(getPendingPlan('plan-scope-s1')).toBeNull();
+      expect(getPendingPlan('plan-scope-s2')?.task).toBe('other');
+    } finally {
+      clearPendingPlan('plan-scope-s1');
+      clearPendingPlan('plan-scope-s2');
+    }
   });
 
   it('still responds OK when the session was never in memory', () => {

@@ -10,6 +10,7 @@
 
 import { isFlatFeeProvider } from '../../config/providers';
 import { formatCacheReadRates } from '../../utils/tokenTracker';
+import type { SyncFailure, SyncResult } from '../../utils/codeepCloud';
 
 // ─── Search snippet extraction ────────────────────────────────────────────────
 //
@@ -575,13 +576,40 @@ export function formatCloudSessionLabel(
 
 // ─── /me sync + learn + init formatters ───────────────────────────────────────
 
-/** Format the `/me sync` result list. `pulled` is `1` on success, `0` or `null` otherwise. */
-export function formatMeSyncReport(pushed: boolean, pulled: number | null): string {
+/**
+ * Format the `/me sync` result list. For both results `count` is 1 when the
+ * profile moved and 0 when there was nothing to move (no local profile to
+ * push; nothing new to pull). `describe` turns a failure into a sentence —
+ * codeepCloud's describeSyncFailure, passed in so this module stays free of
+ * the config it loads.
+ */
+export function formatMeSyncReport(
+  pushed: SyncResult,
+  pulled: SyncResult,
+  describe: (reason: SyncFailure) => string,
+): string {
   const lines: string[] = [];
-  if (pushed) lines.push('✓ Profile pushed to the dashboard');
-  if (pulled === 1) lines.push('✓ Profile pulled to this machine');
-  if (lines.length === 0) lines.push('Nothing to sync yet — run `/me init` and fill in your profile first.');
+  if (!pushed.ok) lines.push(`✗ Could not push your profile to the dashboard — ${describe(pushed.reason)}`);
+  else if (pushed.count > 0) lines.push('✓ Profile pushed to the dashboard');
+  if (!pulled.ok) lines.push(`✗ Could not fetch your profile from the dashboard — ${describe(pulled.reason)}`);
+  else if (pulled.count > 0) lines.push('✓ Profile pulled to this machine');
+  if (lines.length === 0) {
+    lines.push('Nothing to sync yet — run `/me init` and fill in your profile first.');
+  }
   return `## Profile sync\n\n${lines.join('\n')}`;
+}
+
+// ─── /undo-all ────────────────────────────────────────────────────────────────
+
+/**
+ * Format what `/undo-all` did, one line per action. The results mix restored
+ * files with actions that cannot be undone (a shell command), so a count of
+ * them says nothing about how much was put back.
+ */
+export function formatUndoAllReport(result: { success: boolean; results: string[] }): string {
+  if (result.results.length === 0) return 'Nothing to undo';
+  const heading = result.success ? '## Undo all' : '## Nothing was undone';
+  return `${heading}\n\n${result.results.map(r => `- ${r}`).join('\n')}`;
 }
 
 /**

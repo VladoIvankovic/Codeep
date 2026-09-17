@@ -248,7 +248,7 @@ function defaultDeps(): ReviewDeps {
  * and opening a pull request belong to whatever called this, which in CI is the
  * action that holds the token.
  */
-async function runFixPlan(plan: FixPlan, context: ProjectContext): Promise<string | null> {
+export async function runFixPlan(plan: FixPlan, context: ProjectContext): Promise<string | null> {
   try {
     // Populate the key cache before anything asks for it. `getApiKey` is
     // synchronous and reads the cache alone — it does not consult the
@@ -283,13 +283,20 @@ async function runFixPlan(plan: FixPlan, context: ProjectContext): Promise<strin
         .map(a => a.target),
     );
     const activity = describeAgentActivity(result.actions);
+    const editedList = `Edited ${edited.size} file${edited.size === 1 ? '' : 's'}: ${[...edited].join(', ')}.`;
     if (!result.success) {
+      // The run did its work and the checks after it failed. The edits are in
+      // the working tree all the same, so name them next to the checks.
+      if (result.failedChecks?.length) {
+        const changed = edited.size > 0 ? editedList : activity;
+        return `${summariseFixPlan(plan)} ${changed} These checks still fail afterwards: ${result.failedChecks.join(', ')}.`;
+      }
       return `${summariseFixPlan(plan)} The run did not finish: ${result.error ?? 'unknown error'}. ${activity}`;
     }
     if (edited.size === 0) {
       return `${summariseFixPlan(plan)} Nothing was changed. ${activity}`;
     }
-    return `${summariseFixPlan(plan)} Edited ${edited.size} file${edited.size === 1 ? '' : 's'}: ${[...edited].join(', ')}.`;
+    return `${summariseFixPlan(plan)} ${editedList}`;
   } catch (error) {
     // A missing key or an unreachable provider must not fail the review. The
     // findings are already reported and the exit code already decided.

@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { getEventListeners } from 'events';
 import { validateCommand, validateCommandAsync, executeCommand, execSimple, getAllowedCommands, formatCommandResult } from './shell';
 
 // ─── Mock child_process ───────────────────────────────────────────────────────
@@ -20,7 +23,7 @@ vi.mock('fs', async (importOriginal) => {
 });
 
 import { spawnSync } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'fs';
 
 const mockSpawnSync = spawnSync as ReturnType<typeof vi.fn>;
 const mockExistsSync = existsSync as ReturnType<typeof vi.fn>;
@@ -479,6 +482,36 @@ describe('executeCommandAsync', () => {
     expect(result.stderr).toContain('timed out');
   });
 
+  it('keeps what the command printed before its timeout and says it timed out', async () => {
+    const { executeCommandAsync } = await import('./shell');
+    const { mkdtempSync, writeFileSync: realWrite, rmSync } = await vi.importActual<typeof import('fs')>('fs');
+    const dir = mkdtempSync(join(tmpdir(), 'codeep-timeout-'));
+    try {
+      const script = join(dir, 'slow.js');
+      realWrite(script, "process.stdout.write('partial out\\n'); process.stderr.write('FAIL a.test.ts\\n'); setTimeout(() => {}, 10000);");
+      const result = await executeCommandAsync('node', [script], { timeout: 1500 });
+      expect(result.timedOut).toBe(true);
+      expect(result.stdout).toContain('partial out');
+      expect(result.stderr).toBe('FAIL a.test.ts\nCommand timed out after 1500ms');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A timer left behind would hold a one-shot CLI run open for the whole
+  // timeout after its last command finished.
+  it('leaves no timer running once the command ends', async () => {
+    const { executeCommandAsync } = await import('./shell');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const result = await executeCommandAsync('echo', ['hi'], { timeout: 120_000 });
+      expect(result.success).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('returns failure for blocked command', async () => {
     const { executeCommandAsync } = await import('./shell');
     const result = await executeCommandAsync('sudo', ['ls']);
@@ -489,5 +522,97 @@ describe('executeCommandAsync', () => {
     const { executeCommandAsync } = await import('./shell');
     const result = await executeCommandAsync('notarealcommand_xyz', []);
     expect(result.success).toBe(false);
+  });
+});
+
+describe('executeCommandAsync — abort signal', () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'codeep-shell-abort-')); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  const isAlive = (pid: number) => {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+  const waitFor = async (check: () => boolean, ms: number) => {
+    const until = Date.now() + ms;
+    while (!check() && Date.now() < until) await new Promise((r) => setTimeout(r, 25));
+    return check();
+  };
+  // A node script that records its pid and then idles; with `stubborn` it
+  // also ignores SIGTERM.
+  const idleScript = (stubborn: boolean) => {
+    const script = join(dir, 'idle.cjs');
+    writeFileSync(script, [
+      "require('fs').writeFileSync(process.argv[2], String(process.pid));",
+      stubborn ? "process.on('SIGTERM', () => {});" : '',
+      'setInterval(() => {}, 1000);',
+    ].join('\n'));
+    return script;
+  };
+  const readPid = async (pidFile: string) => {
+    let pid = 0;
+    await waitFor(() => {
+      try { pid = Number(readFileSync(pidFile, 'utf-8')); } catch { /* not yet */ }
+      return pid > 0;
+    }, 5000);
+    return pid;
+  };
+
+  it('kills the running command and reports it cancelled at once', async () => {
+    const { executeCommandAsync } = await import('./shell');
+    const pidFile = join(dir, 'pid');
+    const ac = new AbortController();
+    const pending = executeCommandAsync('node', [idleScript(false), pidFile], { signal: ac.signal, timeout: 10_000 });
+    const pid = await readPid(pidFile);
+    expect(pid).toBeGreaterThan(0);
+
+    const abortedAt = Date.now();
+    ac.abort();
+    const result = await pending;
+    expect(Date.now() - abortedAt).toBeLessThan(1000);
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(true);
+    expect(result.stderr).toBe('Command cancelled');
+    expect(result.exitCode).toBe(-1);
+    expect(await waitFor(() => !isAlive(pid), 1500)).toBe(true);
+  }, 15_000);
+
+  it('force-kills a command that ignores SIGTERM', async () => {
+    const { executeCommandAsync } = await import('./shell');
+    const pidFile = join(dir, 'pid');
+    const ac = new AbortController();
+    const pending = executeCommandAsync('node', [idleScript(true), pidFile], { signal: ac.signal, timeout: 10_000 });
+    const pid = await readPid(pidFile);
+    try {
+      ac.abort();
+      expect((await pending).cancelled).toBe(true);
+      expect(await waitFor(() => !isAlive(pid), 4000)).toBe(true);
+    } finally {
+      if (pid > 0 && isAlive(pid)) process.kill(pid, 'SIGKILL');
+    }
+  }, 15_000);
+
+  it('does not start the command when the signal already fired', async () => {
+    const { executeCommandAsync } = await import('./shell');
+    const marker = join(dir, 'ran');
+    const ac = new AbortController();
+    ac.abort();
+    const result = await executeCommandAsync('touch', [marker], { signal: ac.signal });
+    expect(result.cancelled).toBe(true);
+    expect(result.stderr).toBe('Command cancelled');
+    // Give a stray process time to create the file before checking.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(readdirSync(dir)).not.toContain('ran');
+  });
+
+  it('removes its abort listener once the command ends', async () => {
+    const { executeCommandAsync } = await import('./shell');
+    const ac = new AbortController();
+    for (let i = 0; i < 3; i++) {
+      const result = await executeCommandAsync('echo', ['hi'], { signal: ac.signal });
+      expect(result.success).toBe(true);
+      expect(result.cancelled).toBeUndefined();
+    }
+    expect(getEventListeners(ac.signal, 'abort')).toHaveLength(0);
   });
 });

@@ -26,8 +26,9 @@
  * that's the shape ACP passes over JSON-RPC.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { writeProjectFile } from './projectPaths.js';
+import { join } from 'path';
 import { homedir } from 'os';
 import { config } from '../config/index.js';
 import type { McpServer } from '../acp/protocol.js';
@@ -223,6 +224,40 @@ export function mergeMcpServers(fromConfig: McpServer[], fromAcp: McpServer[] | 
 }
 
 /**
+ * The MCP servers a session runs. Every place that (re)starts a session's
+ * servers goes through here, so they all apply the same rule:
+ *
+ *   - global (~/.codeep) entries always run — they are the user's own —
+ *     unless a workspace entry of the same name runs in their place;
+ *   - workspace entries run only once the workspace is trusted, because
+ *     they arrive with the repo. `userAdded` names entries the user has
+ *     just added by hand (`/mcp add`, `/mcp install`); those need no
+ *     further consent;
+ *   - `fromClient` — the servers the editor passed for the session — run
+ *     too and win on name collisions, as in `mergeMcpServers`.
+ *
+ * `skipped` lists the workspace entries left out, so callers can say why.
+ * Registering replaces a session's whole set of servers, which is why the
+ * editor's servers have to be part of every selection.
+ */
+export function selectSessionMcpServers(
+  workspaceRoot: string | undefined,
+  opts: { fromClient?: McpServer[]; userAdded?: string[] } = {},
+): { servers: McpServer[]; skipped: McpServer[] } {
+  const { workspace } = loadMcpServerConfigSplit(workspaceRoot);
+  const trusted = workspaceRoot !== undefined && isWorkspaceMcpTrusted(workspaceRoot);
+  const allowed = trusted ? workspace : workspace.filter(s => opts.userAdded?.includes(s.name));
+  const skipped = workspace.filter(s => !allowed.includes(s));
+  // The split list has already dropped every global entry a workspace entry
+  // names. Only an entry that is going to run may take the place of one of
+  // the user's own servers; one left out must not stop it.
+  const allowedNames = new Set(allowed.map(s => s.name));
+  const globalServers = loadFromFile(join(homedir(), GLOBAL_CONFIG_PATH))
+    .filter(s => !allowedNames.has(s.name));
+  return { servers: mergeMcpServers([...globalServers, ...allowed], opts.fromClient), skipped };
+}
+
+/**
  * Add or replace a server entry in the project config file. Used by the
  * interactive `/mcp add` command. Project file is created if missing.
  */
@@ -251,8 +286,8 @@ export function addProjectMcpServer(workspaceRoot: string, server: McpServer): v
   const { name, ...rest } = server;
   map[name] = rest;
   parsed.mcpServers = map;
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(parsed, null, 2) + '\n');
+  // .codeep/ can come with a cloned repo: never write through a symlink.
+  writeProjectFile(workspaceRoot, path, JSON.stringify(parsed, null, 2) + '\n');
 }
 
 /**
@@ -277,6 +312,6 @@ export function removeProjectMcpServer(workspaceRoot: string, name: string): boo
   } else {
     return false;
   }
-  writeFileSync(path, JSON.stringify(parsed, null, 2) + '\n');
+  writeProjectFile(workspaceRoot, path, JSON.stringify(parsed, null, 2) + '\n');
   return true;
 }

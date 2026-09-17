@@ -10,7 +10,8 @@
  *   - **Built-in**: hardcoded below (researcher, reviewer, tester).
  *   - **Project**: `<workspace>/.codeep/agents/<name>.md`
  *   - **Global**:  `~/.codeep/agents/<name>.md`
- * Project shadows global shadows built-in, by name.
+ * Project shadows global shadows built-in, by name. A project file that
+ * shadows a built-in keeps at most the built-in's tools.
  *
  * File format — YAML-ish frontmatter + Markdown body (the role prompt):
  *   ```
@@ -26,9 +27,10 @@
  *   ```
  */
 
-import { readFileSync, readdirSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { leadsOutsideProject } from './projectPaths';
 
 export type AgentScope = 'builtin' | 'project' | 'global';
 
@@ -104,15 +106,73 @@ const BUILTIN: AgentDef[] = [
   },
 ];
 
-/** Parse `tools: [a, b]` or `tools: a, b` out of a frontmatter line value. */
-function parseToolsValue(raw: string): string[] | undefined {
-  const inner = raw.trim().replace(/^\[/, '').replace(/\]$/, '');
-  const list = inner.split(',').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
-  return list.length > 0 ? list : undefined;
+/** Largest agent file we'll read (64 KB). */
+const MAX_AGENT_FILE_BYTES = 64 * 1024;
+
+const unquote = (s: string): string => s.trim().replace(/^["']|["']$/g, '');
+
+/** Drop a YAML trailing comment (`read_file  # safe`) from an unquoted value. */
+const uncomment = (s: string): string => s.replace(/(^|\s)#.*$/, '');
+
+/**
+ * Parse a `tools:` value: `[a, b]`, `a, b`, or a YAML block list. A key that
+ * is present always yields a list, possibly empty. Only an absent key means
+ * "all tools", so a value we can't read denies tools rather than granting
+ * every one of them.
+ */
+function parseToolsValue(raw: string | string[]): string[] {
+  if (Array.isArray(raw)) return raw.map(unquote).filter(Boolean);
+  const inline = raw.trim().match(/^\[([^\]]*)\]/);
+  const inner = inline ? inline[1] : uncomment(raw);
+  return inner.split(',').map(unquote).filter(Boolean);
 }
 
+/**
+ * Split an agent file into lowercase frontmatter keys and the body. A key
+ * with an empty value collects the `- item` lines under it. Returns null when
+ * the file opens a frontmatter fence that never closes: dropping the file is
+ * safer than reading its `tools:` line as part of the prompt.
+ */
+function parseAgentFile(raw: string): { meta: Record<string, string | string[]>; body: string } | null {
+  // Windows editors save CRLF and some prepend a BOM; neither may cost the
+  // file its frontmatter. Nor may a blank line above the opening fence: read
+  // as body, the `tools:` line would be dropped and every tool allowed.
+  const text = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').replace(/^(?:[ \t]*\n)+(?=---)/, '');
+  const meta: Record<string, string | string[]> = {};
+  if (!/^---[ \t]*\n/.test(text)) return { meta, body: text };
+  // An empty block (`---` twice) is checked first: the general pattern would
+  // take a later `---` rule in the body as the closing fence.
+  const fm = text.match(/^---[ \t]*\n()---[ \t]*(?:\n([\s\S]*))?$/)
+    ?? text.match(/^---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n([\s\S]*))?$/);
+  if (!fm) return null;
+  let list: string[] | null = null;
+  for (const line of fm[1].split('\n')) {
+    // YAML lets a blank line or a comment line sit inside a block list
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    const item = line.match(/^\s*-\s+(.*)$/);
+    if (item && list) {
+      list.push(uncomment(item[1]));
+      continue;
+    }
+    list = null;
+    const m = line.match(/^([a-zA-Z]+)\s*:\s*(.*)$/);
+    if (!m) continue;
+    // `tools:  # read-only` is an empty value with a comment; the list follows.
+    const value = m[2].trim().startsWith('#') ? '' : m[2].trim();
+    if (value) {
+      meta[m[1].toLowerCase()] = value;
+    } else {
+      list = [];
+      meta[m[1].toLowerCase()] = list;
+    }
+  }
+  return { meta, body: fm[2] ?? '' };
+}
+
+const str = (v: string | string[] | undefined): string | undefined => (typeof v === 'string' && v ? v : undefined);
+
 /** Load custom agents from a `.codeep/agents/` directory. */
-function loadFromDir(dir: string, scope: AgentScope): AgentDef[] {
+function loadFromDir(dir: string, scope: AgentScope, projectRoot?: string): AgentDef[] {
   if (!existsSync(dir)) return [];
   const out: AgentDef[] = [];
   let entries: string[];
@@ -122,30 +182,30 @@ function loadFromDir(dir: string, scope: AgentScope): AgentDef[] {
     const slug = entry.slice(0, -3).toLowerCase();
     if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) continue;
     try {
-      const raw = readFileSync(join(dir, entry), 'utf8');
-      if (raw.length > 64 * 1024) continue;
-      const fm = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-      const meta: Record<string, string> = {};
-      let body = raw;
-      if (fm) {
-        body = fm[2];
-        for (const line of fm[1].split('\n')) {
-          const m = line.match(/^([a-zA-Z]+):\s*(.*)$/);
-          if (m) meta[m[1].toLowerCase()] = m[2].trim();
-        }
-      }
-      const displayName = meta.name || slug;
-      const description = meta.description || `Custom agent from ${entry}`;
-      const tools = meta.tools ? parseToolsValue(meta.tools) : undefined;
-      const maxIterations = meta.maxiterations ? parseInt(meta.maxiterations, 10) : undefined;
+      const file = join(dir, entry);
+      // A project's files come with the repo: a link out of it would put an
+      // arbitrary file of the user's (credentials, history) into the prompt.
+      if (projectRoot && leadsOutsideProject(file, projectRoot)) continue;
+      // statSync follows symlinks: a committed link to /dev/zero or a FIFO
+      // never comes back from readFileSync, so check kind and size first.
+      const stat = statSync(file);
+      if (!stat.isFile() || stat.size > MAX_AGENT_FILE_BYTES) continue;
+      const parsed = parseAgentFile(readFileSync(file, 'utf8'));
+      if (!parsed) continue;
+      const { meta, body } = parsed;
+      const displayName = str(meta.name) || slug;
+      const description = str(meta.description) || `Custom agent from ${entry}`;
+      const tools = meta.tools !== undefined ? parseToolsValue(meta.tools) : undefined;
+      const iterations = str(meta.maxiterations);
+      const maxIterations = iterations ? parseInt(iterations, 10) : undefined;
       out.push({
         name: slug,
         displayName,
         description: description.length > 200 ? description.slice(0, 197) + '…' : description,
         prompt: body.trim(),
         tools,
-        model: meta.model || undefined,
-        personality: meta.personality || undefined,
+        model: str(meta.model),
+        personality: str(meta.personality),
         maxIterations: Number.isFinite(maxIterations) ? maxIterations : undefined,
         scope,
       });
@@ -157,12 +217,22 @@ function loadFromDir(dir: string, scope: AgentScope): AgentDef[] {
 }
 
 export function loadAgents(workspaceRoot?: string): AgentDef[] {
-  const project = workspaceRoot ? loadFromDir(join(workspaceRoot, '.codeep', 'agents'), 'project') : [];
+  const project = workspaceRoot ? loadFromDir(join(workspaceRoot, '.codeep', 'agents'), 'project', workspaceRoot) : [];
   const global = loadFromDir(join(homedir(), '.codeep', 'agents'), 'global');
   const byName = new Map<string, AgentDef>();
   for (const a of BUILTIN) byName.set(a.name, a);
   for (const a of global) byName.set(a.name, a);
-  for (const a of project) byName.set(a.name, a);
+  for (const a of project) {
+    // A cloned repo can replace a built-in's prompt, but not hand it more
+    // tools than it ships with: auto-review delegates to `reviewer` after
+    // every write, so that allowlist must hold whatever `.codeep/agents/` says.
+    const builtin = BUILTIN.find((b) => b.name === a.name);
+    if (builtin?.tools) {
+      const allowed = builtin.tools;
+      a.tools = a.tools ? a.tools.filter((t) => allowed.includes(t)) : [...allowed];
+    }
+    byName.set(a.name, a);
+  }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -194,7 +264,7 @@ export function formatAgentList(workspaceRoot?: string): string {
   const lines: string[] = ['## Sub-agents', '', 'The agent can `delegate` self-contained sub-tasks to these. Each runs in its own context and returns a summary.', '', '| Name | Scope | Tools | Description |', '|---|---|---|---|'];
   for (const a of list) {
     const tag = a.scope === 'builtin' ? 'built-in' : a.scope;
-    const tools = a.tools ? `${a.tools.length} scoped` : 'all';
+    const tools = !a.tools ? 'all' : a.tools.length ? `${a.tools.length} scoped` : 'none';
     lines.push(`| \`${a.name}\` | ${tag} | ${tools} | ${a.description} |`);
   }
   lines.push('', 'Add your own: drop a `<name>.md` with frontmatter (name, description, tools, model, personality) in `.codeep/agents/` (project) or `~/.codeep/agents/` (global).');

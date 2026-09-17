@@ -10,14 +10,16 @@ vi.mock('fs', async (importOriginal) => {
   };
 });
 
-// Mock shell module so we don't run real commands
+// Mock shell module so we don't run real commands. verify.run.test.ts runs
+// the real shell guard.
 vi.mock('./shell', () => ({
   executeCommandAsync: vi.fn(),
+  validateCommandAsync: vi.fn(async () => ({ valid: true })),
 }));
 
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { executeCommandAsync } from './shell';
+import { executeCommandAsync, validateCommandAsync } from './shell';
 import {
   detectProjectScripts,
   formatVerifyResults,
@@ -187,6 +189,32 @@ describe('detectProjectScripts', () => {
 
 // ─── hasVerificationErrors ───────────────────────────────────────────────────
 
+describe('checks that could not run', () => {
+  const notRun = makeResult({ success: false, type: 'typecheck', command: 'tsc --noEmit', notRun: 'TypeScript is not installed' });
+  const failed = makeResult({ success: false, type: 'test', command: 'npm run test', errors: [makeError()] });
+
+  it('are not verification errors', () => {
+    expect(hasVerificationErrors([notRun, makeResult()])).toBe(false);
+    expect(hasVerificationErrors([notRun, failed])).toBe(true);
+  });
+
+  it('are counted apart from passes and failures', () => {
+    expect(getVerificationSummary([makeResult(), notRun, failed])).toMatchObject({ passed: 1, failed: 1, notRun: 1, total: 3 });
+  });
+
+  it('are not handed to the agent to fix', () => {
+    const text = formatErrorsForAgent([notRun, failed]);
+    expect(text).toContain('npm run test');
+    expect(text).not.toContain('tsc --noEmit');
+    expect(formatErrorsForAgent([notRun])).toBe('');
+  });
+
+  it('are shown with the reason', () => {
+    expect(formatVerifyResults([notRun])).toContain('⚠ typecheck: tsc --noEmit');
+    expect(formatVerifyResults([notRun])).toContain('not run: TypeScript is not installed');
+  });
+});
+
 describe('hasVerificationErrors', () => {
   it('returns false when all results are successful', () => {
     const results = [makeResult({ success: true }), makeResult({ success: true })];
@@ -228,7 +256,7 @@ describe('getVerificationSummary', () => {
 
   it('returns zero counts for empty array', () => {
     const summary = getVerificationSummary([]);
-    expect(summary).toEqual({ passed: 0, failed: 0, total: 0, errors: 0 });
+    expect(summary).toEqual({ passed: 0, failed: 0, notRun: 0, total: 0, errors: 0 });
   });
 });
 
@@ -396,6 +424,56 @@ describe('error parsing via runAllVerifications', () => {
     expect(result.errors[0].line).toBe(15);
     expect(result.errors[0].column).toBe(3);
     expect(result.errors[0].severity).toBe('error');
+  });
+
+  const parse = async (stdout: string) => {
+    mockExecuteCommandAsync.mockResolvedValue({ success: false, stdout, stderr: '', exitCode: 1 });
+    const [result] = await runAllVerifications(root, { runBuild: false, runTest: false, runLint: false, runTypecheck: true });
+    return result.errors;
+  };
+
+  it('reads the file and test name from a Vitest failure line', async () => {
+    const errors = await parse(' FAIL  src/utils/x.test.ts > parser > keeps the name');
+    expect(errors).toEqual([
+      { file: 'src/utils/x.test.ts', severity: 'error', message: 'Test failed: parser > keeps the name' },
+    ]);
+  });
+
+  it('reads the file from Vitest and Jest file-level failure lines', async () => {
+    const errors = await parse([
+      ' FAIL  src/a.test.ts [ src/a.test.ts ]',
+      ' FAIL  |unit| src/b.test.ts > b > works',
+      ' FAIL  src/c.test.ts (5.123 s)',
+    ].join('\n'));
+    expect(errors.map(e => e.file)).toEqual(['src/a.test.ts', 'src/b.test.ts', 'src/c.test.ts']);
+    expect(errors.map(e => e.message)).toEqual(['Test file failed', 'Test failed: b > works', 'Test file failed']);
+  });
+
+  it('reads failure lines from coloured output', async () => {
+    const errors = await parse('\x1b[31m FAIL \x1b[39m src/a.test.ts\x1b[2m > \x1b[22ma > works');
+    expect(errors).toEqual([{ file: 'src/a.test.ts', severity: 'error', message: 'Test failed: a > works' }]);
+  });
+
+  it('reads PHP errors printed with and without the log prefix, once each', async () => {
+    const errors = await parse([
+      'PHP Parse error:  syntax error, unexpected end of file in ./src/a.php on line 7',
+      '',
+      'Parse error: syntax error, unexpected end of file in ./src/a.php on line 7',
+      'Errors parsing ./src/a.php',
+    ].join('\n'));
+    expect(errors).toEqual([
+      { file: 'src/a.php', line: 7, severity: 'error', message: 'syntax error, unexpected end of file' },
+    ]);
+  });
+
+  it('reports a command the shell guard refuses as not run, without starting it', async () => {
+    vi.mocked(validateCommandAsync).mockResolvedValueOnce({ valid: false, reason: "Command 'x' is not in the allowed list" });
+
+    const results = await runAllVerifications(root, { runBuild: false, runTest: false, runLint: false, runTypecheck: true });
+
+    expect(results[0].notRun).toContain('not in the allowed list');
+    expect(hasVerificationErrors(results)).toBe(false);
+    expect(mockExecuteCommandAsync).not.toHaveBeenCalled();
   });
 
   it('parses Jest FAIL lines', async () => {

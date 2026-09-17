@@ -4,16 +4,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('fs', () => ({
   existsSync: vi.fn(),
   readFileSync: vi.fn(),
+  statSync: vi.fn(),
 }));
 
-import { existsSync, readFileSync } from 'fs';
-import { loadIgnoreRules, isIgnored } from './gitignore';
+import { existsSync, readFileSync, statSync } from 'fs';
+import { loadIgnoreRules, isIgnored, rulesBelow } from './gitignore';
 
 const mockExistsSync = existsSync as unknown as ReturnType<typeof vi.fn>;
 const mockReadFileSync = readFileSync as unknown as ReturnType<typeof vi.fn>;
+const mockStatSync = statSync as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockStatSync.mockReturnValue({ isFile: () => true, size: 100 });
 });
 
 describe('loadIgnoreRules', () => {
@@ -32,6 +35,28 @@ describe('loadIgnoreRules', () => {
     const rules = loadIgnoreRules('/project');
     expect(isIgnored('error.log', rules)).toBe(true);
     expect(isIgnored('tmp/cache', rules)).toBe(true);
+  });
+
+  it('checks the file kind and size before reading .gitignore', () => {
+    // A cloned repo can commit `.gitignore -> /dev/zero` (or a FIFO), and
+    // readFileSync on either never returns. Every agent run and every @dir
+    // walk loads these rules, so a non-regular or oversized file is never read.
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue('*.log\n');
+
+    mockStatSync.mockReturnValue({ isFile: () => false, size: 0 });
+    const device = loadIgnoreRules('/project');
+    mockStatSync.mockReturnValue({ isFile: () => true, size: 2 * 1024 * 1024 });
+    const huge = loadIgnoreRules('/project');
+    expect(mockReadFileSync).not.toHaveBeenCalled();
+    // Built-ins still apply; the file's own rules do not.
+    for (const rules of [device, huge]) {
+      expect(isIgnored('node_modules/x.js', rules)).toBe(true);
+      expect(isIgnored('error.log', rules)).toBe(false);
+    }
+
+    mockStatSync.mockReturnValue({ isFile: () => true, size: 1024 });
+    expect(isIgnored('error.log', loadIgnoreRules('/project'))).toBe(true);
   });
 
   it('handles read errors gracefully', () => {
@@ -198,5 +223,43 @@ describe('isIgnored — path normalization', () => {
 
   it('returns false for empty path', () => {
     expect(isIgnored('', rules)).toBe(false);
+  });
+});
+
+describe('rulesBelow', () => {
+  function rulesFrom(gitignore: string) {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(gitignore);
+    return loadIgnoreRules('/project');
+  }
+
+  it('drops the rules that ignore a named directory or everything in it', () => {
+    // `@dir generated` is deliberate: `generated/*` must not hide every file
+    // the user asked for, whichever form the .gitignore uses.
+    for (const form of ['generated/', '/generated', 'generated/*', 'generated/**', '/generated/*']) {
+      const rules = rulesFrom(`${form}\n*.log\nsecrets.json\n`);
+      expect(isIgnored('/project/generated/api.ts', rules), form).toBe(true);
+      const below = rulesBelow('/project/generated', rules);
+      expect(isIgnored('/project/generated/api.ts', below), form).toBe(false);
+      expect(isIgnored('/project/generated/sub/b.ts', below), form).toBe(false);
+      // Everything else in the file still applies beneath it.
+      expect(isIgnored('/project/generated/debug.log', below), form).toBe(true);
+      expect(isIgnored('/project/generated/secrets.json', below), form).toBe(true);
+      expect(isIgnored('/project/generated/node_modules/x.js', below), form).toBe(true);
+    }
+  });
+
+  it('keeps negations and leaves a directory with no matching rule alone', () => {
+    const rules = rulesFrom('*.txt\n!docs/\nbuild/*\n');
+    const docs = rulesBelow('/project/docs', rules);
+    expect(isIgnored('/project/docs/a.txt', docs)).toBe(false);
+    expect(docs.patterns).toHaveLength(rules.patterns.length);
+
+    // A built-in directory the user names is walked too.
+    const out = rulesBelow('/project/out', rules);
+    expect(isIgnored('/project/out/main.js', out)).toBe(false);
+    expect(isIgnored('/project/out/notes.txt', out)).toBe(true);
+
+    expect(rulesBelow('/project', rules)).toBe(rules);
   });
 });

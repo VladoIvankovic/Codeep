@@ -14,7 +14,10 @@ vi.mock('fs', async (importOriginal) => {
   };
 });
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
+vi.mock('./projectPaths', () => ({ writeProjectFile: vi.fn() }));
+
+import { existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
+import { writeProjectFile } from './projectPaths';
 import { join } from 'path';
 import {
   scanProject,
@@ -28,7 +31,6 @@ import {
 const mockExistsSync = existsSync as ReturnType<typeof vi.fn>;
 const mockReadFileSync = readFileSync as ReturnType<typeof vi.fn>;
 const mockWriteFileSync = writeFileSync as ReturnType<typeof vi.fn>;
-const mockMkdirSync = mkdirSync as ReturnType<typeof vi.fn>;
 const mockReaddirSync = readdirSync as ReturnType<typeof vi.fn>;
 
 // Minimal valid intelligence object for testing generateContextFromIntelligence
@@ -218,26 +220,22 @@ describe('saveProjectIntelligence', () => {
     mockExistsSync.mockReturnValue(true);
   });
 
-  it('returns true and writes file when successful', () => {
+  it('returns true and writes the file inside the project', () => {
     const intel = makeIntelligence();
     const result = saveProjectIntelligence('/project', intel);
 
     expect(result).toBe(true);
-    expect(mockWriteFileSync).toHaveBeenCalledOnce();
-    const [path, content] = mockWriteFileSync.mock.calls[0];
-    expect(path).toContain('.codeep/intelligence.json');
-    const parsed = JSON.parse(content as string);
-    expect(parsed.name).toBe('my-app');
-  });
-
-  it('creates .codeep dir if it does not exist', () => {
-    mockExistsSync.mockReturnValue(false);
-    saveProjectIntelligence('/project', makeIntelligence());
-    expect(mockMkdirSync).toHaveBeenCalledWith(join('/project', '.codeep'), { recursive: true });
+    // writeProjectFile creates .codeep/ and refuses a path through a symlink.
+    expect(vi.mocked(writeProjectFile)).toHaveBeenCalledOnce();
+    const [root, path, content] = vi.mocked(writeProjectFile).mock.calls[0];
+    expect(root).toBe('/project');
+    expect(path).toBe(join('/project', '.codeep', 'intelligence.json'));
+    expect(JSON.parse(content).name).toBe('my-app');
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
   });
 
   it('returns false on write error', () => {
-    mockWriteFileSync.mockImplementation(() => { throw new Error('disk full'); });
+    vi.mocked(writeProjectFile).mockImplementationOnce(() => { throw new Error('disk full'); });
     const result = saveProjectIntelligence('/project', makeIntelligence());
     expect(result).toBe(false);
   });
@@ -521,5 +519,62 @@ describe('detectTesting via scanProject', () => {
     const result = await scanProject('/project');
     expect(result.testing.hasTests).toBe(false);
     expect(result.testing.framework).toBeNull();
+  });
+});
+
+// ─── rescan keeps /memory notes ──────────────────────────────────────────────
+
+describe('scanProject keeps notes saved by /memory', () => {
+  const intelPath = join('/project', '.codeep', 'intelligence.json');
+  let disk: Map<string, string>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    disk = new Map();
+    mockReaddirSync.mockReturnValue([]);
+    mockExistsSync.mockImplementation((p: string) => disk.has(p) || p === join('/project', '.codeep'));
+    mockReadFileSync.mockImplementation((p: string) => {
+      const content = disk.get(p);
+      if (content === undefined) throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
+      return content;
+    });
+    mockWriteFileSync.mockImplementation((p: string, content: string) => { disk.set(p, content); });
+  });
+
+  it('a rescan saved over the old file still has the notes', async () => {
+    disk.set(intelPath, JSON.stringify(makeIntelligence({
+      notes: ['never touch the legacy billing module', 'deploys go through make release only'],
+    })));
+
+    const rescanned = await scanProject('/project');
+    saveProjectIntelligence('/project', rescanned);
+
+    expect(loadProjectIntelligence('/project')?.notes).toEqual([
+      'never touch the legacy billing module',
+      'deploys go through make release only',
+    ]);
+    expect(generateContextFromIntelligence(rescanned)).toContain('never touch the legacy billing module');
+  });
+
+  it('keeps notes from a file written by an older schema version', async () => {
+    disk.set(intelPath, JSON.stringify({ version: '1.0', notes: ['Always use pnpm, never npm'] }));
+    const rescanned = await scanProject('/project');
+    expect(rescanned.notes).toEqual(['Always use pnpm, never npm']);
+  });
+
+  it('starts with no notes when the old file is unreadable or has none', async () => {
+    disk.set(intelPath, '{ not json');
+    expect((await scanProject('/project')).notes).toEqual([]);
+
+    disk.set(intelPath, JSON.stringify({ version: '1.2', notes: 'not a list' }));
+    expect((await scanProject('/project')).notes).toEqual([]);
+
+    disk.delete(intelPath);
+    expect((await scanProject('/project')).notes).toEqual([]);
+  });
+
+  it('drops non-string entries from a hand-edited notes list', async () => {
+    disk.set(intelPath, JSON.stringify({ version: '1.2', notes: ['keep me', 42, null] }));
+    expect((await scanProject('/project')).notes).toEqual(['keep me']);
   });
 });

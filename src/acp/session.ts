@@ -6,6 +6,7 @@ import { runAgent, PermissionOutcome } from '../utils/agent.js';
 import { getProjectContext, ProjectContext } from '../utils/project.js';
 import { ToolCall } from '../utils/tools.js';
 import type { FsCallbacks } from '../utils/toolExecution.js';
+import type { Message } from '../config/index.js';
 
 export interface AgentSessionOptions {
   prompt: string;
@@ -21,6 +22,22 @@ export interface AgentSessionOptions {
   onExecuteCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** Optional fs delegation when the ACP client advertises `fs` capability. */
   fs?: FsCallbacks;
+  /**
+   * Earlier turns of this conversation. ACP clients send only the new
+   * message, so without this the agent would start every turn blind to a
+   * loaded, rewound or compacted session.
+   */
+  chatHistory?: Message[];
+}
+
+/**
+ * The part of a session's history the agent sees: user and assistant turns,
+ * as the TUI passes them (`App.getChatHistory`).
+ */
+export function toAgentChatHistory(history: Message[]): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return history
+    .filter((m): m is Message & { role: 'user' | 'assistant' } => m.role === 'user' || m.role === 'assistant')
+    .map(m => ({ role: m.role, content: m.content }));
 }
 
 /**
@@ -216,20 +233,28 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
     // `conversationId` is the ACP session id, which is what
     // registerSessionServers keyed by in server.ts handleSessionNew.
     mcpSessionId: opts.conversationId,
+    chatHistory: opts.chatHistory ? toAgentChatHistory(opts.chatHistory) : undefined,
   });
 
-  // result.finalResponse is already emitted via onChunk streaming above;
-  // only emit it here if nothing was streamed (e.g. non-streaming fallback path)
-  // — except a paused/interrupted run, whose finalResponse is a fresh "say
+  // result.finalResponse is mostly emitted via onChunk streaming above;
+  // emit all of it here if nothing was streamed (e.g. non-streaming fallback path)
+  // — or a paused/interrupted run, whose finalResponse is a fresh "say
   // continue" notice that was never streamed and must always reach the client.
+  // Otherwise send what the loop wrote itself and never streamed (the
+  // verification result, a reviewer's notes, a notice that replaced the
+  // answer): without it an editor never hears that verification failed.
   if (result.finalResponse && (chunksEmitted === 0 || result.interrupted)) {
     opts.onChunk(result.finalResponse);
+  } else if (result.finalResponse && !result.aborted) {
+    const tail = result.unstreamedText ?? '';
+    if (tail) opts.onChunk(`\n\n${tail}`);
   }
 
   // Surface errors as thrown exceptions so the ACP server can handle them correctly.
-  // Exception: if finalResponse was already sent as a chunk (e.g. "Agent reached the
-  // iteration limit", "Agent stopped due to repeated API timeouts"), don't also throw —
-  // the user already received the explanation and Zed would show a confusing second error.
+  // Exception: once chunks were streamed, the rest of finalResponse was sent
+  // just above (e.g. "✗ Verification failed", "Agent stopped due to repeated
+  // API timeouts"), so don't also throw — the user already received the
+  // explanation and Zed would show a confusing second error.
   if (!result.success && !result.aborted) {
     const alreadyExplained = result.finalResponse && chunksEmitted > 0;
     if (!alreadyExplained) {

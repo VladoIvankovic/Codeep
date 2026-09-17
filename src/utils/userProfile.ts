@@ -24,8 +24,10 @@
  * concept, different storage, different command (`/me` vs `/profile`).
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { join, dirname } from 'path';
+import { StringDecoder } from 'string_decoder';
+import { isSafeProjectWriteTarget, leadsOutsideProject, writeProjectFile } from './projectPaths.js';
 import { homedir } from 'os';
 import { config } from '../config/index.js';
 
@@ -62,13 +64,35 @@ export function projectLearnedProfilePath(workspaceRoot: string): string {
 
 export type LearnScope = 'global' | 'project';
 
-/** Read + trim a profile file, capped. Returns '' when missing/empty/broken. */
-function readProfile(path: string): string {
+/**
+ * Read + trim a profile file, capped. Returns '' when missing/empty/broken.
+ * A project's profile files can come with a cloned repo, so for those
+ * (`projectRoot` given) a link out of the project is not followed — the
+ * profile rides every system prompt — and only a regular file is read, so a
+ * link to /dev/zero cannot hang the run.
+ */
+function readProfile(path: string, projectRoot?: string): string {
   try {
     if (!existsSync(path)) return '';
-    let content = readFileSync(path, 'utf-8');
-    if (content.length > MAX_PROFILE_BYTES) content = content.slice(0, MAX_PROFILE_BYTES);
-    return content.trim();
+    if (projectRoot && leadsOutsideProject(path, projectRoot)) return '';
+    const stat = statSync(path, { throwIfNoEntry: false });
+    if (stat && !stat.isFile()) return '';
+    if (!stat || stat.size <= MAX_PROFILE_BYTES) {
+      return readFileSync(path, 'utf-8').slice(0, MAX_PROFILE_BYTES).trim();
+    }
+    const fd = openSync(path, 'r');
+    try {
+      const buf = Buffer.alloc(MAX_PROFILE_BYTES);
+      let read = 0;
+      while (read < MAX_PROFILE_BYTES) {
+        const n = readSync(fd, buf, read, MAX_PROFILE_BYTES - read, read);
+        if (n === 0) break;
+        read += n;
+      }
+      return new StringDecoder('utf8').write(buf.subarray(0, read)).trim();
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return '';
   }
@@ -84,7 +108,7 @@ export function loadUserProfilePrompt(workspaceRoot?: string): string {
   const global = readProfile(globalProfilePath());
   if (global) sections.push(global);
   if (workspaceRoot) {
-    const project = readProfile(projectProfilePath(workspaceRoot));
+    const project = readProfile(projectProfilePath(workspaceRoot), workspaceRoot);
     if (project) sections.push(project);
   }
   // Auto-learned facts (if any) come last — they're observations, so the
@@ -93,7 +117,7 @@ export function loadUserProfilePrompt(workspaceRoot?: string): string {
   const learnedGlobal = readProfile(globalLearnedProfilePath());
   if (learnedGlobal) sections.push(learnedGlobal);
   if (workspaceRoot) {
-    const learnedProject = readProfile(projectLearnedProfilePath(workspaceRoot));
+    const learnedProject = readProfile(projectLearnedProfilePath(workspaceRoot), workspaceRoot);
     if (learnedProject) sections.push(learnedProject);
   }
   if (sections.length === 0) return '';
@@ -188,8 +212,12 @@ export function scaffoldProfile(
   }
   if (existsSync(path)) return { path, created: false };
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, scope === 'global' ? GLOBAL_TEMPLATE : PROJECT_TEMPLATE, 'utf-8');
+    if (scope === 'project' && workspaceRoot) {
+      writeProjectFile(workspaceRoot, path, PROJECT_TEMPLATE);
+    } else {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, GLOBAL_TEMPLATE, 'utf-8');
+    }
     return { path, created: true };
   } catch {
     return null;
@@ -224,9 +252,9 @@ export function formatProfileView(workspaceRoot?: string): string {
   lines.push('');
 
   const globalRaw = readProfile(globalProfilePath());
-  const projectRaw = workspaceRoot ? readProfile(projectProfilePath(workspaceRoot)) : '';
+  const projectRaw = workspaceRoot ? readProfile(projectProfilePath(workspaceRoot), workspaceRoot) : '';
   const learnedGlobalRaw = readProfile(globalLearnedProfilePath());
-  const learnedProjectRaw = workspaceRoot ? readProfile(projectLearnedProfilePath(workspaceRoot)) : '';
+  const learnedProjectRaw = workspaceRoot ? readProfile(projectLearnedProfilePath(workspaceRoot), workspaceRoot) : '';
   if (!globalRaw && !projectRaw && !learnedGlobalRaw && !learnedProjectRaw) {
     lines.push('No profile yet. Run `/me init` to scaffold a global template (or `/me init project` for this project), then edit the file. Or let Codeep build one for you with `/me learn on`.');
   } else {
@@ -307,7 +335,8 @@ export async function updateLearnedProfile(
       .join('\n')
       .slice(0, 24000);
 
-    const existingFacts = parseFactBullets(readProfile(targetPath)).join('\n');
+    const projectRoot = scope === 'project' ? workspaceRoot : undefined;
+    const existingFacts = parseFactBullets(readProfile(targetPath, projectRoot)).join('\n');
     const system = scope === 'global' ? GLOBAL_LEARN_SYSTEM : PROJECT_LEARN_SYSTEM;
     const user = `EXISTING FACTS:\n${existingFacts || '(none yet)'}\n\nRECENT CONVERSATION:\n${transcript}`;
 
@@ -323,8 +352,13 @@ export async function updateLearnedProfile(
       ? 'What Codeep has learned about me'
       : 'What Codeep has learned about this project';
     const content = `# ${heading}\n\n<!-- Auto-observed from your Codeep sessions. Edit freely, clear with \`/me forget\`, or turn off with \`/me learn off\`. -->\n\n${facts}\n`;
-    mkdirSync(dirname(targetPath), { recursive: true });
-    writeFileSync(targetPath, content, 'utf-8');
+    if (projectRoot) {
+      // Never through a symlinked .codeep/ that came with the repo.
+      writeProjectFile(projectRoot, targetPath, content);
+    } else {
+      mkdirSync(dirname(targetPath), { recursive: true });
+      writeFileSync(targetPath, content, 'utf-8');
+    }
     return { updated: true, facts };
   } catch {
     return null;
@@ -377,6 +411,8 @@ export function clearLearnedProfile(workspaceRoot?: string): boolean {
   ];
   for (const p of paths) {
     if (p && existsSync(p)) {
+      // Through a symlinked .codeep/ the project path would name a file elsewhere.
+      if (workspaceRoot && p !== paths[0] && !isSafeProjectWriteTarget(workspaceRoot, p)) continue;
       try { rmSync(p); removed = true; } catch { /* ignore */ }
     }
   }

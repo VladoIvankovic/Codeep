@@ -37,6 +37,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { leadsOutsideProject } from './projectPaths';
 
 export interface SkillBundleMeta {
   /** Slug — defaults to the directory name if frontmatter `name` is missing. */
@@ -132,7 +133,10 @@ export function stripQuotes(s: string): string {
   return s.replace(/^["']|["']$/g, '');
 }
 
-function loadFromDir(dir: string, scope: 'project' | 'global'): SkillBundle[] {
+/** Largest SKILL.md we'll read (256 KB). */
+const MAX_SKILL_FILE_BYTES = 256 * 1024;
+
+function loadFromDir(dir: string, scope: 'project' | 'global', projectRoot?: string): SkillBundle[] {
   if (!existsSync(dir)) return [];
   let entries: string[];
   try { entries = readdirSync(dir); } catch { return []; }
@@ -145,13 +149,21 @@ function loadFromDir(dir: string, scope: 'project' | 'global'): SkillBundle[] {
     if (!stat.isDirectory()) continue;
     const skillFile = join(bundleDir, 'SKILL.md');
     if (!existsSync(skillFile)) continue;
+    // A project's bundles come with the repo: a link out of it (the bundle
+    // directory or its SKILL.md) would put a user file into the prompt.
+    if (projectRoot && leadsOutsideProject(skillFile, projectRoot)) continue;
 
-    let raw: string;
-    try { raw = readFileSync(skillFile, 'utf-8'); } catch { continue; }
     // Cap at 256 KB — any bigger and the user is shipping something
     // that doesn't belong in a SKILL.md. Skip silently to avoid OOM
-    // surprises when an agent run loads dozens of bundles.
-    if (raw.length > 256 * 1024) continue;
+    // surprises when an agent run loads dozens of bundles. Check before
+    // reading: statSync follows symlinks, and a committed `SKILL.md ->
+    // /dev/zero` (or a FIFO) never comes back from readFileSync.
+    let raw: string;
+    try {
+      const fileStat = statSync(skillFile);
+      if (!fileStat.isFile() || fileStat.size > MAX_SKILL_FILE_BYTES) continue;
+      raw = readFileSync(skillFile, 'utf-8');
+    } catch { continue; }
 
     const { meta, body } = parseFrontmatter(raw);
     const name = typeof meta.name === 'string' && meta.name ? meta.name : entry;
@@ -191,7 +203,7 @@ export function asStringArray(v: unknown): string[] | null {
 export function loadSkillBundles(workspaceRoot?: string): SkillBundle[] {
   const global = loadFromDir(join(homedir(), '.codeep', 'skills'), 'global');
   const project = workspaceRoot
-    ? loadFromDir(join(workspaceRoot, '.codeep', 'skills'), 'project')
+    ? loadFromDir(join(workspaceRoot, '.codeep', 'skills'), 'project', workspaceRoot)
     : [];
 
   const byName = new Map<string, SkillBundle>();

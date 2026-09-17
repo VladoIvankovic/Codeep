@@ -8,7 +8,7 @@
  *
  * Supported mention forms (case-sensitive `@`):
  *   @src/index.ts          → relative-to-project-root file
- *   @./local.ts            → relative-to-cwd file
+ *   @./local.ts            → relative-to-project-root file too
  *   @/abs/path.ts          → absolute path
  *   @"path with space.ts"  → quoted (spaces/special chars allowed)
  *   @'path with space.ts'  → single-quoted variant
@@ -23,8 +23,9 @@
  * explicitly `/add` very large files if they really want them.
  */
 
-import { statSync, readFileSync, readdirSync, type Dirent } from 'fs';
+import { statSync, readFileSync, readdirSync, realpathSync, type Dirent } from 'fs';
 import { join, isAbsolute, relative, resolve, sep } from 'path';
+import { loadIgnoreRules, isIgnored, rulesBelow, type IgnoreRules } from './gitignore';
 
 /** Max file size we'll auto-inline from a mention (100 KB). */
 export const MAX_MENTION_BYTES = 100 * 1024;
@@ -116,9 +117,8 @@ export function extractMentions(text: string): MentionToken[] {
 
 export interface MentionExpansionOptions {
   /**
-   * The root directory mentions are resolved against when they're
-   * relative (not starting with `/` or `.`). Usually the project root
-   * or `process.cwd()`.
+   * The root directory relative mentions (`src/a.ts`, `./a.ts`, `.`) are
+   * resolved against. Usually the project root or `process.cwd()`.
    */
   root: string;
 }
@@ -158,8 +158,8 @@ export function expandMentions(
     // pasted (an issue body, a log, model output), so `@.env` or
     // `@~/.aws/credentials` would silently ship credentials to the provider.
     // `/add` remains the explicit, deliberate path for these.
-    if (isSensitiveFile(resolved.fullPath)) {
-      failures.push({ mention: tok.raw, reason: 'looks like a secrets file — use /add to attach it deliberately' });
+    if (isRefusedMention(resolved.fullPath)) {
+      failures.push({ mention: tok.raw, reason: SECRETS_REASON });
       continue;
     }
 
@@ -170,6 +170,12 @@ export function expandMentions(
     }
     if (!stat.isFile) {
       failures.push({ mention: tok.raw, reason: 'not a file' });
+      continue;
+    }
+    // A cloned repo can commit `notes.md -> ~/.zsh_history`: a path inside
+    // the project must not read a file from outside it.
+    if (linksOutsideRoot(resolved.fullPath, opts.root)) {
+      failures.push({ mention: tok.raw, reason: LINKS_OUTSIDE_REASON });
       continue;
     }
     if (stat.size > MAX_MENTION_BYTES) {
@@ -183,6 +189,11 @@ export function expandMentions(
     const content = safeRead(resolved.fullPath);
     if (content === null) {
       failures.push({ mention: tok.raw, reason: 'could not read (binary?)' });
+      continue;
+    }
+    // Keys are often saved under names no pattern knows (`~/.ssh/github`).
+    if (looksLikeKeyMaterial(content)) {
+      failures.push({ mention: tok.raw, reason: SECRETS_REASON });
       continue;
     }
 
@@ -304,17 +315,15 @@ export function expandFolderMentions(
       failures.push({ mention: tok.raw, reason: 'not a directory (use @file)' });
       continue;
     }
-
-    const walked = walkDirectory(resolved.fullPath, opts.root, seen);
-    if (walked.files.length === 0) {
-      failures.push({ mention: tok.raw, reason: walked.capped ? `stopped at ${MAX_FOLDER_BYTES / 1024}KB cap` : 'no source files found' });
+    // Same rule as a single file: a committed `docs -> ~` must not be walked.
+    if (linksOutsideRoot(resolved.fullPath, opts.root)) {
+      failures.push({ mention: tok.raw, reason: LINKS_OUTSIDE_REASON });
       continue;
     }
 
+    const walked = walkDirectory(resolved.fullPath, opts.root, seen);
     loaded.push(...walked.files);
-    if (walked.capped) {
-      failures.push({ mention: tok.raw, reason: `stopped at ${MAX_FOLDER_BYTES / 1024}KB cap, loaded ${walked.files.length} file(s)` });
-    }
+    for (const reason of walkNotes(walked)) failures.push({ mention: tok.raw, reason });
   }
 
   // Strip the `@folder <path>` tokens from the visible prompt, leaving
@@ -370,15 +379,13 @@ export function expandFileAndFolderMentions(
       folderFailures.push({ mention: tok.raw, reason: 'not a directory (use @file)' });
       continue;
     }
-    const walked = walkDirectory(resolved.fullPath, opts.root, seen);
-    if (walked.files.length === 0) {
-      folderFailures.push({ mention: tok.raw, reason: walked.capped ? `stopped at ${MAX_FOLDER_BYTES / 1024}KB cap` : 'no source files found' });
+    if (linksOutsideRoot(resolved.fullPath, opts.root)) {
+      folderFailures.push({ mention: tok.raw, reason: LINKS_OUTSIDE_REASON });
       continue;
     }
+    const walked = walkDirectory(resolved.fullPath, opts.root, seen);
     folderLoaded.push(...walked.files);
-    if (walked.capped) {
-      folderFailures.push({ mention: tok.raw, reason: `stopped at ${MAX_FOLDER_BYTES / 1024}KB cap, loaded ${walked.files.length} file(s)` });
-    }
+    for (const reason of walkNotes(walked)) folderFailures.push({ mention: tok.raw, reason });
   }
 
   // Strip the `@folder` tokens from the prompt before running `@file`
@@ -412,19 +419,41 @@ export function expandFileAndFolderMentions(
   };
 }
 
+interface WalkResult {
+  files: Array<{ fullPath: string; relativePath: string; content: string }>;
+  capped: boolean;
+  /**
+   * Entries left out on purpose, so the user hears why a file is missing
+   * instead of a bare "no source files found". The built-in directory list,
+   * binaries and oversized files were always skipped quietly. Folders are
+   * counted apart from files: one ignored `target/` is not "1 file".
+   */
+  skipped: { secrets: number; ignored: number; ignoredDirs: number; outside: number; outsideDirs: number };
+}
+
 /**
  * Walk a directory and return its source files, capped at
  * `MAX_FOLDER_BYTES` total content. Mutates `seen` so repeat folders
  * don't duplicate files.
  */
-function walkDirectory(
-  dir: string,
-  root: string,
-  seen: Set<string>,
-): { files: Array<{ fullPath: string; relativePath: string; content: string }>; capped: boolean } {
-  const files: Array<{ fullPath: string; relativePath: string; content: string }> = [];
+function walkDirectory(dir: string, root: string, seen: Set<string>): WalkResult {
+  const files: WalkResult['files'] = [];
+  const skipped: WalkResult['skipped'] = { secrets: 0, ignored: 0, ignoredDirs: 0, outside: 0, outsideDirs: 0 };
   let totalBytes = 0;
   let capped = false;
+
+  // Honour the project's .gitignore beneath the named directory: that is
+  // where local secrets and build output live. The directory itself was named
+  // deliberately, so the rules that ignore it or everything in it (`dist/`,
+  // `dist/*`) are dropped, the same way DEFAULT_IGNORE_DIRS only applies
+  // below it. A directory outside the project has no rules of its own here.
+  const insideRoot = computeRelativePath(dir, root) !== dir;
+  const ignore: IgnoreRules | null = insideRoot ? rulesBelow(dir, loadIgnoreRules(root)) : null;
+
+  // A symlink may only lead somewhere the user already chose to share: the
+  // named directory or the project. A cloned repo can commit
+  // `docs/notes.md -> ~/.zsh_history`, and the loaded file list is never shown.
+  const allowed = [realPathOf(dir), realPathOf(root)].filter((p): p is string => p !== null);
 
   const walk = (d: string, depth: number): void => {
     if (capped || depth > 6) return;
@@ -444,30 +473,75 @@ function walkDirectory(
       } catch {
         continue;
       }
-      if (isDir) {
-        if (DEFAULT_IGNORE_DIRS.has(name)) continue;
-        walk(full, depth + 1);
-      } else {
-        if (!shouldSuggest(name)) continue;
-        if (seen.has(full)) continue;
-        const fstat = safeStat(full);
-        if (!fstat.exists || !fstat.isFile) continue;
-        if (fstat.size > MAX_MENTION_BYTES) continue;
-        const content = safeRead(full);
-        if (content === null) continue;
-        if (totalBytes + content.length > MAX_FOLDER_BYTES) {
-          capped = true;
-          return;
-        }
-        totalBytes += content.length;
-        seen.add(full);
-        files.push({ fullPath: full, relativePath: relative(root, full), content });
+      if (isDir && DEFAULT_IGNORE_DIRS.has(name)) continue;
+      if (!isDir && (!shouldSuggest(name) || seen.has(full))) continue;
+      if (ignore && isIgnored(full, ignore)) {
+        if (isDir) skipped.ignoredDirs++;
+        else skipped.ignored++;
+        continue;
       }
+      const real = realPathOf(full);
+      if (real === null) continue;
+      if (!allowed.some((base) => isWithin(real, base))) {
+        if (isDir) skipped.outsideDirs++;
+        else skipped.outside++;
+        continue;
+      }
+      if (isDir) {
+        walk(full, depth + 1);
+        continue;
+      }
+      // Same rule as a single-file mention: `@dir ~/.ssh` or `@dir config`
+      // must not ship the private key that `@config/server.key` refuses.
+      if (isSensitiveFile(full)) {
+        skipped.secrets++;
+        continue;
+      }
+      const fstat = safeStat(full);
+      if (!fstat.exists || !fstat.isFile) continue;
+      if (fstat.size > MAX_MENTION_BYTES) continue;
+      const content = safeRead(full);
+      if (content === null) continue;
+      if (looksLikeKeyMaterial(content)) {
+        skipped.secrets++;
+        continue;
+      }
+      if (totalBytes + content.length > MAX_FOLDER_BYTES) {
+        capped = true;
+        return;
+      }
+      totalBytes += content.length;
+      seen.add(full);
+      files.push({ fullPath: full, relativePath: relative(root, full), content });
     }
   };
 
   walk(dir, 0);
-  return { files, capped };
+  return { files, capped, skipped };
+}
+
+/** The notes a folder mention reports back: the cap, and what was left out. */
+function walkNotes(walked: WalkResult): string[] {
+  const { secrets, ignored, ignoredDirs, outside, outsideDirs } = walked.skipped;
+  const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+  const parts: string[] = [];
+  if (secrets) parts.push(count(secrets, 'secret-looking file'));
+  if (ignored) parts.push(count(ignored, 'ignored file'));
+  if (ignoredDirs) parts.push(count(ignoredDirs, 'ignored folder'));
+  if (outside) parts.push(`${count(outside, 'file')} linked from outside the project`);
+  if (outsideDirs) parts.push(`${count(outsideDirs, 'folder')} linked from outside the project`);
+  const skippedNote = parts.length
+    ? `skipped ${parts.join(', ')}; use /add to attach one deliberately`
+    : '';
+  const capNote = `stopped at ${MAX_FOLDER_BYTES / 1024}KB cap`;
+  if (walked.files.length === 0) {
+    const reason = walked.capped ? capNote : 'no source files found';
+    return [skippedNote ? `${reason}; ${skippedNote}` : reason];
+  }
+  const notes: string[] = [];
+  if (walked.capped) notes.push(`${capNote}, loaded ${walked.files.length} file(s)`);
+  if (skippedNote) notes.push(skippedNote);
+  return notes;
 }
 
 // ─── Path resolution ──────────────────────────────────────────────────────────
@@ -488,7 +562,8 @@ interface UnresolvedPath {
  *
  * Rules:
  *   `/abs/...`   → used as-is, relativePath computed from root.
- *   `./rel/...`  → resolved against cwd (not root), like a normal import.
+ *   `./rel/...`  → resolved against root too. In ACP the process cwd is not
+ *                  the workspace, so `@dir .` walked the wrong directory.
  *   `rel/...`    → resolved against root (project root).
  *   `~/...`      → expanded to the home directory.
  */
@@ -501,7 +576,7 @@ function resolveMentionPath(mentionPath: string, root: string): ResolvedPath | U
   } else if (isAbsolute(mentionPath)) {
     fullPath = resolve(mentionPath);
   } else if (mentionPath.startsWith('./') || mentionPath.startsWith('.\\') || mentionPath === '.') {
-    fullPath = resolve(process.cwd(), mentionPath);
+    fullPath = resolve(root, mentionPath);
   } else {
     fullPath = resolve(join(root, mentionPath));
   }
@@ -676,14 +751,155 @@ const IGNORED_DOTFILES = new Set(['.DS_Store', '.env']);
  * Filenames that typically hold credentials. Mentions never auto-inline
  * these — see the guard in `expandMentions`. Matched on the basename so it
  * catches the file wherever it lives (project root, `~/.aws/`, …).
+ * Committed templates (`.env.example`) are left to `ENV_TEMPLATE_RE`;
+ * SSH keys match with any suffix (`id_ed25519_work`) except `.pub`.
  */
 const SENSITIVE_FILE_RE =
-  /^(\.env(\..*)?|\.netrc|\.npmrc|\.pgpass|credentials|id_(rsa|dsa|ecdsa|ed25519)|.*\.(pem|key|p12|pfx|keystore))$/i;
+  /^(\.env(?!\.(?:example|sample|template)$)(\..*)?|\.netrc|\.npmrc|\.pgpass|\.git-credentials|\.pypirc|\.dockercfg|credentials|id_(?!.*\.pub$)(rsa|dsa|ecdsa|ed25519)(_sk)?([_.-].*)?|.*\.(pem|key|p12|pfx|keystore|ppk))$/i;
 
-/** True if `fullPath`'s basename looks like it holds secrets. */
+/**
+ * Credential files whose own name is generic, recognised by the directory
+ * they sit in: `~/.docker/config.json`, `~/.kube/config`,
+ * `~/.config/gh/hosts.yml`.
+ */
+const SENSITIVE_PATH_RE = /(^|[\\/])(\.docker[\\/]config\.json|\.kube[\\/]config|gh[\\/]hosts\.ya?ml)$/i;
+
+const SECRETS_REASON = 'looks like a secrets file — use /add to attach it deliberately';
+
+/**
+ * Committed `.env` templates. A walk and smart context include them, but a
+ * single `@.env.example` is refused as it always was: a template can still
+ * hold a real value.
+ */
+const ENV_TEMPLATE_RE = /^\.env\.(?:example|sample|template)$/i;
+
+/**
+ * True if `fullPath` looks like it holds secrets, judged by its basename and,
+ * for a symlink, by the basename of the file it points at: a repo can commit
+ * `.env.example -> .env` or `tsconfig.json -> ../.env`, and every read
+ * follows the link.
+ */
 export function isSensitiveFile(fullPath: string): boolean {
-  const name = fullPath.split(sep).pop() ?? fullPath;
-  return SENSITIVE_FILE_RE.test(name);
+  if (nameMatches(fullPath, SENSITIVE_FILE_RE)) return true;
+  if (SENSITIVE_PATH_RE.test(fullPath)) return true;
+  const real = realPathOf(fullPath);
+  return real !== null && SENSITIVE_PATH_RE.test(real);
+}
+
+/**
+ * True if a file named on its own (an @-mention, or a path smart context
+ * picks out of the prompt) must not be inlined: secrets, and committed `.env`
+ * templates, which can still hold a real value. Both paths use this one rule,
+ * so a mention the user was told is refused never reaches the provider
+ * another way.
+ */
+export function isRefusedMention(fullPath: string): boolean {
+  return isSensitiveFile(fullPath) || nameMatches(fullPath, ENV_TEMPLATE_RE);
+}
+
+/** True if the basename of `fullPath`, or of the file it links to, matches `re`. */
+function nameMatches(fullPath: string, re: RegExp): boolean {
+  const nameOf = (p: string) => p.split(sep).pop() ?? p;
+  if (re.test(nameOf(fullPath))) return true;
+  const real = realPathOf(fullPath);
+  return real !== null && re.test(nameOf(real));
+}
+
+/**
+ * A PEM / OpenSSH / PGP private-key block, or a PuTTY key header. The armour
+ * line must be followed by a line break, real or escaped (a service account
+ * JSON holds the key inside a string), then optional `Proc-Type:` /
+ * `Version:` headers and a blank line, then a line of base64. Code and docs
+ * that only name the armour (`"-----BEGIN RSA PRIVATE KEY-----"`, a regex,
+ * `'…-----\n' + body`, a `...` placeholder) don't match.
+ */
+const PRIVATE_KEY_RE = new RegExp(
+  String.raw`-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[ \t]*(?:\r?\n|\\(?:r\\)?n)` +
+    String.raw`(?:[ \t]*[A-Za-z][\w-]*:[^\r\n\\]*(?:\r?\n|\\(?:r\\)?n))*` +
+    String.raw`(?:[ \t]*(?:\r?\n|\\(?:r\\)?n))?` +
+    String.raw`[ \t]*[A-Za-z0-9+/]+=*[ \t]*(?:\\(?:r\\)?n|$)` +
+    String.raw`|^PuTTY-User-Key-File-\d+:`,
+  'm',
+);
+
+/**
+ * True if `text` holds private-key material anywhere. Keys are saved under
+ * any name (`~/.ssh/github`, `deploy/prod`), so the name check alone lets
+ * them through, and a key can sit past the top of a JSON or YAML file.
+ */
+export function looksLikeKeyMaterial(text: string): boolean {
+  return PRIVATE_KEY_RE.test(text) || hasPrivateKeyBlock(text);
+}
+
+const KEY_ARMOUR_RE = /-----BEGIN ((?:[A-Z0-9]+ )*)PRIVATE KEY( BLOCK)?-----/g;
+/** How far past an armour line a key body is looked for. */
+const KEY_BLOCK_WINDOW = 20 * 1024;
+
+/**
+ * A complete private key block written the way code and config write it: on
+ * one line with spaces for breaks (YAML, CI variables), as concatenated or
+ * joined string literals, with `\n` or `\\n` escapes, or with the body glued
+ * to the armour line. The line-shaped pattern above misses those.
+ *
+ * Plain string work rather than one regex: a pattern that spans BEGIN, a body
+ * and END backtracks badly on a file full of BEGIN lines with no END.
+ */
+function hasPrivateKeyBlock(text: string): boolean {
+  for (const m of text.matchAll(KEY_ARMOUR_RE)) {
+    const start = (m.index ?? 0) + m[0].length;
+    const nextBegin = text.indexOf('-----BEGIN ', start);
+    const limit = Math.min(nextBegin < 0 ? text.length : nextBegin, start + KEY_BLOCK_WINDOW);
+    const window = text.slice(start, limit);
+    const endAt = window.indexOf(`-----END ${m[1]}PRIVATE KEY${m[2] ?? ''}-----`);
+    if (endAt < 0) continue;
+    const body = window.slice(0, endAt)
+      .replace(/\\\\?[rn]/g, '\n')   // \n and \\n escapes are line breaks
+      .replace(/\\\//g, '/')           // JSON writes / as \/
+      .split(/\r?\n/)
+      // Armour headers (Proc-Type:, Comment:) are not base64, which has no colon.
+      .filter((line) => !line.includes(':'))
+      .join('')
+      .replace(/[\s"'`+,[\]]/g, '');
+    const run = /^[A-Za-z0-9/=]{40,}/.exec(body)?.[0];
+    // A real body mixes many characters; a placeholder like xxxx… does not.
+    if (run && new Set(run).size >= 10) return true;
+  }
+  return false;
+}
+
+/** `fullPath` with every symlink resolved, or null when it doesn't resolve. */
+function realPathOf(fullPath: string): string | null {
+  try {
+    return realpathSync(fullPath);
+  } catch {
+    return null;
+  }
+}
+
+const LINKS_OUTSIDE_REASON = 'links outside the project — use /add to attach it deliberately';
+
+/**
+ * True if `fullPath` names a place inside `root` but, with symlinks resolved,
+ * leads outside it. A path outside the project by name (`~/.ssh`) was chosen
+ * on purpose and is not judged here.
+ */
+function linksOutsideRoot(fullPath: string, root: string): boolean {
+  return isWithin(fullPath, resolve(root)) && !resolvesWithin(fullPath, root);
+}
+
+/** True if `child` is `parent` or lies beneath it. */
+function isWithin(child: string, parent: string): boolean {
+  return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
+}
+
+/**
+ * True if `fullPath`, with symlinks resolved, lies inside `dir` (also
+ * resolved). False when either doesn't exist.
+ */
+export function resolvesWithin(fullPath: string, dir: string): boolean {
+  const real = realPathOf(fullPath);
+  const realDir = realPathOf(dir);
+  return real !== null && realDir !== null && isWithin(real, realDir);
 }
 
 /** True if a filename looks like a suggestible source file. */

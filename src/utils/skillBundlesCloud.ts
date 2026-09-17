@@ -11,7 +11,8 @@
  * for /api/tasks and friends.
  */
 
-import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { existsSync, readFileSync, rmSync } from 'fs';
+import { isSafeProjectDir, writeProjectFile } from './projectPaths.js';
 import { join } from 'path';
 import { homedir } from 'os';
 import { getSyncToken } from '../config/index.js';
@@ -109,12 +110,17 @@ export async function installBundle(
       return { ok: false, error: data.error ?? `HTTP ${res.status}` };
     }
     const skill = data.skill;
+    // The slug becomes a directory name. codeep.dev only issues this shape;
+    // anything else from the server must not choose where files are written.
+    if (!isBundleSlug(skill.slug)) {
+      return { ok: false, error: `The server sent an invalid skill name: ${JSON.stringify(skill.slug)}` };
+    }
     const dir = join(workspaceRoot, '.codeep', 'skills', skill.slug);
     if (existsSync(dir)) {
       return { ok: false, error: `A bundle already exists at .codeep/skills/${skill.slug}/ — remove it before re-installing.` };
     }
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'SKILL.md'), skill.body);
+    // .codeep/ can come with a cloned repo: never write through a symlink.
+    writeProjectFile(workspaceRoot, join(dir, 'SKILL.md'), skill.body);
     return { ok: true, name: skill.slug };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
@@ -188,8 +194,14 @@ export function serialiseSkillMd(bundle: SkillBundle): string {
   return meta.join('\n') + bundle.body;
 }
 
+/** The bundle names codeep.dev issues (lowercase letters, digits, hyphens). */
+function isBundleSlug(slug: unknown): slug is string {
+  return typeof slug === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(slug);
+}
+
 /** Read raw SKILL.md from disk — used when we want the unmodified bytes. */
 export function readRawSkillMd(workspaceRoot: string, slug: string): string | null {
+  if (!isBundleSlug(slug)) return null;
   const file = join(workspaceRoot, '.codeep', 'skills', slug, 'SKILL.md');
   if (!existsSync(file)) return null;
   try { return readFileSync(file, 'utf-8'); } catch { return null; }
@@ -197,8 +209,11 @@ export function readRawSkillMd(workspaceRoot: string, slug: string): string | nu
 
 /** Delete the local copy of an installed skill bundle (for /skills uninstall). */
 export function uninstallLocalBundle(workspaceRoot: string, slug: string): boolean {
+  if (!isBundleSlug(slug)) return false;
   const dir = join(workspaceRoot, '.codeep', 'skills', slug);
   if (!existsSync(dir)) return false;
+  // Through a symlinked .codeep/ (or skills/) this would delete a directory elsewhere.
+  if (!isSafeProjectDir(workspaceRoot, dir)) return false;
   try { rmSync(dir, { recursive: true, force: true }); return true; } catch { return false; }
 }
 

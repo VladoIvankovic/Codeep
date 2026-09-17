@@ -2,7 +2,7 @@
  * .gitignore parser — loads ignore patterns and tests file paths against them.
  */
 
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, statSync } from 'fs';
 import { join, relative, sep } from 'path';
 
 export interface IgnoreRules {
@@ -39,6 +39,9 @@ const BUILTIN_IGNORES = [
   '.output',
 ];
 
+/** Largest .gitignore we'll parse (1 MB). */
+const MAX_GITIGNORE_BYTES = 1024 * 1024;
+
 /**
  * Load .gitignore rules from a project root.
  * Falls back to built-in ignores if no .gitignore exists.
@@ -55,9 +58,16 @@ export function loadIgnoreRules(projectRoot: string): IgnoreRules {
   const gitignorePath = join(projectRoot, '.gitignore');
   if (existsSync(gitignorePath)) {
     try {
-      const content = readFileSync(gitignorePath, 'utf-8');
-      const parsed = parseGitignore(content);
-      patterns.push(...parsed);
+      // statSync follows symlinks: a cloned repo can commit `.gitignore ->
+      // /dev/zero` (or a FIFO), and readFileSync on either never returns.
+      // Every agent run and every @dir walk loads these rules, so check the
+      // kind and size before reading.
+      const stat = statSync(gitignorePath);
+      if (stat.isFile() && stat.size <= MAX_GITIGNORE_BYTES) {
+        const content = readFileSync(gitignorePath, 'utf-8');
+        const parsed = parseGitignore(content);
+        patterns.push(...parsed);
+      }
     } catch {
       // Ignore read errors
     }
@@ -73,12 +83,7 @@ export function loadIgnoreRules(projectRoot: string): IgnoreRules {
  * @returns true if the path should be ignored
  */
 export function isIgnored(filePath: string, rules: IgnoreRules): boolean {
-  // Normalize to forward-slash relative path
-  let rel = filePath;
-  if (filePath.startsWith(rules.projectRoot)) {
-    rel = relative(rules.projectRoot, filePath);
-  }
-  rel = rel.split(sep).join('/');
+  const rel = toRulePath(filePath, rules);
 
   // Empty path is never ignored
   if (!rel) return false;
@@ -92,6 +97,34 @@ export function isIgnored(filePath: string, rules: IgnoreRules): boolean {
   }
 
   return ignored;
+}
+
+/**
+ * The rules that still apply beneath a directory the user named on purpose
+ * (`@dir dist`). Drops every pattern that ignores the directory itself
+ * (`dist/`, `/dist`) or all of its children at once (`dist/*`, `dist/**`),
+ * and keeps the rest (`*.log`, `secrets.json`, negations), so naming a
+ * directory never hides its whole contents.
+ */
+export function rulesBelow(dir: string, rules: IgnoreRules): IgnoreRules {
+  const rel = toRulePath(dir, rules);
+  if (!rel) return rules;
+  // No real file name holds a NUL, so a pattern matches this child only when
+  // it matches every child.
+  const anyChild = `${rel}/\0`;
+  return {
+    projectRoot: rules.projectRoot,
+    patterns: rules.patterns.filter((p) => p.negated || !(p.regex.test(rel) || p.regex.test(anyChild))),
+  };
+}
+
+/** Normalize to the forward-slash, root-relative form the patterns expect. */
+function toRulePath(filePath: string, rules: IgnoreRules): string {
+  let rel = filePath;
+  if (filePath.startsWith(rules.projectRoot)) {
+    rel = relative(rules.projectRoot, filePath);
+  }
+  return rel.split(sep).join('/');
 }
 
 /**

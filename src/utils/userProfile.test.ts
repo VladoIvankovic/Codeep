@@ -27,6 +27,13 @@ vi.mock('../config/index.js', () => {
 // Mock the LLM call used by the auto-learn pass.
 vi.mock('../api/index.js', () => ({ chat: vi.fn() }));
 
+// The project-file guards touch the real disk; these paths are imaginary.
+vi.mock('./projectPaths.js', () => ({
+  writeProjectFile: vi.fn(),
+  isSafeProjectWriteTarget: vi.fn(() => true),
+  leadsOutsideProject: vi.fn(() => false),
+}));
+
 import { existsSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import {
   loadUserProfilePrompt,
@@ -41,6 +48,7 @@ import {
   clearLearnedProfile,
 } from './userProfile';
 import { config } from '../config/index.js';
+import { writeProjectFile } from './projectPaths.js';
 import { chat } from '../api/index.js';
 
 const mockExists = existsSync as ReturnType<typeof vi.fn>;
@@ -111,6 +119,9 @@ describe('userProfile', () => {
   it('scaffoldProfile creates a template when missing', () => {
     mockExists.mockReturnValue(false);
     expect(scaffoldProfile('project', ROOT)).toEqual({ path: projectProfilePath(ROOT), created: true });
+    expect(vi.mocked(writeProjectFile)).toHaveBeenCalledWith(ROOT, projectProfilePath(ROOT), expect.any(String));
+    expect(scaffoldProfile('global')).toEqual({ path: globalProfilePath(), created: true });
+    expect(mockWrite).toHaveBeenCalledWith(globalProfilePath(), expect.any(String), 'utf-8');
   });
 
   it('scaffoldProfile returns null for a project scope with no workspace root', () => {
@@ -210,8 +221,12 @@ describe('userProfile — auto-learn (Phase 2)', () => {
     mockChat.mockResolvedValue('- Deploys to a Hostinger VPS');
     const res = await updateLearnedProfile(HISTORY, 'project', '/my/project');
     expect(res?.updated).toBe(true);
-    expect(mockWrite.mock.calls[0][0]).toBe(projectLearnedProfilePath('/my/project'));
-    expect(mockWrite.mock.calls[0][1] as string).toContain('learned about this project');
+    // Through the project-file guard, never a plain write into the repo.
+    expect(mockWrite).not.toHaveBeenCalled();
+    const [root, path, content] = vi.mocked(writeProjectFile).mock.calls[0];
+    expect(root).toBe('/my/project');
+    expect(path).toBe(projectLearnedProfilePath('/my/project'));
+    expect(content).toContain('learned about this project');
   });
 
   it('updateLearnedProfile project scope is a no-op without a workspace root', async () => {

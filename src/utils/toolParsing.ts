@@ -15,9 +15,17 @@ const debug = (...args: unknown[]) => {
 };
 
 /**
- * Normalize tool name to lowercase with underscores
+ * Normalize tool name to lowercase with underscores.
+ *
+ * MCP tools (`<server>__<tool>`) are returned untouched. Their names are the
+ * server's, not ours: `brave-search__brave_web_search` or
+ * `context7__resolve-library-id` must reach the registry exactly as advertised,
+ * or the server lookup and the server's own tool lookup both miss. No built-in
+ * tool name contains `__`, so the check cannot catch one of ours.
  */
 export function normalizeToolName(name: string): string {
+  if (name.includes('__')) return name;
+
   const toolNameMap: Record<string, string> = {
     'executecommand': 'execute_command',
     'execute_command': 'execute_command',
@@ -277,7 +285,8 @@ export function parseToolCalls(response: string): ToolCall[] {
   // Format 2: <toolcall>toolname{...}
   const malformedRegex = /<toolcall>(\w+)[\s,]*(?:"parameters"\s*:\s*)?(\{[\s\S]*?\})/gi;
   while ((match = malformedRegex.exec(response)) !== null) {
-    const toolName = match[1].toLowerCase();
+    // MCP names keep their case — see normalizeToolName.
+    const toolName = match[1].includes('__') ? match[1] : match[1].toLowerCase();
     const actualToolName = TEXT_TOOL_NAME_MAP[toolName] || toolName;
     try {
       const parsed = JSON.parse(match[2]);
@@ -291,7 +300,7 @@ export function parseToolCalls(response: string): ToolCall[] {
   // Format 2b: loose toolname + parameters key
   const looseRegex = /<toolcall>(\w+)[,\s]+["']?parameters["']?\s*:\s*(\{[\s\S]*?\})(?:<\/toolcall>|<|$)/gi;
   while ((match = looseRegex.exec(response)) !== null) {
-    const toolName = match[1].toLowerCase();
+    const toolName = match[1].includes('__') ? match[1] : match[1].toLowerCase();
     const actualToolName = TEXT_TOOL_NAME_MAP[toolName] || toolName;
     if (toolCalls.some(t => t.tool === actualToolName)) continue;
     const params = tryExtractParams(match[2]);

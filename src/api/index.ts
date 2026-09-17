@@ -515,6 +515,8 @@ async function chatOpenAI(
         temperature: omitTemperature ? undefined : temperature,
         timeoutMs: timeout,
         onChunk: stream ? onChunk : undefined,
+        // Carries the user's Stop as well as this request's own timeout.
+        signal: controller.signal,
       });
       if (result.promptTokens != null && result.completionTokens != null) {
         recordTokenUsage(

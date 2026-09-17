@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, appendFileSync } from 'fs';
+import { appendProjectFile } from './projectPaths';
 import { join } from 'path';
 import { homedir } from 'os';
 
@@ -23,11 +24,7 @@ export function setLogProjectPath(projectPath: string | null): void {
  * Get local log directory for project
  */
 function getLocalLogDir(projectPath: string): string {
-  const logDir = join(projectPath, '.codeep', 'logs');
-  if (!existsSync(logDir)) {
-    mkdirSync(logDir, { recursive: true });
-  }
-  return logDir;
+  return join(projectPath, '.codeep', 'logs');
 }
 
 /**
@@ -49,11 +46,11 @@ export interface LogEntry {
 /**
  * Get log file paths for today (global and optionally local)
  */
-function getLogFilePaths(): { global: string; local?: string } {
+function getLogFilePaths(): { global: string; local?: string; project?: string } {
   const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
   const filename = `codeep-${date}.log`;
   
-  const paths: { global: string; local?: string } = {
+  const paths: { global: string; local?: string; project?: string } = {
     global: join(GLOBAL_LOG_DIR, filename),
   };
   
@@ -61,6 +58,7 @@ function getLogFilePaths(): { global: string; local?: string } {
   if (currentProjectPath && isProjectDirectory(currentProjectPath)) {
     const localLogDir = getLocalLogDir(currentProjectPath);
     paths.local = join(localLogDir, filename);
+    paths.project = currentProjectPath;
   }
   
   return paths;
@@ -95,8 +93,9 @@ function writeLog(level: LogLevel, message: string, data?: any, localOnly: boole
     }
     
     // Write to local log if available
-    if (paths.local) {
-      appendFileSync(paths.local, logLine, 'utf-8');
+    // .codeep/ can come with a cloned repo: never append through a symlink.
+    if (paths.local && paths.project) {
+      appendProjectFile(paths.project, paths.local, logLine);
     }
   } catch {
     // Silent fail - don't crash app if logging fails

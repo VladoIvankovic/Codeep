@@ -2,10 +2,11 @@
  * Skills System - predefined workflows and commands
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
+import { dirname, join, resolve } from 'path';
 import { homedir } from 'os';
 import { ProjectContext } from './project';
+import { logger } from './logger';
 
 // Skills directory
 const SKILLS_DIR = join(homedir(), '.codeep', 'skills');
@@ -27,6 +28,12 @@ export interface SkillStep {
   type: 'prompt' | 'command' | 'confirm' | 'notify' | 'agent';
   content: string;
   optional?: boolean;
+  /**
+   * A parameter that stands in for this step. When the user gives it, the
+   * step does not run and the parameter's value becomes the step's output —
+   * `${_prev}` for the steps after it.
+   */
+  skipIf?: string;
 }
 
 export interface SkillParameter {
@@ -83,8 +90,8 @@ const BUILT_IN_SKILLS: Skill[] = [
     ],
     steps: [
       { type: 'command', content: 'git diff --cached --stat || git diff --stat' },
-      { type: 'prompt', content: 'Based on this git diff, generate ONLY a conventional commit message (no explanation, no markdown). Format: type(scope): description. Types: feat, fix, docs, style, refactor, test, chore. Be concise. One line only.\n\n${_prev}' },
-      { type: 'confirm', content: 'Commit with this message?' },
+      { type: 'prompt', content: 'Based on this git diff, generate ONLY a conventional commit message (no explanation, no markdown). Format: type(scope): description. Types: feat, fix, docs, style, refactor, test, chore. Be concise. One line only.\n\n${_prev}', skipIf: 'message' },
+      { type: 'confirm', content: 'Commit with this message? ${_prev}' },
       { type: 'command', content: 'git add -A && git commit -m "${_prev}"' },
       { type: 'notify', content: 'Changes committed successfully!' },
     ],
@@ -150,9 +157,9 @@ const BUILT_IN_SKILLS: Skill[] = [
       { name: 'description', description: 'What the branch is for', required: true },
     ],
     steps: [
-      { type: 'prompt', content: 'Based on the description "${description}", suggest a branch name following convention: type/short-description. Types: feature, fix, hotfix, refactor, chore.' },
+      { type: 'prompt', content: 'Based on the description "${description}", suggest a branch name following convention: type/short-description. Types: feature, fix, hotfix, refactor, chore. Reply with ONLY the branch name (no explanation, no markdown).' },
       { type: 'confirm', content: 'Create this branch?' },
-      { type: 'command', content: 'git checkout -b ${branch}' },
+      { type: 'command', content: 'git checkout -b "${_prev}"' },
     ],
   },
   {
@@ -161,8 +168,8 @@ const BUILT_IN_SKILLS: Skill[] = [
     category: 'git',
     requiresGit: true,
     steps: [
-      { type: 'prompt', content: 'Analyze the current changes and suggest a meaningful stash message.' },
-      { type: 'command', content: 'git stash push -m "${message}"' },
+      { type: 'prompt', content: 'Analyze the current changes and suggest a meaningful stash message. Reply with ONLY the message, one line (no explanation, no markdown).' },
+      { type: 'command', content: 'git stash push -m "${_prev}"' },
       { type: 'notify', content: 'Changes stashed!' },
     ],
   },
@@ -679,27 +686,111 @@ export function getBuiltInSkills(): Skill[] {
   return BUILT_IN_SKILLS;
 }
 
+function isValidCustomSkill(value: unknown): value is Skill {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const s = value as Partial<Skill>;
+  return typeof s.name === 'string'
+    && typeof s.description === 'string'
+    && Array.isArray(s.steps)
+    && (s.shortcut === undefined || typeof s.shortcut === 'string');
+}
+
+/** A custom skill file that could not be used, and why. */
+export interface SkippedSkillFile {
+  file: string;
+  problem: string;
+}
+
+// What the latest load passed over. Kept so the places a user looks — the
+// "Unknown command" reply, /skills — can name the file; the log alone is
+// somewhere nobody reads while wondering where their skill went.
+let skippedSkillFiles: SkippedSkillFile[] = [];
+// Every lookup reloads the directory; log each bad file once, not per lookup.
+const loggedSkippedFiles = new Set<string>();
+
 /**
  * Load custom skills from disk
  */
 export function loadCustomSkills(): Skill[] {
   ensureSkillsDir();
   const skills: Skill[] = [];
-  
+  const skipped: SkippedSkillFile[] = [];
+  const skip = (file: string, problem: string) => {
+    skipped.push({ file, problem });
+    if (!loggedSkippedFiles.has(file)) {
+      loggedSkippedFiles.add(file);
+      logger.warn(`Skipping custom skill ${file}: ${problem}`);
+    }
+  };
+
   try {
     const files = readdirSync(SKILLS_DIR).filter(f => f.endsWith('.json'));
-    
+
     for (const file of files) {
+      let content: string;
+      let skill: unknown;
       try {
-        const content = readFileSync(join(SKILLS_DIR, file), 'utf-8');
-        const skill = JSON.parse(content) as Skill;
-        skill.category = 'custom';
-        skills.push(skill);
-      } catch {}
+        content = readFileSync(join(SKILLS_DIR, file), 'utf-8');
+      } catch {
+        skip(file, 'could not be read');
+        continue;
+      }
+      try {
+        skill = JSON.parse(content);
+      } catch {
+        skip(file, 'not valid JSON');
+        continue;
+      }
+      // These files are edited by hand. One entry without a string name
+      // would make every lookup that reaches it throw, taking down all
+      // custom skills and the "Unknown command" reply with it.
+      if (!isValidCustomSkill(skill)) {
+        skip(file, 'needs a string "name" and "description" and a "steps" array');
+        continue;
+      }
+      skill.category = 'custom';
+      skills.push(skill);
     }
   } catch {}
-  
+
+  skippedSkillFiles = skipped;
   return skills;
+}
+
+/** Custom skill files the latest load could not use. */
+export function getSkippedCustomSkills(): SkippedSkillFile[] {
+  return [...skippedSkillFiles];
+}
+
+/** One line per skipped file, naming where it is and what is wrong with it. */
+export function formatSkippedCustomSkills(skipped: SkippedSkillFile[]): string {
+  return skipped
+    .map(s => `Skipped ~/.codeep/skills/${s.file} — ${s.problem}. Fix or delete the file.`)
+    .join('\n');
+}
+
+/**
+ * Whether ~/.codeep/skills/<name>.json exists, whether or not it loads. A
+ * file that fails to load is invisible to findSkill, and creating a skill of
+ * that name would write over what the user wrote by hand.
+ */
+export function customSkillFileExists(name: string): boolean {
+  const filepath = customSkillFile(name);
+  return filepath !== null && existsSync(filepath);
+}
+
+/**
+ * ~/.codeep/skills/<name>.json, or null when the name would put the file
+ * anywhere else. Names come straight from `/skill create|delete <name>`, and
+ * `../mcp_servers` would otherwise reach ~/.codeep/mcp_servers.json.
+ */
+function customSkillFile(name: string): string | null {
+  if (typeof name !== 'string' || !name.trim()) return null;
+  if (/[\\/]/.test(name)) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f]/.test(name)) return null;
+  const filepath = join(SKILLS_DIR, `${name}.json`);
+  return dirname(resolve(filepath)) === resolve(SKILLS_DIR) ? filepath : null;
 }
 
 /**
@@ -757,22 +848,31 @@ export function parseSkillArgs(args: string, skill: Skill): Record<string, strin
   const result: Record<string, string> = {};
   
   // Pattern to match key=value or key="value with spaces" or just "value"
-  const keyValuePattern = /(\w+)=(?:"([^"]+)"|'([^']+)'|(\S+))/g;
+  const keyValuePattern = /(?<!\S)(\w+)=(?:"([^"]+)"|'([^']+)'|(\S+))/g;
   const quotedPattern = /^["'](.+)["']$/;
-  
+  // A skill that declares parameters takes only those as key=value; any other
+  // `word=value` is part of the text for its first parameter — "fix: set
+  // retries=3 by default" is a commit message, not a `retries` parameter.
+  const declared = skill.parameters && skill.parameters.length > 0
+    ? new Set(skill.parameters.map(p => p.name))
+    : null;
+
   // First, try to parse key=value pairs
   let match;
   let remainingArgs = args;
-  
+
   while ((match = keyValuePattern.exec(args)) !== null) {
     const key = match[1];
+    if (declared && !declared.has(key)) continue;
     const value = match[2] || match[3] || match[4];
     result[key] = value;
     remainingArgs = remainingArgs.replace(match[0], '').trim();
   }
   
-  // If there's remaining text and skill has parameters, use as first param
-  if (remainingArgs.trim() && skill.parameters && skill.parameters.length > 0) {
+  // If there's remaining text and skill has parameters, use as first param —
+  // unless that one was given as key=value, which is the more explicit of the two
+  if (remainingArgs.trim() && skill.parameters && skill.parameters.length > 0
+    && result[skill.parameters[0].name] === undefined) {
     const firstParam = skill.parameters[0];
     // Check if it's quoted
     const quotedMatch = remainingArgs.match(quotedPattern);
@@ -795,23 +895,57 @@ export function parseSkillArgs(args: string, skill: Skill): Record<string, strin
   return result;
 }
 
+// Only the first line is used, and a commit message, branch name or stash
+// message never needs more than this. The cap also bounds the regexes below:
+// an unclosed fence or a run of unclosed `$(` in a long reply made them
+// quadratic.
+const SHELL_TEXT_MAX = 8192;
+
 /**
- * Sanitize text for safe use inside shell commands.
- * Strips markdown formatting and removes shell metacharacters to prevent
- * command injection via $(), backtick subshells, semicolons, pipes, etc.
+ * Sanitize model output for use inside a double-quoted shell string —
+ * `"${_prev}"`. Takes the first line of the reply (markdown removed), drops
+ * shell syntax and escapes it for that position.
+ *
+ * Only the double quotes make it safe. Unquoted, the result can still carry
+ * spaces, globs, redirects and (outside Windows) `&`.
  */
-function sanitizeForShell(text: string): string {
-  const firstLine = text
-    // Strip markdown code blocks
-    .replace(/```[\s\S]*?```/g, '')
+function sanitizeForShell(text: string, platform: NodeJS.Platform = process.platform): string {
+  return quoteForDoubleQuotes(modelTextForShell(text, platform), platform);
+}
+
+/** The part of a model reply that `"${_prev}"` hands to a command, unescaped. */
+function modelTextForShell(text: string, platform: NodeJS.Platform): string {
+  const capped = text.slice(0, SHELL_TEXT_MAX);
+  const firstLine = capped
+    // Unwrap fenced code blocks, keeping their content — models often fence a
+    // one-line answer even when told not to, and dropping the block would
+    // leave nothing but the raw fallback below
+    .replace(/```[^\n]{0,100}\n?([\s\S]*?)```/g, '$1')
     // Strip inline backtick code spans (remove content too, not just markers)
     .replace(/`[^`]*`/g, '')
     // Strip bold/italic markers
     .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
     // Take only the first non-empty line
-    .split('\n').map(l => l.trim()).filter(Boolean)[0] || text.trim();
+    .split('\n').map(l => l.trim()).filter(Boolean)[0] || capped.trim();
 
-  return firstLine
+  // The escaping must hold on its own: the fallback above hands back the raw
+  // text, so nothing can rely on the markdown stripping having happened.
+  return plainTextForShell(stripShellSyntax(firstLine, platform), platform);
+}
+
+/**
+ * Remove shell syntax from model output. On POSIX this is not what makes it
+ * safe — the escaping does that — but kept for templates that leave
+ * `${_prev}` unquoted, which it only partly protects.
+ *
+ * On Windows it is what makes it safe. `shell: true` runs cmd.exe there,
+ * which takes no backslash escapes: every `"` opens or closes quoting, so a
+ * reply could close the string and chain a command. Model output loses the
+ * characters cmd.exe acts on outright.
+ */
+function stripShellSyntax(text: string, platform: NodeJS.Platform): string {
+  const stripped = text
+    .slice(0, SHELL_TEXT_MAX)
     // Remove $(...) subshell expansion
     .replace(/\$\([^)]*\)/g, '')
     // Remove ${...} variable/subshell expansion
@@ -820,11 +954,41 @@ function sanitizeForShell(text: string): string {
     .replace(/\$\w+/g, '')
     // Remove command chaining operators
     .replace(/[;|]/g, '')
-    // Remove newlines and null bytes
-    .replace(/[\n\r\0]/g, ' ')
-    // Escape double quotes for safe embedding in "..." shell strings
-    .replace(/"/g, '\\"')
-    .trim();
+    // Backticks run a command even inside "..." shell strings
+    .replace(/`/g, '');
+  return platform === 'win32' ? stripped.replace(/["&|<>^%]/g, '') : stripped;
+}
+
+/**
+ * The text a double-quoted `"${_prev}"` passes on: one line, and on Windows
+ * without `"` and `%`. cmd.exe cannot keep those inside quotes — a `"` ends
+ * them and `%NAME%` expands even there. With no `"` left to end the quotes,
+ * the rest (`&`, `|`, `<`, `>`, `^`) is plain text to cmd.exe.
+ */
+function plainTextForShell(text: string, platform: NodeJS.Platform): string {
+  const line = text.slice(0, SHELL_TEXT_MAX).replace(/[\n\r\0]/g, ' ');
+  return (platform === 'win32' ? line.replace(/["%]/g, '') : line).trim();
+}
+
+/** Escape text from plainTextForShell for the inside of a double-quoted shell string. */
+function quoteForDoubleQuotes(text: string, platform: NodeJS.Platform): string {
+  if (platform === 'win32') {
+    // cmd.exe passes backslashes on as they are, and the program's own
+    // argument parsing reads backslashes right before the closing quote as
+    // escaping it. Doubled, they stay backslashes and the quote closes.
+    let end = text.length;
+    while (end > 0 && text[end - 1] === '\\') end--;
+    return text + text.slice(end);
+  }
+  // Escape what is still special inside "..." for sh. A backslash left alone
+  // would escape the backslash added before a quote, and that quote would
+  // then close the string early.
+  return text.replace(/[\\"$`]/g, '\\$&');
+}
+
+/** Escape text so a double-quoted shell string holds it literally. */
+function escapeForDoubleQuotes(text: string, platform: NodeJS.Platform = process.platform): string {
+  return quoteForDoubleQuotes(plainTextForShell(text, platform), platform);
 }
 
 /**
@@ -848,19 +1012,23 @@ export function interpolateParams(content: string, params: Record<string, string
  * Save a custom skill
  */
 export function saveCustomSkill(skill: Skill): void {
+  const filepath = customSkillFile(skill.name);
+  if (!filepath) {
+    throw new Error(`Skill name "${skill.name}" is not allowed: it cannot be empty or contain "/", "\\" or control characters.`);
+  }
   ensureSkillsDir();
   skill.category = 'custom';
-  const filename = `${skill.name}.json`;
-  writeFileSync(join(SKILLS_DIR, filename), JSON.stringify(skill, null, 2));
+  writeFileSync(filepath, JSON.stringify(skill, null, 2));
 }
 
 /**
  * Delete a custom skill
  */
 export function deleteCustomSkill(name: string): boolean {
-  const filepath = join(SKILLS_DIR, `${name}.json`);
+  const filepath = customSkillFile(name);
+  if (!filepath) return false;
   if (existsSync(filepath)) {
-    require('fs').unlinkSync(filepath);
+    unlinkSync(filepath);
     return true;
   }
   return false;
@@ -926,7 +1094,8 @@ export interface SkillExecutionCallbacks {
 
 /**
  * Execute a skill's steps sequentially.
- * Each step's output is available as ${_prev} in the next step's content.
+ * The latest command, prompt or agent output is available as ${_prev} in later
+ * steps' content; confirm and notify steps leave it unchanged.
  * Returns the collected results from all steps.
  */
 export async function executeSkill(
@@ -936,11 +1105,38 @@ export async function executeSkill(
 ): Promise<SkillExecutionResult> {
   const stepResults: SkillExecutionResult['steps'] = [];
   let lastOutput = '';
+  // Whether lastOutput is text the user typed rather than a model reply.
+  let lastOutputIsUsers = false;
 
-  for (const step of skill.steps) {
+  for (let i = 0; i < skill.steps.length; i++) {
+    const step = skill.steps[i];
+    // A parameter the user gave replaces the step outright — `/commit "msg"`
+    // commits "msg" instead of asking the model for a message.
+    const standIn = step.skipIf ? params[step.skipIf] : undefined;
+    if (standIn) {
+      if (step.type === 'command' || step.type === 'prompt' || step.type === 'agent') {
+        lastOutput = standIn;
+        lastOutputIsUsers = true;
+      }
+      stepResults.push({ step, result: standIn, success: true });
+      continue;
+    }
+
     // Interpolate params and ${_prev} into step content
-    // For command steps, sanitize _prev for safe shell usage
-    const sanitizedPrev = step.type === 'command' ? sanitizeForShell(lastOutput) : lastOutput;
+    // For command steps, sanitize _prev for safe shell usage. The user's own
+    // text is only escaped: it is not markdown to strip, and a `$5` or a `;`
+    // in a commit message is part of the message.
+    // A confirm step right before a command that uses ${_prev} shows the text
+    // that command will be given, so what the user approves is what runs.
+    const platform = process.platform;
+    const next = skill.steps[i + 1];
+    const approvesCommand = step.type === 'confirm'
+      && next?.type === 'command' && next.content.includes('${_prev}');
+    const sanitizedPrev = step.type === 'command'
+      ? (lastOutputIsUsers ? escapeForDoubleQuotes(lastOutput, platform) : sanitizeForShell(lastOutput, platform))
+      : approvesCommand
+        ? (lastOutputIsUsers ? plainTextForShell(lastOutput, platform) : modelTextForShell(lastOutput, platform))
+        : lastOutput;
     const allParams = { ...params, _prev: sanitizedPrev };
     const content = interpolateParams(step.content, allParams);
 
@@ -976,7 +1172,14 @@ export async function executeSkill(
           break;
       }
 
-      lastOutput = result;
+      // Only steps that produce something feed ${_prev}. A confirm or notify
+      // in between must pass the earlier output through — otherwise
+      // "generate message → confirm → git commit -m ${_prev}" commits the
+      // word "confirmed" instead of the message the user just approved.
+      if (step.type === 'command' || step.type === 'prompt' || step.type === 'agent') {
+        lastOutput = result;
+        lastOutputIsUsers = false;
+      }
       stepResults.push({ step, result, success: true });
     } catch (err) {
       const errMsg = (err as Error).message || String(err);
@@ -993,7 +1196,7 @@ export async function executeSkill(
 /**
  * Format skills list for display
  */
-export function formatSkillsList(skills: Skill[]): string {
+export function formatSkillsList(skills: Skill[], skipped: SkippedSkillFile[] = getSkippedCustomSkills()): string {
   const byCategory = new Map<SkillCategory, Skill[]>();
   
   for (const skill of skills) {
@@ -1038,6 +1241,12 @@ export function formatSkillsList(skills: Skill[]): string {
   lines.push('## Skill Chaining');
   lines.push('Chain multiple skills with `+`: `/commit+push`, `/test+commit+push`');
   lines.push('');
+
+  if (skipped.length > 0) {
+    lines.push('## Not loaded');
+    lines.push(formatSkippedCustomSkills(skipped));
+    lines.push('');
+  }
   
   return lines.join('\n');
 }
@@ -1078,7 +1287,8 @@ export function formatSkillHelp(skill: Skill): string {
   
   for (let i = 0; i < skill.steps.length; i++) {
     const step = skill.steps[i];
-    const optional = step.optional ? ' (optional)' : '';
+    const optional = (step.optional ? ' (optional)' : '')
+      + (step.skipIf ? ` (skipped when ${step.skipIf} is given)` : '');
     
     switch (step.type) {
       case 'prompt':
@@ -1145,7 +1355,7 @@ export const WIZARD_STEPS: WizardStep[] = [
       if (!input.match(/^[a-z][a-z0-9-]*$/)) {
         return 'Name must be lowercase letters, numbers, and hyphens. Must start with a letter.';
       }
-      if (findSkill(input)) {
+      if (findSkill(input) || customSkillFileExists(input)) {
         return 'A skill with this name already exists.';
       }
       return null;
@@ -1398,7 +1608,7 @@ export function getSkillStats(): { totalUsage: number; uniqueSkills: number; suc
 export function clearSkillHistory(): void {
   try {
     if (existsSync(SKILLS_HISTORY_FILE)) {
-      require('fs').unlinkSync(SKILLS_HISTORY_FILE);
+      unlinkSync(SKILLS_HISTORY_FILE);
     }
   } catch {
     // Ignore errors

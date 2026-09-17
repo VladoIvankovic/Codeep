@@ -1184,33 +1184,72 @@ describe('formatCloudSessionLabel', () => {
 });
 
 // ─── formatMeSyncReport ───────────────────────────────────────────────────────
-import { formatMeSyncReport } from './helpers';
+import { formatMeSyncReport, formatUndoAllReport } from './helpers';
+import type { SyncFailure, SyncResult } from '../../utils/codeepCloud';
 
 describe('formatMeSyncReport', () => {
+  const moved: SyncResult = { ok: true, count: 1, removed: 0 };
+  const nothing: SyncResult = { ok: true, count: 0, removed: 0 };
+  const failed = (reason: SyncFailure): SyncResult => ({ ok: false, reason });
+  const describe_ = (reason: SyncFailure) => `because ${reason}`;
+
   it('shows both push and pull lines on full success', () => {
-    const out = formatMeSyncReport(true, 1);
+    const out = formatMeSyncReport(moved, moved, describe_);
     expect(out).toContain('✓ Profile pushed to the dashboard');
     expect(out).toContain('✓ Profile pulled to this machine');
   });
 
-  it('shows only the push line when pulled is not 1', () => {
-    const out = formatMeSyncReport(true, 0);
+  it('shows only the push line when nothing was pulled', () => {
+    const out = formatMeSyncReport(moved, nothing, describe_);
     expect(out).toContain('✓ Profile pushed to the dashboard');
     expect(out).not.toContain('pulled');
+    expect(out).not.toContain('✗');
   });
 
-  it('shows the empty-state hint when nothing happened', () => {
-    const out = formatMeSyncReport(false, 0);
+  it('shows the empty-state hint when there is no profile anywhere', () => {
+    const out = formatMeSyncReport(nothing, nothing, describe_);
     expect(out).toContain('Nothing to sync yet');
+    expect(out).not.toContain('✗');
   });
 
-  it('handles pulled === null (network failure)', () => {
-    const out = formatMeSyncReport(false, null);
-    expect(out).toContain('Nothing to sync yet');
+  it('reports a failed push with its reason instead of asking for /me init', () => {
+    for (const pulled of [failed('unreachable'), nothing]) {
+      const out = formatMeSyncReport(failed('rejected'), pulled, describe_);
+      expect(out).toContain('✗ Could not push your profile to the dashboard — because rejected');
+      expect(out).not.toContain('/me init');
+    }
+  });
+
+  it('reports a failed pull with its reason even with nothing to push', () => {
+    const out = formatMeSyncReport(nothing, failed('unreachable'), describe_);
+    expect(out).toContain('✗ Could not fetch your profile from the dashboard — because unreachable');
+    expect(out).not.toContain('✗ Could not push');
+    expect(out).not.toContain('Nothing to sync yet');
   });
 
   it('includes the header', () => {
-    expect(formatMeSyncReport(true, 1)).toContain('## Profile sync');
+    expect(formatMeSyncReport(moved, moved, describe_)).toContain('## Profile sync');
+  });
+});
+
+// ─── formatUndoAllReport ──────────────────────────────────────────────────────
+
+describe('formatUndoAllReport', () => {
+  it('lists every action, including the ones that could not be undone', () => {
+    const out = formatUndoAllReport({
+      success: true,
+      results: ['Cannot undo command: npm test', 'Restored: /p/a.ts'],
+    });
+    expect(out).toBe('## Undo all\n\n- Cannot undo command: npm test\n- Restored: /p/a.ts');
+  });
+
+  it('says nothing was undone when no action could be', () => {
+    const out = formatUndoAllReport({ success: false, results: ['Cannot undo command: a', 'Cannot undo command: b'] });
+    expect(out.startsWith('## Nothing was undone')).toBe(true);
+  });
+
+  it('handles an empty result', () => {
+    expect(formatUndoAllReport({ success: false, results: [] })).toBe('Nothing to undo');
   });
 });
 

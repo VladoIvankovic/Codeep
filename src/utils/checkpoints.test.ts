@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -109,10 +109,28 @@ describe('loadCheckpoint', () => {
   it('returns null when the file is corrupt JSON', () => {
     const id = 'ck-2026-05-18-deadbeef';
     const dir = join(workspaceRoot, '.codeep', 'checkpoints');
-    // Need to create the directory by triggering listCheckpoints first
-    listCheckpoints(workspaceRoot);
+    mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${id}.json`), '{ not valid json');
     expect(loadCheckpoint(workspaceRoot, id)).toBeNull();
+  });
+});
+
+describe('a symlinked .codeep that came with the repo', () => {
+  it('refuses to write or delete checkpoints through it', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'codeep-ck-outside-'));
+    try {
+      symlinkSync(outside, join(workspaceRoot, '.codeep'));
+      expect(() => createCheckpoint({
+        workspaceRoot, sessionId: 's', provider: 'p', model: 'm', messages: sampleMessages(), filesTouched: [],
+      })).toThrow(/symlink/);
+      mkdirSync(join(outside, 'checkpoints'));
+      const id = 'ck-2026-05-18-deadbeef';
+      writeFileSync(join(outside, 'checkpoints', `${id}.json`), '{}');
+      expect(deleteCheckpoint(workspaceRoot, id)).toBe(false);
+      expect(existsSync(join(outside, 'checkpoints', `${id}.json`))).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 
