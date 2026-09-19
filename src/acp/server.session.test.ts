@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -1038,7 +1038,7 @@ describe('execute_command in the client terminal', () => {
     repo = mkdtempSync(join(tmpdir(), 'codeep-acp-term-'));
     // The fixtures run real git, and git reads whoever's machine this is on.
     // Point it at a file that is not there, for the fixture's own commands and
-    // for the scan inside shellCommandEnv, which inherits this process's env.
+    // for the scan inside commandEnv, which inherits this process's env.
     process.env.GIT_CONFIG_GLOBAL = join(repo, 'no-such-gitconfig');
     process.env.GIT_CONFIG_SYSTEM = join(repo, 'no-such-gitconfig');
     git('init', '-q');
@@ -1064,10 +1064,14 @@ describe('execute_command in the client terminal', () => {
     return mark;
   }
 
-  const statusRanTheProgram = (mark: string, env: NodeJS.ProcessEnv): boolean => {
+  const statusRanTheProgram = (
+    mark: string,
+    env: NodeJS.ProcessEnv,
+    args: string[] = ['status', '--porcelain'],
+  ): boolean => {
     rmSync(mark, { force: true });
     try {
-      execFileSync('git', ['status', '--porcelain'], { cwd: repo, env, stdio: 'ignore' });
+      execFileSync('git', args, { cwd: repo, env, stdio: 'ignore' });
     } catch {
       // A hostile fsmonitor makes git exit non-zero; the mark is the answer.
     }
@@ -1093,19 +1097,291 @@ describe('execute_command in the client terminal', () => {
     expect(statusRanTheProgram(mark, env!)).toBe(false);
   });
 
-  it('sends the whole environment, not only the git overrides', async () => {
-    // A client is free to read `env` as THE environment rather than as
-    // additions to its own, and a terminal that got only GIT_CONFIG_* would
-    // then be running without a PATH.
+  it('scans the repository `-C` aims git at, not the one it was spawned in', async () => {
+    // shellCommandEnv() can only scan the SPAWN's cwd, so `git -C vendor/lib
+    // status` over ACP was hardened against the OUTER project — whose config
+    // is spotless — and reached the nested checkout with only the always-on
+    // GIT_EXECUTING_CONFIG pairs behind it. `filter.*` is the half those
+    // pairs cannot wildcard, so the nested clean filter ran (git 2.54). One
+    // argument was the whole difference between this path and the local
+    // runner, which has always read `-C` out of the argv.
+    const nested = join(repo, 'vendor', 'lib');
+    mkdirSync(nested, { recursive: true });
+    const inNested = (...a: string[]) => execFileSync('git', a, { cwd: nested, stdio: 'ignore' });
+    // A plain nested clone, not a submodule: nothing in `repo/.git` mentions
+    // it, so the outer scan has no way to reach it.
+    inNested('init', '-q');
+    const spy = join(repo, 'spy.sh');
+    const mark = join(repo, 'MARK');
+    writeFileSync(spy, `#!/bin/sh\n: > "${mark}"\nexit 1\n`, { mode: 0o755 });
+    // ARMED, and not only declared. `.gitattributes` is what routes a path at
+    // a filter driver, and git runs a `filter.<d>.clean` for the files it
+    // routes and for nothing else — so a fixture that set the config key and
+    // no attributes file was asserting a refusal without putting the thing
+    // that causes one in the repository. It passed only while an unrouted
+    // driver was refused as well, which is a decision in utils/git.ts and not
+    // one this test gets to rest on.
+    //
+    // Committed BEFORE the filter is configured, because `git add` runs the
+    // clean filter too and would fire the spy while the fixture was still
+    // being built. Rewriting the file afterwards is what leaves the index
+    // stale, so the `git status` below has to re-clean it.
+    writeFileSync(join(nested, '.gitattributes'), '* filter=spy\n');
+    writeFileSync(join(nested, 'a.txt'), 'hi\n');
+    inNested('add', '.');
+    inNested('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init');
+    inNested('config', 'filter.spy.clean', spy);
+    // Rewritten at the SAME BYTE LENGTH as `hi\n`. git compares stat data
+    // before it compares content, and when the size differs it can answer
+    // "modified" from the stat alone and never read the file — no read, no
+    // clean filter, and the control below then reports a live trap as dead
+    // and fails this test as if the hardening had regressed. Whether it takes
+    // that shortcut is decided by a second boundary nothing in the fixture
+    // can see: git distrusts its own stat data only while the file's mtime is
+    // not older than the index's, and the two writes here are milliseconds
+    // apart. Measured on git 2.54 — an 8-byte replacement left the filter
+    // unrun in 10 of 300 fixtures, and in 15 of 15 once the index is touched
+    // a second after the file, which is what those 10 hit. At this length
+    // there is no shortcut to take: git has to read the content to answer at
+    // all, and the filter ran in 300 of 300 and in 15 of 15.
+    writeFileSync(join(nested, 'a.txt'), 'oh\n');
+
+    // Real git, the real fixture: unhardened, `git -C vendor/lib status`
+    // really does run the nested repository's clean filter.
+    expect(statusRanTheProgram(mark, process.env, ['-C', 'vendor/lib', 'status', '--porcelain'])).toBe(true);
+    // And the control on the other side: the same command WITHOUT `-C` is
+    // allowed through, because `repo` itself sets nothing to refuse over. So
+    // the refusal below is proof of WHICH repository was scanned, rather than
+    // of anything ambient in the fixture.
+    const outer = terminalClient();
+    expect((await executeAcpCommand('git', ['status'], repo, outer.ctx)).exitCode).toBe(0);
+
     const client = terminalClient();
+    const result = await executeAcpCommand('git', ['-C', 'vendor/lib', 'status'], repo, client.ctx);
+
+    expect(result.exitCode).toBe(-1);
+    // The refusal names the NESTED path and the NESTED key.
+    expect(result.stderr).toContain(nested);
+    expect(result.stderr).toContain('filter.spy.clean');
+    expect(client.methods()).not.toContain('terminal/create');
+  });
+
+  it('sends the hardening\'s own variables and not the shell it inherited', async () => {
+    // `env` is not a private channel. It used to be the whole of process.env,
+    // and src/acp/transport.ts mirrors every outbound frame verbatim into
+    // ~/.cache/codeep/acp-debug.log under CODEEP_ACP_DEBUG — so every API key
+    // and session token in the user's shell was written to a plaintext file
+    // on disk, and handed to an editor free to log the traffic itself.
+    process.env.CODEEP_TEST_FAKE_TOKEN = 'sk-ant-api03-notarealkeyatall0000000000';
+    try {
+      const client = terminalClient();
+      await executeAcpCommand('git', ['status'], repo, client.ctx);
+
+      const created = client.params('terminal/create')!;
+      const list = created.env as { name: string; value: string }[];
+      expect(list.some((e) => e.name === 'CODEEP_TEST_FAKE_TOKEN')).toBe(false);
+      expect(list.every((e) => !e.value.includes('notarealkeyatall'))).toBe(true);
+      // And not in the frame at all, under any other name or in any other
+      // field: this object is what the transport serialises, so it is also
+      // exactly what the debug log mirrors. (What the log does with a frame
+      // that DOES carry a secret — one that came out of a command's own
+      // output, say — is transport.test.ts's half.)
+      expect(JSON.stringify(created)).not.toContain('notarealkeyatall');
+
+      // Nothing beyond the allowlist rides along at all, whatever it is
+      // called: an allowlist that grew a wildcard would be no allowlist.
+      // Spelled out here rather than imported, because a guard that reads the
+      // list it is guarding passes whatever that list becomes.
+      const allowed = new RegExp(`^(?:${[
+        'GIT_CONFIG_(?:COUNT|KEY_\\d+|VALUE_\\d+|GLOBAL|SYSTEM|NOSYSTEM|PARAMETERS)',
+        'GIT_PAGER|GIT_TERMINAL_PROMPT',
+        'PATH|HOME|SHELL|USER|LOGNAME',
+        'SSH_AUTH_SOCK',
+        'TMPDIR|TMP|TEMP',
+        'LANG|LANGUAGE|LC_[A-Z]+',
+        'TERM|COLORTERM|TERM_PROGRAM|TZ',
+        '(?:HTTP|HTTPS|FTP|ALL|NO)_PROXY|(?:http|https|ftp|all|no)_proxy',
+        'ASDF_DIR|ASDF_DATA_DIR|NVM_DIR|NVM_BIN|PYENV_ROOT|RBENV_ROOT',
+        'SDKMAN_DIR|VOLTA_HOME|PNPM_HOME|BUN_INSTALL',
+        'VIRTUAL_ENV|CONDA_PREFIX|CARGO_HOME|RUSTUP_HOME|GOPATH|GOROOT|JAVA_HOME',
+      ].join('|')})$`);
+      const names = list.map((e) => e.name);
+      expect(names.filter((n) => !allowed.test(n))).toEqual([]);
+      // Each name once. The list is built from a filter over `env` plus one
+      // entry appended by hand, and a duplicate would leave which value the
+      // client uses up to the client.
+      expect(new Set(names).size).toBe(names.length);
+
+      const env = client.terminalEnv()!;
+      // What the terminal does get: the numbered pairs that disarm the repo,
+      // all of them — a COUNT that outruns the pairs behind it is a git that
+      // fails outright ("missing environment variable"), so the count and the
+      // pairs have to arrive together.
+      const count = Number(env.GIT_CONFIG_COUNT);
+      expect(count).toBeGreaterThan(0);
+      for (let i = 0; i < count; i++) {
+        expect(env[`GIT_CONFIG_KEY_${i}`], `GIT_CONFIG_KEY_${i}`).toBeDefined();
+        expect(env[`GIT_CONFIG_VALUE_${i}`], `GIT_CONFIG_VALUE_${i}`).toBeDefined();
+      }
+      expect(env.GIT_PAGER).toBe('cat');
+      expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+      // …the GIT_CONFIG_GLOBAL the scan itself read the config through, so
+      // the terminal's git cannot resolve a different global config than the
+      // one Codeep just decided was safe…
+      expect(env.GIT_CONFIG_GLOBAL).toBe(process.env.GIT_CONFIG_GLOBAL);
+      // …a PATH, because a client is free to read `env` as THE environment
+      // rather than as additions to its own, and a terminal that got only
+      // GIT_CONFIG_* would then be running without one…
+      expect(env.PATH).toBe(process.env.PATH);
+      expect(env.HOME).toBe(process.env.HOME);
+      // …and the empty GIT_CONFIG_PARAMETERS that stands in for the removal
+      // this list cannot spell (see the test below for what it is for).
+      expect(env.GIT_CONFIG_PARAMETERS).toBe('');
+      // And nothing is sent as an unreadable `value: undefined`.
+      expect(list.every((e) => typeof e.value === 'string')).toBe(true);
+    } finally {
+      delete process.env.CODEEP_TEST_FAKE_TOKEN;
+    }
+  });
+
+  /**
+   * The user's shell, for one test.
+   *
+   * Put back afterwards and not merely deleted: `process.env` is the whole
+   * worker's, so an SSH_AUTH_SOCK or a TMPDIR left behind here follows every
+   * test after this one — and into the next file the worker picks up.
+   */
+  function withShellEnv(vars: Record<string, string>): () => void {
+    const saved = Object.keys(vars).map((name) => [name, process.env[name]] as const);
+    Object.assign(process.env, vars);
+    return () => {
+      for (const [name, value] of saved) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    };
+  }
+
+  it('gives an ordinary command what the user\'s shell gives it', async () => {
+    // acpEnvList() filters the environment of EVERY terminal/create and not
+    // only of a hardened git spawn, and a client is free to read `env` as THE
+    // environment rather than as additions to its own. The first cut of this
+    // hotfix sent PATH and HOME and nothing else, so against such a client an
+    // `npm test` ran with no agent socket, no locale, no TMPDIR and no proxy
+    // — none of them a secret, and all of them things it had in the shell the
+    // user started Codeep from.
+    const shell = {
+      SSH_AUTH_SOCK: join(repo, 'agent.sock'),
+      LANG: 'en_US.UTF-8',
+      LC_TIME: 'en_US.UTF-8',
+      TMPDIR: repo,
+      TERM: 'xterm-256color',
+      https_proxy: 'http://proxy.test:8080',
+      NO_PROXY: 'localhost',
+      NVM_DIR: join(repo, '.nvm'),
+    };
+    const restore = withShellEnv(shell);
+    try {
+      const client = terminalClient();
+      const result = await executeAcpCommand('npm', ['test'], repo, client.ctx);
+
+      expect(result.exitCode).toBe(0);
+      const env = client.terminalEnv()!;
+      for (const [name, value] of Object.entries(shell)) expect(env[name], name).toBe(value);
+    } finally {
+      restore();
+    }
+  });
+
+  it('gives a git terminal those too, and the hardening with them', async () => {
+    // The allowlist is not "whatever a hardened `git status` needs": the
+    // command that needs SSH_AUTH_SOCK most is a push over SSH, and that is a
+    // git command. Without the agent socket git falls back to asking for a
+    // password on a terminal whose GIT_TERMINAL_PROMPT the hardening set to
+    // `0`, so it fails outright rather than prompting.
+    const restore = withShellEnv({ SSH_AUTH_SOCK: join(repo, 'agent.sock'), LANG: 'en_US.UTF-8' });
+    try {
+      const client = terminalClient();
+      await executeAcpCommand('git', ['status'], repo, client.ctx);
+
+      const env = client.terminalEnv()!;
+      expect(env.SSH_AUTH_SOCK).toBe(join(repo, 'agent.sock'));
+      expect(env.LANG).toBe('en_US.UTF-8');
+      // And widening the list cost the hardening nothing: the numbered pairs
+      // that do the actual work are still all there, with the count that
+      // reaches them.
+      const count = Number(env.GIT_CONFIG_COUNT);
+      expect(count).toBeGreaterThan(0);
+      for (let i = 0; i < count; i++) {
+        expect(env[`GIT_CONFIG_KEY_${i}`], `GIT_CONFIG_KEY_${i}`).toBeDefined();
+        expect(env[`GIT_CONFIG_VALUE_${i}`], `GIT_CONFIG_VALUE_${i}`).toBeDefined();
+      }
+      expect(env.GIT_CONFIG_PARAMETERS).toBe('');
+    } finally {
+      restore();
+    }
+  });
+
+  it.each<[string, string[]]>([['git', ['status']], ['npm', ['test']]])(
+    'keeps the shell\'s credentials out of the %s terminal',
+    async (command, args) => {
+      // The property the whole list exists for, on BOTH branches — the
+      // hardened one and the one that is left alone. It is also why this is
+      // an allowlist and not a denylist over names that look like secrets:
+      // the last variable below is a password, and nothing in its name says
+      // so. Every one of them would otherwise be mirrored verbatim into
+      // ~/.cache/codeep/acp-debug.log under CODEEP_ACP_DEBUG and handed to an
+      // editor that is free to log the traffic itself.
+      const restore = withShellEnv({
+        ANTHROPIC_API_KEY: 'sk-ant-api03-notarealkeyatall0000000000',
+        GITHUB_TOKEN: 'ghp_notarealtokenatall000000000000000',
+        AWS_SECRET_ACCESS_KEY: 'notarealsecretatall00000000000000',
+        CODEEP_TEST_DATABASE_URL: 'postgres://u:notarealpasswordatall@db/x',
+      });
+      try {
+        const client = terminalClient();
+        await executeAcpCommand(command, args, repo, client.ctx);
+
+        const created = client.params('terminal/create')!;
+        const names = (created.env as { name: string }[]).map((e) => e.name);
+        expect(names).not.toContain('ANTHROPIC_API_KEY');
+        expect(names).not.toContain('CODEEP_TEST_DATABASE_URL');
+        // And no value of any of them, under any other name or in any other
+        // field: this object is what the transport serialises.
+        expect(JSON.stringify(created)).not.toContain('notareal');
+      } finally {
+        restore();
+      }
+    },
+  );
+
+  it('cannot be switched back off by a GIT_CONFIG_PARAMETERS the client already had', async () => {
+    // hardenedGitEnv() DELETES this variable, because git reads it after the
+    // numbered GIT_CONFIG_* pairs and it beats them. A `terminal/create` env
+    // has no way to ask for a removal — an absent name is not an unset — so
+    // against a client that extends its own environment with `env` rather
+    // than replacing it, one variable the editor happened to inherit turned
+    // the whole hardening off. It is sent empty instead, which git reads as
+    // no parameters at all.
+    const mark = repoThatRunsAProgramOnStatus();
+    // The repository's own core.fsmonitor goes back out again, so the only
+    // thing left that can run the spy is the environment variable. Otherwise
+    // the numbered pair that neutralises the config key would be doing the
+    // work below and this would pass without proving anything.
+    git('config', '--unset', 'core.fsmonitor');
+    const client = terminalClient();
+
     await executeAcpCommand('git', ['status'], repo, client.ctx);
 
-    const env = client.terminalEnv()!;
-    expect(env.PATH).toBe(process.env.PATH);
-    expect(env.HOME).toBe(process.env.HOME);
-    // And nothing is sent as an unreadable `value: undefined`.
-    const list = client.params('terminal/create')!.env as { name: string; value: string }[];
-    expect(list.every((e) => typeof e.value === 'string')).toBe(true);
+    // The client's own environment, with the variable already in it. Real
+    // git, and the control first: this is a live trap, not a shape.
+    const inherited = { ...process.env, GIT_CONFIG_PARAMETERS: `'core.fsmonitor=${join(repo, 'spy.sh')}'` };
+    expect(statusRanTheProgram(mark, inherited)).toBe(true);
+    // And the reading this has to survive: the client's environment with
+    // `env` laid over it. Nothing in that list neutralises this but the empty
+    // GIT_CONFIG_PARAMETERS — the always-on `core.fsmonitor=false` pair is
+    // sitting right there and loses to it (git 2.54).
+    expect(statusRanTheProgram(mark, { ...inherited, ...client.terminalEnv() })).toBe(false);
   });
 
   it('fails the command with git\'s own refusal rather than running it unhardened', async () => {
@@ -1136,5 +1412,10 @@ describe('execute_command in the client terminal', () => {
 
     expect(result.exitCode).toBe(0);
     expect(client.methods()).toContain('terminal/create');
+    // And left alone in the environment too: the empty GIT_CONFIG_PARAMETERS
+    // stands in for a removal hardenedGitEnv() makes, and hardenedGitEnv()
+    // does not run for a command that is not git. Sending it anyway would
+    // take a variable off a command Codeep deliberately does not harden.
+    expect(client.terminalEnv()).not.toHaveProperty('GIT_CONFIG_PARAMETERS');
   });
 });

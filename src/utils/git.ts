@@ -1,6 +1,6 @@
 import { execSync, execFileSync, spawnSync } from 'child_process';
-import { existsSync, readdirSync, statSync, type Dirent } from 'fs';
-import { join, resolve } from 'path';
+import { existsSync, readFileSync, realpathSync, statSync } from 'fs';
+import { delimiter, isAbsolute, join, relative, resolve, sep } from 'path';
 // Type-only: keeps git.ts free of runtime imports, so src/utils/shell.ts
 // can pull hardenedGitEnv() in without creating an import cycle.
 import type { ActionLog } from './tools';
@@ -12,15 +12,36 @@ export interface GitStatus {
   ahead?: number;
   behind?: number;
   /**
-   * Why there is no branch here, when a repository was found but git would
-   * not be run in it — a GitHardeningError, or git itself failing. Declared
-   * because getGitStatus was already filling it through an `as GitStatus`
-   * cast that the compiler could not check: the field existed at runtime,
-   * nothing in the type said so, and the status line in renderer/main.ts
-   * reads `.branch` only — so a refusal showed up as the branch silently
-   * disappearing. Written for the user; show it where the branch would go.
+   * Why there is no branch here — a GitHardeningError, or git itself failing.
+   * Declared because getGitStatus was already filling it through an
+   * `as GitStatus` cast that the compiler could not check: the field existed
+   * at runtime, nothing in the type said so, and the status line in
+   * renderer/main.ts reads `.branch` only — so a refusal showed up as the
+   * branch silently disappearing. Written for the user; show it where the
+   * branch would go.
+   *
+   * Every way git can fail lands here, including the ordinary ones. The
+   * commonest is a brand-new `git init` with no commit yet, where `git
+   * rev-parse --abbrev-ref HEAD` answers `fatal: ambiguous argument 'HEAD'`
+   * (git 2.54) — which is why nothing should put this in front of the user
+   * as an instruction. Use `refusal` for that.
    */
   error?: string;
+  /**
+   * Set ONLY when the hardening refused to run git here, and never for an
+   * ordinary git failure. The message names the config key and the
+   * `git config --unset` that clears it, so it is the one the TUI shows
+   * verbatim (see gitRefusalNotice in renderer/main.ts).
+   *
+   * This field shipped dead in the first cut of the hotfix: main.ts read
+   * `status.refusal`, `GitStatus` never declared it and getGitStatus never
+   * set it, so the warning it exists to raise never fired once and the only
+   * symptom of a refused repository was the branch quietly vanishing from
+   * the header — the exact symptom that notice was written to remove. When
+   * this is set, `error` carries the same text, so callers that only know
+   * about `error` still say something useful.
+   */
+  refusal?: string;
 }
 
 export interface GitDiffResult {
@@ -120,11 +141,17 @@ const GIT_EXECUTING_CONFIG: ReadonlyArray<readonly [key: string, value: string]>
  * assert.
  *
  * The win32 arm is the reserved device name `NUL`, chosen because no
- * directory can shadow a reserved name. It is NOT verified: nothing in this
- * repository runs git on Windows, so treat it as the best available guess
- * rather than a proven no-hooks path. If it turns out git there resolves
- * `NUL\pre-commit` to something openable, the fix is a real empty directory,
- * not another reserved name.
+ * directory can shadow a reserved name. It is NOT verified — nothing in this
+ * repository runs git on Windows, and the suites below skip there — so it is
+ * the best available guess rather than a proven no-hooks path.
+ *
+ * What that costs if the guess is wrong is worth naming, because it is small:
+ * `noHooks` is only ever passed for the commands Codeep runs BY ITSELF
+ * (status, diff, rev-parse, show, ls-files, log), none of which git runs a
+ * hook for in the first place. A `NUL` that resolved to an openable directory
+ * would therefore re-enable nothing that the commands the user triggers do
+ * not already run deliberately. Whoever verifies it should replace this with
+ * a real empty directory rather than another reserved name.
  */
 const NO_HOOKS_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
@@ -160,6 +187,32 @@ function refuse(cwd: string, detail: string): GitHardeningError {
 const SCAN_MAX_BUFFER = 16 * 1024 * 1024;
 
 /**
+ * How much `git ls-files -s` output the index listing accepts — see
+ * indexGitlinkPaths(), the one call that uses it.
+ *
+ * Sharing SCAN_MAX_BUFFER with it was the bug, and an unusually bad one: the
+ * config scan's ceiling is about a `.git/config` an attacker PADDED, where
+ * 16MB is already absurd, while the index listing's is about how many files
+ * a repository has, where 16MB is roughly 100k paths — a real monorepo, not a
+ * hostile one. Past it execFileSync threw ENOBUFS and the catch below turned
+ * that into a hardening refusal, so the whole git integration switched itself
+ * off in the repositories that need it most, and no fixture in the suite was
+ * big enough to see it (reproduced: a 22k-entry index, 21.7MB of listing,
+ * refused every git call).
+ *
+ * 256MB is a ceiling no honest index reaches — ~1.7M paths at the ~150 bytes
+ * a record costs here, several times the largest repositories git serves
+ * without a virtual filesystem — and it is a transient allocation rather than
+ * a resident cost: Node only ever holds what the child actually wrote, which
+ * for this repository is 14KB and for a 100k-file monorepo 16MB. The listing
+ * is read once per hardenedGitEnv() call and dropped.
+ *
+ * It is still a ceiling rather than Infinity, because the answer above it has
+ * to be an error and not an out-of-memory kill of the whole CLI.
+ */
+const INDEX_MAX_BUFFER = 256 * 1024 * 1024;
+
+/**
  * How long the scan may take.
  *
  * Generous on purpose. The scan costs ~9ms, and the old 2s budget was still
@@ -188,6 +241,22 @@ interface GitConfigEntry {
    */
   keyExact: boolean;
   valueExact: boolean;
+  /**
+   * The config FILE the entry came from, as `--show-origin` reports it.
+   *
+   * Only filled for the submodule pass, and load-bearing there: that pass
+   * reads every submodule's config through one `git -c include.path=…` child
+   * (see listSubmoduleConfig), so without an origin every entry looks like it
+   * came from the superproject. A refusal then named the superproject and
+   * printed `git config --unset <key>`, which run there silently does
+   * nothing — `--unset` writes the repository it is run in, and the key is in
+   * `.git/modules/<name>/config`. The user ran it, saw no error, and met the
+   * same refusal on the next call. See unsetCommand().
+   */
+  file?: string;
+  /** The submodule's working tree, when the enumeration reached it through
+   *  one. Absent for a submodule that is initialised but not checked out. */
+  worktree?: string;
 }
 
 /**
@@ -220,8 +289,12 @@ type RepoExecutingRule =
        * changes what git stores (see the content-filter rule). Returns the
        * reason the user is shown, or null to leave the entry running
        * untouched, which is how the well-known content filters keep working.
+       *
+       * `env` is the environment the real git call will run under. It is
+       * here for the content-filter rule, which has to know the PATH the
+       * shell git spawns would search — see isSafeContentFilterCommand().
        */
-      refuse: (entry: GitConfigEntry, m: RegExpMatchArray) => string | null;
+      refuse: (entry: GitConfigEntry, m: RegExpMatchArray, env: NodeJS.ProcessEnv) => string | null;
     };
 
 /**
@@ -248,6 +321,49 @@ function describeValue(value: string): string {
 }
 
 /**
+ * The `git config --unset` that actually reaches this entry.
+ *
+ * A plain `git config --unset <key>` writes the repository it is run in, so
+ * for a key that came out of `.git/modules/<name>/config` it clears nothing
+ * and exits 5 ("no such section") or 0 — and the user, who was told to run
+ * it at the superproject, sees no error and meets the same refusal on the
+ * next call. Reproduced against git 2.54. `-C <worktree>` is preferred over
+ * `-f <file>` when the submodule is checked out: it is the form a user can
+ * read without knowing where git hides a submodule's git directory.
+ *
+ * `--worktree` for a key in `config.worktree`, for the same reason and with
+ * the same symptom: a plain `git config --unset` writes the LOCAL file, so
+ * against a key that lives in `config.worktree` it exits 5 ("no such
+ * section"), clears nothing, and the user meets the identical refusal on the
+ * next call. Reproduced with git 2.54, both scopes. The `-f <file>` form
+ * below needs no flag — it names the file outright.
+ */
+function unsetCommand(entry: GitConfigEntry): string {
+  // `worktree` is how git's own `--show-scope` labels the superproject's
+  // `.git/config.worktree`; the submodule pass has no scope word of its own
+  // for it, so there the file it came from is what says which one it is.
+  const worktreeScope =
+    entry.scope === 'worktree' || entry.file?.endsWith(`${sep}config.worktree`) === true ? ' --worktree' : '';
+  if (entry.scope !== SUBMODULE_SCOPE) return `git config${worktreeScope} --unset ${entry.key}`;
+  if (entry.worktree) return `git -C ${entry.worktree} config${worktreeScope} --unset ${entry.key}`;
+  return `git config -f ${entry.file} --unset ${entry.key}`;
+}
+
+/** Who set this entry, for "… the diff driver <this> configured in <key>". */
+function describeSetter(entry: GitConfigEntry): string {
+  if (entry.scope !== SUBMODULE_SCOPE) return 'this repository';
+  if (entry.worktree) return `the submodule at ${entry.worktree}`;
+  return `a submodule of this repository (${entry.file})`;
+}
+
+/** Whose config this entry is, for "<this> sets <key>, which git runs …". */
+function describeConfig(entry: GitConfigEntry): string {
+  if (entry.scope !== SUBMODULE_SCOPE) return "this repository's own git config";
+  if (entry.worktree) return `the git config of the submodule at ${entry.worktree}`;
+  return `the git config of a submodule of this repository (${entry.file})`;
+}
+
+/**
  * The value that replaces a repo-chosen `diff.external` / `diff.<d>.command`:
  * it names the key and the `git config --unset` that fixes it, then fails.
  *
@@ -257,10 +373,10 @@ function describeValue(value: string): string {
  * then stops with `fatal: external diff died`, exit 128, so nothing has
  * silently fallen back to git's own diff either.
  */
-function diffDriverRefusalCommand(key: string): string {
+function diffDriverRefusalCommand(entry: GitConfigEntry): string {
   const message =
-    `codeep: refusing to run the diff driver this repository configured in ${key}. ` +
-    `Remove it (git config --unset ${key}) if you trust this repository.`;
+    `codeep: refusing to run the diff driver ${describeSetter(entry)} configured in ${entry.key}. ` +
+    `Remove it (${unsetCommand(entry)}) if you trust this repository.`;
   return `printf '%s\\n' ${shellQuote(message)} >&2; false`;
 }
 
@@ -282,7 +398,8 @@ function diffDriverRefusalCommand(key: string): string {
  * message, for the reason the diff-driver rule spells out: otherwise the
  * warning is the injection.
  */
-function aliasRefusalCommand(name: string, value: string): string {
+function aliasRefusalCommand(entry: GitConfigEntry, name: string): string {
+  const value = entry.value;
   // A `!` alias is a shell line; anything else is spliced in front of git's
   // own arguments, so `alias.st = status -sb` means `git status -sb`. Saying
   // which one it is turns "run the plain git command instead" into something
@@ -290,11 +407,12 @@ function aliasRefusalCommand(name: string, value: string): string {
   const defined = value.startsWith('!')
     ? `the shell command ${describeValue(value.slice(1))}`
     : `git ${describeValue(value)}`;
+  const setter = describeSetter(entry);
   const message =
-    `codeep: refusing to run 'git ${name}', an alias this repository defined in its own git config. ` +
-    `Codeep disables repository-defined aliases; run the plain git command instead — this repository ` +
+    `codeep: refusing to run 'git ${name}', an alias ${setter} defined in its own git config. ` +
+    `Codeep disables repository-defined aliases; run the plain git command instead — ${setter} ` +
     `defines '${name}' as ${defined}. ` +
-    `Remove it (git config --unset alias.${name}) if you trust this repository.`;
+    `Remove it (${unsetCommand(entry)}) if you trust this repository.`;
   return `!printf '%s\\n' ${shellQuote(message)} >&2; false`;
 }
 
@@ -315,12 +433,18 @@ function aliasRefusalCommand(name: string, value: string): string {
  * runtime — and the suite asserts that property so a future entry cannot
  * quietly break it.
  *
- * Spellings that are NOT here, deliberately: `"<abs path to python>" -m
- * nbstripout`, which newer nbstripout installers write, and any git-lfs line
- * carrying an absolute path. An absolute path is the machine's, not a string
- * this file can pin, so those repositories get the refusal and its `--unset`
- * — which is the fail-closed half of the policy working as intended, not an
- * oversight.
+ * These are the values with the program named BARE. The same integrations
+ * also spell the program as an absolute path, which is the machine's and not
+ * a string this file can pin — see isSafeContentFilterCommand(), which takes
+ * the basename apart and compares it against this same list.
+ *
+ * A spelling that is NOT accepted in any form: `"<abs path to python>" -m
+ * nbstripout`, which newer nbstripout installers write. Its program is
+ * `python`, so there is nothing to recognise in it — the argument tail is
+ * what says what it will do, and pinning `-m nbstripout` would pin a
+ * mechanism for running any module at all. Those repositories get the
+ * refusal and its `--unset`, which is the fail-closed half of the policy
+ * working as intended rather than an oversight.
  */
 export const SAFE_CONTENT_FILTER_COMMANDS: ReadonlySet<string> = new Set([
   // `git lfs install` / `git lfs install --local`. `filter-process` is what
@@ -350,6 +474,13 @@ export const SAFE_CONTENT_FILTER_COMMANDS: ReadonlySet<string> = new Set([
   '"git-crypt" clean',
   '"git-crypt" smudge',
   '"git-crypt" diff',
+  // `git annex init` writes both of these into the repository's own config,
+  // and an annex repository is refused without them: git-annex routes every
+  // path in `.gitattributes` at `filter.annex`, so the refusal lands on the
+  // ordinary `git status` behind the status line. `-- %f` is git-annex's own
+  // spelling, placeholder included, exactly as git-lfs's lines above are.
+  'git-annex smudge -- %f',
+  'git-annex clean -- %f',
   // `nbstripout --install`, in the spelling that names the program directly.
   'nbstripout',
   // nbstripout's own smudge side, and git's documented identity filter. Left
@@ -361,20 +492,122 @@ export const SAFE_CONTENT_FILTER_COMMANDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The bytes one word of an allowlisted command line may be spelled with.
+ *
+ * A whitelist of characters rather than a blacklist of shell metacharacters,
+ * because git runs a filter command THROUGH A SHELL and the blacklist is the
+ * one that has to be complete. Everything not named here stops the value
+ * dead: `;` `&` `|` `$` a backtick, a quote, a newline, a tab — and also the
+ * bytes that only look like the allowlisted ones, a U+00A0 no-break space or
+ * a U+2011 non-breaking hyphen, which is what makes this the check that
+ * answers homoglyphs rather than a separate one. `%` is here for git's own
+ * `%f` placeholder and means nothing to sh. `~` is NOT: sh expands it at the
+ * start of a word.
+ */
+const PLAIN_COMMAND_WORD = /^[A-Za-z0-9._\/%+:=@-]+$/;
+
+/**
+ * Whether a repo-scope `filter.<driver>.{clean,smudge,process}` value is one
+ * of the well-known integrations — accepting the spelling that names the
+ * program by an ABSOLUTE PATH, which the frozen list above cannot hold.
+ *
+ * `/usr/local/bin/git-lfs filter-process` is what a `git lfs install` writes
+ * on a machine where git-lfs is not the one on PATH, and git-annex writes the
+ * same shape. Those are ordinary working repositories, and the whole-value
+ * list refused every git call in them — the fail-closed policy landing on the
+ * integrations it was written to keep running.
+ *
+ * What is compared is the program's BASENAME plus the argument tail EXACTLY
+ * as the literal spells it, so every property of the list survives the
+ * relaxation. `/usr/local/bin/git-lfs clean -- %f; curl …|sh` fails on its
+ * bytes before anything is compared; `… clean -- %f --extra` and `…
+ * FILTER-PROCESS` produce a tail that is not in the list; a leading command
+ * puts something other than an absolute path in the first word. There is no
+ * prefix matching anywhere in here, in either half.
+ *
+ * And the path has to name the program PATH ALREADY RESOLVES that basename
+ * to, which is the check that keeps this from being a way in. Without it the
+ * repository picks the program: it ships an executable called `git-lfs` — or
+ * `cat`, which is on the list with no arguments at all — points the filter at
+ * its own checkout, and git runs it. That is not a relaxation of the
+ * allowlist, it is the end of it. With it, an absolute path can only name the
+ * same file the bare spelling on the list would have run anyway, so the
+ * repository gains nothing by writing it out.
+ *
+ * `env` is the environment the REAL git call will run under, so the PATH
+ * asked here is the PATH the shell git spawns would search.
+ */
+export function isSafeContentFilterCommand(value: string, env: NodeJS.ProcessEnv): boolean {
+  if (SAFE_CONTENT_FILTER_COMMANDS.has(value)) return true;
+
+  // Split on one ASCII space, never on `\s`: JS counts U+00A0 and the rest of
+  // Unicode's spaces as whitespace and a shell does not, so `\s` would read
+  // `git-lfs<NBSP>filter-process` as two words and compare a string the shell
+  // will never see. Anything but a single plain space between words leaves an
+  // empty word, or a word PLAIN_COMMAND_WORD rejects.
+  const words = value.split(' ');
+  if (!words.every(word => PLAIN_COMMAND_WORD.test(word))) return false;
+
+  // Absolute only, and with no `..` in it — a relative program resolves
+  // against the current directory, which in every call site here is the
+  // repository's own working tree, and `..` is how an absolute path becomes
+  // a relative one again.
+  const program = words[0];
+  const parts = program.split('/');
+  if (parts[0] !== '' || parts.includes('..')) return false;
+
+  const base = parts[parts.length - 1];
+  if (!SAFE_CONTENT_FILTER_COMMANDS.has([base, ...words.slice(1)].join(' '))) return false;
+
+  let target: string;
+  try {
+    target = realpathSync(program);
+  } catch {
+    // A path that is not there is not the program PATH resolves to either,
+    // and git would fail on it anyway. Refusing says so with a sentence.
+    return false;
+  }
+  for (const dir of (env.PATH ?? '').split(delimiter)) {
+    if (!dir) continue;
+    try {
+      // realpath on both sides: a package manager's `bin` is usually a
+      // symlink into its own store, so the two spellings of one program
+      // rarely match as strings.
+      if (realpathSync(join(dir, base)) === target) return true;
+    } catch {
+      // Not in this directory, or not readable through it — the next one
+      // answers, and "none of them" is a no.
+    }
+  }
+  return false;
+}
+
+/**
  * Why a repo-scope content filter stops the call, written for the user.
  *
- * It has to say three things, because each one is a step a user takes next:
- * which driver, what the repository asked git to run, and the `--unset` that
- * ends it. The fourth sentence is the one that matters most — `git config
+ * It has to say four things, because each one is a step a user takes next:
+ * which driver, what the repository asked git to run, the `--unset` that ends
+ * it, and — for the commonest honest case — why a driver that routes nothing
+ * in this checkout today is refused all the same. A leftover
+ * `filter.nbstripout.*` from an `nbstripout --install` in a repository that
+ * has since lost its notebooks is exactly that user, and without the third
+ * sentence they read the refusal, see no `.gitattributes` naming the driver,
+ * and conclude Codeep is simply wrong.
+ *
+ * The last sentence is the one that matters most — `git config
  * filter.<d>.required false` is the first hit for "clean filter failed", and
  * it is precisely the change that makes git accept a filter that did not run
  * and write the file's contents unfiltered.
  */
 function contentFilterRefusal(entry: GitConfigEntry, driver: string): string {
   return (
-    `this repository's own git config sets ${entry.key}, which git runs as a program for every file ` +
+    `${describeConfig(entry)} sets ${entry.key}, which git runs as a program for every file ` +
     `.gitattributes routes at the "${driver}" filter — here it runs: ${describeValue(entry.value)}. ` +
-    `Remove it (git config --unset ${entry.key}) if you trust this repository. ` +
+    `Remove it (${unsetCommand(entry)}) if you trust this repository. ` +
+    `That is the fix even if nothing routes a path at "${driver}" in this checkout today: which paths ` +
+    `git routes is decided by .gitattributes anywhere in the tree, by .git/info/attributes, and by ` +
+    `attr.tree or --attr-source on a single command, so "nothing uses it" is not something Codeep can ` +
+    `establish without re-implementing git's own attribute lookup — and it will not guess. ` +
     `Do NOT set filter.${driver}.required false to get past this: that makes git accept a filter that ` +
     `never ran and store the file's contents UNFILTERED, which for an encrypting filter means ` +
     `committing the plaintext.`
@@ -428,9 +661,25 @@ const REPO_EXECUTING_RULES: ReadonlyArray<RepoExecutingRule> = [
     // SAFE_CONTENT_FILTER_COMMANDS), and anything else stops the call with a
     // sentence that names the driver and warns off that workaround. `required`
     // is never read and never written — the answer is the same either way.
+    //
+    // UNCONDITIONALLY, and that is a decision rather than an oversight. A
+    // previous round relaxed this to "refuse only when some attributes file
+    // routes a path at the driver", to spare the ordinary repository that
+    // still carries a leftover `filter.nbstripout.*` from an `nbstripout
+    // --install` and has since lost its notebooks. Answering that question
+    // means re-implementing git's attribute resolution, and the copy missed
+    // sources git honours: `.git/info/attributes` in a linked worktree,
+    // `attr.tree`, `--attr-source`, and a path that is in the index but not
+    // on disk. Each miss reads as "inert" and hands the repository arbitrary
+    // execution back. A security hotfix is not where that reimplementation
+    // gets written, so the check is gone and the refusal is flat: a
+    // repo-scope content filter that is not one of the well-known
+    // integrations stops the call whether or not anything routes a path at
+    // it today. contentFilterRefusal() says so in the message, because the
+    // leftover-config user is the one who meets it.
     match: /^filter\.(.+)\.(clean|smudge|process)$/i,
-    refuse: (entry, m) =>
-      SAFE_CONTENT_FILTER_COMMANDS.has(entry.value) ? null : contentFilterRefusal(entry, m[1]),
+    refuse: (entry, m, env) =>
+      isSafeContentFilterCommand(entry.value, env) ? null : contentFilterRefusal(entry, m[1]),
   },
   {
     // `.textconv` renders a file to text before diffing it; `.gitattributes`
@@ -464,7 +713,7 @@ const REPO_EXECUTING_RULES: ReadonlyArray<RepoExecutingRule> = [
     // Codeep's own diff reads pass `--no-ext-diff --no-textconv` and never
     // get here; this covers `git diff` run through execute_command.
     match: /^diff\.((.+)\.command|external)$/i,
-    neutralise: entry => [[entry.key, diffDriverRefusalCommand(entry.key)]],
+    neutralise: entry => [[entry.key, diffDriverRefusalCommand(entry)]],
   },
   {
     // A custom merge driver runs on every conflicting hunk. Emptying it makes
@@ -532,7 +781,7 @@ const REPO_EXECUTING_RULES: ReadonlyArray<RepoExecutingRule> = [
     // diff-driver rule already uses, and it still exits 1, so nothing has
     // quietly succeeded either.
     match: /^alias\.(.+)$/i,
-    neutralise: (entry, m) => [[entry.key, aliasRefusalCommand(m[1], entry.value)]],
+    neutralise: (entry, m) => [[entry.key, aliasRefusalCommand(entry, m[1])]],
   },
   {
     // A credential helper whose value starts with `!` is a shell command, run
@@ -579,9 +828,9 @@ const REPO_EXECUTING_RULES: ReadonlyArray<RepoExecutingRule> = [
     // must already be on PATH, which a repository cannot put there.
     match: /^remote\..+\.(uploadpack|receivepack)$/i,
     refuse: entry =>
-      `this repository's own git config sets ${entry.key}, which git runs as a program on fetch and push. ` +
+      `${describeConfig(entry)} sets ${entry.key}, which git runs as a program on fetch and push. ` +
       'Git keeps the first value it sees for that key, so no environment override can switch it off. ' +
-      `Remove it (git config --unset ${entry.key}) if you trust this repository.`,
+      `Remove it (${unsetCommand(entry)}) if you trust this repository.`,
   },
   {
     // Piped over the diff that `git add -p` and friends show.
@@ -597,6 +846,26 @@ const REPO_EXECUTING_RULES: ReadonlyArray<RepoExecutingRule> = [
 
 /** Matches every key the credential-helper rule owns. */
 const CREDENTIAL_HELPER_KEY = /^credential\.(.+\.)?helper$/i;
+
+/**
+ * Whether `<key>=<value>` is a config key that makes git RUN a program.
+ *
+ * Exported for utils/shell.ts, which has to answer the same question about a
+ * `git -c <key>=<value>` an agent typed. Keeping one answer is the point:
+ * these are exactly the keys this file spends its length neutralising, and a
+ * second hand-written list in the command validator would drift away from
+ * this one the first time a rule is added here.
+ *
+ * Both halves matter. GIT_EXECUTING_CONFIG is the always-on set, so a `-c
+ * core.fsmonitor=<program>` would otherwise WIN — git reads its own `-c`
+ * after the GIT_CONFIG_* pairs (verified, git 2.54). REPO_EXECUTING_RULES is
+ * the scope-aware set, and `-c` is not a scope the scan can see at all.
+ */
+export function isExecutingConfigKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  if (GIT_EXECUTING_CONFIG.some(([name]) => name.toLowerCase() === lower)) return true;
+  return REPO_EXECUTING_RULES.some(rule => rule.match.test(key));
+}
 
 /** An absent value, kept out of the parse loop below. */
 const NO_BYTES = Buffer.alloc(0);
@@ -676,56 +945,88 @@ function listGitConfig(cwd: string, env: NodeJS.ProcessEnv): GitConfigEntry[] | 
   return parseConfigList(out);
 }
 
+/** How `--show-origin` spells a config file. Anything else it can print —
+ *  `command line:`, `standard input:`, `blob:<sha>` — is not a file we can
+ *  point a `git config -f` at, so it is dropped rather than guessed at. */
+const ORIGIN_FILE_PREFIX = 'file:';
+
 /**
- * `<scope>\0<key>\n<value>\0` per entry, split on BYTES. A value may itself
- * contain a newline, so the key ends at the FIRST one; a valueless key
- * (`[section] key` with no `=`) has no newline at all.
+ * `<scope>\0<key>\n<value>\0` per entry, split on BYTES, or
+ * `<scope>\0<origin>\0<key>\n<value>\0` when the call passed `--show-origin`.
+ * A value may itself contain a newline, so the key ends at the FIRST one; a
+ * valueless key (`[section] key` with no `=`) has no newline at all.
  */
-function parseConfigList(out: Buffer): GitConfigEntry[] {
+function parseConfigList(out: Buffer, withOrigin: boolean = false): GitConfigEntry[] {
   const parts = splitOnNul(out);
+  const stride = withOrigin ? 3 : 2;
   const entries: GitConfigEntry[] = [];
-  for (let i = 0; i + 1 < parts.length; i += 2) {
-    const record = parts[i + 1];
+  for (let i = 0; i + stride - 1 < parts.length; i += stride) {
+    const record = parts[i + stride - 1];
     const nl = record.indexOf(0x0a);
     const key = decodeExact(nl === -1 ? record : record.subarray(0, nl));
     const value = decodeExact(nl === -1 ? NO_BYTES : record.subarray(nl + 1));
+    const origin = withOrigin ? parts[i + 1].toString('utf-8') : '';
     entries.push({
       scope: parts[i].toString('utf-8'),
       key: key.text,
       keyExact: key.exact,
       value: value.text,
       valueExact: value.exact,
+      file: origin.startsWith(ORIGIN_FILE_PREFIX) ? origin.slice(ORIGIN_FILE_PREFIX.length) : undefined,
     });
   }
   return entries;
 }
 
 /**
- * How many submodule configs one call will read, and how deep the walk for
- * them goes.
+ * How many submodule configs one call will read, and how far the enumeration
+ * follows submodules of submodules.
  *
- * Both are bounds on a directory tree the REPOSITORY owns — `.git/modules`
- * can be nested as deeply and be as wide as whoever prepared the checkout
- * liked. Past the cap the call is refused rather than partially scanned:
- * "we looked at 512 of your submodules" is a fail-open dressed as a limit.
- * A superproject with more than 512 initialised submodules is not a thing
- * anyone has; linux/llvm-scale monorepos have none at all.
+ * Both are bounds on a tree the REPOSITORY owns — a checkout can declare as
+ * many submodules, nested as deeply, as whoever prepared it liked. Past
+ * either one the call is REFUSED rather than partly scanned: "we looked at
+ * some of your submodules" is a fail-open dressed as a limit. Every other
+ * bound in this pass throws for the same reason, which is the half that used
+ * to be missing — the depth guard and the directory-read failure both used
+ * to `return`, so a tree nested one level too deep, or a `.git/modules` we
+ * had no permission to read, silently became "this repository has no
+ * submodules".
+ *
+ * The count was 512, and that was a wall rather than a backstop: a
+ * superproject past it was refused forever, with a message naming nothing
+ * the user could change. 2048 is an order of magnitude past the largest real
+ * superproject, so only a tree built to reach it does. It is not raised
+ * further because every config read is one more `-c include.path=` argument
+ * on one command line, and a Windows command line stops at 32KB; and the
+ * message now names the two things that get the user moving again.
  */
-const MAX_SUBMODULE_CONFIGS = 512;
+export const MAX_SUBMODULE_CONFIGS = 2048;
 const MAX_SUBMODULE_DEPTH = 16;
 
+/** Where a repository keeps the things this pass has to look at. */
+interface GitLayout {
+  /**
+   * `--git-common-dir`, i.e. the directory that holds `modules/<name>`.
+   * Not `--git-dir`: in a linked worktree the per-worktree git dir has no
+   * `modules/` of its own and the submodules hang off the shared one.
+   */
+  commonDir: string;
+  /** `--show-toplevel`, or null in a bare repository — where there is no
+   *  index of gitlinks to read and no `.gitattributes` on disk. */
+  topLevel: string | null;
+}
+
 /**
- * The `.git` directory of the repository at `cwd`, or null when there is not
- * one to find.
+ * The layout of the repository at `cwd`, or null when there is not one.
  *
- * The fast path is a single `statSync`: every caller inside Codeep passes the
+ * The fast path is two `statSync`s: every caller inside Codeep passes the
  * project ROOT, where `.git` is a directory sitting right there, so the usual
- * case costs no child process at all — measured, a hardened env in a plain
- * repository at its root is 6.9ms with this code and 6.9ms without it.
+ * case costs no child process at all — measured, it adds nothing to a
+ * hardened env in a plain repository at its root.
  *
  * Only the other shapes — a `cwd` below the root, a linked worktree, a
  * submodule, where `.git` is a FILE or is not there at all — have to ask git,
- * and that is one extra child: 13.6ms instead of 6.9ms, measured. Walking up
+ * and that is one extra child, ~7ms, measured. Walking up
  * for a `.git` ourselves would save it and would also be a second, worse copy
  * of git's discovery rules (ceiling directories, `GIT_DIR`, worktree links),
  * so git answers instead. The hot callers — the status line, /commit, the
@@ -733,131 +1034,377 @@ const MAX_SUBMODULE_DEPTH = 16;
  * `execute_command` whose cwd is a subdirectory, once, on a command the user
  * approved.
  *
- * `--git-common-dir` rather than `--git-dir`: in a linked worktree the
- * per-worktree git dir has no `modules/` of its own, and the submodules hang
- * off the shared one.
+ * `--show-toplevel` rides along in that same child rather than costing
+ * another. It fails outright in a bare repository ("this operation must be
+ * run in a work tree") and would take `--git-common-dir` down with it, so
+ * that case asks again without it.
  */
-function gitCommonDir(cwd: string, env: NodeJS.ProcessEnv): string | null {
+function gitLayout(cwd: string, env: NodeJS.ProcessEnv): GitLayout | null {
   const here = join(cwd, '.git');
   try {
-    if (statSync(here).isDirectory()) return here;
+    // `isDirectory()` is not proof that there is a repository here, and
+    // taking it as proof made the layout name the wrong root. ANY directory
+    // can be called `.git` — one `mkdir sub/.git` inside a real checkout is
+    // the whole thing — and a half-built or half-deleted git directory has
+    // the same shape. The layout then said `cwd` was the top level, so
+    // indexGitlinkPaths listed the REAL repository's index (git finds it by
+    // walking up from `cwd`) with paths relative to a root that is not this
+    // one: every gitlink resolved to a directory that is not there, and
+    // gitDirOfWorktree dropped the lot. The submodule enumeration skipped
+    // silently while git, run from that same subdirectory, still ran the
+    // submodule's `filter.<d>.clean` on a plain `git status` — reproduced,
+    // git 2.54. `commonDir` was equally wrong, so `<commonDir>/modules` found
+    // nothing either.
+    //
+    // `HEAD` is git's own cheapest proof: validate_headref() is what setup.c
+    // calls before it will treat a directory as a git directory, and one more
+    // `statSync` keeps the fast path a fast path. This APPROXIMATES that
+    // function — git also wants `objects/` and `refs/`, and reads what HEAD
+    // contains — and it does not have to be exact, because being wrong in
+    // this direction costs correctness and not safety: everything not
+    // accepted here falls through to the `git rev-parse` below, which answers
+    // for every shape (a linked worktree, a submodule, a `cwd` below the
+    // root, and the fake `.git` above — where it names the real repository).
+    if (statSync(here).isDirectory() && statSync(join(here, 'HEAD')).isFile()) {
+      return { commonDir: here, topLevel: cwd };
+    }
   } catch {
-    // Not there, or not readable — fall through and let git answer.
+    // Not there, not readable, or no HEAD — fall through and let git answer.
   }
 
+  const ask = (flags: string[]): string[] | null => {
+    try {
+      return execFileSync('git', ['rev-parse', ...flags], {
+        cwd,
+        env,
+        timeout: SCAN_TIMEOUT_MS,
+        maxBuffer: SCAN_MAX_BUFFER,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+        .split('\n')
+        .map(line => line.trim());
+    } catch {
+      return null;
+    }
+  };
+
+  // git prints the common dir relative to `cwd` when it can.
+  const both = ask(['--git-common-dir', '--show-toplevel']);
+  if (both?.[0]) {
+    return { commonDir: resolve(cwd, both[0]), topLevel: both[1] ? resolve(cwd, both[1]) : null };
+  }
+  const bare = ask(['--git-common-dir']);
+  if (bare?.[0]) return { commonDir: resolve(cwd, bare[0]), topLevel: null };
+
+  // git said "not a git repository", or never started. Either way the real
+  // call cannot run here either, so there is no submodule of ours to scan —
+  // the same reasoning listGitConfig() applies to its own null.
+  return null;
+}
+
+/**
+ * `submodule.<name>.<var>` — what git writes into the CONTAINING repository's
+ * own config for every submodule it has initialised (`git submodule add` and
+ * `git submodule update --init` both leave `submodule.<name>.url` and
+ * `.active` behind). That record is why the enumeration below needs no
+ * directory walk to find `<common>/modules/<name>`.
+ *
+ * The keys with no subsection — `submodule.recurse`, `submodule.active`,
+ * `submodule.fetchJobs` — need a second dot to match and do not.
+ */
+const SUBMODULE_NAME_KEY = /^submodule\.(.+)\.[^.]+$/i;
+
+/**
+ * The config files a submodule's git directory can carry, both of which git
+ * reads for a call inside that submodule.
+ *
+ * `config.worktree` was the hole: it sits in the git directory exactly as
+ * `config` does, git honours it as scope `worktree` the moment the repository
+ * sets `extensions.worktreeConfig`, and the pass below read only `config` —
+ * so a `filter.<d>.clean` written with `git config --worktree` inside a
+ * submodule survived the whole scan. It is the same file the isRepoScope()
+ * note is about, one level down.
+ *
+ * Read UNCONDITIONALLY rather than only when `extensions.worktreeConfig` is
+ * on. Deciding that would mean picking, out of one merged `--show-origin`
+ * listing, which repository's `extensions.worktreeConfig` belongs to which
+ * `config.worktree` — and getting the pairing wrong fails OPEN, which is the
+ * direction this pass never goes. Reading a `config.worktree` that git is
+ * currently ignoring can only over-refuse, and the `--unset` in the message
+ * still names the file that has the key in it.
+ */
+const SUBMODULE_CONFIG_FILES = ['config', 'config.worktree'] as const;
+
+/** Every submodule name these entries record, de-duplicated. */
+function submoduleNames(entries: readonly GitConfigEntry[], cwd: string): string[] {
+  const names = new Set<string>();
+  for (const entry of entries) {
+    const m = entry.key.match(SUBMODULE_NAME_KEY);
+    if (!m) continue;
+    // The name becomes a path component below, and a name whose bytes do not
+    // survive the round trip is one we cannot open — so the honest answers
+    // are the same two decodeExact() leaves everywhere else, and "skip it"
+    // is not one of them.
+    if (!entry.keyExact) {
+      throw refuse(
+        cwd,
+        'its git config names a submodule whose name is not valid UTF-8, so Codeep cannot open that ' +
+          "submodule to check whether its own config names a program for git to run."
+      );
+    }
+    names.add(m[1]);
+  }
+  return [...names];
+}
+
+/**
+ * `root` joined with `parts`, but only when the result stays under `root`.
+ *
+ * A submodule NAME comes out of a config file the repository wrote and a
+ * submodule PATH out of its index, so `../../..` is something either of them
+ * can say. git validates both itself — that is what CVE-2018-11235 was — and
+ * this is the same check on our side: everything this pass opens has to be
+ * under the directory it claims to be under.
+ */
+function containedPath(root: string, part: string): string | null {
+  const full = resolve(root, part);
+  const rel = relative(root, full);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel) ? full : null;
+}
+
+/** `gitdir: <path>` — how a submodule's `.git` FILE names its real git dir. */
+const GITDIR_POINTER = /^gitdir:\s*(.*?)\s*$/;
+
+/**
+ * The git directory of the checkout at `worktree`, resolved the way git
+ * resolves it, or null when there is not one there.
+ *
+ * Both shapes are real and both escaped the `.git/modules` walk this
+ * replaced. Reproduced with git 2.54, each with a `filter.<d>.clean` that
+ * FIRED on the superproject's own `git status --porcelain`:
+ *
+ * - `.git` is a DIRECTORY. `git submodule add <url> <path>` over a path that
+ *   is already a checkout answers "Adding existing repo at '<path>' to the
+ *   index" and leaves the embedded git directory exactly where it is, so
+ *   `<common>/modules` is never even created.
+ * - `.git` is a FILE naming a git directory elsewhere. Absorbed submodules
+ *   point at `<common>/modules/<name>`, and nothing stops a prepared
+ *   checkout from pointing one somewhere else.
+ */
+function gitDirOfWorktree(worktree: string, cwd: string): string | null {
+  const dot = join(worktree, '.git');
+  let stat: ReturnType<typeof statSync>;
   try {
-    const out = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+    stat = statSync(dot);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    // Not checked out is an ordinary state, and `<common>/modules/<name>` is
+    // then the only git dir there is. Anything else — EACCES, EIO, a symlink
+    // loop — means git can read something we cannot, and answering "no
+    // submodule here" to that is the fail-open this whole pass is removing.
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return null;
+    throw refuse(
       cwd,
+      `the submodule at ${worktree} could not be read (${err.code ?? 'unknown error'}), so Codeep ` +
+        'cannot tell whether its git config names a program for git to run.'
+    );
+  }
+
+  if (stat.isDirectory()) return dot;
+  if (!stat.isFile()) return null;
+
+  let text: string;
+  try {
+    text = readFileSync(dot, 'utf-8');
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    throw refuse(
+      cwd,
+      `the .git file of the submodule at ${worktree} could not be read (${err.code ?? 'unknown error'}), ` +
+        'so Codeep cannot tell whether its git config names a program for git to run.'
+    );
+  }
+  const pointer = text.split('\n')[0].match(GITDIR_POINTER);
+  return pointer?.[1] ? resolve(worktree, pointer[1]) : null;
+}
+
+/** The index mode of a gitlink — the entry `git status` descends into. */
+const GITLINK_MODE = '160000';
+
+/**
+ * Whether git will serve this directory as a working tree at all.
+ *
+ * Only ever asked once something else has already failed, so it is a child
+ * process on the error path and nothing on the ordinary one. It answers the
+ * narrow question "can any git command run here?", which is what separates a
+ * repository Codeep should refuse from one where there is nothing to refuse
+ * over because git itself has walked away.
+ */
+function gitServesWorkTree(dir: string, env: NodeJS.ProcessEnv): boolean {
+  try {
+    return (
+      execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+        cwd: dir,
+        env,
+        timeout: SCAN_TIMEOUT_MS,
+        maxBuffer: SCAN_MAX_BUFFER,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim() === 'true'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Every path this repository's INDEX records as a submodule.
+ *
+ * The index is the authoritative list, and the reason this is not driven by
+ * `.gitmodules`: git descends into a path — and runs that checkout's
+ * `filter.<d>.clean` on the automatic `git status` behind the status line —
+ * because the INDEX says the path is a gitlink, not because `.gitmodules`
+ * mentions it. Reproduced with git 2.54: a gitlink added with a plain
+ * `git add`, with no `.gitmodules` entry and no `submodule.<name>.url`
+ * anywhere, still fired the embedded checkout's clean filter. An enumeration
+ * built on `.gitmodules` would have been a fix an attacker undoes by
+ * deleting one line.
+ *
+ * `--abbrev=4` because the object names are 40 bytes each and nothing here
+ * reads them: on a 100k-entry index that is 2.7MB of output instead of
+ * 6.3MB, and this has to fit in INDEX_MAX_BUFFER. `-- :/` with `--full-name`
+ * so the answer is the whole repository, root-relative, whatever `cwd` the
+ * call came in with.
+ *
+ * `git ls-files` refreshes nothing, so it runs no filter and no fsmonitor
+ * (verified against a marker, git 2.54) — safe to run before the hardening
+ * is complete, exactly as `git config --list` is.
+ */
+function indexGitlinkPaths(top: string, cwd: string, env: NodeJS.ProcessEnv): string[] {
+  let out: Buffer;
+  try {
+    out = execFileSync('git', ['ls-files', '-s', '-z', '--full-name', '--abbrev=4', '--', ':/'], {
+      cwd: top,
       env,
       timeout: SCAN_TIMEOUT_MS,
-      maxBuffer: SCAN_MAX_BUFFER,
-      encoding: 'utf-8',
+      // NOT the scan's buffer: this one is sized by how many files the
+      // repository has, not by what an attacker padded. See INDEX_MAX_BUFFER.
+      maxBuffer: INDEX_MAX_BUFFER,
       stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-    // git prints it relative to `cwd` when it can.
-    return out ? resolve(cwd, out) : null;
-  } catch {
-    // git said "not a git repository", or never started. Either way the real
-    // call cannot run here either, so there is no submodule of ours to scan
-    // — the same reasoning listGitConfig() applies to its own null.
-    return null;
-  }
-}
-
-/**
- * Every `<git dir>/modules/**\/config` under `modulesDir`, which is where git
- * keeps the real git directory of each initialised submodule.
- *
- * Two shapes have to be walked rather than listed. A submodule whose NAME
- * contains a slash (`vendor/lib`, the default when the path does) becomes
- * nested directories, so `modules/vendor` holds no `config` of its own; and a
- * submodule of a submodule lands in `modules/<name>/modules/<inner>`.
- *
- * Symlinks are skipped — `isDirectory()` is false for one — which is both a
- * loop guard and the right answer: a `.git/modules` entry symlinked at some
- * directory is not a submodule git dir git would use.
- */
-function collectSubmoduleConfigs(modulesDir: string, found: string[], depth: number): void {
-  if (depth > MAX_SUBMODULE_DEPTH || found.length > MAX_SUBMODULE_CONFIGS) return;
-
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(modulesDir, { withFileTypes: true });
-  } catch {
-    return; // No modules dir, or not readable: nothing here to scan.
-  }
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const dir = join(modulesDir, entry.name);
-    if (existsSync(join(dir, 'config'))) {
-      found.push(join(dir, 'config'));
-      // A submodule's own submodules live one level further in.
-      collectSubmoduleConfigs(join(dir, 'modules'), found, depth + 1);
-    } else {
-      // An intermediate directory from a slashed submodule name.
-      collectSubmoduleConfigs(dir, found, depth + 1);
+    });
+  } catch (error) {
+    // Two different failures arrive here with the same exit code, and only
+    // one of them is ours to refuse over.
+    //
+    // git may be declining to serve this repository AT ALL — a
+    // `core.repositoryformatversion` it does not understand, a `.git` that is
+    // a directory but not a git directory, a config file it will not parse.
+    // `git config --list` survives some of those (the version case only
+    // warns, exit 0), and gitLayout's fast path is a pair of `statSync`s
+    // rather than a question to git, so the scan gets this far and then meets
+    // a git that will not read an index. The REAL call cannot run in such a
+    // repository either, so there is no filter to neutralise and no submodule to find —
+    // the same reasoning listGitConfig() applies to its own null. Refusing
+    // instead turned every one of them into a hardening refusal about a
+    // submodule scan the user has nothing to do with, and replaced the "git
+    // failed to answer" that keeps the hook write gate in
+    // utils/toolExecution.ts switched ON.
+    //
+    // So git is asked one more question, on the error path only, where it
+    // costs nothing in the ordinary case: does it consider this a working
+    // tree? A `no` means nothing runs here. A `yes` means git serves the
+    // repository and still would not list its index — ENOBUFS on an oversized
+    // one, a timeout — and that is the shape this has to fail closed on,
+    // because the real call WILL run.
+    if (!gitServesWorkTree(top, env)) return [];
+    const err = error as NodeJS.ErrnoException & {
+      status?: number;
+      stderr?: Buffer | string;
+      killed?: boolean;
+    };
+    const detail = String(err.stderr ?? '').trim() || err.code || `exit ${err.status ?? '?'}`;
+    // A read that ran out of room or out of time is OUR limit, and saying so
+    // is the difference between a sentence a user can act on and one that
+    // accuses their repository of something. The old text did the latter for
+    // both: the reader was told Codeep could not tell what its directories
+    // are, in the one wording this file uses for a hostile config, over a
+    // monorepo whose only crime was having files in it. INDEX_MAX_BUFFER is
+    // what makes this unreachable for a real repository; this is what it
+    // reads like if it is ever reached anyway.
+    //
+    // It still stops the call. A gitlink the enumeration never saw is a
+    // submodule whose own git config was never checked, and the real git call
+    // WILL descend into it — which is the whole reason this pass exists. So
+    // the honest answer is "Codeep could not check", not "there was nothing
+    // to check", and it names a way forward that does not involve deleting
+    // anything.
+    const killed = err.killed === true || err.code === 'ETIMEDOUT';
+    if (err.code === 'ENOBUFS' || killed) {
+      throw refuse(
+        cwd,
+        `its index is too large for Codeep to list in one read (${detail}). Nothing in this repository ` +
+          'is wrong and there is no config key to remove — Codeep enumerates the index to find the ' +
+          'submodules git descends into, whose own git config can name a program for git to run, and it ' +
+          'will not run git here having read only part of that list. Run git in the directory you meant ' +
+          'instead (git -C <path> …).'
+      );
     }
-    if (found.length > MAX_SUBMODULE_CONFIGS) return;
+    throw refuse(
+      cwd,
+      `its index could not be listed (${detail}), so Codeep cannot tell which of its directories are ` +
+        'submodules whose own git config may name a program for git to run.'
+    );
   }
+
+  const paths: string[] = [];
+  for (const record of splitOnNul(out)) {
+    // `<mode> <object> <stage>\t<path>`. A path may contain anything but NUL,
+    // including a tab, so it starts at the FIRST one.
+    const tab = record.indexOf(0x09);
+    if (tab === -1) continue;
+    if (!record.subarray(0, tab).toString('utf-8').startsWith(`${GITLINK_MODE} `)) continue;
+    const path = decodeExact(record.subarray(tab + 1));
+    if (!path.exact) {
+      throw refuse(
+        cwd,
+        'one of its submodule paths is not valid UTF-8, so Codeep cannot open that submodule to check ' +
+          'whether its git config names a program for git to run.'
+      );
+    }
+    paths.push(path.text);
+  }
+  return paths;
 }
 
 /**
- * The config of every submodule of the repository at `cwd`, as repo-supplied
- * entries.
+ * Read a batch of config FILES in one git child, as `command`-scope entries
+ * that carry the file each came from.
  *
- * THE HOLE THIS CLOSES: a submodule's settings live in
- * `.git/modules/<name>/config`, and `git config --list --show-scope` run at
- * the superproject never prints a single one of them. A `filter.<d>.clean`
- * there still runs on the automatic `git status` behind the status line —
- * proven with git 2.54, the superproject's `git status --porcelain` fired the
- * submodule's clean filter while the superproject's own config was spotless.
- * The overrides themselves do reach it: the same `git status` with
- * `GIT_CONFIG_KEY_0=filter.<d>.clean` left the trap cold.
+ * `-c include.path=<file>` is what makes this ONE child for any number of
+ * files: git reads every named file in the same process and reports their
+ * entries under scope `command`. The alternative, a child per submodule,
+ * measured 342ms on a 50-submodule fixture — on every status refresh.
  *
- * WHAT IT COSTS, since this runs on every hardened git call. Measured here
- * against git 2.54, per hardenedGitEnv() call, at the repository root:
- * - No submodules — every repository anyone here has: 6.9ms, which is the
- *   `git config --list` that was already there. `.git/modules` is not on
- *   disk, so this function is two stat calls and a return.
- * - 1 submodule: 14.1ms. 10 submodules: 14.7ms. 50 submodules: 18.3ms.
- *   Flat, because it is the readdir walk above plus ONE `git config --list`
- *   child for ALL of them, whatever the count.
- * - The alternative, a child per submodule, measured on the same
- *   50-submodule fixture: 342ms. On every status refresh. That is what
- *   `-c include.path=<file>` buys — git reads every named file in one
- *   process and reports the entries under scope `command`.
+ * `--show-origin` is not decoration. Without it every entry in the merged
+ * output looks like the superproject's, and a refusal then names the
+ * superproject and prints a `git config --unset` that silently does nothing
+ * there (see unsetCommand).
  *
  * `GIT_CONFIG_COUNT=0` on this child is load-bearing: our own overrides ride
  * in the environment as GIT_CONFIG_* pairs and git reports THOSE as scope
  * `command` too, so without it the pass would read back and re-neutralise
  * Codeep's own work.
  */
-function listSubmoduleConfig(cwd: string, env: NodeJS.ProcessEnv): GitConfigEntry[] {
-  const common = gitCommonDir(cwd, env);
-  if (!common) return [];
-  const modules = join(common, 'modules');
-  if (!existsSync(modules)) return [];
-
-  const configs: string[] = [];
-  collectSubmoduleConfigs(modules, configs, 0);
-  if (configs.length === 0) return [];
-  if (configs.length > MAX_SUBMODULE_CONFIGS) {
-    throw refuse(
-      cwd,
-      `it has more than ${MAX_SUBMODULE_CONFIGS} initialised submodules, and each one carries its own ` +
-        'git config that can name a program for git to run. Codeep will not run git here rather than ' +
-        'check only some of them.'
-    );
-  }
-
+function readConfigFiles(cwd: string, env: NodeJS.ProcessEnv, files: string[]): GitConfigEntry[] {
   // The `-c` pairs are git's own GLOBAL options and have to come before the
   // subcommand — after it, git 2.54 answers "unknown switch `c'". A missing
   // or unreadable include is silently skipped (verified, 2.54), so a
-  // submodule directory that lost its config does not fail the call.
+  // submodule directory that lost its config between the stat and here does
+  // not fail the call.
   const args: string[] = [];
-  for (const file of configs) args.push('-c', `include.path=${file}`);
-  args.push('config', '--list', '-z', '--show-scope', '--includes');
+  for (const file of files) args.push('-c', `include.path=${file}`);
+  args.push('config', '--list', '-z', '--show-scope', '--show-origin', '--includes');
 
   let out: Buffer;
   try {
@@ -882,15 +1429,272 @@ function listSubmoduleConfig(cwd: string, env: NodeJS.ProcessEnv): GitConfigEntr
     );
   }
 
-  return parseConfigList(out)
-    // `command` is what git reports for everything reached through our own
-    // `-c include.path`. Any `local` / `global` / `system` entry here belongs
-    // to the superproject or the user and is already handled by the main
-    // scan, so taking only `command` keeps this pass to the submodules.
-    .filter(entry => entry.scope === 'command')
-    // The `include.path` pseudo-entries are Codeep's own argv coming back.
-    .filter(entry => entry.key.toLowerCase() !== 'include.path')
-    .map(entry => ({ ...entry, scope: SUBMODULE_SCOPE }));
+  return (
+    parseConfigList(out, true)
+      // `command` is what git reports for everything reached through our own
+      // `-c include.path`. Any `local` / `global` / `system` entry here
+      // belongs to the superproject or the user and is already handled by the
+      // main scan, so taking only `command` keeps this pass to the submodules.
+      .filter(entry => entry.scope === 'command')
+      // The `include.path` pseudo-entries are Codeep's own argv coming back.
+      .filter(entry => entry.key.toLowerCase() !== 'include.path')
+  );
+}
+
+/**
+ * The config of every submodule of the repository at `cwd`, as repo-supplied
+ * entries that carry the file — and, where we know it, the working tree —
+ * they came from.
+ *
+ * THE HOLE THIS CLOSES: a submodule's settings live in its own git config,
+ * and `git config --list --show-scope` run at the superproject never prints
+ * a single one of them. A `filter.<d>.clean` there still runs on the
+ * automatic `git status` behind the status line — proven with git 2.54, the
+ * superproject's `git status --porcelain` fired the submodule's clean filter
+ * while the superproject's own config was spotless. The overrides themselves
+ * do reach it: the same `git status` with `GIT_CONFIG_KEY_0=filter.<d>.clean`
+ * left the trap cold.
+ *
+ * HOW THE SUBMODULES ARE FOUND, and why not by walking `.git/modules`, which
+ * is what this shipped as. Three real layouts escaped that walk — each
+ * reproduced against git 2.54 with a hostile `filter.<d>.clean` that FIRED on
+ * the superproject's own `git status --porcelain` while the walk reported
+ * nothing to scan:
+ *
+ * - an EMBEDDED git directory. `git submodule add` over a path that is
+ *   already a checkout leaves `<path>/.git` a real directory and never
+ *   creates `.git/modules` at all.
+ * - a `.git` FILE repointed at a git directory outside `.git/modules`.
+ * - a DECOY `config` at an intermediate level of a slashed submodule name:
+ *   one `touch .git/modules/vendor/config` hid `.git/modules/vendor/lib/
+ *   config` from a walk that stopped descending at the first `config` it
+ *   found. Writing one file is the whole attack.
+ *
+ * So the submodules are enumerated the way git itself records them, and the
+ * two records between them cover all three:
+ * - the INDEX's gitlinks (mode 160000) are the paths git descends into, and
+ *   each path's own `.git` gives its real git directory, wherever that is;
+ * - `submodule.<name>.*` in the containing repository's config gives the
+ *   names git maps to `<common>/modules/<name>`, which is what covers a
+ *   submodule that is initialised but not checked out. A name is a direct
+ *   lookup, so nothing planted alongside it can hide it.
+ * Nesting is followed by repeating the second source inside each config just
+ * read — a submodule of a submodule is recorded in ITS parent's config, and
+ * git puts it under `<that git dir>/modules/<name>`.
+ *
+ * A symlinked `.git/modules/<name>` is no longer a special case: the walk
+ * used to SKIP one (`isDirectory()` is false for a symlink) and the
+ * submodule behind it ran unscanned — reproduced. A name lookup opens it
+ * exactly as git does, which is the right answer rather than a refusal.
+ *
+ * THE INDEX IS ALWAYS READ, and that is the fix this round makes. There used
+ * to be a gate in front of it — run `git ls-files` only when the config named
+ * a submodule, or `.git/modules` existed, or the working tree had a
+ * `.gitmodules` — which skipped the very enumeration the rest of this
+ * function is built on. A gitlink added with a plain `git add`, with no
+ * `.gitmodules` and no `submodule.<name>.*` anywhere, leaves none of those
+ * three signals, and git still descends into it and still runs that
+ * checkout's `filter.<d>.clean` on the superproject's own `git status`
+ * (reproduced, git 2.54). The gate was the one place that shape survived, so
+ * it is gone: wherever there is a working tree, the index is enumerated.
+ *
+ * WHAT IS STILL NOT REACHED, named rather than implied: a NESTED submodule
+ * that itself uses one of the two non-standard layouts above. Resolving
+ * those needs the inner repository's index, and that is one child process
+ * per submodule — the cost this pass exists to avoid. The shape git writes
+ * by itself, `<common>/modules/<outer>/modules/<inner>`, is covered.
+ *
+ * WHAT IT COSTS, since this runs on every hardened git call. Measured here
+ * against git 2.54, per hardenedGitEnv() call, at the repository root, as
+ * the median of 15:
+ * - No submodules, 307 files (this repository): 13.6ms, of which 7.0ms is
+ *   the `git config --list` that was already there and 6.6ms is the
+ *   `git ls-files` the gate used to skip. 10k files: 16.8ms.
+ * - 100k files, still no submodules: 47.7ms. That is the honest worst case
+ *   and it is the index, not the submodules — `git ls-files -s` writes 3MB
+ *   there. `--abbrev=4` already trims it; `--format=%(objectmode) %(path)`
+ *   would save 2ms more and was left alone because it needs git ≥ 2.38 and
+ *   this is a hotfix.
+ * - 1 submodule: 19.7ms. 10: 21.5ms. 50: 28.3ms. Near-flat in the submodule
+ *   count, because it is ONE `git ls-files` plus ONE `git config --list` for
+ *   ALL of them however many there are. The alternative, a child per
+ *   submodule, measured 342ms on the same 50-submodule fixture.
+ *
+ * So the check is memoised per call and not cached across calls: one
+ * `git ls-files` per hardenedGitEnv(), which is why that function's own note
+ * says to build the environment ONCE and hand the same object to every spawn
+ * inside it. A cache that outlived the call would have to be invalidated on
+ * the index changing, and the only cheap signal for that is `.git/index`'s
+ * mtime — which is coarse enough to miss a write inside the same tick. Being
+ * wrong there means running git against a gitlink this pass never opened,
+ * which is the failure the gate above was just deleted for.
+ */
+function listSubmoduleConfig(
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  scanned: readonly GitConfigEntry[],
+  layout: GitLayout | null
+): GitConfigEntry[] {
+  if (!layout) return [];
+  const { commonDir, topLevel } = layout;
+  const modulesRoot = join(commonDir, 'modules');
+
+  const names = submoduleNames(scanned, cwd);
+
+  /** Each config file's working tree, for the refusal text. */
+  const worktrees = new Map<string, string>();
+  const roots: string[] = [];
+  const addGitDir = (dir: string, worktree?: string): void => {
+    roots.push(dir);
+    if (worktree) for (const name of SUBMODULE_CONFIG_FILES) worktrees.set(join(dir, name), worktree);
+  };
+
+  for (const name of names) {
+    const dir = containedPath(modulesRoot, name);
+    if (!dir) {
+      throw refuse(
+        cwd,
+        `its git config names a submodule ("${describeValue(name)}") whose git directory would sit ` +
+          'outside .git/modules. Codeep will not follow that.'
+      );
+    }
+    addGitDir(dir);
+  }
+  if (topLevel !== null) {
+    for (const path of indexGitlinkPaths(topLevel, cwd, env)) {
+      const worktree = containedPath(topLevel, path);
+      if (!worktree) {
+        throw refuse(
+          cwd,
+          `its index records a submodule at "${describeValue(path)}", which is outside the repository. ` +
+            'Codeep will not follow that.'
+        );
+      }
+      const dir = gitDirOfWorktree(worktree, cwd);
+      if (dir) addGitDir(dir, worktree);
+    }
+  }
+
+  const entries: GitConfigEntry[] = [];
+  /** Config files already read, by real path, so a symlink that aliases one
+   *  git directory onto another does not send the rounds below in a circle. */
+  const read = new Set<string>();
+  /** Git directories this call has read a config out of, for the count cap. */
+  let scannedDirs = 0;
+  let frontier = roots;
+
+  for (let depth = 0; ; depth++) {
+    const files: string[] = [];
+    const dirs: string[] = [];
+    for (const dir of frontier) {
+      let any = false;
+      for (const name of SUBMODULE_CONFIG_FILES) {
+        const file = join(dir, name);
+        // Not `existsSync`, which answers false for a file it has no
+        // PERMISSION to look at — so one `chmod 000` on a submodule's git
+        // directory used to turn its config into "there is no submodule here",
+        // silently, while git went on reading it perfectly well.
+        try {
+          if (!statSync(file).isFile()) continue;
+        } catch (error) {
+          const err = error as NodeJS.ErrnoException;
+          if (err.code === 'ENOENT' || err.code === 'ENOTDIR') continue;
+          throw refuse(
+            cwd,
+            `the git config of its submodule at ${dir} could not be reached (${err.code ?? 'unknown error'}), ` +
+              'so Codeep cannot tell whether it names a program for git to run.'
+          );
+        }
+        let id: string;
+        try {
+          id = realpathSync(file);
+        } catch (error) {
+          const err = error as NodeJS.ErrnoException;
+          // Gone between the stat and here is a race, and git's own
+          // `include.path` skips a missing file just as silently. Anything else
+          // is a file git can open and we cannot, which has to fail the call.
+          if (err.code === 'ENOENT' || err.code === 'ENOTDIR') continue;
+          throw refuse(
+            cwd,
+            `the git config of its submodule at ${dir} could not be opened (${err.code ?? 'unknown error'}), ` +
+              'so Codeep cannot tell whether it names a program for git to run.'
+          );
+        }
+        if (read.has(id)) continue;
+        read.add(id);
+        files.push(file);
+        any = true;
+      }
+      // One entry per git DIRECTORY, whichever of its config files existed:
+      // `dirs` only feeds the `<dir>/modules/<name>` pairing below, and a
+      // directory listed twice would square that cross product.
+      if (any) dirs.push(dir);
+    }
+    if (files.length === 0) break;
+
+    if (depth >= MAX_SUBMODULE_DEPTH) {
+      throw refuse(
+        cwd,
+        `its submodules are nested more than ${MAX_SUBMODULE_DEPTH} levels deep, and every level carries ` +
+          'its own git config that can name a program for git to run. Codeep will not run git here rather ' +
+          'than check only the levels it reached. Run git in the submodule you meant instead ' +
+          '(git -C <path> …).'
+      );
+    }
+    // Counted in git DIRECTORIES, not in `read.size`: since `config.worktree`
+    // joined the list a submodule can contribute two files, and counting
+    // files would refuse a checkout for having half as many submodules as the
+    // message claims.
+    scannedDirs += dirs.length;
+    if (scannedDirs > MAX_SUBMODULE_CONFIGS) {
+      throw refuse(
+        cwd,
+        `it has more than ${MAX_SUBMODULE_CONFIGS} initialised submodules, and each one carries its own ` +
+          'git config that can name a program for git to run. Codeep will not run git here rather than ' +
+          'check only some of them. De-initialise the ones this checkout does not need ' +
+          '(git submodule deinit <path>), or run git in the one you meant instead (git -C <path> …).'
+      );
+    }
+
+    const round = readConfigFiles(cwd, env, files);
+    for (const entry of round) {
+      entries.push({
+        ...entry,
+        scope: SUBMODULE_SCOPE,
+        worktree: entry.file ? worktrees.get(entry.file) : undefined,
+      });
+    }
+
+    // A submodule's own submodules are recorded in the config just read, and
+    // git puts their git directories under `<that git dir>/modules/<name>`.
+    // Which parent goes with which name is not in the merged output, so every
+    // pairing is offered and the filesystem answers — a stat each, no child.
+    //
+    // The pairing is a cross product, so it is capped like everything else
+    // here and it is capped BEFORE the work rather than by truncating the
+    // list afterwards: dropping candidates quietly would be one more bound
+    // that fails open, and a superproject that could produce this many is
+    // one the count cap is about to refuse anyway.
+    const nested = submoduleNames(round, cwd);
+    if (dirs.length * nested.length > MAX_SUBMODULE_CONFIGS) {
+      throw refuse(
+        cwd,
+        `its submodules declare more than ${MAX_SUBMODULE_CONFIGS} submodules of their own, and each one ` +
+          'carries a git config that can name a program for git to run. Codeep will not run git here ' +
+          'rather than check only some of them. De-initialise the ones this checkout does not need ' +
+          '(git submodule deinit <path>), or run git in the one you meant instead (git -C <path> …).'
+      );
+    }
+    frontier = [];
+    for (const dir of dirs) {
+      for (const name of nested) {
+        const child = containedPath(join(dir, 'modules'), name);
+        if (child) frontier.push(child);
+      }
+    }
+  }
+
+  return entries;
 }
 
 /**
@@ -907,7 +1711,13 @@ function repoSuppliedOverrides(cwd: string, env: NodeJS.ProcessEnv): Array<reado
   // joined here rather than scanned together because git cannot print them
   // together: see listSubmoduleConfig() for what `--show-scope` at the
   // superproject leaves out and what that costs.
-  const entries = [...scanned, ...listSubmoduleConfig(cwd, env)];
+  //
+  // `gitLayout` is called straight through rather than behind a memoised
+  // getter. The getter existed for the content-filter rule, which used to ask
+  // for the layout again on the refusal path; that rule no longer asks
+  // anything, and this call site resolved it eagerly anyway, so the memo
+  // never saved a child process.
+  const entries = [...scanned, ...listSubmoduleConfig(cwd, env, scanned, gitLayout(cwd, env))];
 
   const overrides: Array<readonly [string, string]> = [];
   for (const entry of entries) {
@@ -920,15 +1730,16 @@ function repoSuppliedOverrides(cwd: string, env: NodeJS.ProcessEnv): Array<reado
     if (!entry.keyExact) {
       throw refuse(
         cwd,
-        `its git config sets "${entry.key}", whose name is not valid UTF-8. Git runs the program that ` +
-          'key names, and no environment override can spell the key back exactly. Remove it from .git/config.'
+        `${describeConfig(entry)} sets "${entry.key}", whose name is not valid UTF-8. Git runs the ` +
+          'program that key names, and no environment override can spell the key back exactly. Remove it ' +
+          `from ${entry.file ?? '.git/config'}.`
       );
     }
     if ('refuse' in rule) {
       // null means the entry is safe as it stands — the well-known content
       // filters, which have to keep running for git-lfs, git-crypt and
       // nbstripout repositories to work at all.
-      const why = rule.refuse(entry, entry.key.match(rule.match)!);
+      const why = rule.refuse(entry, entry.key.match(rule.match)!, env);
       if (why) throw refuse(cwd, why);
       continue;
     }
@@ -1017,9 +1828,11 @@ export interface HardenedGitEnvOptions {
  * key neutralised. Pass it to EVERY git spawn — including the read-only ones:
  * `git status` is the call that runs `core.fsmonitor` and a `filter.<d>.clean`.
  *
- * It costs one extra `git config --list` per call — measured 6.9ms here in a
- * plain repository at its root, 14ms in one with submodules and 18ms with
- * fifty of them (see listSubmoduleConfig for where the rest goes) — so build
+ * It costs one `git config --list` plus one `git ls-files` per call —
+ * measured 13.6ms here in a plain repository at its root, 19.7ms in one with
+ * a submodule, 28.3ms with fifty of them and 47.7ms in a 100k-file checkout
+ * with none (see listSubmoduleConfig for where each part goes, and for why
+ * the index is read even in a repository that declares no submodules) — so build
  * it ONCE per function and hand the same object to every spawn inside. There is
  * deliberately no cache across calls: the scan's whole job is to notice what
  * the repository's config says RIGHT NOW, and a hostile `.git/config` written
@@ -1163,7 +1976,10 @@ export function getGitStatus(cwd: string = process.cwd()): GitStatus {
     // said no, so "this is version-controlled" is the safer of the two
     // guesses — and the wrong guess still shows the reason rather than a
     // blank.
-    return repo.refusal ? { isRepo: true, error: repo.refusal } : { isRepo: false };
+    // `refusal` as well as `error`: the TUI's warning reads the narrow field
+    // (see gitRefusalNotice in renderer/main.ts) and callers that only know
+    // about `error` keep the same text.
+    return repo.refusal ? { isRepo: true, error: repo.refusal, refusal: repo.refusal } : { isRepo: false };
   }
 
   try {
@@ -1177,12 +1993,30 @@ export function getGitStatus(cwd: string = process.cwd()): GitStatus {
     // Get current branch. stderr is piped rather than inherited — execSync's
     // default sends it to ours, and a repository with no commit yet answers
     // `fatal: ambiguous argument 'HEAD'` into the middle of the TUI.
-    const branch = execSync('git rev-parse --abbrev-ref HEAD', {
-      cwd,
-      encoding: 'utf-8',
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
+    //
+    // Caught HERE rather than by the outer catch, which is what it used to
+    // do. A brand-new `git init` has no commit for HEAD to name, so this line
+    // throws and took the whole function down with it: `hasChanges` came back
+    // undefined, and autoCommitAgentChanges() reads exactly that field — so
+    // the first agent run in a new project reported "No changes detected by
+    // git" over a working tree full of the files it had just written, and the
+    // auto-commit the user had switched on never happened once until they
+    // committed something by hand. A repository with no commits is an
+    // ordinary repository; only the branch is unknown in it. The reason still
+    // lands in `error` (never in `refusal` — it is not a hardening refusal),
+    // which is the field GitStatus declares for "why there is no branch".
+    let branch: string | undefined;
+    let branchError: string | undefined;
+    try {
+      branch = execSync('git rev-parse --abbrev-ref HEAD', {
+        cwd,
+        encoding: 'utf-8',
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
+    } catch (error) {
+      branchError = error instanceof Error ? error.message : 'Unknown error';
+    }
 
     // Check for changes
     const status = execSync('git status --porcelain', {
@@ -1220,15 +2054,26 @@ export function getGitStatus(cwd: string = process.cwd()): GitStatus {
       hasChanges,
       ahead,
       behind,
+      error: branchError,
     };
   } catch (error) {
     // No `as GitStatus` any more: the cast was the whole reason this value
     // could claim a field the type did not have, so nothing ever read it back
     // and a refusal looked like a branch that vanished. `error` is declared on
     // GitStatus now, and the compiler checks this object against it.
+    //
+    // `refusal` is filled ONLY for a GitHardeningError, which is what makes
+    // it safe for the TUI to print as an instruction. Everything else here is
+    // an ordinary git failure, and telling that user to remove a config key
+    // they do not have is worse than saying nothing. The brand-new `git init`
+    // no longer arrives here at all — its `fatal: ambiguous argument 'HEAD'`
+    // is caught at the branch read above so the rest of the status survives —
+    // but it still fills `error` from there, on the same terms.
+    const message = error instanceof Error ? error.message : 'Unknown error';
     return {
       isRepo: true,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: message,
+      refusal: error instanceof GitHardeningError ? message : undefined,
     };
   }
 }
@@ -1651,15 +2496,40 @@ export function autoCommitAgentChanges(
     return { success: false, error: 'No file changes to commit' };
   }
   
-  // Check for actual git changes. `error` is read FIRST: a refused repository
-  // answers `hasChanges: undefined`, so the old order reported "No changes
-  // detected by git" for a config Codeep would not run git under — on the
-  // hottest path there is, the auto-commit at the end of every agent run.
-  // The user then has an agent that silently stops committing and a sentence
-  // that says nothing is wrong.
+  // Check for actual git changes. A REFUSAL is read first: a refused
+  // repository answers `hasChanges: undefined`, so the old order reported
+  // "No changes detected by git" for a config Codeep would not run git under
+  // — on the hottest path there is, the auto-commit at the end of every agent
+  // run. The user then has an agent that silently stops committing and a
+  // sentence that says nothing is wrong.
+  //
+  // `refusal` and NOT `error`, which was the fix's own bug: `error` is filled
+  // for ANY git failure, and the commonest one is a brand-new repository with
+  // no commit yet (`fatal: ambiguous argument 'HEAD'`, git 2.54). So `git
+  // init` plus a first agent run printed raw git plumbing at a user who had
+  // done nothing wrong. An ordinary failure keeps the ordinary sentence below.
   const status = getGitStatus(cwd);
-  if (status.error) {
-    return { success: false, error: status.error };
+  if (status.refusal) {
+    return { success: false, error: status.refusal };
+  }
+  // Reading ONLY `refusal` was the other half of the same mistake, in the
+  // other direction: every git failure that is not a refusal came out as "No
+  // changes detected by git". `hasChanges` is the field that says which one
+  // this is, and it is undefined exactly when getGitStatus could not read the
+  // working tree at all — the `git status --porcelain` it comes from threw,
+  // so nobody knows whether there are changes. Reproduced with a repository
+  // whose config says `core.bare = true`: git answers "fatal: this operation
+  // must be run in a work tree", and the auto-commit told the user their
+  // agent's work was not a change. Saying git failed, and what it said, is
+  // the difference between a user who fixes their repository and one who
+  // thinks Codeep wrote nothing.
+  //
+  // Ordered after the `hasChanges` read and before the `!hasChanges` one on
+  // purpose: a brand-new repository fills `error` (there is no HEAD for the
+  // branch read to name) while `hasChanges` is perfectly true, and that one
+  // has to go on and commit.
+  if (status.hasChanges === undefined) {
+    return { success: false, error: `Could not read git status: ${status.error ?? 'git failed'}` };
   }
   if (!status.hasChanges) {
     return { success: false, error: 'No changes detected by git' };

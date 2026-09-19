@@ -101,23 +101,6 @@ function getHeaderBranch(): string | undefined {
 }
 
 /**
- * getGitStatus's result, plus the one field this file reads off it.
- *
- * `refusal` belongs on GitStatus in utils/git.ts — it is that function's own
- * output — but utils/git.ts is not this file's to change in this hotfix, so
- * the shape is stated here and git.ts fills it. The contract is exactly:
- * set `refusal` on the two results that come from hardenedGitEnv() refusing
- * (the `repo.refusal` branch and the catch, when the error is a
- * GitHardeningError) and on nothing else. Moving the declaration onto
- * GitStatus is then a straight deletion of this type; nothing below changes.
- *
- * Until it is filled, this file says nothing — which is the pre-hotfix
- * behaviour and the safe direction to be wrong in. Reading `error` instead,
- * which is what a fill-nothing fallback would mean, is the bug below.
- */
-type GitStatusResult = GitStatus & { refusal?: string };
-
-/**
  * What to tell the user when git would not run in this project, or null when
  * there is nothing to tell them.
  *
@@ -139,7 +122,7 @@ type GitStatusResult = GitStatus & { refusal?: string };
  * existed — the branch is simply missing from the header, which is what it
  * has always done.
  */
-export function gitRefusalNotice(status: GitStatusResult): string | null {
+export function gitRefusalNotice(status: GitStatus): string | null {
   const refusal = status.isRepo ? status.refusal : undefined;
   if (!refusal) return null;
   return `⚠️  ${refusal}\n\nUntil then the header shows no branch, and everything Codeep does with git here — the status line, \`@git\`, \`/commit\`, the review hook — is off.`;

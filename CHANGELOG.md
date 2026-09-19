@@ -11,6 +11,95 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.4.1] — 2026-09-19
+
+> TL;DR — Security release: a repository's own .git/config could make git run a program of its choosing, and opening the folder was enough. Codeep now neutralises those settings on every git call it makes.
+
+A follow-up to 3.4.0, from the same review applied to the macOS app: git reads
+settings from the repository it is run in, and several of them name a program
+git then runs. Codeep runs git by itself — the status line alone runs
+`git status` when a project opens — so a folder that arrived with its own
+`.git` (a zip, a tarball, a shared drive) could execute code before anything
+was typed. Reproduced, then closed, then attacked again over seven rounds of
+adversarial review with real git 2.54.
+
+### Security
+
+- **A repository's own git config could run a program of its choosing.** Every
+  git call Codeep makes now neutralises the settings that name a command —
+  `core.fsmonitor`, content filters (`filter.<driver>.clean/smudge/process`),
+  `diff.external` and diff drivers, textconv, merge drivers, the `gpg.*`
+  cluster, `credential.helper`, `core.sshCommand`, `core.askPass`,
+  `core.gitProxy`, `interactive.diffFilter`, trailer commands,
+  `submodule.<name>.update`, `remote.<name>.uploadpack` and `receivepack`,
+  `uploadpack.packObjectsHook`, `core.alternateRefsCommand`, every alias the
+  repository defines, and the pager, editor and signature-display settings.
+  Settings in **your own** global config are left alone.
+- **It covers every path git is reached by**: the status line, `/commit`,
+  `/diff`, `@git`, the review, `execute_command`, a skill's command steps, and
+  the terminal an editor runs commands in over ACP.
+- **The repository's submodules are read too** — a submodule keeps its config
+  in `.git/modules/<name>/config`, which the superproject's own config listing
+  never shows.
+- **A config Codeep cannot read completely** (oversized, unparseable, timing
+  out) now refuses the git call instead of running it unprotected, and
+  `GIT_CONFIG_PARAMETERS` is removed from the environment so it cannot
+  re-enable anything.
+- **`execute_command` refuses git arguments that aim git elsewhere**:
+  `--git-dir`, `--work-tree`, `--exec-path`, `--config-env`, `--attr-source`,
+  and `-c` for `include.path`, `includeIf.*.path`, `attr.tree` or any key that
+  names a program. `git -C` is allowed and the repository it points at is the
+  one that gets checked.
+- **Writing a file that decides what runs later now always asks**, in every
+  confirmation mode, and fails when there is nobody to ask: anything under
+  `.git/`, the hook directory the repository actually uses (including
+  `.githooks` and `.husky`), `.codeep/hooks/`, `.codeep/skills/`,
+  `.codeep/agents/`, `.codeep/mcp_servers.json`, `.mcp.json` and
+  `.codeep/config.json`. The prompt says what the file controls. This covers
+  the tools that take a path; it is not a boundary against a shell command you
+  approved, which can write the same file with `node`, `cp` or `tee`.
+- **The editor terminal no longer receives your whole environment.** Commands
+  sent over ACP carried every variable of the Codeep process, including API
+  keys, and the ACP debug log mirrored them. Only the settings the hardening
+  needs and the ordinary shell variables are sent now.
+
+### Upgrade notes
+
+- **A repository that configures its own content filter stops Codeep's git
+  calls**, unless the filter is one of the known integrations (git-lfs,
+  git-crypt, nbstripout, git-annex, also when spelled with an absolute path).
+  The message names the driver and the exact `git config --unset`. Turning off
+  `filter.<driver>.required` is **not** a fix: it makes git store the file's
+  contents unfiltered. The same applies to a repo-set
+  `remote.<name>.uploadpack` or `receivepack`, which no override can reach.
+- **A leftover filter config refuses the repository even if nothing is routed
+  at it today.** Deciding that it is unused would mean re-implementing git's
+  attribute lookup, which a security release is not the place for.
+- **Codeep's own read-only git calls run with hooks disabled.** Hooks still run
+  for the commits and checkouts you trigger, as they do in your terminal.
+- **`@git`, `/diff` and the review no longer apply the repository's textconv or
+  external diff drivers**, so a repo that renders binaries for display shows
+  the raw diff.
+- **Aliases the repository defines do not run through Codeep**; the refusal
+  says so and names the alias.
+- Checking a repository's config costs about 7 ms more per git call, and about
+  14 ms in a repository with submodules.
+
+### Fixed
+
+- `/commit` and the review saw the first changed file with two characters
+  missing from its name.
+- Auto-commit said "No changes detected by git" when git had actually failed,
+  and did nothing at all in a repository with no commits yet.
+- The status line went blank with no explanation when Codeep refused to run
+  git; it now says so once, with the setting and the command that clears it.
+- `codeep hook install` said "not a git repository" when git had been refused.
+
+### Internal
+
+- 3850 tests. Every fix in this release was checked by putting the bug back and
+  watching the test fail.
+
 ## [3.4.0] — 2026-09-17
 
 > TL;DR — Security and reliability release: a repo can no longer grant itself access or start MCP servers, secrets stay out of prompts, MCP tools ask first, and /commit, /scan, /undo and sessions stop losing work.

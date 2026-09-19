@@ -986,12 +986,21 @@ describe.skipIf(!hasGit || !posixGit)('git through executeCommand / executeComma
     ['--work-tree', ['--work-tree=.', 'status']],
     ['--exec-path', ['--exec-path=/tmp/fake-git-core', 'status']],
     ['--config-env', ['--config-env=core.pager=EVIL', 'log']],
+    // Attributes decide which files get routed at a `filter.<d>.clean` or a
+    // `diff.<d>.textconv`, so a tree of them is as much a way to pick the
+    // programs a call runs as a config key that names one. This was treated
+    // as an option that merely takes a value, i.e. skipped. Both spellings,
+    // because git accepts the value attached or separate.
+    ['--attr-source=', ['--attr-source=HEAD', 'status']],
+    ['--attr-source <tree>', ['--attr-source', 'HEAD', 'status']],
   ])('refuses `git %s`, which aims git somewhere the scan did not look', (_name, args) => {
     // `-C` can be followed; these cannot. `--git-dir` / `--work-tree` name
     // another repository's config, `--config-env` hides the config VALUE
-    // behind an environment variable the approval prompt never shows, and
+    // behind an environment variable the approval prompt never shows,
     // `--exec-path` makes git load its own subcommands from a directory of
-    // the caller's choosing — which is code execution, not a config question.
+    // the caller's choosing — which is code execution, not a config question
+    // — and `--attr-source` takes the `.gitattributes` from a tree object
+    // nothing in this process ever read.
     const result = executeCommand('git', args, { cwd: repo });
 
     expect(result.success).toBe(false);
@@ -1004,26 +1013,149 @@ describe.skipIf(!hasGit || !posixGit)('git through executeCommand / executeComma
     ['-c includeIf.<cond>.path', ['-c', 'includeIf.gitdir:/.path=/tmp/evil.gitconfig', 'status']],
     ['-c INCLUDE.PATH', ['-c', 'INCLUDE.PATH=/tmp/evil.gitconfig', 'status']],
     ['--config=include.path', ['--config=include.path=/tmp/evil.gitconfig', 'status']],
-  ])('refuses `git %s`, which hides a whole config file behind a path', (_name, args) => {
-    // `-c` is allowed on purpose: `git -c core.pager=/tmp/x log` names its
-    // program IN the command the user approved. `include.path` breaks exactly
-    // that — git reads every key in the named file, and the prompt showed a
-    // path. Verified against git 2.54 that the mixed-case and `includeIf`
-    // spellings pull the file in just as the plain one does, so the test
-    // covers all three.
+    // The keys the repo-scope scan spends its length neutralising. Every one
+    // of them BEATS that scan from the argv — git reads its own `-c` after
+    // the GIT_CONFIG_* pairs — so allowing them here handed the model back
+    // exactly what the hardening takes away, through the tool whose job is to
+    // gate arbitrary execution. Mixed case included because git's own key
+    // lookup ignores it (verified, git 2.54).
+    ['-c core.pager', ['-c', 'core.pager=/tmp/evil', 'log']],
+    ['-c CORE.FSMonitor', ['-c', 'CORE.FSMonitor=/tmp/evil', 'status']],
+    ['-c gpg.program', ['-c', 'gpg.program=/tmp/evil', 'commit', '-m', 'x']],
+    ['-c filter.<d>.clean', ['-c', 'filter.d.clean=/tmp/evil', 'add', '-A']],
+    ['-c alias.<name>', ['-c', 'alias.x=!/tmp/evil', 'x']],
+    ['-c core.sshCommand', ['-c', 'core.sshCommand=/tmp/evil', 'fetch']],
+    ['-c diff.external', ['-c', 'diff.external=/tmp/evil', 'diff']],
+    ['-c remote.o.uploadpack', ['-c', 'remote.o.uploadpack=/tmp/evil', 'fetch', 'o']],
+    // Not in the repo-scope table — the repository answer to hooks is the
+    // `noHooks` option — but every bit as much a program git runs.
+    ['-c core.hooksPath', ['-c', 'core.hooksPath=/tmp/evil-hooks', 'commit', '-m', 'x']],
+    ['-c init.templateDir', ['-c', 'init.templateDir=/tmp/evil-template', 'init']],
+    // The config spelling of `--attr-source`. It names no program itself, so
+    // the executing-key table never matched it — and it picks which files get
+    // routed at the programs that table is about, out of a tree nothing here
+    // read.
+    ['-c attr.tree', ['-c', 'attr.tree=HEAD', 'status']],
+    ['-c ATTR.Tree', ['-c', 'ATTR.Tree=HEAD', 'status']],
+  ])('refuses `git %s`, which hands git a program to run', (_name, args) => {
     const result = executeCommand('git', args, { cwd: repo });
 
     expect(result.success).toBe(false);
-    expect(result.stderr).toMatch(/pulls in a whole config file/);
+    expect(result.stderr).toMatch(/makes git run a program of the command's own choosing/);
     expect(mockSpawnSync).not.toHaveBeenCalled();
   });
 
-  it('still allows the `-c` forms that name what they run', () => {
-    // The judgement this narrows, not reverses: a `-c` the user can read in
-    // the approval prompt stays allowed, and `-C` still only moves git.
-    const actual = validateCommand('git', ['-c', 'core.pager=cat', '-C', 'sub', 'status']);
+  it('a `-c` that names a program really would have run it, so the refusal is not theoretical', async () => {
+    // The reproduction behind the rule above, with real git and a real
+    // executable rather than an argv assertion. The trap is a script file,
+    // not `touch X; false`: this key is one git can spawn without a shell,
+    // and a value that is only a shell line would leave git looking for a
+    // program of that name and the marker cold for the wrong reason.
+    //
+    // Two halves. First that git runs it THROUGH THE HARDENED ENVIRONMENT —
+    // the repository's own `core.fsmonitor` is neutralised to `false` by a
+    // GIT_CONFIG_* pair, and the `-c` beats it, because git reads its own
+    // `-c` last (git 2.54). That is the whole reason this key family cannot
+    // be allowed from the argv. Then that executeCommand refuses before
+    // anything spawns.
+    const trap = join(base, 'argv-fsmonitor.sh');
+    writeFileSync(trap, `#!/bin/sh\ntouch "${join(markers, 'argv-fsmonitor')}"\nexit 1\n`);
+    chmodSync(trap, 0o755);
+    const { commandEnv } = await import('./shell');
 
-    expect(actual.valid, actual.reason).toBe(true);
+    try {
+      execFileSync('git', ['-c', `core.fsmonitor=${trap}`, 'status', '--porcelain'], {
+        cwd: repo,
+        env: commandEnv('git', ['status'], repo),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch {
+      // The trap exits 1; what is being proven is that it ran at all.
+    }
+    expect(fired()).toEqual(['argv-fsmonitor']);
+
+    rmSync(join(markers, 'argv-fsmonitor'));
+    const result = executeCommand('git', ['-c', `core.fsmonitor=${trap}`, 'status'], { cwd: repo });
+
+    expect(result.success).toBe(false);
+    expect(result.stderr).toMatch(/makes git run a program of the command's own choosing/);
+    expect(fired()).toEqual([]);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
+
+  it('an attribute-aimed option really would have routed a file at a filter, so the refusal is not theoretical', async () => {
+    // The reproduction behind the two rules above, with real git. The
+    // routing lives in a TREE and nowhere on disk, which is the whole point:
+    // the working tree has no `.gitattributes`, so nothing a scan can read
+    // says `*.bin` goes through a filter — and git runs the filter anyway
+    // once it is pointed at that tree. Verified against git 2.54.
+    setup(repo, ['config', '--unset', 'core.fsmonitor']);
+    writeFileSync(join(repo, '.gitattributes'), '*.bin filter=viatree\n');
+    setup(repo, ['add', '.gitattributes']);
+    setup(repo, ['commit', '-qm', 'attributes']);
+    const tree = setup(repo, ['rev-parse', 'HEAD^{tree}']).trim();
+    setup(repo, ['rm', '-q', '--cached', '.gitattributes']);
+    rmSync(join(repo, '.gitattributes'));
+    setup(repo, ['commit', '-qm', 'take the attributes back out']);
+    writeFileSync(join(repo, 'notes.bin'), 'later.\n');
+    const clean = `touch "${join(markers, 'viatree')}"; cat`;
+
+    // Nothing on disk routes `*.bin` now, so a plain call leaves it cold…
+    execFileSync('git', ['-c', `filter.viatree.clean=${clean}`, 'status', '--porcelain'], {
+      cwd: repo,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    expect(fired()).toEqual([]);
+
+    // …and each of these two makes git find the routing in the tree instead.
+    for (const aim of [['--attr-source', tree], ['-c', `attr.tree=${tree}`]]) {
+      execFileSync('git', [...aim, '-c', `filter.viatree.clean=${clean}`, 'status', '--porcelain'], {
+        cwd: repo,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      expect(fired(), `${aim[0]} did not reach the filter`).toEqual(['viatree']);
+      rmSync(join(markers, 'viatree'));
+    }
+
+    // So executeCommand refuses both before anything spawns.
+    for (const args of [['--attr-source', tree, 'status'], ['-c', `attr.tree=${tree}`, 'status']]) {
+      const result = executeCommand('git', args, { cwd: repo });
+      expect(result.success, args.join(' ')).toBe(false);
+      expect(mockSpawnSync).not.toHaveBeenCalled();
+    }
+    expect(fired()).toEqual([]);
+  });
+
+  it('exports commandEnv, which is what the ACP terminal path has to call', async () => {
+    // The ACP terminal spawns its own children, so it needs the environment
+    // the local runner builds — the same function, not a second one that
+    // agrees with it today. And it needs the ARGV, not just the cwd: `git -C
+    // nested status` reads the nested checkout's config, so a caller who
+    // passes only the spawn cwd hardens the wrong repository.
+    armNestedFilter(makeNestedRepo());
+    const { commandEnv } = await import('./shell');
+
+    expect(typeof commandEnv).toBe('function');
+
+    // The scope-aware half of the hardening — the content filter — is the
+    // one that depends on scanning the right directory, and `repo` has no
+    // filter of its own, so a refusal naming `filter.deep.clean` can only
+    // have come from following the `-C`.
+    expect(() => commandEnv('git', ['-C', 'nested', 'status'], repo)).toThrow(/filter\.deep\.clean/);
+    // ...and the cwd-only spelling is exactly the mistake this signature
+    // prevents: it scans `repo`, finds nothing, and hardens nothing.
+    expect(() => commandEnv('git', ['status'], repo)).not.toThrow();
+  });
+
+  it('still allows the ordinary `-c` keys, which are most of them', () => {
+    // Narrowed, not reversed. `-c` sets plenty that names no program at all,
+    // and refusing it wholesale would break ordinary agent commands — a
+    // `protocol.file.allow` for a local submodule, a `user.name` for a
+    // commit. `-C` still only moves git.
+    for (const pair of ['user.name=Test', 'protocol.file.allow=always', 'core.autocrlf=false', 'advice.detachedHead=false']) {
+      const actual = validateCommand('git', ['-c', pair, '-C', 'sub', 'status']);
+      expect(actual.valid, `${pair}: ${actual.reason}`).toBe(true);
+    }
   });
 
   it.each(['--global', '--system', '--file'])('refuses `git config %s`, which writes into the scope the scan trusts', flag => {

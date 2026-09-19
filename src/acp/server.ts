@@ -27,7 +27,7 @@ import { loadCustomCommands } from '../utils/customCommands.js';
 import { registerSessionServers, disposeAllSessions as disposeAllMcpSessions } from '../utils/mcpRegistry.js';
 import { selectSessionMcpServers } from '../utils/mcpConfig.js';
 import { handleMcpSamplingRequest } from '../utils/mcpSamplingBridge.js';
-import { executeCommandAsync, validateCommandAsync, shellCommandEnv } from '../utils/shell.js';
+import { executeCommandAsync, validateCommandAsync, commandEnv } from '../utils/shell.js';
 import { checkCommandRateLimit } from '../utils/ratelimit.js';
 import { recordCommand } from '../utils/history.js';
 import { PermissionOutcome } from '../utils/agent.js';
@@ -466,22 +466,159 @@ export function exitCodeFromWaitResult(result: unknown): number | null {
 }
 
 /**
+ * `GIT_CONFIG_COUNT` and the `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>`
+ * pairs it counts — the numbered half of what hardenedGitEnv() produces.
+ */
+const GIT_CONFIG_ENV_NAME = /^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+)$/;
+
+/**
+ * The rest of what the terminal has to be given by name — see acpEnvList().
+ *
+ * `GIT_PAGER` and `GIT_TERMINAL_PROMPT` are hardenedGitEnv()'s two
+ * non-numbered outputs. `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM` /
+ * `GIT_CONFIG_NOSYSTEM` are the variables the SCAN itself read the config
+ * through: leaving them behind would let the terminal's git resolve a
+ * different global config than the one Codeep just decided was safe.
+ *
+ * Everything after them is there for a client that REPLACES its environment
+ * with this list rather than extending it, and it is the half the first cut
+ * of this hotfix got wrong: the list was `PATH` and `HOME` — enough for the
+ * hardened `git status` it was written for — while acpEnvList() is applied
+ * to EVERY command handed to terminal/create. Against a replacing client
+ * that cost an ordinary command things that are not secrets and that it had
+ * in the user's own shell: `git push` over SSH had no agent socket to sign
+ * with and fell back to asking for a password on a terminal whose
+ * GIT_TERMINAL_PROMPT is `0`, which fails it outright; a test that sorts
+ * strings or formats a date ran under the C locale instead of the user's; a
+ * build had nowhere but the default /tmp to put its temporaries; anything
+ * behind a corporate proxy could not reach the network at all; and a
+ * toolchain installed under a version manager lost the variable its shim
+ * reads to pick a version.
+ *
+ * It stays an ALLOWLIST rather than becoming "process.env minus the names
+ * that look like credentials", because what made the change necessary is
+ * that `env` is not a private channel (see acpEnvList) and a name-shaped
+ * denylist does not recognise `DATABASE_URL`, a company's own `ACME_CREDS`,
+ * or anything else whose name does not say what it holds. A name gets in
+ * here only when it is known not to hold one.
+ *
+ * The one value below that CAN carry a credential is a proxy URL
+ * (`https_proxy=http://user:pass@proxy`), which is why redactCredentials()
+ * in src/acp/transport.ts has a rule for that exact shape. A command behind
+ * a proxy cannot reach the network without it.
+ */
+const ACP_TERMINAL_ENV_NAMES: ReadonlySet<string> = new Set([
+  // hardenedGitEnv()'s own, and what the scan read the config through.
+  'GIT_PAGER',
+  'GIT_TERMINAL_PROMPT',
+  'GIT_CONFIG_GLOBAL',
+  'GIT_CONFIG_SYSTEM',
+  'GIT_CONFIG_NOSYSTEM',
+  // Where programs are found, and whose account runs them. No `PWD`: the
+  // terminal's working directory is the `cwd` of the terminal/create, and
+  // this process's would tell a shell script it is somewhere it is not.
+  'PATH',
+  'HOME',
+  'SHELL',
+  'USER',
+  'LOGNAME',
+  // The agent socket `git push` and `git fetch` over SSH sign with.
+  'SSH_AUTH_SOCK',
+  // Where a build puts its temporaries.
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  // The locale a test that sorts strings or formats a date asserts against.
+  'LANG',
+  'LANGUAGE',
+  // What the command may draw with, and what it thinks the time is.
+  'TERM',
+  'COLORTERM',
+  'TERM_PROGRAM',
+  'TZ',
+  // Toolchains under a version manager: the shim is on PATH, but the shim
+  // reads one of these to find the version to run.
+  'ASDF_DIR',
+  'ASDF_DATA_DIR',
+  'NVM_DIR',
+  'NVM_BIN',
+  'PYENV_ROOT',
+  'RBENV_ROOT',
+  'SDKMAN_DIR',
+  'VOLTA_HOME',
+  'PNPM_HOME',
+  'BUN_INSTALL',
+  'VIRTUAL_ENV',
+  'CONDA_PREFIX',
+  'CARGO_HOME',
+  'RUSTUP_HOME',
+  'GOPATH',
+  'GOROOT',
+  'JAVA_HOME',
+]);
+
+/**
+ * The same allowlist for the two families whose members cannot be listed:
+ * the locale categories (`LC_ALL`, `LC_TIME`, `LC_COLLATE`, …), and the
+ * proxy variables, which every tool spells in whichever case it was written
+ * in — curl and most of Unix read the lowercase ones, Windows-born tools the
+ * uppercase, and a machine behind a proxy usually sets both.
+ */
+const ACP_TERMINAL_ENV_FAMILY = /^(?:LC_[A-Z]+|(?:HTTP|HTTPS|FTP|ALL|NO)_PROXY|(?:http|https|ftp|all|no)_proxy)$/;
+
+/**
  * An environment in the shape `terminal/create` takes it: ACP spells it as a
  * list of `{ name, value }`, not as the map Node keeps in `process.env`.
  *
+ * An allowlist goes in it — the hardening's own variables and the shell
+ * essentials above — and not the WHOLE of `process.env`, which is what this
+ * used to serialise. `env` is not a private channel: src/acp/transport.ts
+ * mirrors every outbound frame verbatim into ~/.cache/codeep/acp-debug.log
+ * when CODEEP_ACP_DEBUG is set, so every `ANTHROPIC_API_KEY`,
+ * `GITHUB_TOKEN`, `AWS_SECRET_ACCESS_KEY` and session cookie in the user's
+ * shell was written to a plaintext file on disk — and handed to the editor,
+ * which is free to log the protocol traffic itself. None of them makes the
+ * hardening work; the numbered GIT_CONFIG_* pairs do.
+ *
+ * What else the terminal inherits is the CLIENT's decision, not ours: ACP
+ * does not say whether `env` extends the client's environment or replaces it.
+ * A client that extends gives the command the user's shell environment
+ * anyway; a client that replaces gives it only this list — which is why the
+ * list has to cover what an ORDINARY command needs to run at all and not
+ * only what a hardened git spawn does. A terminal that got `GIT_CONFIG_COUNT`
+ * and nothing else would be running without a PATH.
+ *
  * Unset variables are dropped rather than sent as `value: undefined` — that
  * is what `process.env` holds for a variable that is not set, and JSON has no
- * way to carry it. The list is the whole environment and not only the git
- * overrides on purpose: a client is free to read `env` as the environment
- * rather than as additions to its own, and a terminal that got only
- * `GIT_CONFIG_COUNT` would then be running without a PATH. Nothing secret
- * rides along that did not come from the client in the first place — Codeep
- * keeps API keys in memory and never puts one in `process.env`.
+ * way to carry it.
+ *
+ * `hardened` says whether commandEnv() actually hardened this spawn, which it
+ * does for `git` and for nothing else. It only decides the last entry below:
+ * a command that cannot reach git is left with the environment it would have
+ * had, which is the same line the refusal path draws.
  */
-function acpEnvList(env: NodeJS.ProcessEnv): { name: string; value: string }[] {
-  return Object.entries(env)
+function acpEnvList(env: NodeJS.ProcessEnv, hardened: boolean): { name: string; value: string }[] {
+  const list = Object.entries(env)
     .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    .filter(([name]) => ACP_TERMINAL_ENV_NAMES.has(name)
+      || ACP_TERMINAL_ENV_FAMILY.test(name)
+      || GIT_CONFIG_ENV_NAME.test(name))
     .map(([name, value]) => ({ name, value }));
+
+  // The one thing this list cannot express is a REMOVAL — an absent name is
+  // not a request to unset one — and hardenedGitEnv() removes exactly one
+  // variable, so it is sent EMPTY instead.
+  //
+  // `GIT_CONFIG_PARAMETERS` is read after the numbered `GIT_CONFIG_*` pairs
+  // and beats them: with `GIT_CONFIG_KEY_0=core.fsmonitor` and an empty value
+  // right there, a `GIT_CONFIG_PARAMETERS='core.fsmonitor=<program>'` still
+  // ran the program on `git status` (verified, git 2.54). So against a client
+  // that EXTENDS its own environment rather than replacing it, one variable
+  // the editor happened to inherit switched this whole hardening off. Git
+  // parses an empty value as no parameters at all (verified, same version),
+  // which is the unset this list has no other way to ask for.
+  if (hardened) list.push({ name: 'GIT_CONFIG_PARAMETERS', value: '' });
+  return list;
 }
 
 /**
@@ -536,20 +673,22 @@ export async function executeAcpCommand(
   // did before this hotfix. The validation above stops the argv forms that
   // redirect git, but nothing was stopping its config.
   //
-  // Same helper as the skill runners, so there is one answer to "what does a
-  // spawn that may reach git run with" — see shellCommandEnv(). A refusal
-  // fails the command with git's own wording rather than handing it to a
-  // terminal this process cannot harden.
+  // Same helper as the local runner, so there is one answer to "what does a
+  // spawn that may reach git run with" — see commandEnv(). A refusal fails
+  // the command with git's own wording rather than handing it to a terminal
+  // this process cannot harden.
   //
-  // It scans the repository at `cwd`, so `git -C vendor/lib status` here gets
-  // the nested checkout covered only by the always-on GIT_EXECUTING_CONFIG
-  // pairs and not by the repo-scope scan — the gap shellCommandEnv()
-  // documents, which `filter.*` is the live part of. The local runner reads
-  // `-C` out of the argv and scans where git will really run; matching that
-  // here needs shell.ts's commandEnv(), which is not exported today.
+  // commandEnv() and NOT shellCommandEnv(): this call site has the argv, and
+  // shellCommandEnv() can only scan the spawn's `cwd`. That made one argument
+  // the whole difference between the two runners — `git -C vendor/lib status`
+  // over ACP got the outer project scanned, so the nested checkout was left
+  // with only the always-on GIT_EXECUTING_CONFIG pairs behind it and its
+  // `filter.<driver>.clean` still ran (proven, git 2.54), while the same
+  // command locally reads `-C` out of the argv and scans where git will
+  // actually run.
   let env: NodeJS.ProcessEnv;
   try {
-    env = shellCommandEnv([command, ...args].join(' '), cwd);
+    env = commandEnv(command, args, cwd);
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error));
   }
@@ -562,7 +701,7 @@ export async function executeAcpCommand(
       command,
       args,
       cwd,
-      env: acpEnvList(env),
+      env: acpEnvList(env, command === 'git'),
       outputByteLimit: 1_000_000,
     }) as TerminalCreateResult | null;
     if (!created || typeof created.terminalId !== 'string') {

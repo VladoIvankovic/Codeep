@@ -104,26 +104,44 @@ describe('a repository where git merely failed', () => {
 // instead — narrowly: a notice that is built and never shown is exactly the
 // bug this was, and tsc says nothing about an unused return value.
 describe('the header is what asks for it', () => {
-  const source = readFileSync('src/renderer/main.ts', 'utf-8')
+  // Resolved against THIS file and not against the process's working
+  // directory. `readFileSync('src/renderer/main.ts')` reads whatever that
+  // path means wherever vitest was started from, and this whole block is
+  // evaluated during collection — so `vitest run --root <repo>` from any
+  // other directory did not fail these three guards, it failed to collect
+  // the file at all and ran none of its ten tests (verified).
+  const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf-8')
     .split('\n')
     .filter(line => !line.trim().startsWith('//'))
     .join('\n');
 
   /**
-   * One function's source: from its `function` line to the `}` in the first
-   * column that ends it.
+   * One function's source: from its own `function` line to the `}` in the
+   * first column that ends it.
    *
-   * Bounded, because slicing to the END OF THE FILE is what this did and it
-   * made the guard almost vacuous — any call anywhere below counted, so the
-   * assertions would have passed on a `gitRefusalNotice(status)` sitting in
-   * some unrelated function added later, while the header did nothing.
+   * Bounded at BOTH ends, because slicing to the END OF THE FILE is what this
+   * did and it made the guard almost vacuous — any call anywhere below
+   * counted, so the assertions would have passed on a
+   * `gitRefusalNotice(status)` sitting in some unrelated function added later,
+   * while the header did nothing.
+   *
+   * The start is anchored the same way, on a declaration at the start of a
+   * line and on the WHOLE name. `indexOf('function ' + name)` takes the first
+   * mention of the name anywhere — inside a block comment (which the `//`
+   * filter above does not remove), or as the prefix of a
+   * `getHeaderBranchFor…` added later — and the slice is then bounded around
+   * somebody else's body while still reading like a guard.
+   *
+   * `from` is the source to read, so the anchoring itself can be tested on
+   * text that contains those two shapes; main.ts is the default and what
+   * every guard below passes.
    */
-  function functionSource(name: string): string {
-    const start = source.indexOf(`function ${name}`);
-    expect(start, `${name} not found in main.ts`).toBeGreaterThan(-1);
-    const end = source.indexOf('\n}', start);
+  function functionSource(name: string, from: string = source): string {
+    const start = from.search(new RegExp(`^(?:export )?function ${name}\\b`, 'm'));
+    expect(start, `${name} not found`).toBeGreaterThan(-1);
+    const end = from.indexOf('\n}', start);
     expect(end, `no end of ${name} found`).toBeGreaterThan(start);
-    return source.slice(start, end + 2);
+    return from.slice(start, end + 2);
   }
 
   it('builds the notice where the branch is resolved, and reports it', () => {
@@ -141,5 +159,32 @@ describe('the header is what asks for it', () => {
     // two functions it reads: neither may contain the other's body.
     expect(functionSource('getHeaderBranch')).not.toMatch(/addMessage/);
     expect(functionSource('reportGitRefusal')).not.toMatch(/gitRefusalNotice\(status\)/);
+  });
+
+  it('starts each slice at the declaration, not at a mention of the name', () => {
+    // The other end of the same problem, on the two shapes that used to move
+    // the START of the slice: the name written inside a block comment — which
+    // the `//` filter above does not strip — and a LONGER name that begins
+    // with this one. Either way the guard would have been reading a body that
+    // is not the one it names, and reading it as if it were.
+    const decoy = [
+      '/**',
+      ' * Calls function reportGitRefusal — the DECOY, not the declaration.',
+      ' */',
+      'function reportGitRefusalLater(): void {',
+      '  theWrongBody();',
+      '}',
+      '',
+      'function reportGitRefusal(): void {',
+      '  theRightBody();',
+      '}',
+      '',
+    ].join('\n');
+
+    const sliced = functionSource('reportGitRefusal', decoy);
+
+    expect(sliced).toContain('theRightBody()');
+    expect(sliced).not.toContain('DECOY');
+    expect(sliced).not.toContain('theWrongBody()');
   });
 });

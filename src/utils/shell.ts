@@ -7,7 +7,7 @@ import { resolve, relative, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { isIP } from 'net';
 import { assertFetchUrlAllowed, isBlockedIp } from './ssrfGuard';
-import { hardenedGitEnv, GitHardeningError } from './git';
+import { hardenedGitEnv, isExecutingConfigKey, GitHardeningError } from './git';
 
 export interface CommandResult {
   success: boolean;
@@ -351,34 +351,77 @@ const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-
  * ENVIRONMENT VARIABLE to read a config value from, so the value that decides
  * whether git runs a program is not in the command the user approved.
  *
+ * `--attr-source=<tree>` is the same move against ATTRIBUTES: it makes git
+ * take `.gitattributes` from a tree object instead of from the working tree,
+ * and attributes are what route a file at a `filter.<d>.clean` or a
+ * `diff.<d>.textconv`. The tree it names is one nothing in this process ever
+ * read, so a command carrying it decides which programs a git call runs from
+ * a place the approval never showed. It used to be listed only as an option
+ * that takes a value, i.e. skipped. `-c attr.tree=<tree>` is the config
+ * spelling of the same thing and is refused alongside it — see
+ * GIT_CONFIG_EXTRA_EXECUTING_KEYS.
+ *
  * `-C` is NOT here: it only moves the working directory, so the scan can
- * simply follow it — see gitEffectiveCwd(). `-c` is not here either, and that
- * is a deliberate, narrower judgement: `git -c core.pager=/tmp/x log` does
- * name a program, but it names it IN THE COMMAND, where the user reading the
- * approval prompt sees it, and the agent could equally have run `/tmp/x`
- * directly. `--config-env` is the same power with the value hidden, which is
- * why only that one is refused — and why `-c include.path` is refused too,
- * by GIT_CONFIG_INCLUDE_KEYS below.
+ * simply follow it — see gitEffectiveCwd(). `-c` is not here either, because
+ * most of what it sets is ordinary (`user.name`, `core.autocrlf`,
+ * `protocol.file.allow`) and refusing it wholesale would break perfectly
+ * normal agent commands. The keys that make git RUN something are refused
+ * instead — see isRefusedGitConfigArg() below.
  */
-const GIT_REDIRECTING_OPTIONS = new Set(['--git-dir', '--work-tree', '--exec-path', '--config-env']);
+const GIT_REDIRECTING_OPTIONS = new Set([
+  '--git-dir',
+  '--work-tree',
+  '--exec-path',
+  '--config-env',
+  '--attr-source',
+]);
 
 /**
- * The `-c` keys that make the argument the user approved stop describing what
- * git will do.
+ * The `-c` keys execute_command will not pass to git.
  *
- * The whole case for allowing `-c` is that the value is IN THE COMMAND, so
- * the approval prompt shows it. `git -c include.path=<file> status` breaks
- * that: git reads every key in that file — `core.fsmonitor`, a
- * `filter.<d>.clean`, an alias — and the prompt showed a path, not a program.
- * Same power as `--config-env` with the value hidden somewhere else, so it
- * gets the same answer. `includeIf.<condition>.path` is the conditional
- * spelling of the identical thing.
+ * This shipped allowing every `-c`, defended by a comment claiming the value
+ * is IN THE COMMAND so the user reading the approval prompt sees it. That
+ * defence is FALSE wherever approvals are automatic — auto-approve and the
+ * headless paths run the command with nobody reading anything — and even
+ * with a human in front of it, `git -c core.pager=/tmp/x log` is arbitrary
+ * execution through the tool whose whole job is to gate arbitrary execution.
+ * `git` is on ALLOWED_COMMANDS precisely because it is not supposed to be
+ * one of those.
  *
- * Case-insensitive because git's own key lookup is: `-c INCLUDE.PATH=<file>`
- * pulls the file in exactly as the lower-case spelling does (verified, git
- * 2.54), so a case-sensitive test here would be no test at all.
+ * What is refused is the executing family and nothing wider:
+ * - every key utils/git.ts neutralises or refuses in a repository's own
+ *   config, asked of that same table through isExecutingConfigKey() so the
+ *   two cannot drift — `core.fsmonitor`, `core.pager`, `gpg.program`,
+ *   `filter.<d>.clean`, `alias.<name>`, `credential.helper`, the lot. A `-c`
+ *   BEATS every one of those overrides: git reads its own `-c` after the
+ *   GIT_CONFIG_* pairs (verified, git 2.54), so allowing it here is allowing
+ *   the hardening to be switched off from the argv.
+ * - `core.hooksPath` and `init.templateDir`, which name a DIRECTORY of
+ *   scripts rather than a program, and are not in that table because the
+ *   repository-scope answer to them is the `noHooks` option instead.
+ * - `include.path` / `includeIf.<condition>.path`, which pull in a whole
+ *   config file: every key in it is a program git may run and the argv shows
+ *   a path, not a program. Same power as `--config-env` with the value
+ *   hidden somewhere else, so it gets the same answer.
+ * - `attr.tree`, which names a TREE OBJECT to read `.gitattributes` from
+ *   instead of the working tree. Attributes are what route a file at a
+ *   `filter.<d>.clean` or a `diff.<d>.textconv`, so this picks which programs
+ *   the call runs out of a tree nothing here ever read — and it names no
+ *   program itself, so the executing-key table never matched it. It is the
+ *   config spelling of `--attr-source`, which GIT_REDIRECTING_OPTIONS
+ *   refuses.
+ *
+ * Case-insensitive throughout because git's own key lookup is: `-c
+ * CORE.PAGER=/tmp/x` runs the program exactly as the lower-case spelling
+ * does (verified, git 2.54), so a case-sensitive test here would be no test
+ * at all.
  */
-const GIT_CONFIG_INCLUDE_KEYS = /^(include\.path|includeif\..*\.path)$/i;
+const GIT_CONFIG_EXTRA_EXECUTING_KEYS =
+  /^(core\.hooksPath|init\.templateDir|include\.path|includeIf\..*\.path|attr\.tree)$/i;
+
+function isRefusedGitConfigArg(key: string): boolean {
+  return GIT_CONFIG_EXTRA_EXECUTING_KEYS.test(key) || isExecutingConfigKey(key);
+}
 
 /**
  * `git config` flags that write somewhere the repo-scope scan deliberately
@@ -414,9 +457,9 @@ function scanGitArgv(args: string[]): { problem: string } | { subcommandAt: numb
     if (GIT_REDIRECTING_OPTIONS.has(name)) {
       return {
         problem:
-          `'git ${name}' points git at a repository or a program this process has not checked, ` +
-          'and is not allowed in agent mode. Run git in that directory instead (git -C <dir> …), ' +
-          'or run the command yourself.',
+          `'git ${name}' points git at a repository, a set of attributes, or a program this process ` +
+          'has not checked, and is not allowed in agent mode. Run git in that directory instead ' +
+          '(git -C <dir> …), or run the command yourself.',
       };
     }
     if (arg === '-C') {
@@ -433,13 +476,15 @@ function scanGitArgv(args: string[]): { problem: string } | { subcommandAt: numb
       const pair = arg === name ? (args[++i] ?? '') : arg.slice(name.length + 1);
       const eq = pair.indexOf('=');
       const key = eq === -1 ? pair : pair.slice(0, eq);
-      if (GIT_CONFIG_INCLUDE_KEYS.test(key)) {
+      if (isRefusedGitConfigArg(key)) {
         return {
           problem:
-            `'git ${name} ${key}=…' pulls in a whole config file, and every key in that file — a ` +
-            '`core.fsmonitor`, a `filter.<driver>.clean`, an alias — is a program git may run without ' +
-            'the approval prompt ever showing it. That is the same hole as `--config-env`, so it gets ' +
-            'the same answer. Set the keys you need with their own -c, or run the command yourself.',
+            `'git ${name} ${key}=…' makes git run a program of the command's own choosing, or decides ` +
+            'from somewhere unread which files get routed at one — that is the whole point of those ' +
+            'keys — and a -c beats the hardening Codeep puts in the environment, ' +
+            'because git reads its own -c last. It is also the one key family this repository\'s config ' +
+            'is scanned for, so allowing it from the argv would hand back exactly what the scan takes ' +
+            'away. Run the program directly if that is what you meant, or run the command yourself.',
         };
       }
       continue;
@@ -601,8 +646,20 @@ export function validateCommand(
  * Throws `GitHardeningError` when the repository's config cannot be scanned —
  * both runners below turn that into a failed CommandResult, because a refusal
  * is this command's own failure and the user reads it as such.
+ *
+ * EXPORTED, and this signature is the contract, because the ACP terminal
+ * path spawns its own children and has to harden the SAME repository this
+ * does. Call it with the parsed command, its argv, the cwd the spawn will
+ * get and the caller's own env in `options.env`, and hand the result to the
+ * spawn as `env` — do not spread anything over it, or a later
+ * GIT_CONFIG_COUNT replaces ours and silently drops every override above it.
+ * The argv is not optional there: `git -C vendor/lib status` scans
+ * `vendor/lib`, and a caller that passes only the cwd hardens the wrong
+ * repository. A shell LINE rather than an argv belongs to shellCommandEnv()
+ * below instead. Both throw, and a refusal that escapes a promise executor
+ * never settles it.
  */
-function commandEnv(command: string, args: string[], cwd: string, options?: CommandOptions): NodeJS.ProcessEnv {
+export function commandEnv(command: string, args: string[], cwd: string, options?: CommandOptions): NodeJS.ProcessEnv {
   const base = { ...process.env, ...options?.env };
   return command === 'git' ? hardenedGitEnv({ cwd: gitEffectiveCwd(args, cwd), base }) : base;
 }
@@ -655,9 +712,10 @@ const SHELL_LINE_MENTIONS_GIT = /(^|\W)git(\W|$)/;
  *
  * WHAT THIS CAN AND CANNOT PROMISE, because a shell line is not an argv:
  *
- * - Scanned: the repository at `cwd`, AND every initialised submodule of it,
- *   whose config lives in `.git/modules/<name>/config` (see
- *   listSubmoduleConfig in utils/git.ts). Every key in REPO_EXECUTING_RULES
+ * - Scanned: the repository at `cwd`, AND every submodule of it — the ones
+ *   its index records as gitlinks and the ones its config records by name,
+ *   wherever each keeps its git directory (see listSubmoduleConfig in
+ *   utils/git.ts). Every key in REPO_EXECUTING_RULES
  *   that any of them sets is neutralised, and because the overrides ride in
  *   the ENVIRONMENT rather than in an argv, they apply wherever in the line
  *   git ends up — so `cd vendor/lib && git add` is covered in full when

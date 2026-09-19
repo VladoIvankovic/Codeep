@@ -2,7 +2,7 @@
 // Newline-delimited JSON-RPC over stdio
 
 import { JsonRpcRequest, JsonRpcResponse, JsonRpcNotification } from './protocol.js';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 
@@ -10,17 +10,114 @@ import { join, dirname } from 'node:path';
 // inbound and outbound JSON-RPC frame here. Using a file (not stderr) because
 // most ACP clients (Zed included) do not pipe agent stderr to anywhere the
 // user can easily read; a known on-disk path is reliable everywhere.
+//
+// WHAT IS IN IT, because a user asked for it in a bug report will attach the
+// whole file: every frame of the session. That is the prompts, the model's
+// replies, the contents of every file read or written through fs/*, the
+// commands run in the client's terminal and their output, and the `env` of
+// every terminal/create. redactCredentials() blanks the obvious credential
+// shapes on the way in, but it is a filter over text and not a guarantee — a
+// secret that does not look like one survives it. So: session-private, 0600
+// in a 0700 directory, and not something to paste anywhere unread.
 const ACP_DEBUG_PATH = process.env.CODEEP_ACP_DEBUG_FILE
   || join(homedir(), '.cache', 'codeep', 'acp-debug.log');
 const ACP_DEBUG = !!process.env.CODEEP_ACP_DEBUG;
+/**
+ * Roll the log over at 8MB, keeping one previous file.
+ *
+ * It had no limit at all: every frame was appended and nothing ever truncated
+ * or removed the file, and a frame carries whole file contents and whole
+ * command outputs — so a user who left CODEEP_ACP_DEBUG set grew it until the
+ * disk stopped them. One previous file rather than a truncate because the
+ * frames that explain a broken session are usually the handshake at the top,
+ * which is exactly what a truncate throws away. Bounded at twice this, then.
+ */
+const ACP_DEBUG_MAX_BYTES = 8 * 1024 * 1024;
 if (ACP_DEBUG) {
-  try { mkdirSync(dirname(ACP_DEBUG_PATH), { recursive: true }); } catch { /* ignore */ }
+  // 0700: the directory holds a file with the whole session in it.
+  try { mkdirSync(dirname(ACP_DEBUG_PATH), { recursive: true, mode: 0o700 }); } catch { /* ignore */ }
 }
+
+/** Bytes written so far, so the size check costs no syscall per frame. Null
+ *  until the first write reads what an earlier run left on disk. */
+let acpDebugBytes: number | null = null;
+
 function debugLog(direction: '→' | '←', payload: string): void {
   if (!ACP_DEBUG) return;
+  const line = `${new Date().toISOString()} [ACP${direction}client] ${redactCredentials(payload)}\n`;
+  const bytes = Buffer.byteLength(line);
   try {
-    appendFileSync(ACP_DEBUG_PATH, `${new Date().toISOString()} [ACP${direction}client] ${payload}\n`);
+    if (acpDebugBytes === null) acpDebugBytes = adoptExistingLog();
+    if (acpDebugBytes > 0 && acpDebugBytes + bytes > ACP_DEBUG_MAX_BYTES) {
+      renameSync(ACP_DEBUG_PATH, `${ACP_DEBUG_PATH}.1`);
+      acpDebugBytes = 0;
+    }
+    // `mode` applies only when the file is created, which after the rename
+    // above is every rollover as well as the first frame of the first run.
+    appendFileSync(ACP_DEBUG_PATH, line, { mode: 0o600 });
+    acpDebugBytes += bytes;
   } catch { /* swallow — never break the protocol over a logging failure */ }
+}
+
+/** The size of the log already on disk, 0 when there is none. */
+function adoptExistingLog(): number {
+  try {
+    const stat = statSync(ACP_DEBUG_PATH);
+    // A log this build did not create is one an older Codeep created 0644 —
+    // world-readable, with everything listed above in it. Tighten it, but
+    // only at our own path: CODEEP_ACP_DEBUG_FILE may name something whose
+    // mode is not ours to change (a fifo, a tty, a shared file).
+    if (!process.env.CODEEP_ACP_DEBUG_FILE && (stat.mode & 0o077) !== 0) {
+      chmodSync(ACP_DEBUG_PATH, 0o600);
+    }
+    return stat.size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Credential shapes blanked before a frame is mirrored to the debug log.
+ *
+ * The log exists to debug the protocol, so this is deliberately narrow: it
+ * blanks what is unmistakably a secret and leaves everything else readable.
+ * Matched on the frame TEXT rather than on a parsed object because an inbound
+ * frame is logged before it is parsed and may not be JSON at all.
+ *
+ * Nothing here changes the frame on the wire — only the copy on disk.
+ */
+const ACP_DEBUG_REDACTIONS: ReadonlyArray<readonly [RegExp, string]> = [
+  // `"apiKey": "…"`, `"authorization": "…"` — the MEMBER NAME says it is a
+  // secret, whatever the value looks like.
+  [/("[A-Za-z0-9_.-]*(?:api[_-]?key|access[_-]?key|secret|token|password|passwd|credential|authorization|cookie|private[_-]?key)[A-Za-z0-9_.-]*"\s*:\s*)"(?:[^"\\]|\\.)*"/gi, '$1"[redacted]"'],
+  // ACP spells an environment as `{"name":…,"value":…}`, so the secret-looking
+  // string is the VALUE of `name` and the rule above cannot see it. This is
+  // the shape terminal/create used to leak the whole of process.env in.
+  [/("name"\s*:\s*"[A-Za-z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE)[A-Za-z0-9_.-]*"\s*,\s*"value"\s*:\s*)"(?:[^"\\]|\\.)*"/gi, '$1"[redacted]"'],
+  // And the shapes that are a credential wherever they turn up — a command
+  // line the agent ran, a terminal's own output, a file it read.
+  [/\bsk-[A-Za-z0-9_-]{16,}/g, '[redacted]'],              // OpenAI / Anthropic
+  [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, '[redacted]'],         // GitHub
+  [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, '[redacted]'],
+  [/\bglpat-[A-Za-z0-9_-]{16,}/g, '[redacted]'],           // GitLab
+  [/\bxox[abprs]-[A-Za-z0-9-]{10,}/g, '[redacted]'],       // Slack
+  [/\bAKIA[0-9A-Z]{16}\b/g, '[redacted]'],                 // AWS access key id
+  [/\bAIza[0-9A-Za-z_-]{20,}/g, '[redacted]'],             // Google
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[redacted]'], // JWT
+  [/\bBearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}/gi, 'Bearer [redacted]'],
+  // `https://user:password@host` — keep the structure, drop the password.
+  [/((?:https?|ssh|git):\/\/[^\s"'/@]+:)[^\s"'/@]+@/g, '$1[redacted]@'],
+];
+
+/**
+ * A frame with its obvious credentials blanked.
+ *
+ * Exported for unit testing (see transport.test.ts).
+ */
+export function redactCredentials(frame: string): string {
+  let out = frame;
+  for (const [pattern, replacement] of ACP_DEBUG_REDACTIONS) out = out.replace(pattern, replacement);
+  return out;
 }
 
 // A handler may be async; a rejection is answered like a synchronous throw.
