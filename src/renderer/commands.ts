@@ -1229,9 +1229,24 @@ Format: use headers per category, only include categories where you found issues
     case 'git-commit': {
       const message = args.join(' ');
       if (!message) { ctx.app.notify('Usage: /git-commit <message>'); return; }
-      // Use execFile to avoid shell injection — pass commit message as a direct argument
-      import('child_process').then(({ execFile }) => {
-        execFile('git', ['commit', '-m', message], { cwd: ctx.projectPath, encoding: 'utf-8' }, (err) => {
+      // Use execFile to avoid shell injection — pass commit message as a direct argument.
+      // hardenedGitEnv() on top of that: the repo's own .git/config can name programs
+      // git would run for this commit (core.fsmonitor, core.hooksPath, …).
+      Promise.all([import('child_process'), import('../utils/git')]).then(([{ execFile }, { hardenedGitEnv }]) => {
+        // The SAME cwd the commit runs in. Called with no argument, the scan
+        // read process.cwd() instead — so a project opened anywhere other
+        // than the directory Codeep was launched from was "hardened" against
+        // a different repository's config entirely.
+        let env: NodeJS.ProcessEnv;
+        try {
+          env = hardenedGitEnv({ cwd: ctx.projectPath });
+        } catch (error) {
+          // It refuses rather than hand git a half-scanned environment, and
+          // its message names the key and what to do about it.
+          ctx.app.notify(error instanceof Error ? error.message : 'Commit failed');
+          return;
+        }
+        execFile('git', ['commit', '-m', message], { cwd: ctx.projectPath, encoding: 'utf-8', env }, (err) => {
           if (err) {
             ctx.app.notify(`Commit failed: ${err.message}`);
           } else {

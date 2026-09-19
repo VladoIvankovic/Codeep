@@ -42,7 +42,7 @@ import {
 import { getCurrentVersion, checkForUpdates, getUpdateInstructions } from '../utils/update';
 import { getProviderList, isNoApiKeyProvider, resolveReasoningTier } from '../config/providers';
 import { getSessionStats, getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
-import { getGitStatus, isGitRepository } from '../utils/git';
+import { getGitStatus, isGitRepository, type GitStatus } from '../utils/git';
 import { reportStats, syncSession, syncSessionAsync, generateProjectId, ensureDeviceRegistered } from '../utils/codeepCloud';
 import { expandFileAndFolderMentions, expandGitMentions } from '../utils/mentions';
 import { expandWebMentions } from '../utils/webFetch';
@@ -64,8 +64,13 @@ import { symlinkedCodeepNotice } from '../utils/projectPaths';
 
 let projectPath = process.cwd();
 /** Cached header branch. Resolved on first use so `--version`/`--help` never
- *  shell out to git, and cached because getStatus runs on every render frame. */
-let gitBranchCache: { path: string; branch?: string } | null = null;
+ *  shell out to git, and cached because getStatus runs on every render frame.
+ *  `refusal` is the message getGitStatus carries back when git would not run
+ *  here at all — see reportGitRefusal(). */
+let gitBranchCache: { path: string; branch?: string; refusal?: string } | null = null;
+/** Projects whose refusal has already been put in the transcript, so a cache
+ *  dropped after every agent run does not repeat it once a minute. */
+const gitRefusalReported = new Set<string>();
 let projectContext: ProjectContext | null = null;
 let hasWriteAccess = false;
 let sessionId = getCurrentSessionId();
@@ -87,9 +92,76 @@ const addedFiles: Map<string, { relativePath: string; content: string }> = new M
  *  or an agent run finished (an agent can check out a different branch). */
 function getHeaderBranch(): string | undefined {
   if (!gitBranchCache || gitBranchCache.path !== projectPath) {
-    gitBranchCache = { path: projectPath, branch: getGitStatus(projectPath).branch };
+    const status = getGitStatus(projectPath);
+    const refusal = gitRefusalNotice(status);
+    gitBranchCache = { path: projectPath, branch: status.branch, refusal: refusal ?? undefined };
+    reportGitRefusal(projectPath, refusal);
   }
   return gitBranchCache.branch;
+}
+
+/**
+ * getGitStatus's result, plus the one field this file reads off it.
+ *
+ * `refusal` belongs on GitStatus in utils/git.ts — it is that function's own
+ * output — but utils/git.ts is not this file's to change in this hotfix, so
+ * the shape is stated here and git.ts fills it. The contract is exactly:
+ * set `refusal` on the two results that come from hardenedGitEnv() refusing
+ * (the `repo.refusal` branch and the catch, when the error is a
+ * GitHardeningError) and on nothing else. Moving the declaration onto
+ * GitStatus is then a straight deletion of this type; nothing below changes.
+ *
+ * Until it is filled, this file says nothing — which is the pre-hotfix
+ * behaviour and the safe direction to be wrong in. Reading `error` instead,
+ * which is what a fill-nothing fallback would mean, is the bug below.
+ */
+type GitStatusResult = GitStatus & { refusal?: string };
+
+/**
+ * What to tell the user when git would not run in this project, or null when
+ * there is nothing to tell them.
+ *
+ * Without it the only symptom is the branch quietly missing from the header,
+ * which reads as "not a repository" — so a repository whose own `.git/config`
+ * names a program git would run looks like an ordinary folder, and the one
+ * thing the user has to do (remove that key) is never said anywhere. The
+ * refusal names the key and the `git config --unset` that clears it, so it is
+ * passed through verbatim rather than summarised into "git failed".
+ *
+ * Read off `refusal` and NOT off `error`, which is the field an earlier cut
+ * of this used. `error` is every way git can fail in a repository, and the
+ * commonest of them is a brand-new `git init` with no commit yet: `git
+ * rev-parse --abbrev-ref HEAD` answers `fatal: ambiguous argument 'HEAD'`
+ * there (git 2.54), so the first thing a user does in a new project met a
+ * warning made of git internals telling them to remove a config key that does
+ * not exist. `refusal` is filled on the hardening path and nowhere else, so
+ * an ordinary git failure stays as silent as it was before this notice
+ * existed — the branch is simply missing from the header, which is what it
+ * has always done.
+ */
+export function gitRefusalNotice(status: GitStatusResult): string | null {
+  const refusal = status.isRepo ? status.refusal : undefined;
+  if (!refusal) return null;
+  return `⚠️  ${refusal}\n\nUntil then the header shows no branch, and everything Codeep does with git here — the status line, \`@git\`, \`/commit\`, the review hook — is off.`;
+}
+
+/**
+ * Put that message in the transcript once per project.
+ *
+ * A transcript message and not notify(): a toast is gone in three seconds,
+ * and this is a thing to act on, not a thing to glance at. Once per project
+ * because the cache it rides on is dropped after every agent run, and a
+ * warning repeated after each run is one the user learns to scroll past.
+ *
+ * Queued rather than added inline because the only caller runs inside
+ * getStatus(), which the render loop calls — pushing a message onto the list
+ * the frame is reading would tear that frame. The microtask lands before the
+ * next one.
+ */
+function reportGitRefusal(path: string, notice: string | null | undefined): void {
+  if (!notice || gitRefusalReported.has(path)) return;
+  gitRefusalReported.add(path);
+  queueMicrotask(() => { app?.addMessage({ role: 'system', content: notice }); });
 }
 
 /** Derive a short display name from a user message (first ~5 words, max 48 chars). */

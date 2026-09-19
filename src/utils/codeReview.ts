@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join, extname, relative } from 'path';
 import { ProjectContext } from './project';
-import { getChangedFiles } from './git';
+import { getChangedFilesResult } from './git';
 import { loadReviewConfig, globToRegExp } from './reviewConfig';
 
 export interface ReviewIssue {
@@ -356,31 +356,44 @@ function analyzeFile(
 }
 
 /**
- * Get files to review
+ * Which files to review, and which branch decided that.
+ *
+ * `gitError` carries the reason git produced no list, when there was one —
+ * a `.git/config` Codeep refuses to run git under answers the same empty
+ * array as a clean tree. Reviewing the whole of `src/` is still the right
+ * fallback, but calling it "no git changes" is a lie the user acts on: they
+ * read it as "nothing to review" and never learn their repository's config is
+ * the reason. It is threaded out to `scope` instead of being swallowed.
  */
+interface FilesToReview {
+  files: string[];
+  source: 'specific' | 'git' | 'scan';
+  gitError?: string;
+}
+
 function getFilesToReview(
   projectRoot: string,
   specificFiles?: string[]
-): string[] {
+): FilesToReview {
   if (specificFiles && specificFiles.length > 0) {
-    return specificFiles
-      .map(f => join(projectRoot, f))
-      .filter(f => existsSync(f));
+    return {
+      files: specificFiles.map(f => join(projectRoot, f)).filter(f => existsSync(f)),
+      source: 'specific',
+    };
   }
-  
-  // Get changed files from git
-  const changedFiles = getChangedFiles(projectRoot);
-  if (changedFiles.length > 0) {
-    return changedFiles.map(f => join(projectRoot, f));
+
+  // Get changed files from git. Called ONCE — the scope line below used to
+  // call getChangedFiles() a second time, which is a second `git config
+  // --list` plus a second `git status` on every review.
+  const changed = getChangedFilesResult(projectRoot);
+  if (changed.files.length > 0) {
+    return { files: changed.files.map(f => join(projectRoot, f)), source: 'git' };
   }
-  
+
   // Otherwise, review src directory
   const srcDir = join(projectRoot, 'src');
-  if (existsSync(srcDir)) {
-    return getAllSourceFiles(srcDir);
-  }
-  
-  return getAllSourceFiles(projectRoot);
+  const files = existsSync(srcDir) ? getAllSourceFiles(srcDir) : getAllSourceFiles(projectRoot);
+  return { files, source: 'scan', gitError: changed.error };
 }
 
 /**
@@ -437,7 +450,8 @@ export function performCodeReview(
     ...(config?.rules ?? []),
   ];
 
-  let filesToReview = getFilesToReview(projectRoot, specificFiles);
+  const selection = getFilesToReview(projectRoot, specificFiles);
+  let filesToReview = selection.files;
 
   // Apply include/exclude globs (posix-relative paths). Empty include = all.
   if (config && (config.include.length > 0 || config.exclude.length > 0)) {
@@ -453,15 +467,20 @@ export function performCodeReview(
 
   const allIssues: ReviewIssue[] = [];
 
-  // Determine scope — mirrors the branching in getFilesToReview so the user
-  // sees exactly which branch ran.
+  // Determine scope — reports the branch getFilesToReview actually took,
+  // rather than re-deriving it, so the two can no longer disagree.
+  const count = `${filesToReview.length} file${filesToReview.length === 1 ? '' : 's'}`;
   let scope: string;
-  if (specificFiles && specificFiles.length > 0) {
-    scope = `specific file${specificFiles.length === 1 ? '' : 's'} (${filesToReview.length})`;
-  } else if (getChangedFiles(projectRoot).length > 0) {
-    scope = `unstaged git changes (${filesToReview.length} file${filesToReview.length === 1 ? '' : 's'})`;
+  if (selection.source === 'specific') {
+    scope = `specific file${specificFiles?.length === 1 ? '' : 's'} (${filesToReview.length})`;
+  } else if (selection.source === 'git') {
+    scope = `unstaged git changes (${count})`;
+  } else if (selection.gitError) {
+    // Not "no git changes": git would not run here, so nobody knows whether
+    // there are any. Say which, and say why — the message carries the fix.
+    scope = `full src/ scan — git could not list the changes: ${selection.gitError} (${count})`;
   } else {
-    scope = `full src/ scan — no git changes (${filesToReview.length} file${filesToReview.length === 1 ? '' : 's'})`;
+    scope = `full src/ scan — no git changes (${count})`;
   }
 
   for (const filePath of filesToReview) {

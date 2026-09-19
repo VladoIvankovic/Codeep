@@ -16,6 +16,8 @@ import { takeRunFromPhone } from '../utils/telegramInbox';
 import { isFlatFeeProvider } from '../config/providers';
 import { raceApproval, type RaceParticipant } from '../utils/approvalRace';
 import { describeAuditTarget } from '../utils/auditLog';
+import { trustBearingWrite, forgetHooksDirectory, type TrustBearingWrite } from '../utils/toolExecution';
+import { shellCommandEnv } from '../utils/shell';
 import { charWidth } from './ansi';
 import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
@@ -319,88 +321,108 @@ export async function executeAgentTask(
 
     // Read the Telegram credentials once for the whole run rather than per tool
     // call: they come from the OS keychain, and paying that on every dangerous
-    // tool would put a keychain round-trip in front of each confirmation.
-    // Null means the feature is off or half-configured, and the terminal is
-    // then the only place the question appears — exactly as before.
-    const telegramCredentials = asksPerTool
-      ? await loadTelegramCredentials()
-      : null;
-
-    // The finish notice does not depend on the confirmation mode — a run with
-    // confirmations off is exactly the one you are most likely to walk away
-    // from. Reuse the credentials already read above when there are any, so
-    // this costs a second keychain round-trip only when there are not.
-    const noticeCredentials = telegramCredentials ?? await loadTelegramCredentials();
+    // tool would put a keychain round-trip in front of each confirmation. Read
+    // in every mode, for the finish notice — and because 'never' now asks
+    // about a file that decides what runs later, which is exactly the kind of
+    // run someone has walked away from. Null means the feature is off or
+    // half-configured, and the terminal is then the only place the question
+    // appears — exactly as before.
+    const telegramCredentials = await loadTelegramCredentials();
     const runStartedAt = Date.now();
 
-    const onRequestPermission = asksPerTool
-      ? async (toolCall: import('../utils/tools').ToolCall): Promise<PermissionOutcome> => {
-          // `parameters.command` is the binary alone — `git`, not `git status`.
-          // Showing that asks someone to approve a command they have not been
-          // shown, which is the one thing this gate must not do. The audit
-          // record already joins the binary with its arguments; reuse it rather
-          // than writing a second, subtly different answer.
-          const target = describeAuditTarget(toolCall);
-          // Indented by two in the dialog.
-          const targetLines = wrapConfirmTarget(target, (process.stdout.columns || 80) - 4)
-            .map(line => `  ${line}`);
+    // 'never' still gets a callback. A write to a file that decides what runs
+    // later — `.git/config`, a hook, an MCP server list — is asked about in
+    // every mode (the agent gate decides which calls those are), and "never
+    // ask" is then answered here for everything else, exactly as before:
+    // without a callback the agent would have to refuse those writes instead.
+    const onRequestPermission = async (
+      toolCall: import('../utils/tools').ToolCall,
+      // What the agent gate already worked out about this call, passed rather
+      // than worked out twice: trustBearingWrite() stats the path, resolves a
+      // symlinked ancestor and may ask git where this repo keeps its hooks.
+      // Undefined means the question came from somewhere that has not looked
+      // — a skill's shell line asks through this same callback — so it is
+      // only then that this side looks for itself. `null` is an answer.
+      known?: TrustBearingWrite | null,
+    ): Promise<PermissionOutcome> => {
+      const trustBearing = known !== undefined ? known : trustBearingWrite(toolCall, context.root || process.cwd());
+      if (!asksPerTool && !trustBearing) return 'allow_once';
+      // `parameters.command` is the binary alone — `git`, not `git status`.
+      // Showing that asks someone to approve a command they have not been
+      // shown, which is the one thing this gate must not do. The audit
+      // record already joins the binary with its arguments; reuse it rather
+      // than writing a second, subtly different answer.
+      const target = describeAuditTarget(toolCall);
+      // Indented by two in the dialog.
+      const targetLines = wrapConfirmTarget(target, (process.stdout.columns || 80) - 4)
+        .map(line => `  ${line}`);
 
-          const inTerminal: RaceParticipant<PermissionOutcome> = {
-            answer: new Promise<PermissionOutcome | null>((resolve) => {
-              app.showConfirm({
-                title: '⚠️  Confirm Action',
-                message: [
-                  'The agent wants to execute:',
-                  '',
-                  `  ${showControls(toolCall.tool)}`,
-                  ...targetLines,
-                  '',
-                  telegramCredentials ? 'Allow this action? (or answer on Telegram)' : 'Allow this action?',
-                ],
-                confirmLabel: 'Allow',
-                cancelLabel: 'Deny',
-                extraOption: { label: 'Always Allow', onSelect: () => resolve('allow_always') },
-                onConfirm: () => resolve('allow_once'),
-                onCancel: () => resolve('reject_always'),
-              });
-            }),
-            // Answered on the phone: take the dialog down without running either
-            // callback, since the decision is already made and taken.
-            withdraw: (winner) => app.dismissConfirm(`Answered on Telegram — ${winner}.`),
-          };
+      const inTerminal: RaceParticipant<PermissionOutcome> = {
+        answer: new Promise<PermissionOutcome | null>((resolve) => {
+          app.showConfirm({
+            title: '⚠️  Confirm Action',
+            message: [
+              'The agent wants to execute:',
+              '',
+              `  ${showControls(toolCall.tool)}`,
+              ...targetLines,
+              // What the file does, not that it is "sensitive": someone
+              // deciding in one second needs the consequence, not a label.
+              ...(trustBearing ? ['', ...wrapConfirmTarget(`⚠️  ${trustBearing.reason}`, (process.stdout.columns || 80) - 4)] : []),
+              '',
+              telegramCredentials ? 'Allow this action? (or answer on Telegram)' : 'Allow this action?',
+            ],
+            confirmLabel: 'Allow',
+            cancelLabel: 'Deny',
+            // No "Always Allow" for one of those files: the agent answers
+            // about this file only and would not remember it anyway.
+            extraOption: trustBearing ? undefined : { label: 'Always Allow', onSelect: () => resolve('allow_always') },
+            onConfirm: () => resolve('allow_once'),
+            // The one "no" there is, and it answers reject_always. For one of
+            // those files the agent remembers that against the FILE rather
+            // than the tool, so refusing a `.git/config` prompt does not also
+            // switch delete_file off for the rest of the run.
+            onCancel: () => resolve('reject_always'),
+          });
+        }),
+        // Answered on the phone: take the dialog down without running either
+        // callback, since the decision is already made and taken.
+        withdraw: (winner) => app.dismissConfirm(`Answered on Telegram — ${winner}.`),
+      };
 
-          let onPhone: RaceParticipant<PermissionOutcome> | null = null;
-          if (telegramCredentials) {
-            // Report a failure to *ask* once, in the terminal. Without this a
-            // wrong chat id looks exactly like a phone nobody picked up.
-            const telegram = new TelegramApproval(
-              telegramCredentials,
-              reason => app.notifyWarn(`Telegram: ${reason}`),
-            );
-            onPhone = {
-              answer: telegram
-                .ask(target, toolCall.tool, true)
-                .then(answer => (answer ? outcomeForAnswer(answer) : null))
-                // A phone that cannot be reached is not a denial. Step aside and
-                // let the terminal decide, however long that takes.
-                .catch(() => null),
-              withdraw: (winner) => telegram.withdraw(winner),
-            };
-          }
+      let onPhone: RaceParticipant<PermissionOutcome> | null = null;
+      if (telegramCredentials) {
+        // Report a failure to *ask* once, in the terminal. Without this a
+        // wrong chat id looks exactly like a phone nobody picked up.
+        const telegram = new TelegramApproval(
+          telegramCredentials,
+          reason => app.notifyWarn(`Telegram: ${reason}`),
+        );
+        onPhone = {
+          answer: telegram
+            // The reason goes with it: a phone showing less than the terminal
+            // asks for a decision on less than the terminal had.
+            .ask(target, toolCall.tool, true, undefined, trustBearing?.reason)
+            .then(answer => (answer ? outcomeForAnswer(answer) : null))
+            // A phone that cannot be reached is not a denial. Step aside and
+            // let the terminal decide, however long that takes.
+            .catch(() => null),
+          withdraw: (winner) => telegram.withdraw(winner),
+        };
+      }
 
-          const { answer } = await raceApproval(
-            inTerminal,
-            onPhone,
-            outcome => describePermissionOutcome(outcome),
-          );
+      const { answer } = await raceApproval(
+        inTerminal,
+        onPhone,
+        outcome => describePermissionOutcome(outcome),
+      );
 
-          // Nobody answered — neither side could even ask. `classifyPermissionOutcome`
-          // fails closed on anything it does not recognise, and this is spelled
-          // out rather than left to that: a question that was never put must
-          // never read as a yes.
-          return answer ?? 'reject_once';
-        }
-      : undefined;
+      // Nobody answered — neither side could even ask. `classifyPermissionOutcome`
+      // fails closed on anything it does not recognise, and this is spelled
+      // out rather than left to that: a question that was never put must
+      // never read as a yes.
+      return answer ?? 'reject_once';
+    };
 
     const result: AgentResult = await runAgent(enrichedTask, context, {
       dryRun,
@@ -653,7 +675,7 @@ export async function executeAgentTask(
     // Told once the run is over, and only when it ran long enough that you
     // could plausibly have stopped watching. Awaited so the process does not
     // exit from under the request, but never allowed to fail the run.
-    if (noticeCredentials) {
+    if (telegramCredentials) {
       const elapsedMs = Date.now() - runStartedAt;
       const fromPhone = startedFromPhone;
       // The one-minute threshold exists so a phone is not buzzed about work you
@@ -673,7 +695,7 @@ export async function executeAgentTask(
           costUsd: payPerUse.reduce((sum, e) => sum + e.estimatedCost, 0),
         });
         for (const message of messages) {
-          await sendTelegramNotice(noticeCredentials, message).catch(() => false);
+          await sendTelegramNotice(telegramCredentials, message).catch(() => false);
         }
       }
     }
@@ -759,12 +781,36 @@ export async function runSkill(
   try {
     const result = await executeSkill(skill, params, {
       onCommand: async (cmd: string) => {
+        const cwd = ctx.projectPath || process.cwd();
+        // A raw process.env here handed the repository's own `.git/config`
+        // back to git: `/commit` runs `git commit`, and a repo-scope
+        // `gpg.program` that Codeep's own commit path neutralises executed
+        // through this spawn instead.
+        //
+        // Built before the spawn, and caught: shellCommandEnv() refuses a git
+        // line in a repository whose config names a program no override
+        // switches off, and a refusal escaping here would abort the whole
+        // skill rather than fail the step that asked for git. A step that
+        // cannot run is reported the same way a step that failed is.
+        let env: NodeJS.ProcessEnv;
+        try {
+          env = shellCommandEnv(cmd, cwd);
+        } catch (error) {
+          const why = error instanceof Error ? error.message : String(error);
+          ctx.app.addMessage({ role: 'system', content: `\`${cmd}\` was not run:\n\`\`\`\n${why}\n\`\`\`` });
+          throw new Error(why);
+        }
+        // A command line is the one thing in a skill that can move this
+        // repository's hooks (`git config core.hooksPath .evil`), and the
+        // write gate caches where they are for the run.
+        forgetHooksDirectory();
         const proc = spawnSync(cmd, {
-          cwd: ctx.projectPath || process.cwd(),
+          cwd,
           encoding: 'utf-8',
           timeout: 60000,
           shell: true,
           stdio: ['pipe', 'pipe', 'pipe'],
+          env,
         });
         const stdout = (proc.stdout || '').trim();
         const stderr = (proc.stderr || '').trim();

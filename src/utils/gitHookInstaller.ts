@@ -7,6 +7,7 @@
 import { readFileSync, writeFileSync, mkdirSync, chmodSync, rmSync } from 'fs';
 import { join, dirname, isAbsolute } from 'path';
 import { execSync } from 'child_process';
+import { hardenedGitEnv, GitHardeningError } from './git.js';
 import type { FailOn } from './headlessReview.js';
 
 export type HookType = 'pre-commit' | 'pre-push';
@@ -101,15 +102,89 @@ export function isCodeepHook(content: string): boolean {
   return content.includes(MARKER_START);
 }
 
-/** Resolve the git hooks directory (honors worktrees + core.hooksPath). Null if not a repo. */
-export function resolveHooksDir(cwd: string): string | null {
+/**
+ * Where this repository keeps its hooks — as a three-way answer, because two
+ * of the three used to come back as the same `null`.
+ *
+ * `none` means git answered and there is no hook directory to speak of (not a
+ * repository, no git on PATH). `unknown` means git was REFUSED: hardenedGitEnv
+ * would not build an environment for this repository, so nobody can say where
+ * its hooks live or whether a path is one.
+ *
+ * Folding `unknown` into `none` is a fail-OPEN, and it is a live hole rather
+ * than a theoretical one: the write gate in utils/toolExecution.ts reads a
+ * null hook directory as "this repository has no hook directory" and stops
+ * gating, so the one repository whose config Codeep refuses to scan is
+ * exactly the one whose `.githooks/pre-commit` an agent could write
+ * unprompted. A caller that has to decide something must branch on `kind`.
+ */
+export type HooksDirResult =
+  | { kind: 'hooks'; dir: string }
+  | { kind: 'none' }
+  | { kind: 'unknown'; reason: string };
+
+export function resolveHooksDirResult(cwd: string): HooksDirResult {
+  let env: NodeJS.ProcessEnv;
   try {
-    execSync('git rev-parse --is-inside-work-tree', { cwd, stdio: 'ignore' });
-    const hooks = execSync('git rev-parse --git-path hooks', { cwd, encoding: 'utf8' }).trim();
-    return isAbsolute(hooks) ? hooks : join(cwd, hooks);
-  } catch {
-    return null;
+    // noHooks stays off: answering where the hooks live is this function's
+    // entire job, and an override would have git report the no-hooks path and
+    // send `codeep hook install` there.
+    env = hardenedGitEnv({ cwd });
+  } catch (error) {
+    if (error instanceof GitHardeningError) return { kind: 'unknown', reason: error.message };
+    throw error;
   }
+
+  try {
+    // stderr is piped rather than ignored so the catch below can tell git's
+    // own answer apart from everything else. Ignoring it is what made the two
+    // indistinguishable in the first place.
+    execSync('git rev-parse --is-inside-work-tree', { cwd, stdio: ['ignore', 'ignore', 'pipe'], env });
+    const hooks = execSync('git rev-parse --git-path hooks', {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env,
+    }).trim();
+    return { kind: 'hooks', dir: isAbsolute(hooks) ? hooks : join(cwd, hooks) };
+  } catch (error) {
+    // Only git's own "there is no repository here" is `none`. The bare
+    // `catch { kind: 'none' }` this replaces folded a timeout, an EACCES on
+    // `cwd` and a git that died mid-answer into the same result — and `none`
+    // is what the write gate in utils/toolExecution.ts reads as "this
+    // repository has no hook directory, stop gating", so every one of those
+    // failures turned the gate off. `unknown` keeps it on, which is the only
+    // safe way round to be wrong.
+    const err = error as NodeJS.ErrnoException & { status?: number; stderr?: Buffer | string };
+    const stderr = String(err.stderr ?? '');
+    // git's own answer for "there is no repository here". A BARE repository
+    // is deliberately not in this branch: `--is-inside-work-tree` prints
+    // `false` and exits 0 there (verified, git 2.54), so it comes back as a
+    // hooks directory, which is what it has.
+    if (/not a git repository/i.test(stderr)) return { kind: 'none' };
+    // git never started: not on PATH, or `cwd` is gone. The caller's own git
+    // calls cannot run either, so there is no hook directory to speak of.
+    if (err.code === 'ENOENT' || err.code === 'EACCES' || err.code === 'ENOTDIR') return { kind: 'none' };
+    const detail = stderr.trim() || err.code || `exit ${err.status ?? '?'}`;
+    return {
+      kind: 'unknown',
+      reason:
+        `Cannot tell where ${cwd} keeps its git hooks: git failed to answer (${detail}). ` +
+        'Codeep treats that as "there may be hooks here" rather than as "there are none".',
+    };
+  }
+}
+
+/**
+ * Resolve the git hooks directory (honors worktrees + core.hooksPath). Null if
+ * not a repo — and THROWS `GitHardeningError` when git was refused, so a
+ * refusal can never be mistaken for "no hooks here". Callers that must not
+ * throw (the write gate) use resolveHooksDirResult() above instead.
+ */
+export function resolveHooksDir(cwd: string): string | null {
+  const result = resolveHooksDirResult(cwd);
+  if (result.kind === 'unknown') throw new GitHardeningError(result.reason);
+  return result.kind === 'hooks' ? result.dir : null;
 }
 
 export interface HookDeps {
@@ -126,7 +201,20 @@ export function runHookCommand(argv: string[], deps: HookDeps = defaultHookDeps(
     deps.write(HOOK_HELP);
     return 0;
   }
-  const hooksDir = deps.resolveHooksDir(process.cwd());
+  // `resolveHooksDir` throws rather than answer null when git was refused, so
+  // the two failures get the two different messages they need: "you are not in
+  // a repo" is not a useful thing to tell someone whose `.git/config` names a
+  // program Codeep will not run through.
+  let hooksDir: string | null;
+  try {
+    hooksDir = deps.resolveHooksDir(process.cwd());
+  } catch (error) {
+    deps.write(
+      `${error instanceof Error ? error.message : String(error)}\n` +
+        'Fix that config (or run the hook installer yourself) and try again.'
+    );
+    return 1;
+  }
   if (!hooksDir) {
     deps.write('Not a git repository — run `codeep hook` inside a repo.');
     return 1;

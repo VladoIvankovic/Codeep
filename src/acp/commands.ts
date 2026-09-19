@@ -35,6 +35,8 @@ import { join } from 'path';
 import { Message } from '../config/index.js';
 import { chat } from '../api/index.js';
 import { runAgent, classifyPermissionOutcome, buildDangerousTools } from '../utils/agent.js';
+import { forgetHooksDirectory } from '../utils/toolExecution.js';
+import { shellCommandEnv } from '../utils/shell.js';
 import type { McpServer } from './protocol.js';
 import type { AgentSessionOptions } from './session.js';
 import type { PendingPlan } from '../utils/planMode.js';
@@ -70,6 +72,21 @@ export type AcpAgentRunOptions = Pick<
 > & {
   /** Ask the user a yes/no question. Unset: the mode runs without asking. */
   confirm?: (message: string) => Promise<boolean>;
+  /**
+   * Auto mode's answer to the agent's permission gate: yes to everything
+   * except a write to a file that decides what runs later, which is asked
+   * about in every mode. A command that runs the agent passes it in place of
+   * the missing `onRequestPermission`, because the agent refuses those writes
+   * outright when it has nobody to ask — so without this, /go and a skill's
+   * agent step could not touch `.git/config` at all in auto mode, while a
+   * plain prompt could after a confirmation.
+   *
+   * Kept under its own key rather than set on `onRequestPermission`, which
+   * this file reads as "this session asks the user" when it decides whether
+   * to gate a skill's shell lines. Auto mode runs those without asking, as
+   * that mode promises.
+   */
+  onAutoModePermission?: AgentSessionOptions['onRequestPermission'];
 };
 
 export interface CommandResult {
@@ -1681,12 +1698,34 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
               stopIfCancelled();
             }
           }
+          // A raw process.env here handed the repository's own `.git/config`
+          // back to git: `/commit` runs `git commit`, and a repo-scope
+          // `gpg.program` that Codeep's own commit path neutralises executed
+          // through this spawn instead.
+          //
+          // Built before the spawn, and caught: shellCommandEnv() refuses a
+          // git line in a repository whose config names a program no override
+          // switches off, and a refusal that escaped here would abort the
+          // whole skill from inside executeSkill's callback. Failing the step
+          // with the refusal's own wording is what a step that cannot run
+          // looks like everywhere else in this handler.
+          let env: NodeJS.ProcessEnv;
+          try {
+            env = shellCommandEnv(shellCmd, session.workspaceRoot);
+          } catch (error) {
+            throw new Error(`\`${shellCmd}\` was not run: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          // A command line is the one thing in a skill that can move this
+          // repository's hooks (`git config core.hooksPath .evil`), and the
+          // write gate caches where they are for the run.
+          forgetHooksDirectory();
           const proc = spawnSync(shellCmd, {
             cwd: session.workspaceRoot,
             encoding: 'utf-8',
             timeout: 60_000,
             shell: true,
             stdio: ['pipe', 'pipe', 'pipe'],
+            env,
           });
           const out = ((proc.stdout || '') + (proc.stderr || '')).trim();
           const block = `\`${shellCmd}\`\n\`\`\`\n${out || '(no output)'}\n\`\`\`\n`;
@@ -1766,7 +1805,11 @@ async function runCommandAgent(
     abortSignal,
     onIteration: (_i: number, msg: string) => { onChunk(msg + '\n'); },
     onThinking: (text: string) => { onChunk(text); },
-    onRequestPermission: agentRun?.onRequestPermission,
+    // Manual mode's dialog, or — in auto mode, where there is none — the
+    // answer that mode gives. Passing nothing would leave the run with no way
+    // to confirm a write to a file that decides what runs later, and the agent
+    // refuses those rather than doing them unasked.
+    onRequestPermission: agentRun?.onRequestPermission ?? agentRun?.onAutoModePermission,
     extraDangerousTools: agentRun?.extraDangerousTools,
     onExecuteCommand: agentRun?.onExecuteCommand,
     fs: agentRun?.fs,

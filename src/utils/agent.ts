@@ -70,6 +70,7 @@ import {
   ToolResult,
   ActionLog
 } from './tools';
+import { trustBearingWrite, forgetHooksDirectory, NO_CONFIRMER_REFUSAL, type TrustBearingWrite } from './toolExecution';
 import { config, Message } from '../config/index';
 import { supportsNativeTools } from '../config/providers';
 import { isMcpToolName, isVirtualMcpToolName } from './mcpRegistry';
@@ -276,7 +277,18 @@ export interface AgentOptions {
   onVerification?: (results: VerifyResult[]) => void;
   onTaskPlan?: (plan: TaskPlan) => void;
   onTaskUpdate?: (task: SubTask) => void;
-  onRequestPermission?: (toolCall: ToolCall) => Promise<PermissionOutcome>;
+  /**
+   * Ask the user about one tool call.
+   *
+   * `trustBearing` is what this run already worked out about the call — the
+   * file it would write that decides what runs later, or null when it writes
+   * no such file. It is passed so the side putting up the dialog can word it
+   * without calling trustBearingWrite() a second time: that call stats the
+   * path, follows a symlink and may ask git where the repo's hooks live.
+   * Optional, so a caller that would rather work it out itself (or was not
+   * called from the gate below) still type-checks.
+   */
+  onRequestPermission?: (toolCall: ToolCall, trustBearing?: TrustBearingWrite | null) => Promise<PermissionOutcome>;
   /** Tool names to force into the per-run dangerous set, on top of the global
    *  agentConfirm* settings. ACP manual mode passes ['write_file','edit_file']
    *  here to gate them for THIS run only, instead of mutating global config. */
@@ -327,8 +339,10 @@ export interface AgentOptions {
   roleAddendum?: string;
   /** "Always allow" / "always deny" answers shared with a delegating parent,
    *  so a sub-agent neither asks again about a tool the user already decided
-   *  on nor runs one the user refused. */
-  permissionMemory?: { alwaysAllowed: Set<string>; alwaysRejected: Set<string> };
+   *  on nor runs one the user refused. `alwaysRejectedPaths` holds the same
+   *  for a single file that decides what runs later, which is refused by name
+   *  rather than by tool. */
+  permissionMemory?: { alwaysAllowed: Set<string>; alwaysRejected: Set<string>; alwaysRejectedPaths?: Set<string> };
   /** Provider/model for this run only, used in place of the global selection.
    *  A sub-agent with its own `model:` runs on it this way; the global config
    *  is saved to disk and read by every session in the process, so it is
@@ -745,6 +759,13 @@ export async function runAgent(
   const alwaysAllowedTools = opts.permissionMemory?.alwaysAllowed ?? new Set<string>();
   // Track tools permanently rejected this session via reject_always
   const alwaysRejectedTools = opts.permissionMemory?.alwaysRejected ?? new Set<string>();
+  // Files that decide what runs later and were refused for good this session.
+  // Kept apart from the tool set on purpose: the TUI's only "no" button answers
+  // reject_always, so saying no to one `.git/config` prompt would otherwise
+  // turn off delete_file — and every other use of that tool — for the rest of
+  // the run. Keyed by the resolved path, so one answer covers every spelling
+  // of the same file.
+  const alwaysRejectedPaths = opts.permissionMemory?.alwaysRejectedPaths ?? new Set<string>();
   // Tools that require permission when onRequestPermission is set (configurable)
   const dangerousTools = buildDangerousTools(opts.extraDangerousTools);
 
@@ -811,7 +832,7 @@ export async function runAgent(
         dryRun: opts.dryRun,
         onRequestPermission: opts.onRequestPermission,
         extraDangerousTools: opts.extraDangerousTools,
-        permissionMemory: { alwaysAllowed: alwaysAllowedTools, alwaysRejected: alwaysRejectedTools },
+        permissionMemory: { alwaysAllowed: alwaysAllowedTools, alwaysRejected: alwaysRejectedTools, alwaysRejectedPaths },
         modelOverride,
         onExecuteCommand: opts.onExecuteCommand,
         fs: opts.fs,
@@ -876,17 +897,63 @@ export async function runAgent(
       );
     }
 
-    // Permission check for dangerous tools (only when callback is provided, e.g. ACP/Zed)
-    if (opts.onRequestPermission && requiresPermission(toolCall.tool, dangerousTools) && !alwaysAllowedTools.has(toolCall.tool)) {
-      const denied = () => refuse(
-        `User rejected permission for ${toolCall.tool}`,
-        `Tool ${toolCall.tool} was denied by user. Do not attempt this action again.`,
-      );
+    const denied = () => refuse(
+      `User rejected permission for ${toolCall.tool}`,
+      `Tool ${toolCall.tool} was denied by user. Do not attempt this action again.`,
+    );
+
+    // Writing a file that decides what runs later is code execution on a
+    // delay, not an edit: git runs `core.fsmonitor` itself on the next
+    // `git status` the status line makes, a `.codeep/hooks/` script runs on
+    // the next tool call, an MCP entry spawns a process. A prompt injection
+    // that gets one of these written has walked around every other gate, so
+    // the write is confirmed in EVERY confirmation mode — not only the tiers
+    // that happen to list write_file — and an "always allow" answer given for
+    // the tool never covers it. With nobody to ask, it fails the way a write
+    // the editor refused fails: proceeding quietly is the one outcome that
+    // cannot be taken back.
+    const trustBearing = trustBearingWrite(toolCall, projectContext.root || process.cwd());
+    if (trustBearing) {
+      if (!opts.onRequestPermission) {
+        const refusal = refuse(
+          `Refused ${toolCall.tool} on ${trustBearing.path}: ${trustBearing.reason} ${NO_CONFIRMER_REFUSAL}`,
+          `Tool ${toolCall.tool} was refused on ${trustBearing.path}. ${trustBearing.reason} Nobody could be asked to confirm it. Do not try again — tell the user to edit that file themselves.`,
+        );
+        recordAuditEvent(auditRoot, {
+          ts: Date.now(), run: auditRun, tool: toolCall.tool, action: 'refused',
+          target: describeAuditTarget(toolCall), outcome: 'refused',
+          detail: `${trustBearing.path} decides what runs later and no confirmation was possible`,
+        });
+        return refusal;
+      }
+
+      // An "always deny" already given: for the tool, when the user really
+      // chose that in an ordinary prompt, or for this file.
+      if (alwaysRejectedTools.has(toolCall.tool) || alwaysRejectedPaths.has(trustBearing.file)) return denied();
+
+      const decision = classifyPermissionOutcome(await opts.onRequestPermission(toolCall, trustBearing));
+      // Neither answer is remembered for the TOOL. "Always allow" is not
+      // remembered at all: it was an answer about THIS file, and the next
+      // `.git/config` write must be asked about again. "Always deny" is
+      // remembered against the file — the fail-closed half of the same rule.
+      // Against the tool it would be a trap: the TUI offers Allow, Always
+      // Allow and Deny, and that Deny answers reject_always, so refusing one
+      // `.git/config` prompt would silently disable delete_file for the rest
+      // of the run.
+      if (decision !== 'allow-once' && decision !== 'allow-always') {
+        if (decision === 'deny-always') alwaysRejectedPaths.add(trustBearing.file);
+        return denied();
+      }
+    } else if (opts.onRequestPermission && requiresPermission(toolCall.tool, dangerousTools) && !alwaysAllowedTools.has(toolCall.tool)) {
+      // Every other tool: the run's dangerous set decides, and only when
+      // there is a callback to ask through (e.g. ACP/Zed).
 
       // Skip without asking if permanently rejected this session
       if (alwaysRejectedTools.has(toolCall.tool)) return denied();
 
-      const outcome = await opts.onRequestPermission(toolCall);
+      // `null` and not nothing: this branch runs only when the call writes no
+      // such file, and saying so spares the dialog the second lookup.
+      const outcome = await opts.onRequestPermission(toolCall, null);
       // Fail CLOSED: allow ONLY on an explicit allow outcome; reject_* and
       // any malformed/unknown outcome deny (see classifyPermissionOutcome).
       const decision = classifyPermissionOutcome(outcome);
@@ -927,6 +994,12 @@ export async function runAgent(
         };
       } else {
         try {
+          // Runs in the editor's terminal instead of ours, so executeTool's
+          // own invalidation never fires — but `git config core.hooksPath
+          // .evil` moves this repository's hooks just the same. Drop the
+          // cached answer here too, or the next write to the new hook
+          // directory goes through unasked.
+          forgetHooksDirectory();
           const commandResult = await opts.onExecuteCommand(command, args, cwd);
           toolResult = {
             success: commandResult.exitCode === 0,

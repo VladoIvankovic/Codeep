@@ -264,6 +264,7 @@ export async function runFixPlan(plan: FixPlan, context: ProjectContext): Promis
     }
 
     const { runAgent } = await import('./agent.js');
+    const { NO_CONFIRMER_REFUSAL } = await import('./toolExecution.js');
     // No cast here. `as never` on this call once hid the fact that
     // personalityOverride did not exist, which would have run the CI fix with
     // no boundary at all while the tests happily asserted otherwise.
@@ -277,26 +278,48 @@ export async function runFixPlan(plan: FixPlan, context: ProjectContext): Promis
       maxIterations: 25,
     });
 
+    // `result === 'success'` matters: a write the agent ATTEMPTED is logged
+    // whether or not it happened, so a refused `.git/config` was being
+    // reported to CI as a file this run edited — the exact opposite of the
+    // truth, and the file is not in the diff for anyone to check against.
     const edited = new Set(
       result.actions
-        .filter(a => a.type === 'write' || a.type === 'edit')
+        .filter(a => (a.type === 'write' || a.type === 'edit') && a.result === 'success')
         .map(a => a.target),
     );
     const activity = describeAgentActivity(result.actions);
+    // A headless run passes no permission callback, so a write to a file that
+    // decides what runs later — `.git/config`, a hook, an MCP server list —
+    // is refused rather than done unasked. That is the right answer for CI:
+    // an unattended run must not be the thing that installs a hook. But the
+    // refusal only ever reached the model, so the run looked like it had
+    // simply chosen not to fix that finding, and the one action a human has
+    // to take was in nobody's log. Name it in the summary, which is what the
+    // action prints. An opt-in flag was the alternative and is worse: it
+    // would exist to be set in a YAML file once and then never read again.
+    const refused = [...new Set(
+      result.actions
+        .filter(a => a.result === 'error' && a.details?.includes(NO_CONFIRMER_REFUSAL))
+        .map(a => a.target),
+    )];
+    const refusalNote = refused.length
+      ? ` It was refused ${refused.length} write${refused.length === 1 ? '' : 's'} to ${refused.join(', ')}: ` +
+        'those files decide what runs later, and a headless run has nobody to confirm them. Edit them yourself.'
+      : '';
     const editedList = `Edited ${edited.size} file${edited.size === 1 ? '' : 's'}: ${[...edited].join(', ')}.`;
     if (!result.success) {
       // The run did its work and the checks after it failed. The edits are in
       // the working tree all the same, so name them next to the checks.
       if (result.failedChecks?.length) {
         const changed = edited.size > 0 ? editedList : activity;
-        return `${summariseFixPlan(plan)} ${changed} These checks still fail afterwards: ${result.failedChecks.join(', ')}.`;
+        return `${summariseFixPlan(plan)} ${changed}${refusalNote} These checks still fail afterwards: ${result.failedChecks.join(', ')}.`;
       }
-      return `${summariseFixPlan(plan)} The run did not finish: ${result.error ?? 'unknown error'}. ${activity}`;
+      return `${summariseFixPlan(plan)} The run did not finish: ${result.error ?? 'unknown error'}. ${activity}${refusalNote}`;
     }
     if (edited.size === 0) {
-      return `${summariseFixPlan(plan)} Nothing was changed. ${activity}`;
+      return `${summariseFixPlan(plan)} Nothing was changed. ${activity}${refusalNote}`;
     }
-    return `${summariseFixPlan(plan)} ${editedList}`;
+    return `${summariseFixPlan(plan)} ${editedList}${refusalNote}`;
   } catch (error) {
     // A missing key or an unreachable provider must not fail the review. The
     // findings are already reported and the exit code already decided.

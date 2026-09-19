@@ -27,11 +27,12 @@ import { loadCustomCommands } from '../utils/customCommands.js';
 import { registerSessionServers, disposeAllSessions as disposeAllMcpSessions } from '../utils/mcpRegistry.js';
 import { selectSessionMcpServers } from '../utils/mcpConfig.js';
 import { handleMcpSamplingRequest } from '../utils/mcpSamplingBridge.js';
-import { executeCommandAsync, validateCommandAsync } from '../utils/shell.js';
+import { executeCommandAsync, validateCommandAsync, shellCommandEnv } from '../utils/shell.js';
 import { checkCommandRateLimit } from '../utils/ratelimit.js';
 import { recordCommand } from '../utils/history.js';
 import { PermissionOutcome } from '../utils/agent.js';
 import { ToolCall } from '../utils/tools.js';
+import { trustBearingWrite, type TrustBearingWrite } from '../utils/toolExecution.js';
 import { initWorkspace, loadWorkspace, handleCommand, type AcpSession, type AcpAgentRunOptions } from './commands.js';
 import { beginTurn } from './turns.js';
 import {
@@ -465,6 +466,25 @@ export function exitCodeFromWaitResult(result: unknown): number | null {
 }
 
 /**
+ * An environment in the shape `terminal/create` takes it: ACP spells it as a
+ * list of `{ name, value }`, not as the map Node keeps in `process.env`.
+ *
+ * Unset variables are dropped rather than sent as `value: undefined` — that
+ * is what `process.env` holds for a variable that is not set, and JSON has no
+ * way to carry it. The list is the whole environment and not only the git
+ * overrides on purpose: a client is free to read `env` as the environment
+ * rather than as additions to its own, and a terminal that got only
+ * `GIT_CONFIG_COUNT` would then be running without a PATH. Nothing secret
+ * rides along that did not come from the client in the first place — Codeep
+ * keeps API keys in memory and never puts one in `process.env`.
+ */
+function acpEnvList(env: NodeJS.ProcessEnv): { name: string; value: string }[] {
+  return Object.entries(env)
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    .map(([name, value]) => ({ name, value }));
+}
+
+/**
  * Run an execute_command tool call for an ACP session, in the client's
  * terminal when it offers one, otherwise locally.
  *
@@ -509,6 +529,31 @@ export async function executeAcpCommand(
   // capability in initialize. Otherwise execute locally.
   if (!ctx.clientSupportsTerminal) return runLocally();
 
+  // The client's terminal is a spawn like any other, and it inherits none of
+  // the hardening executeCommandAsync puts on the local one — so over ACP,
+  // which is how Zed runs Codeep, a `git status` in a hostile repository ran
+  // that repository's `core.fsmonitor` and `filter.<d>.clean` exactly as it
+  // did before this hotfix. The validation above stops the argv forms that
+  // redirect git, but nothing was stopping its config.
+  //
+  // Same helper as the skill runners, so there is one answer to "what does a
+  // spawn that may reach git run with" — see shellCommandEnv(). A refusal
+  // fails the command with git's own wording rather than handing it to a
+  // terminal this process cannot harden.
+  //
+  // It scans the repository at `cwd`, so `git -C vendor/lib status` here gets
+  // the nested checkout covered only by the always-on GIT_EXECUTING_CONFIG
+  // pairs and not by the repo-scope scan — the gap shellCommandEnv()
+  // documents, which `filter.*` is the live part of. The local runner reads
+  // `-C` out of the argv and scans where git will really run; matching that
+  // here needs shell.ts's commandEnv(), which is not exported today.
+  let env: NodeJS.ProcessEnv;
+  try {
+    env = shellCommandEnv([command, ...args].join(' '), cwd);
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+
   const { transport, sessionId, signal } = ctx;
   let terminalId: string;
   try {
@@ -517,6 +562,7 @@ export async function executeAcpCommand(
       command,
       args,
       cwd,
+      env: acpEnvList(env),
       outputByteLimit: 1_000_000,
     }) as TerminalCreateResult | null;
     if (!created || typeof created.terminalId !== 'string') {
@@ -1300,6 +1346,63 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
     // run the agent (/go, custom commands, skill agent steps) run it exactly
     // like a plain prompt.
     const manualMode = session.currentModeId === 'manual';
+
+    // The one permission dialog this session puts in front of the user.
+    const askAboutToolCall = async (
+      toolCall: ToolCall,
+      // What the agent gate already worked out about this call. Passed rather
+      // than worked out again: trustBearingWrite() stats the path, resolves a
+      // symlinked ancestor and may ask git where this repository keeps its
+      // hooks. `null` is an answer ("writes no such file"); undefined means
+      // the question came from somewhere that has not looked, which is the
+      // only case that pays for the lookup here.
+      known?: TrustBearingWrite | null,
+    ): Promise<PermissionOutcome> => {
+      // A write to a file that decides what runs later says so in the
+      // dialog — the editor shows `toolInput`, and "this file controls what
+      // commands git runs" is the part that makes the answer an informed one.
+      const trustBearing = known !== undefined ? known : trustBearingWrite(toolCall, session.workspaceRoot);
+      const result = await askUser({
+        toolCallId: `perm_${randomUUID()}`,
+        toolName: toolCall.tool,
+        toolInput: {
+          ...formatToolInputForPermission(toolCall.tool, toolCall.parameters as Record<string, unknown>),
+          ...(trustBearing ? { warning: trustBearing.reason } : {}),
+        },
+        status: 'pending',
+        content: [],
+      }, [
+        { optionId: 'allow_once',    name: 'Allow once',    kind: 'allow_once' as const },
+        // No "always" for one of those files: the agent answers about this
+        // file only and would not remember the answer anyway.
+        ...(trustBearing ? [] : [{ optionId: 'allow_always', name: 'Allow always', kind: 'allow_always' as const }]),
+        { optionId: 'reject_once',   name: 'Reject once',   kind: 'reject_once' as const },
+        { optionId: 'reject_always', name: 'Reject always', kind: 'reject_always' as const },
+      ]);
+
+      // Map ACP outcome back to PermissionOutcome. No answer
+      // (error, cancelled prompt) denies.
+      if (!result || result.outcome.type === 'cancelled') return 'reject_once';
+      return result.outcome.optionId as PermissionOutcome;
+    };
+
+    // Auto mode's answer to the agent's permission gate: yes to everything
+    // except a write to a file that decides what runs later, which is asked
+    // about in every mode. Without it the agent would have to refuse those
+    // writes outright, having nobody to ask. It travels under its own key on
+    // `agentRun` and never as `onRequestPermission`: a slash command reads
+    // that key being set as "this session asks the user" (see
+    // acp/commands.ts), and auto mode still runs a skill's shell lines
+    // without asking, as it promises.
+    const autoModeAnswer = async (
+      toolCall: ToolCall,
+      known?: TrustBearingWrite | null,
+    ): Promise<PermissionOutcome> => {
+      const trustBearing = known !== undefined ? known : trustBearingWrite(toolCall, session.workspaceRoot);
+      // Handed on, so the dialog does not look the same file up a third time.
+      return trustBearing ? askAboutToolCall(toolCall, trustBearing) : 'allow_once';
+    };
+
     const agentRun: AcpAgentRunOptions = {
       // Manual mode gates write_file/edit_file for this run only, per call —
       // NOT by mutating the global `agentConfirmWriteFile` config, which
@@ -1307,27 +1410,11 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
       // a non-atomic restore.
       extraDangerousTools: manualMode ? ['write_file', 'edit_file'] : undefined,
       // Only request permission in Manual mode
-      onRequestPermission: manualMode
-        ? async (toolCall: ToolCall): Promise<PermissionOutcome> => {
-            const result = await askUser({
-              toolCallId: `perm_${randomUUID()}`,
-              toolName: toolCall.tool,
-              toolInput: formatToolInputForPermission(toolCall.tool, toolCall.parameters as Record<string, unknown>),
-              status: 'pending',
-              content: [],
-            }, [
-              { optionId: 'allow_once',    name: 'Allow once',    kind: 'allow_once' },
-              { optionId: 'allow_always',  name: 'Allow always',  kind: 'allow_always' },
-              { optionId: 'reject_once',   name: 'Reject once',   kind: 'reject_once' },
-              { optionId: 'reject_always', name: 'Reject always', kind: 'reject_always' },
-            ]);
-
-            // Map ACP outcome back to PermissionOutcome. No answer
-            // (error, cancelled prompt) denies.
-            if (!result || result.outcome.type === 'cancelled') return 'reject_once';
-            return result.outcome.optionId as PermissionOutcome;
-          }
-        : undefined,
+      onRequestPermission: manualMode ? askAboutToolCall : undefined,
+      // …and in auto mode, the answer a command that runs the agent uses in
+      // its place, so /go and a skill's agent step get the same one prompt a
+      // plain prompt gets instead of a refusal.
+      onAutoModePermission: manualMode ? undefined : autoModeAnswer,
       // A skill's confirm step ("Deploy to production?") — a one-off
       // question, so no "always" answers.
       confirm: manualMode
@@ -1492,7 +1579,7 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
               }
             }
           },
-          onRequestPermission: agentRun.onRequestPermission,
+          onRequestPermission: agentRun.onRequestPermission ?? agentRun.onAutoModePermission,
           extraDangerousTools: agentRun.extraDangerousTools,
           fs: agentRun.fs,
           onExecuteCommand: agentRun.onExecuteCommand,

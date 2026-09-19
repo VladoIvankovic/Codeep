@@ -5,10 +5,11 @@
  * executeTool() dispatches to individual tool handlers.
  * listDirectory() and htmlToText() are private helpers.
  * createActionLog() converts a ToolCall+ToolResult into a history ActionLog.
+ * trustBearingWrite() names the writes that decide what runs later.
  */
 
 import { existsSync, readdirSync, statSync, lstatSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync, realpathSync } from 'fs';
-import { join, dirname, relative, resolve, isAbsolute, sep } from 'path';
+import { join, dirname, basename, relative, resolve, isAbsolute, sep } from 'path';
 import { executeCommandAsync } from './shell';
 import { recordWrite, recordEdit, recordDelete, recordMkdir, recordCommand, discardAction, recordResult, type ActionRecord } from './history';
 import { loadIgnoreRules, isIgnored } from './gitignore';
@@ -19,6 +20,7 @@ import { logger } from './logger';
 import { runHook } from './hooks';
 import { checkCommandRateLimit } from './ratelimit';
 import { isMcpToolName, callSessionTool, isVirtualMcpToolName, callSessionVirtualTool } from './mcpRegistry';
+import { resolveHooksDirResult, type HooksDirResult } from './gitHookInstaller';
 // SSRF guard (isBlockedIp / assertFetchUrlAllowed) moved to ./ssrfGuard —
 // shared with shell.ts for curl/wget URL checks. Re-exported here so the
 // existing tests that import it from toolExecution keep working.
@@ -86,6 +88,378 @@ export function validatePath(path: string, projectRoot: string): { valid: boolea
   }
 
   return { valid: true, absolutePath };
+}
+
+// ── Files that decide what runs later ────────────────────────────────────────
+//
+// Writing one of these is not an edit, it is code execution on a delay:
+//
+//  - `.git/` — git honours `core.fsmonitor`, `core.pager`, `diff.external`,
+//    `core.hooksPath`, `core.sshCommand` and `credential.helper` by RUNNING
+//    the command they name, so the next `git status` Codeep makes for the
+//    status line executes whatever `.git/config` says. Scripts in
+//    `.git/hooks/` run on the next commit. A worktree's `.git` is a file
+//    pointing at the real directory, so the whole name is off limits and not
+//    only what sits beneath it.
+//  - the repository's hook directory — `.git/hooks/` by default, but
+//    `core.hooksPath` moves it, and `.githooks/` and husky's `.husky/` are
+//    exactly that convention. A hook there runs on the user's own next
+//    `git commit` in their own terminal, long after the agent stopped.
+//  - `.codeep/hooks/` — scripts Codeep itself runs around every tool call.
+//  - `.codeep/skills/` — a skill's steps are commands Codeep runs when the
+//    skill is used (see skillBundles.ts, which loads project skills).
+//  - `.codeep/agents/` — a sub-agent definition. Its `tools:` is the
+//    allowlist the nested run is checked against and REPLACES the parent's,
+//    so it can hand a delegated run a tool this run was restricted from; its
+//    `model:` decides which provider the code in that run's context is sent
+//    to. Both take effect the next time anything delegates to that name.
+//  - `.codeep/mcp_servers.json`, `.mcp.json` — every entry is a command
+//    Codeep spawns.
+//  - `.codeep/config.json` — Codeep's own settings for this project.
+//
+// `.codeep/commands/` is deliberately NOT here, and must stay out: a custom
+// command is prompt text, expanded into a message to the model, and the model's
+// tool calls then go through every gate in this file. Gating it would put a
+// confirmation in front of writing a prompt. That is also the line the agents
+// directory falls on the other side of: an agent file is prompt text PLUS a
+// tool allowlist and a model, which is the part a prompt cannot change.
+//
+// WHAT THIS DOES NOT COVER, so nobody reads the list above as a boundary:
+// only the tools that take a `path` are gated. `execute_command` reaches the
+// same files through any program that writes one — reviewers proved it with
+// git 2.54 by having the agent write an ordinary `setup.cjs` (not a name on
+// this list, so not gated) and then run `node setup.cjs`, which wrote
+// `.git/config`; `cp`, `tee` and `mv` do it in one step and need no file
+// written first. There is no fix for that here, because a gate that asked
+// about every command able to write a file would be asking about every
+// command.
+//
+// Nor is the classification a property of the file: it is decided at the
+// moment of the write, from where the repository keeps its hooks AT THAT
+// MOMENT. `write_file ci/deploy.sh` in a repository with the default hook
+// directory is an ordinary file and goes through unasked; a later `git config
+// core.hooksPath ci` makes that same file a live `pre-commit` without any
+// further write for this gate to see. The cache below is dropped before every
+// command line so the NEXT write is judged against the new hook directory,
+// but nothing re-judges the writes that already happened — reclassifying them
+// would mean keeping every path a run has written and re-running the gate
+// after each command, and there is still nothing to do about a file already
+// on disk. What remains covered is the write that installs the hook itself:
+// `core.hooksPath` lives in `.git/config`, which this gate confirms.
+//
+// What it IS worth is the case it was built for: a model that writes a hook
+// or a `.git/config` as part of an ordinary-looking edit, with no shell
+// involved at all, which is what a prompt injection reaches for because
+// execute_command is the tool users already watch. That write now stops for a
+// confirmation in every mode. Someone who has approved a shell command has
+// approved a shell command.
+//
+// The reasons are written for the person answering the confirmation prompt:
+// "a config file" tells them nothing, "this decides what git runs" does.
+
+const GIT_REASON = 'This file controls what commands git runs — core.fsmonitor, core.pager and diff.external are commands git executes for you.';
+const GIT_HOOK_REASON = 'This is a git hook — git runs it on your next commit or push, in your own terminal.';
+/** The same gate, for the repository that pointed `core.hooksPath` at its own
+ *  root. Every top-level file matches there, so the reason may not say "this
+ *  is a git hook": it would tell someone editing `package.json` that their
+ *  package manifest is a hook. What is true of all of them is the directory
+ *  they sit in, so that is what this says. */
+const HOOKS_AT_ROOT_REASON =
+  "This repository has named its own top level as its git hook directory (core.hooksPath), so git runs files " +
+  'from here by name — writing one can install a hook that runs on your next commit.';
+const CODEEP_HOOK_REASON = 'This file runs on every tool call.';
+const SKILL_REASON = 'This is a skill — its steps are commands Codeep runs whenever the skill is used.';
+const MCP_SERVERS_REASON = 'This file starts MCP servers — every entry is a command Codeep spawns.';
+const AGENT_REASON = 'This file defines a sub-agent — the tools it may use and the model it runs on, every time something delegates to it.';
+const CODEEP_CONFIG_REASON = "This file is Codeep's own configuration for this project.";
+/** The one reason that is not a constant: it carries git's own refusal with
+ *  it, because over ACP this prompt is the only place the user is ever told
+ *  which key made Codeep refuse and how to clear it. */
+const unknownHooksReason = (why: string) =>
+  'Codeep could not ask git where this repository keeps its hooks, so it cannot tell whether this write installs ' +
+  `one that runs on your next commit. ${why}`;
+
+/** Directory names that are a git hook directory by convention, so a repo
+ *  using one is covered before git is asked anything. `.githooks` is the bare
+ *  `core.hooksPath` convention and `.husky` is husky's. */
+const HOOK_DIRECTORY_NAMES = new Set(['.githooks', '.husky']);
+
+/** Tools whose `path` parameter names a file they create, change or remove. */
+const PATH_WRITING_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'create_directory']);
+
+/**
+ * A path's segments as the filesystem will match them: lowercased, because
+ * macOS and Windows both hand `.GIT/config` to the same file git reads, and
+ * without the trailing dots and spaces Windows silently drops — `.git./config`
+ * and `.git /config` are two literal directories on POSIX but land in the real
+ * `.git` on Windows, which is the whole point of writing them that way. A
+ * segment that is nothing but dots or spaces keeps its own spelling, so `..`
+ * stays `..` instead of collapsing to nothing.
+ */
+function pathSegments(path: string): string[] {
+  return path
+    .split(/[\\/]+/)
+    .filter(s => s && s !== '.')
+    .map(s => (s.replace(/[. ]+$/, '') || s).toLowerCase());
+}
+
+/**
+ * Where this repository's hooks live — resolveHooksDirResult's three-way
+ * answer, narrowed to what this gate matches on.
+ *
+ * - `segments` — the hook directory, relative to the project root.
+ * - `none` — there is no hook directory under this root to gate: not a
+ *   repository at all, or a `core.hooksPath` pointing outside the project,
+ *   which is not somewhere the agent can write anyway. (The `.git/hooks`
+ *   default is covered by the `.git` name before git is asked anything.)
+ * - `unknown` — git was refused, so the answer is not "no".
+ */
+type HooksDirectory =
+  | { kind: 'segments'; segments: string[] }
+  | { kind: 'none' }
+  | { kind: 'unknown'; reason: string };
+
+/**
+ * The answer per project, for one run.
+ *
+ * The comment that used to sit here refused a cache, and it was right about
+ * the risk and wrong about the cost: `core.hooksPath` really can change
+ * mid-run without any write this gate sees — `execute_command` running
+ * `git config core.hooksPath .evil` needs no path-writing tool — but paying
+ * for that with a fresh resolution on EVERY path-writing call meant two git
+ * subprocesses per tool call. Measured over 100 ordinary writes in a real
+ * repository: 2484ms without the cache, 4.7ms with it (24.8ms → 0.05ms per
+ * call), all of it on the event loop and almost all of it on the common path
+ * where no name matches anything.
+ *
+ * So the answer is cached and thrown away the moment a command runs, which is
+ * the only in-run way the answer can change. Every caller that spawns a
+ * command line calls forgetHooksDirectory() first: the execute_command tool
+ * below, the ACP path that delegates that tool to the client's terminal (see
+ * agent.ts), and the two skill runners. `git config core.hooksPath .evil`
+ * followed by `write_file .evil/pre-commit` therefore still finds a cold
+ * cache, which is the case the old comment was protecting.
+ *
+ * Keyed by project root because one process serves several workspaces over
+ * ACP, and cleared whole rather than per root because a command line can `cd`
+ * into any of them.
+ */
+const hooksDirectoryCache = new Map<string, HooksDirectory>();
+
+/** Drop the cached hook directories. Call before spawning a command line. */
+export function forgetHooksDirectory(): void {
+  hooksDirectoryCache.clear();
+}
+
+/**
+ * Where this repository's hooks live, as segments relative to the project
+ * root — see HooksDirectory.
+ *
+ * Asking git is the only way to learn where a repo actually keeps them, and
+ * gitHookInstaller already does it with a hardened environment: every
+ * command-executing key is neutralised, `core.hooksPath` alone is left under
+ * the repo's control, and `git rev-parse` only prints a path. So the
+ * resolution cannot run anything the repository chose.
+ *
+ * resolveHooksDirResult() is the variant that does not throw, and the reason
+ * it exists: `none` and `unknown` used to be the same null, and reading a
+ * refusal as "no hook directory" switched this gate off in exactly the
+ * repositories that earned the refusal. It is still wrapped in a try/catch,
+ * and ANY throw counts as unknown — the fail-closed answer must not depend on
+ * a promise made by another module.
+ */
+function hooksDirectorySegments(projectRoot: string, realRoot: string): HooksDirectory {
+  const cached = hooksDirectoryCache.get(projectRoot);
+  if (cached !== undefined) return cached;
+  const answer = resolveHooksDirectory(projectRoot, realRoot);
+  hooksDirectoryCache.set(projectRoot, answer);
+  return answer;
+}
+
+function resolveHooksDirectory(projectRoot: string, realRoot: string): HooksDirectory {
+  let result: HooksDirResult;
+  try {
+    result = resolveHooksDirResult(projectRoot);
+  } catch (error) {
+    return { kind: 'unknown', reason: error instanceof Error ? error.message : String(error) };
+  }
+  if (result.kind !== 'hooks') return result;
+  // Both spellings of the root, as below: git may print the hooks path
+  // canonicalised (an absolute `core.hooksPath`, a symlinked checkout), and on
+  // macOS that is `/private/var/…` where the root arrived as `/var/…`.
+  const rel = insideRoot(projectRoot, result.dir) ?? insideRoot(realRoot, result.dir);
+  // `??` and not `||`: '' is the hook directory BEING the project root, which
+  // is a repository this has to cover, and pathSegments('') is the empty
+  // prefix that says so.
+  return rel === null ? { kind: 'none' } : { kind: 'segments', segments: pathSegments(rel) };
+}
+
+/**
+ * What a project-relative path controls, or null when it controls nothing.
+ *
+ * Matched on path segments rather than on a prefix, so a nested checkout's
+ * `vendor/lib/.git/config` is covered the same as the top-level one.
+ *
+ * `hooksDir` is the repository's own hook directory. It costs a `git
+ * rev-parse` the first time it is asked in a run, so it is asked for only once
+ * a name has failed to answer.
+ */
+function reasonForSegments(relativePath: string, hooksDir: () => HooksDirectory): string | null {
+  const segments = pathSegments(relativePath);
+  if (segments.includes('.git')) return GIT_REASON;
+  if (segments.some(s => HOOK_DIRECTORY_NAMES.has(s))) return GIT_HOOK_REASON;
+  const last = segments[segments.length - 1];
+  if (last === '.mcp.json') return MCP_SERVERS_REASON;
+  for (let i = 0; i < segments.length - 1; i++) {
+    if (segments[i] !== '.codeep') continue;
+    if (segments[i + 1] === 'hooks') return CODEEP_HOOK_REASON;
+    if (segments[i + 1] === 'skills') return SKILL_REASON;
+    if (segments[i + 1] === 'agents') return AGENT_REASON;
+    if (i + 2 !== segments.length) continue; // `.codeep/<file>` only, not deeper
+    if (segments[i + 1] === 'mcp_servers.json') return MCP_SERVERS_REASON;
+    if (segments[i + 1] === 'config.json') return CODEEP_CONFIG_REASON;
+  }
+  const hooks = hooksDir();
+  // Git could not be asked, so "this is not a hook" is not something anyone
+  // knows. A repository gets that answer when its own config names a program
+  // git would run, which is the last repository to hand a write through
+  // unasked — so every write in it is confirmed until the config is fixed.
+  // Noisy, and that is the trade: the alternative is a `core.hooksPath` this
+  // cannot see, pointed anywhere, written into silently.
+  if (hooks.kind === 'unknown') return unknownHooksReason(hooks.reason);
+  if (hooks.kind === 'none') return null;
+  // `every` over the empty prefix is trivially true, which is right: a repo
+  // whose `core.hooksPath` IS its root runs `<root>/pre-commit` on the next
+  // commit (verified with git 2.54), and that file was going unasked. What
+  // would NOT be right is reading that empty prefix as "every path in the
+  // project is a hook" — it would put a confirmation in front of every write
+  // in the repository. git looks for hooks DIRECTLY in its hook directory, so
+  // at the root that is the top level and nothing under it. A hook directory
+  // of its own keeps the whole subtree: a hook sources its helpers from
+  // beside it, the way husky's `pre-commit` sources `_/husky.sh`.
+  const prefix = hooks.segments;
+  if (prefix.every((s, i) => segments[i] === s) && (prefix.length > 0 || segments.length === 1)) {
+    // Which reason depends on which of those two shapes matched: a hook
+    // directory of its own means this file IS one, the root means only that
+    // this is the directory git looks in — and that one reports `package.json`
+    // along with everything else at the top level.
+    return prefix.length > 0 ? GIT_HOOK_REASON : HOOKS_AT_ROOT_REASON;
+  }
+  return null;
+}
+
+/** The path with a symlinked ancestor resolved, or null if it cannot be. */
+function realPathThroughLinks(absolutePath: string): string | null {
+  let existing = absolutePath;
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      lstatSync(existing); // lstat, so a symlink counts as existing
+      break;
+    } catch {
+      const parent = dirname(existing);
+      if (parent === existing) return null;
+      rest.unshift(basename(existing));
+      existing = parent;
+    }
+  }
+  try {
+    return join(realpathSync(existing), ...rest);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The path relative to `root`, or null when it is not inside it.
+ *
+ * The empty string is a RESULT, not a miss: it means the path is the root
+ * itself. Folding it into null cost the hook gate a real repository — one
+ * with `core.hooksPath` set to its own root, where git runs `<root>/pre-commit`
+ * on the next commit and the relative path of the hook directory is ''.
+ */
+function insideRoot(root: string, absolutePath: string): string | null {
+  const rel = relative(root, absolutePath);
+  return !rel.startsWith('..') && !isAbsolute(rel) ? rel : null;
+}
+
+/**
+ * The tail of the refusal one of these writes gets when the run has nobody to
+ * ask — no permission callback at all, which is how `codeep review --fix`
+ * runs in CI. agent.ts builds the refusal; headlessReview.ts recognises it by
+ * this text so it can say so in the run output rather than leave it buried in
+ * the agent's tool log.
+ *
+ * One constant, in the module that owns the classification rather than in
+ * agent.ts, for two reasons: a reworded refusal that stopped matching would
+ * put CI back to failing silently, and agent.js is a module the fix-run tests
+ * replace wholesale — a constant read from there would have been undefined in
+ * exactly the test that guards this.
+ */
+export const NO_CONFIRMER_REFUSAL = 'Nobody could be asked to confirm it, so nothing was written.';
+
+export interface TrustBearingWrite {
+  /** The path exactly as the tool call named it, for the prompt. */
+  path: string;
+  /** The absolute path the classification matched — one spelling per file, so
+   *  a "never again" answer given for `.git/config` also covers
+   *  `./.git/config` and the symlink that reaches it. Never shown to anyone;
+   *  it exists to key that answer (see agent.ts). */
+  file: string;
+  /** One plain sentence about what the file controls. */
+  reason: string;
+}
+
+/**
+ * What a tool call would write that decides what runs later, or null.
+ *
+ * Callers use this for two things: to force a confirmation the mode would
+ * otherwise skip (see agent.ts), and to tell the person answering it what
+ * they are approving.
+ *
+ * A symlink inside the project can point at one of these names — `ln -s .git
+ * tools/cfg` makes a write to `tools/cfg/config` land in the real `.git`, and
+ * validatePath allows it because it never leaves the project — so the
+ * resolved path is classified alongside the one the model asked for.
+ */
+export function trustBearingWrite(toolCall: ToolCall, projectRoot: string): TrustBearingWrite | null {
+  if (!PATH_WRITING_TOOLS.has(normalizeToolName(toolCall.tool))) return null;
+  const path = toolCall.parameters?.path;
+  if (typeof path !== 'string' || !path) return null;
+
+  const absolute = isAbsolute(path) ? resolve(path) : resolve(projectRoot, path);
+  let realRoot = projectRoot;
+  try {
+    realRoot = realpathSync(projectRoot);
+  } catch {
+    // Unreadable root: the given path is all there is to go on.
+  }
+
+  const candidates = [absolute];
+  const resolved = realPathThroughLinks(absolute);
+  if (resolved && resolved !== absolute) candidates.push(resolved);
+
+  // Looked up at most once per call, and only if a candidate gets far enough
+  // to need it. The cache behind it spans the run; this spans the call, so
+  // the two candidates below share one lookup.
+  let hooksDir: HooksDirectory | undefined;
+  const hooksDirOnce = () => {
+    if (hooksDir === undefined) hooksDir = hooksDirectorySegments(projectRoot, realRoot);
+    return hooksDir;
+  };
+
+  for (const candidate of candidates) {
+    // Only the part below the project root is classified. The root's own
+    // path is not the agent's doing, and on macOS it usually arrives
+    // unresolved (/var/folders/… for /private/var/folders/…), so both
+    // spellings get a chance to match.
+    const rel = insideRoot(projectRoot, candidate) ?? insideRoot(realRoot, candidate);
+    const reason = rel && reasonForSegments(rel, hooksDirOnce);
+    // The resolved candidate is the stable name for this file, so it keys the
+    // answer when there is one.
+    if (reason) return { path, file: resolved ?? candidate, reason };
+  }
+  return null;
 }
 
 /**
@@ -587,6 +961,13 @@ async function dispatchTool(
         const args = (parameters.args as string[]) || [];
 
         if (!command) return { success: false, output: '', error: 'Missing required parameter: command', tool, parameters };
+
+        // A command is the one thing in a run that can move this repository's
+        // hooks — `git config core.hooksPath .evil` — without any write the
+        // gate above sees. Drop the cached answer before it runs, so the next
+        // `write_file .evil/pre-commit` asks git again rather than trusting
+        // where the hooks were a moment ago.
+        forgetHooksDirectory();
 
         // Command throttle — guards against agent loops that spawn commands
         // every iteration (each can be up to 2 minutes of subprocess time).

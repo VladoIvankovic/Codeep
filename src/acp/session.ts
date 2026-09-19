@@ -5,7 +5,7 @@ import { join, isAbsolute } from 'path';
 import { runAgent, PermissionOutcome } from '../utils/agent.js';
 import { getProjectContext, ProjectContext } from '../utils/project.js';
 import { ToolCall } from '../utils/tools.js';
-import type { FsCallbacks } from '../utils/toolExecution.js';
+import type { FsCallbacks, TrustBearingWrite } from '../utils/toolExecution.js';
 import type { Message } from '../config/index.js';
 
 export interface AgentSessionOptions {
@@ -16,7 +16,18 @@ export interface AgentSessionOptions {
   onChunk: (text: string) => void;
   onThought?: (text: string) => void;
   onToolCall?: (toolCallId: string, toolName: string, kind: string, title: string, status: 'pending' | 'running' | 'finished' | 'error', locations?: string[], rawOutput?: string) => void;
-  onRequestPermission?: (toolCall: ToolCall) => Promise<PermissionOutcome>;
+  /**
+   * Ask the user about one tool call. Handed straight to runAgent, so the
+   * signature is runAgent's: `trustBearing` is what the agent's own gate
+   * already worked out about the call — the file it would write that decides
+   * what runs later, or null when it writes no such file — and the dialog
+   * words itself from that instead of resolving the path a second time.
+   *
+   * Declared with one parameter, this type said the second argument did not
+   * exist while runAgent passed it on every call, so the one caller that
+   * needs it had to cast its way back to the truth.
+   */
+  onRequestPermission?: (toolCall: ToolCall, trustBearing?: TrustBearingWrite | null) => Promise<PermissionOutcome>;
   /** Tools to force into the per-run dangerous set (ACP manual mode). */
   extraDangerousTools?: string[];
   onExecuteCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;

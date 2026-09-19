@@ -119,6 +119,24 @@ describe('composeMessage', () => {
     expect(text).toContain('…');
     expect(text.match(/```/g)).toHaveLength(2);
   });
+
+  it('carries the reason the file was worth asking about', () => {
+    // The terminal dialog says what the file decides. Someone answering from a
+    // phone has the least context of anyone, so leaving it out asks them to
+    // approve on less than the person at the desk had.
+    const text = composeMessage('.git/config', 'write_file', true, 'This file controls what commands git runs.');
+    expect(text).toContain('what commands git runs');
+    // Ahead of the command, which is where the eye lands first.
+    expect(text.indexOf('what commands git runs')).toBeLessThan(text.indexOf('.git/config'));
+  });
+
+  it('escapes a marker in the reason rather than risking the message', () => {
+    // parse_mode is 'Markdown', and Telegram rejects a whole message whose
+    // markup is unbalanced — one stray underscore and the question never
+    // arrives.
+    const text = composeMessage('x', 'write_file', true, 'This file runs pre_tool_call.sh on every call.');
+    expect(text).toContain('pre\\_tool\\_call.sh');
+  });
 });
 
 describe('buildKeyboard', () => {

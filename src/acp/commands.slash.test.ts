@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, chmodSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -64,6 +64,11 @@ import { config, saveSession, loadSession } from '../config/index';
 
 const agentModeBefore = config.get('agentMode');
 const autoSaveBefore = config.get('autoSave');
+// git is real in this file — fixtures run `git init`, and the hardening reads
+// the config of the repository they build. Point git at a file that is not
+// there, so a `core.hooksPath`, an `init.templateDir` or a `commit.gpgsign`
+// in whoever's global config this runs under cannot decide what is asserted.
+const gitConfigEnvBefore = { global: process.env.GIT_CONFIG_GLOBAL, system: process.env.GIT_CONFIG_SYSTEM };
 let ws: string;
 let session: AcpSession;
 let chunks: string[];
@@ -77,6 +82,8 @@ function run(input: string, signal?: AbortSignal, agentRun?: AcpAgentRunOptions)
 
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'codeep-acp-slash-'));
+  process.env.GIT_CONFIG_GLOBAL = join(fakeHome, 'no-such-gitconfig');
+  process.env.GIT_CONFIG_SYSTEM = join(fakeHome, 'no-such-gitconfig');
   initWorkspace(ws, true);
   session = {
     sessionId: 'acp-1',
@@ -106,6 +113,10 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  if (gitConfigEnvBefore.global === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+  else process.env.GIT_CONFIG_GLOBAL = gitConfigEnvBefore.global;
+  if (gitConfigEnvBefore.system === undefined) delete process.env.GIT_CONFIG_SYSTEM;
+  else process.env.GIT_CONFIG_SYSTEM = gitConfigEnvBefore.system;
   rmSync(fakeHome, { recursive: true, force: true });
 });
 
@@ -261,6 +272,34 @@ const AUTO: AcpAgentRunOptions = {
   onExecuteCommand: PERMISSIONS.onExecuteCommand,
   fs: PERMISSIONS.fs,
 };
+
+describe('commands that run the agent in auto mode', () => {
+  // Auto mode puts up no dialog, but the agent still needs a way to confirm a
+  // write to a file that decides what runs later: it refuses those outright
+  // when it has nobody to ask. Handed no callback at all, /go and a skill's
+  // agent step could not touch `.git/config` even after the user said yes,
+  // while a plain prompt in the same session could.
+  const autoAnswer = vi.fn(async () => 'allow_once' as const);
+  const auto = (): AcpAgentRunOptions => ({ ...AUTO, onAutoModePermission: autoAnswer });
+
+  beforeEach(() => { autoAnswer.mockClear(); });
+
+  it('hand the agent auto mode\'s answer in place of the missing dialog', async () => {
+    await planPending();
+    await run('/go', undefined, auto());
+    expect(vi.mocked(runAgent).mock.calls[0][2]!.onRequestPermission).toBe(autoAnswer);
+  });
+
+  it('still run a skill\'s shell lines without asking', async () => {
+    // Why the answer travels under its own key: this file reads
+    // `onRequestPermission` being set as "this session asks the user", so
+    // putting it there would start gating commands in the mode that promises
+    // not to ask about them.
+    await run('/commit', undefined, auto());
+    expect(autoAnswer).not.toHaveBeenCalled();
+    expect(vi.mocked(spawnSync)).toHaveBeenCalledTimes(2);
+  });
+});
 
 /** Manual mode where the user allows every command. */
 const manual = (overrides: Partial<AcpAgentRunOptions> = {}): AcpAgentRunOptions => ({
@@ -446,6 +485,79 @@ describe('skill command steps', () => {
     expect(opts.onRequestPermission).not.toHaveBeenCalled();
     expect(vi.mocked(spawnSync)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(spawnSync).mock.calls[0][0]).toBe('git push');
+  });
+
+  // The trap is a `#!/bin/sh` script, so this one is POSIX-only.
+  it.skipIf(process.platform === 'win32')('run git with the repository\'s own executing config neutralised', async () => {
+    // Proven with git 2.54: a repo-scope `gpg.program` that createCommit
+    // neutralises fired anyway when the same `git commit` ran as a skill step,
+    // because the step was spawned with a raw process.env.
+    const { spawnSync: realSpawnSync } = await vi.importActual<typeof import('child_process')>('child_process');
+    const outside = mkdtempSync(join(tmpdir(), 'codeep-acp-skill-trap-'));
+    const marker = join(outside, 'gpg-ran');
+    const trap = join(outside, 'gpg-trap.sh');
+    // A real executable: `gpg.program` is spawned WITHOUT a shell, so a value
+    // like `touch X; false` would have git look for a program of that name and
+    // the marker would stay absent whatever the environment.
+    writeFileSync(trap, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`);
+    chmodSync(trap, 0o755);
+
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: ws, stdio: 'ignore' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@test.com');
+    git('config', 'user.name', 'Test User');
+    git('config', 'commit.gpgsign', 'true');
+    git('config', 'gpg.program', trap);
+    writeCustomSkill('hostile-commit', 'git commit --allow-empty -m "from a skill"');
+
+    // This one step runs for real; everything else in the file keeps the stub.
+    vi.mocked(spawnSync).mockImplementationOnce(
+      ((...args: unknown[]) => (realSpawnSync as unknown as (...a: unknown[]) => unknown)(...args)) as never,
+    );
+    try {
+      await run('/hostile-commit', undefined, AUTO);
+
+      expect(existsSync(marker)).toBe(false);
+      // And the commit still happened: a trap that stays cold because git died
+      // on the way is a different bug, not a fix.
+      expect(execFileSync('git', ['log', '--oneline'], { cwd: ws, encoding: 'utf-8' })).toContain('from a skill');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('fail the step that needs git when the repository is one git refuses to run in, and only that step', async () => {
+    // `remote.<name>.uploadpack` names a program git runs at the far end of a
+    // fetch or push, and git keeps the FIRST value it sees for that key — so
+    // no `-c` or GIT_CONFIG_* override reaches it and hardening can only
+    // refuse. Proven with git 2.54.
+    //
+    // The regression this pins: the helper that ran here hardened EVERY step
+    // and threw, so in this repository a skill died on `echo`, which cannot
+    // reach git at all. Now the line decides, and a refusal fails its own
+    // step with the message the user has to act on.
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: ws, stdio: 'ignore' });
+    git('init', '-q');
+    git('config', 'remote.origin.uploadpack', '/bin/echo');
+
+    mkdirSync(join(fakeHome, '.codeep', 'skills'), { recursive: true });
+    writeFileSync(join(fakeHome, '.codeep', 'skills', 'mixed.json'), JSON.stringify({
+      name: 'mixed', description: 'one step that cannot reach git, one that does', steps: [
+        { type: 'command', content: 'echo hello' },
+        { type: 'command', content: 'git status' },
+      ],
+    }));
+
+    const res = await run('/mixed', undefined, AUTO);
+
+    // The step that cannot reach git ran, and the one that would have failed.
+    expect(vi.mocked(spawnSync)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(spawnSync).mock.calls[0][0]).toBe('echo hello');
+    expect(res.response).toContain('Skill **mixed** failed');
+    expect(res.response).toContain('`git status` was not run');
+    // The user is told the key and how to clear it, not "git failed".
+    expect(res.response).toContain('remote.origin.uploadpack');
+    expect(res.response).toContain('git config --unset');
   });
 
   it('run in auto mode as they always have', async () => {

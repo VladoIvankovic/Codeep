@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { getEventListeners } from 'events';
-import { validateCommand, validateCommandAsync, executeCommand, execSimple, getAllowedCommands, formatCommandResult } from './shell';
+import { validateCommand, validateCommandAsync, executeCommand, execSimple, getAllowedCommands, formatCommandResult, shellCommandEnv } from './shell';
 
 // ─── Mock child_process ───────────────────────────────────────────────────────
 vi.mock('child_process', async (importOriginal) => {
@@ -22,8 +22,8 @@ vi.mock('fs', async (importOriginal) => {
   };
 });
 
-import { spawnSync } from 'child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'fs';
+import { spawnSync, execFileSync } from 'child_process';
+import { existsSync, chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'fs';
 
 const mockSpawnSync = spawnSync as ReturnType<typeof vi.fn>;
 const mockExistsSync = existsSync as ReturnType<typeof vi.fn>;
@@ -614,5 +614,496 @@ describe('executeCommandAsync — abort signal', () => {
       expect(result.cancelled).toBeUndefined();
     }
     expect(getEventListeners(ac.signal, 'abort')).toHaveLength(0);
+  });
+});
+
+// ─── git through the command tools ───────────────────────────────────────────
+
+/**
+ * `git` is on ALLOWED_COMMANDS, so a skill's shell line, a `!` command and the
+ * agent's own execute_command tool all reach git directly — carrying none of
+ * the `--no-ext-diff`-style flags Codeep's own git calls pass. A repository
+ * ships its own `.git/config`, and a `filter.<driver>.clean` there is RUN
+ * during the index refresh that a plain `git status` performs. So both spawn
+ * paths have to hand git the same hardened environment.
+ *
+ * Real git, a real repository and a real trap: what git does with a config
+ * file is the whole subject, and a mocked spawn would only prove that the test
+ * agrees with itself.
+ */
+const hasGit = (() => {
+  try {
+    execFileSync('git', ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+/**
+ * The trap is a `touch` in a config value git runs through a shell, so this
+ * suite is POSIX-only. Skipping on Windows is right; skipping because git is
+ * MISSING is not — that would quietly turn the suite into nothing on a CI
+ * runner, which is how hardening stops protecting anything without anyone
+ * noticing. Hence the assertion below rather than one more `skipIf`.
+ */
+const posixGit = process.platform !== 'win32';
+
+describe('git hardening preconditions (shell)', () => {
+  it('git is on PATH, so the suite below actually runs', () => {
+    expect(hasGit).toBe(true);
+  });
+});
+
+describe.skipIf(!hasGit || !posixGit)('git through executeCommand / executeCommandAsync', () => {
+  let base: string;
+  let repo: string;
+  let markers: string;
+
+  /**
+   * Point git at config files that are not there.
+   *
+   * These fixtures run REAL git, and the calls under test build their
+   * environment from `process.env` — so an `init.templateDir` in the
+   * developer's own global config would decide what `git init` puts in
+   * `.git/hooks`, and a global `filter.*` would land in the scan. Isolating
+   * has to happen on the process, not on a `base` passed to one call.
+   */
+  const NOWHERE = join(tmpdir(), 'codeep-no-such-gitconfig');
+  const GIT_CONFIG_KEYS = ['HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM'] as const;
+  const savedGitConfigEnv: Record<string, string | undefined> = {};
+
+  /** git for the test's own setup, with the trap disabled on the command line. */
+  const setup = (cwd: string, args: string[]) =>
+    execFileSync('git', ['-c', 'core.fsmonitor=false', ...args], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+
+  /** Names of the traps that fired. `existsSync` is mocked in this file. */
+  const fired = () => readdirSync(markers).sort();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExistsSync.mockReturnValue(true);
+    mockSpawnSync.mockReturnValue(makeSpawnResult());
+
+    for (const key of GIT_CONFIG_KEYS) {
+      savedGitConfigEnv[key] = process.env[key];
+      process.env[key] = NOWHERE;
+    }
+
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'codeep-shell-git-')));
+    repo = join(base, 'repo');
+    markers = join(base, 'markers');
+    mkdirSync(repo);
+    mkdirSync(markers); // outside the repo, so a marker is never a git change
+
+    setup(base, ['init', '-q', 'repo']);
+    setup(repo, ['config', 'user.email', 'test@test.com']);
+    setup(repo, ['config', 'user.name', 'Repo User']);
+    writeFileSync(join(repo, '.gitattributes'), '*.bin filter=hostile\n');
+    writeFileSync(join(repo, 'notes.bin'), 'before\n');
+    setup(repo, ['add', '-A']);
+    setup(repo, ['commit', '-qm', 'initial']);
+
+    // Armed after the initial commit, so the setup above never runs it. This
+    // is the index-refresh trap for the suite: `core.fsmonitor` is what git
+    // runs on the `git status` these tests make, it is neutralised rather
+    // than refused, and so the call still returns a real answer to assert on.
+    //
+    // A `filter.<d>.clean` is deliberately NOT armed here, and the reason
+    // changed in this round: a repo-scope content filter that is not one of
+    // the well-known integrations now REFUSES every git call in the
+    // repository (see SAFE_CONTENT_FILTER_COMMANDS in utils/git.ts). That is
+    // the correct answer and it has its own tests below — but a refusal stops
+    // `git status` before it reaches the index refresh, and a trap that stays
+    // cold because git never ran proves nothing about the environment.
+    setup(repo, ['config', 'core.fsmonitor', `touch "${join(markers, 'fsmonitor')}"; false`]);
+    // Same length as the original on purpose: git can skip the content
+    // comparison when the size already differs, and that comparison is what
+    // reaches the filter driver the tests below arm.
+    writeFileSync(join(repo, 'notes.bin'), 'after.\n');
+  });
+
+  /**
+   * Give the repository a content filter of its own — a driver
+   * `.gitattributes` already routes `*.bin` at. Not part of the fixture
+   * because it makes every git call in the repository fail by design.
+   */
+  const armContentFilter = () =>
+    setup(repo, ['config', 'filter.hostile.clean', `touch "${join(markers, 'filter-clean')}"; cat`]);
+
+  afterEach(() => {
+    for (const key of GIT_CONFIG_KEYS) {
+      if (savedGitConfigEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedGitConfigEnv[key];
+    }
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('executeCommandAsync does not run the repository index-refresh program', async () => {
+    const { executeCommandAsync } = await import('./shell');
+
+    const result = await executeCommandAsync('git', ['status', '--porcelain'], { cwd: repo });
+
+    expect(fired()).toEqual([]);
+    // Not vacuous: the call has to have reached the index refresh that would
+    // have run `core.fsmonitor`, and listing the modified file is what proves
+    // it got there rather than dying early.
+    expect(result.success).toBe(true);
+    expect(result.stdout).toContain('notes.bin');
+  });
+
+  it('executeCommand does not run the repository index-refresh program', async () => {
+    // The sync twin, spawning for real — every other test in this file mocks
+    // spawnSync, and a mocked spawn cannot run a program to begin with.
+    const actual = await vi.importActual<typeof import('child_process')>('child_process');
+    mockSpawnSync.mockImplementation(actual.spawnSync as never);
+
+    const result = executeCommand('git', ['status', '--porcelain'], { cwd: repo });
+
+    expect(fired()).toEqual([]);
+    expect(result.success).toBe(true);
+    expect(result.stdout).toContain('notes.bin');
+  });
+
+  it('refuses a git command in a repository that configures its own content filter', async () => {
+    // The policy this round settles. Emptying `filter.<d>.clean` is not safe
+    // — `required` defaults to false, so git would accept the filter as
+    // "did not run" and store the file UNFILTERED — so a driver that is not
+    // one of the well-known integrations stops the call instead.
+    armContentFilter();
+    const { executeCommandAsync } = await import('./shell');
+
+    const result = await executeCommandAsync('git', ['status', '--porcelain'], { cwd: repo });
+
+    expect(result.success).toBe(false);
+    // The driver, what it asked to run, the undo, and the warning off the
+    // workaround that would make Codeep write the plaintext.
+    expect(result.stderr).toContain('filter.hostile.clean');
+    expect(result.stderr).toContain('git config --unset filter.hostile.clean');
+    expect(result.stderr).toMatch(/filter\.hostile\.required false/);
+    expect(result.stderr).toMatch(/UNFILTERED/);
+    // Nothing ran, and nothing was silently emptied either.
+    expect(fired()).toEqual([]);
+  });
+
+  it('leaves a git-lfs content filter running, so those repositories still work', async () => {
+    // The other half of the policy: `git lfs install --local` writes exactly
+    // these lines, and a repository that has them has to keep working. The
+    // trap is a `git-lfs` on PATH — if the filter were emptied or refused,
+    // the marker would stay cold and `git status` would not come back clean.
+    const bin = join(base, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'git-lfs'), `#!/bin/sh\ntouch "${join(markers, 'lfs')}"\ncat\n`);
+    chmodSync(join(bin, 'git-lfs'), 0o755);
+    writeFileSync(join(repo, '.gitattributes'), '*.bin filter=lfs\n');
+    setup(repo, ['config', 'filter.lfs.clean', 'git-lfs clean -- %f']);
+    setup(repo, ['config', 'filter.lfs.smudge', 'git-lfs smudge -- %f']);
+    setup(repo, ['config', 'filter.lfs.required', 'true']);
+    const { executeCommandAsync } = await import('./shell');
+
+    const result = await executeCommandAsync('git', ['status', '--porcelain'], {
+      cwd: repo,
+      env: { PATH: `${bin}:${process.env.PATH}` },
+    });
+
+    expect(result.success, result.stderr).toBe(true);
+    // The filter really ran — which is the whole point of allowlisting it.
+    expect(fired()).toContain('lfs');
+    expect(fired()).not.toContain('fsmonitor');
+  });
+
+  it('refuses a content filter whose value only STARTS with an allowlisted one', async () => {
+    // Why the allowlist is a whole-value comparison. Git runs a filter
+    // command through a shell, so this value does what git-lfs does and then
+    // does something else — a `startsWith` check would wave it through.
+    writeFileSync(join(repo, '.gitattributes'), '*.bin filter=lfs\n');
+    setup(repo, ['config', 'filter.lfs.clean', `git-lfs clean -- %f; touch "${join(markers, 'lfs-tail')}"`]);
+    const { executeCommandAsync } = await import('./shell');
+
+    const result = await executeCommandAsync('git', ['status', '--porcelain'], { cwd: repo });
+
+    expect(result.success).toBe(false);
+    expect(result.stderr).toContain('filter.lfs.clean');
+    expect(fired()).toEqual([]);
+  });
+
+  it('keeps GIT_CONFIG pairs the caller declared', async () => {
+    const { executeCommandAsync } = await import('./shell');
+    const env = {
+      ...process.env,
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'user.name',
+      GIT_CONFIG_VALUE_0: 'Env User',
+    };
+
+    const status = await executeCommandAsync('git', ['status', '--porcelain'], { cwd: repo, env });
+    const name = await executeCommandAsync('git', ['config', '--get', 'user.name'], { cwd: repo, env });
+
+    // Their pair still decides user.name...
+    expect(name.stdout.trim()).toBe('Env User');
+    // ...and ours still hold. Spread the caller's env OVER the hardened one
+    // rather than passing it in as the base and their GIT_CONFIG_COUNT=1
+    // replaces ours, silently dropping every override above index 0 — and the
+    // filter runs.
+    expect(fired()).toEqual([]);
+    // Naming what the call had to reach, not just that it exited 0: this test
+    // once failed about once in four full-suite runs, when the config scan
+    // blew its 2s budget under load, fell open and let the filter run. The
+    // budget is now generous AND the scan fails closed, so the same load
+    // shows up here as a refusal in `stderr` rather than a cold-trap
+    // assertion that has to be guessed at.
+    expect(status.success, status.stderr).toBe(true);
+    expect(status.stdout).toContain('notes.bin');
+  });
+
+  /**
+   * A config git refuses to parse, which is the cheapest way to make the scan
+   * start and not finish. The expensive shapes — a config padded past the
+   * read buffer, a scan that times out — reach the same branch and are proven
+   * against real git in git.hardening.test.ts.
+   */
+  const unscannable = () => {
+    const path = join(base, 'bad.gitconfig');
+    writeFileSync(path, 'this is not a config file\n');
+    return { GIT_CONFIG_GLOBAL: path };
+  };
+
+  it('shellCommandEnv hardens a shell line that reaches git', async () => {
+    // The skill runners hand a whole line to a shell, so the binary-name
+    // check in executeCommand cannot see the git in it. Proven for real:
+    // without the hardened environment the clean filter runs here.
+    const actual = await vi.importActual<typeof import('child_process')>('child_process');
+    const line = 'cd . && git status --porcelain';
+
+    const proc = actual.spawnSync(line, {
+      cwd: repo,
+      shell: true,
+      encoding: 'utf-8',
+      env: shellCommandEnv(line, repo),
+    });
+
+    expect(fired()).toEqual([]);
+    expect(proc.stdout).toContain('notes.bin');
+  });
+
+  it('shellCommandEnv refuses a git line it cannot harden, and passes a line that is not git', () => {
+    // Fail closed for the line that could run git...
+    expect(() => shellCommandEnv('cd . && git status', repo, unscannable())).toThrow(/Refusing to run git/);
+    // ...and open for the one that cannot, so an unreadable config in the
+    // project does not also break `echo`.
+    expect(shellCommandEnv('echo hello', repo, unscannable()).GIT_CONFIG_GLOBAL).toBe(unscannable().GIT_CONFIG_GLOBAL);
+  });
+
+  it('executeCommand reports a refusal as the command failing, not as a throw', () => {
+    const result = executeCommand('git', ['status', '--porcelain'], { cwd: repo, env: unscannable() });
+
+    expect(result.success).toBe(false);
+    expect(result.stderr).toMatch(/Refusing to run git/);
+    // And git was never spawned with a half-built environment.
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
+
+  it('executeCommandAsync settles on a refusal instead of hanging', async () => {
+    // It builds the environment inside the promise executor, so a refusal
+    // that escaped would reject a promise nobody holds and never resolve the
+    // one the caller is awaiting. A hang fails this test as a timeout.
+    const { executeCommandAsync } = await import('./shell');
+
+    const result = await executeCommandAsync('git', ['status', '--porcelain'], { cwd: repo, env: unscannable() });
+
+    expect(result.success).toBe(false);
+    expect(result.stderr).toMatch(/Refusing to run git/);
+  });
+
+  /**
+   * A second repository UNDER the first, with its own traps. This is the
+   * shape that escapes a cwd-pinned scan: `git -C nested status` and
+   * `cd nested && git status` both read ITS `.git/config`, never the one at
+   * `repo` that hardenedGitEnv() was pointed at.
+   */
+  const makeNestedRepo = (): string => {
+    const nested = join(repo, 'nested');
+    setup(repo, ['init', '-q', 'nested']);
+    setup(nested, ['config', 'user.email', 'test@test.com']);
+    setup(nested, ['config', 'user.name', 'Nested User']);
+    writeFileSync(join(nested, '.gitattributes'), '*.bin filter=deep\n');
+    writeFileSync(join(nested, 'deep.bin'), 'before\n');
+    setup(nested, ['add', '-A']);
+    setup(nested, ['commit', '-qm', 'initial']);
+    // Armed after the initial commit, so the setup above never runs them.
+    // Both values are shell commands: git runs `core.fsmonitor` and a clean
+    // filter through a shell (verified, git 2.54), so `touch …; false` is a
+    // real trap here rather than a filename with a semicolon in it.
+    setup(nested, ['config', 'core.fsmonitor', `touch "${join(markers, 'nested-fsmonitor')}"; false`]);
+    // Same length as the original, so git cannot skip the content comparison
+    // that reaches the clean filter.
+    writeFileSync(join(nested, 'deep.bin'), 'after.\n');
+    return nested;
+  };
+
+  /** The nested checkout's own content filter, armed where it is the subject. */
+  const armNestedFilter = (nested: string) =>
+    setup(nested, ['config', 'filter.deep.clean', `touch "${join(markers, 'nested-clean')}"; cat`]);
+
+  it('scans the repository `git -C` actually runs in, not the spawn cwd', async () => {
+    // hardenedGitEnv() is pinned to one directory, and `-C` moves git before
+    // it reads any repository config — so a vendored checkout got the
+    // hardening of the project above it, which is none of its own. Proven
+    // with git 2.54: `git -C nested status` ran the nested `core.fsmonitor`.
+    makeNestedRepo();
+    const { executeCommandAsync } = await import('./shell');
+
+    const result = await executeCommandAsync('git', ['-C', 'nested', 'status', '--porcelain'], { cwd: repo });
+
+    expect(fired()).toEqual([]);
+    // Not vacuous: the call has to have reached the index refresh that would
+    // have run the fsmonitor, and listing the modified file proves it did.
+    expect(result.success, result.stderr).toBe(true);
+    expect(result.stdout).toContain('deep.bin');
+  });
+
+  it('refuses on the content filter of the repository `git -C` moved to', async () => {
+    // The same proof from the other side, and a sharper one: `repo` has no
+    // content filter at all, so a refusal naming `filter.deep.clean` can only
+    // have come from scanning the directory `-C` named.
+    armNestedFilter(makeNestedRepo());
+    const { executeCommandAsync } = await import('./shell');
+
+    const result = await executeCommandAsync('git', ['-C', 'nested', 'status', '--porcelain'], { cwd: repo });
+
+    expect(result.success).toBe(false);
+    expect(result.stderr).toContain('filter.deep.clean');
+    expect(fired()).toEqual([]);
+  });
+
+  it.each([
+    ['--git-dir', ['--git-dir', '.git', 'status']],
+    ['--git-dir=', ['--git-dir=.git', 'status']],
+    ['--work-tree', ['--work-tree=.', 'status']],
+    ['--exec-path', ['--exec-path=/tmp/fake-git-core', 'status']],
+    ['--config-env', ['--config-env=core.pager=EVIL', 'log']],
+  ])('refuses `git %s`, which aims git somewhere the scan did not look', (_name, args) => {
+    // `-C` can be followed; these cannot. `--git-dir` / `--work-tree` name
+    // another repository's config, `--config-env` hides the config VALUE
+    // behind an environment variable the approval prompt never shows, and
+    // `--exec-path` makes git load its own subcommands from a directory of
+    // the caller's choosing — which is code execution, not a config question.
+    const result = executeCommand('git', args, { cwd: repo });
+
+    expect(result.success).toBe(false);
+    expect(result.stderr).toMatch(/not allowed in agent mode/);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['-c include.path', ['-c', 'include.path=/tmp/evil.gitconfig', 'status']],
+    ['-c includeIf.<cond>.path', ['-c', 'includeIf.gitdir:/.path=/tmp/evil.gitconfig', 'status']],
+    ['-c INCLUDE.PATH', ['-c', 'INCLUDE.PATH=/tmp/evil.gitconfig', 'status']],
+    ['--config=include.path', ['--config=include.path=/tmp/evil.gitconfig', 'status']],
+  ])('refuses `git %s`, which hides a whole config file behind a path', (_name, args) => {
+    // `-c` is allowed on purpose: `git -c core.pager=/tmp/x log` names its
+    // program IN the command the user approved. `include.path` breaks exactly
+    // that — git reads every key in the named file, and the prompt showed a
+    // path. Verified against git 2.54 that the mixed-case and `includeIf`
+    // spellings pull the file in just as the plain one does, so the test
+    // covers all three.
+    const result = executeCommand('git', args, { cwd: repo });
+
+    expect(result.success).toBe(false);
+    expect(result.stderr).toMatch(/pulls in a whole config file/);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
+
+  it('still allows the `-c` forms that name what they run', () => {
+    // The judgement this narrows, not reverses: a `-c` the user can read in
+    // the approval prompt stays allowed, and `-C` still only moves git.
+    const actual = validateCommand('git', ['-c', 'core.pager=cat', '-C', 'sub', 'status']);
+
+    expect(actual.valid, actual.reason).toBe(true);
+  });
+
+  it.each(['--global', '--system', '--file'])('refuses `git config %s`, which writes into the scope the scan trusts', flag => {
+    // The scan deliberately leaves global and system scope alone, so git-lfs,
+    // commit signing and `git push` keep working. That makes those scopes the
+    // place to put a program if you can reach them — and execute_command
+    // could: `git config --global core.pager /tmp/x`, then the next Codeep
+    // git call runs it (proven with git 2.54 via GIT_CONFIG_GLOBAL).
+    const result = executeCommand('git', ['config', flag, 'core.pager', '/tmp/x'], { cwd: repo });
+
+    expect(result.success).toBe(false);
+    expect(result.stderr).toMatch(/writes the git config outside this repository/);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
+
+  it('still allows `git config` in this repository, whose config the scan reads', async () => {
+    // Repo-scope config is exactly what the scan neutralises, so writing it
+    // needs no extra gate — and blocking `git config` outright would break
+    // ordinary work like setting `user.email` for a checkout.
+    const { executeCommandAsync } = await import('./shell');
+
+    const result = await executeCommandAsync('git', ['config', '--local', 'user.email', 'someone@example.com'], { cwd: repo });
+
+    expect(result.success, result.stderr).toBe(true);
+    expect(setup(repo, ['config', '--get', 'user.email']).trim()).toBe('someone@example.com');
+  });
+
+  it('shellCommandEnv keeps the always-on pairs in force in a repository it never scanned', async () => {
+    // What shellCommandEnv can honestly promise. A shell line can `cd`
+    // anywhere, and no parse of the string can say where it ends up — so the
+    // scope-aware layer covers `repo` and nothing else. The always-on
+    // GIT_EXECUTING_CONFIG pairs travel with the environment instead, which
+    // is why `core.fsmonitor` is blanket there rather than scope-aware: it is
+    // the only thing left in a nested checkout.
+    //
+    // The nested `filter.deep.clean` DOES run here — GIT_CONFIG_* cannot
+    // wildcard `filter.*` — and that gap is documented on shellCommandEnv()
+    // rather than papered over. This test pins the half that is promised.
+    const actual = await vi.importActual<typeof import('child_process')>('child_process');
+    const nested = makeNestedRepo();
+    armNestedFilter(nested);
+    const line = 'cd nested && git status --porcelain';
+
+    const proc = actual.spawnSync(line, {
+      cwd: repo,
+      shell: true,
+      encoding: 'utf-8',
+      env: shellCommandEnv(line, repo),
+    });
+
+    expect(readdirSync(markers)).not.toContain('nested-fsmonitor');
+    expect(proc.stdout).toContain('deep.bin');
+    expect(nested).toBe(join(repo, 'nested'));
+  });
+
+  it('refuses every git call in a repository no override can protect, and lets the rest run', () => {
+    // `remote.<name>.uploadpack` names a program git runs on fetch and push,
+    // and git keeps the FIRST value it sees — so no environment override
+    // reaches it and the only safe answer is to not run git here. That must
+    // not take the rest of the session down with it.
+    setup(repo, ['config', 'remote.origin.uploadpack', '/tmp/hostile']);
+
+    const git = executeCommand('git', ['status', '--porcelain'], { cwd: repo });
+    expect(git.success).toBe(false);
+    expect(git.stderr).toContain('remote.origin.uploadpack');
+    expect(git.stderr).toContain('git config --unset remote.origin.uploadpack');
+
+    // Non-git work keeps running, and a shell line that cannot reach git is
+    // never refused either.
+    expect(executeCommand('echo', ['hello'], { cwd: repo }).success).toBe(true);
+    expect(() => shellCommandEnv('echo hello', repo)).not.toThrow();
+  });
+
+  it('leaves a non-git command environment alone', () => {
+    // Hardening every command would cost a `git config --list` per spawn and
+    // change environments that no git will ever read.
+    executeCommand('ls', ['-la'], { cwd: repo });
+
+    const env = mockSpawnSync.mock.calls[0][2].env as NodeJS.ProcessEnv;
+    expect(env.GIT_CONFIG_COUNT).toBe(process.env.GIT_CONFIG_COUNT);
+    expect(env.GIT_TERMINAL_PROMPT).toBe(process.env.GIT_TERMINAL_PROMPT);
   });
 });

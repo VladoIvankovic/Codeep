@@ -44,28 +44,45 @@ export { nextOffset } from './telegramUpdates';
 const MAX_COMMAND_CHARS = 300;
 
 /**
+ * Markdown markers neutralised.
+ *
+ * Telegram rejects a WHOLE message whose markup is unbalanced (these go out
+ * with `parse_mode: 'Markdown'`), so a single stray underscore in the text
+ * would mean the question never arrives at all. A visible backslash beats a
+ * phone that stayed silent.
+ */
+const escapeMarkdown = (text: string): string => text.replace(/([_*`[])/g, '\\$1');
+
+/**
  * The message text.
  *
  * Fenced, because a command containing underscores or asterisks would otherwise
  * be mangled by Markdown parsing into something that is not what will run — and
  * approving a command you were shown incorrectly is the one failure this whole
  * feature must not have.
+ *
+ * `reason` is what the file being written decides — "this file controls what
+ * commands git runs". The terminal dialog shows it, and someone answering from
+ * a phone is the one with the least context, so a message without it asks them
+ * to approve on less than the person at the desk had.
  */
 export function composeMessage(
   command: string,
   toolName: string,
   isDestructive: boolean,
+  reason?: string,
 ): string {
   const head = isDestructive
     ? '⚠️ Codeep wants to run a destructive tool'
     : 'Codeep needs approval';
+  const why = reason ? `\n\n⚠️ ${escapeMarkdown(reason)}` : '';
   const trimmed = command.length > MAX_COMMAND_CHARS
     ? command.slice(0, MAX_COMMAND_CHARS - 1) + '…'
     : command;
   // A fence inside the command would close ours early and leak the rest as
   // prose. Neutralise it rather than trusting the input.
   const safe = trimmed.replace(/```/g, "'''");
-  return `${head}\n\n\`${toolName}\`\n\n\`\`\`\n${safe}\n\`\`\``;
+  return `${head}${why}\n\n\`${toolName}\`\n\n\`\`\`\n${safe}\n\`\`\``;
 }
 
 /**
@@ -209,16 +226,20 @@ export class TelegramApproval {
    * Resolves `null` when no answer arrived — the terminal was used instead, the
    * caller aborted, or Telegram could not be reached. **A null is never
    * approval**: the caller keeps its own gate and decides for itself.
+   *
+   * `reason` says what the file being written decides, when it decides
+   * anything, so the phone shows what the terminal shows.
    */
   async ask(
     command: string,
     toolName: string,
     isDestructive: boolean,
     signal?: AbortSignal,
+    reason?: string,
   ): Promise<TelegramAnswer | null> {
     const token = randomToken();
     const messageID = await this.sendQuestion(
-      composeMessage(command, toolName, isDestructive),
+      composeMessage(command, toolName, isDestructive, reason),
       token,
     );
     if (messageID === null) {

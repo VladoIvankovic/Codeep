@@ -7,11 +7,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { StdioTransport } from './transport';
-import { startAcpServer } from './server';
+import { startAcpServer, executeAcpCommand } from './server';
 import { runAgentSession, type AgentSessionOptions } from './session';
 import { initWorkspace, loadWorkspace, handleCommand } from './commands';
 import { registerSessionServers } from '../utils/mcpRegistry';
@@ -19,6 +20,8 @@ import { config, saveSession } from '../config/index';
 import { selectSessionMcpServers } from '../utils/mcpConfig';
 import { handleMcpSamplingRequest } from '../utils/mcpSamplingBridge';
 import type { ToolCall } from '../utils/tools';
+import type { PermissionOutcome } from '../utils/agent';
+import type { TrustBearingWrite } from '../utils/toolExecution';
 import type { McpServer } from './protocol';
 
 vi.mock('./session.js', () => ({ runAgentSession: vi.fn() }));
@@ -726,6 +729,25 @@ describe('run options handed to slash commands', () => {
     expect(run.onExecuteCommand).toBeTypeOf('function');
   });
 
+  it('carries the auto-mode answer under its own key, so /go can still be asked about one file', async () => {
+    client.answers['session/request_permission'] = () => ({ result: { outcome: { type: 'selected', optionId: 'allow_once' } } });
+    const sessionId = await newSession();
+    await client.waitForResponse(prompt(sessionId, '/go'));
+    const run = lastRunOptions();
+
+    // NOT on onRequestPermission: acp/commands.ts reads that key being set as
+    // "this session asks the user" and would start gating a skill's shell
+    // lines in the mode that promises not to.
+    expect(run.onRequestPermission).toBeUndefined();
+    expect(run.onAutoModePermission).toBeTypeOf('function');
+
+    // And it is the same one prompt a plain prompt gets: without it, /go
+    // could only refuse the write.
+    const answer = await run.onAutoModePermission!({ tool: 'write_file', parameters: { path: '.git/config', content: '[core]' } });
+    expect(answer).toBe('allow_once');
+    expect(client.requests('session/request_permission')).toHaveLength(1);
+  });
+
   it('asks a skill confirm step through the client and takes the answer', async () => {
     const answers: boolean[] = [];
     vi.mocked(handleCommand).mockImplementation(async (_input, _session, _onChunk, _signal, run) => {
@@ -766,6 +788,97 @@ describe('run options handed to slash commands', () => {
     vi.mocked(handleCommand).mockResolvedValue({ handled: true, response: 'done' });
     const sessionId = await newSession();
     expect((await client.waitForResponse(prompt(sessionId, '/status'))).result).toEqual({ stopReason: 'end_turn' });
+  });
+});
+
+// ─── Writes that decide what runs later ─────────────────────────────────────
+
+describe('the permission prompt for a file that decides what runs later', () => {
+  const gitConfig: ToolCall = { tool: 'write_file', parameters: { path: '.git/config', content: '[core]\n\tfsmonitor = "touch MARK; false"\n' } };
+  const ordinary: ToolCall = { tool: 'write_file', parameters: { path: 'src/app.ts', content: 'export const x = 1;' } };
+
+  /**
+   * Put a tool call to the callback the agent runs with in this mode.
+   *
+   * Every call starts its own session, so it reads the LAST run's options and
+   * only the dialogs its own call put up — a test that drives two sessions
+   * would otherwise answer with the first session's callback and count the
+   * first session's prompts.
+   */
+  async function askAbout(modeId: 'auto' | 'manual', toolCall: ToolCall) {
+    client.answers['session/request_permission'] = () => ({ result: { outcome: { type: 'selected', optionId: 'allow_once' } } });
+    const before = client.requests('session/request_permission').length;
+    const sessionId = await newSession();
+    if (modeId === 'manual') {
+      const id = nextId++;
+      client.send_({ id, method: 'session/set_mode', params: { sessionId, modeId } });
+      await client.waitForResponse(id);
+    }
+    await client.waitForResponse(prompt(sessionId, 'do it'));
+    const agentOpts = vi.mocked(runAgentSession).mock.lastCall![0];
+    const answer = await agentOpts.onRequestPermission!(toolCall);
+    return { answer, asked: client.requests('session/request_permission').slice(before) };
+  }
+
+  it('asks in auto mode, which asks about nothing else', async () => {
+    const git = await askAbout('auto', gitConfig);
+    expect(git.asked).toHaveLength(1);
+    expect(git.asked[0].params!.toolCall.toolInput.warning).toMatch(/what commands git runs/);
+    expect(git.answer).toBe('allow_once');
+  });
+
+  it('answers for auto mode without asking about anything else', async () => {
+    const plain = await askAbout('auto', ordinary);
+    expect(plain.asked).toHaveLength(0);
+    expect(plain.answer).toBe('allow_once');
+  });
+
+  it('offers no "Allow always" for one of those files', async () => {
+    const git = await askAbout('manual', gitConfig);
+    expect(git.asked[0].params!.options.map((o: { optionId: string }) => o.optionId))
+      .toEqual(['allow_once', 'reject_once', 'reject_always']);
+  });
+
+  it('words itself from what the agent gate already worked out', async () => {
+    // The gate has already stat'd the path, resolved a symlinked ancestor and
+    // possibly asked git where this repository keeps its hooks. It hands that
+    // answer over; looking it up again here is that work a second time per
+    // dialog, and — because the two lookups are separate — a chance for the
+    // dialog to describe a different file than the one being confirmed.
+    client.answers['session/request_permission'] = () => ({ result: { outcome: { type: 'selected', optionId: 'allow_once' } } });
+    const before = client.requests('session/request_permission').length;
+    const sessionId = await newSession();
+    const id = nextId++;
+    client.send_({ id, method: 'session/set_mode', params: { sessionId, modeId: 'manual' } });
+    await client.waitForResponse(id);
+    await client.waitForResponse(prompt(sessionId, 'do it'));
+    const agentOpts = vi.mocked(runAgentSession).mock.lastCall![0];
+
+    // An ordinary path that the gate says IS trust-bearing — which is what a
+    // repository's own `core.hooksPath` makes of `ci/hooks/pre-commit`.
+    //
+    // Called through the agent's own signature, with no cast: runAgent passes
+    // the gate's answer as a second argument and session.ts hands this
+    // callback straight to it, and AgentSessionOptions now says so.
+    const trustBearing: TrustBearingWrite = {
+      path: 'src/app.ts', file: '/elsewhere/src/app.ts', reason: 'This is a git hook.',
+    };
+    const answer: PermissionOutcome = await agentOpts.onRequestPermission!(ordinary, trustBearing);
+    expect(answer).toBe('allow_once');
+    const asked = client.requests('session/request_permission').slice(before);
+    expect(asked[0].params!.toolCall.toolInput.warning).toBe('This is a git hook.');
+    expect(asked[0].params!.options.map((o: { optionId: string }) => o.optionId))
+      .toEqual(['allow_once', 'reject_once', 'reject_always']);
+  });
+
+  it('offers every answer for an ordinary file', async () => {
+    // Two sessions, the auto one first: reading the first run's callback
+    // rather than this one's would answer the manual prompt with auto mode's
+    // answer, which says yes to an ordinary file without asking anyone.
+    await askAbout('auto', ordinary);
+    const plain = await askAbout('manual', ordinary);
+    expect(plain.asked[0].params!.options.map((o: { optionId: string }) => o.optionId))
+      .toEqual(['allow_once', 'allow_always', 'reject_once', 'reject_always']);
   });
 });
 
@@ -879,5 +992,149 @@ describe('slash commands that change the session', () => {
     await client.waitForResponse(prompt(sessionId, '/mcp reload'));
     const calls = vi.mocked(registerSessionServers).mock.calls;
     expect(calls[calls.length - 1][1]).toContainEqual(zed);
+  });
+});
+
+// ─── The environment a command gets in the client's terminal ────────────────
+
+describe('execute_command in the client terminal', () => {
+  /**
+   * A client that creates a terminal, runs it to completion and hands back no
+   * output. Only `request` is reached, so that is all this is.
+   */
+  function terminalClient() {
+    const sent: { method: string; params: Record<string, any> }[] = [];
+    const request = vi.fn(async (method: string, params: unknown) => {
+      sent.push({ method, params: (params ?? {}) as Record<string, any> });
+      if (method === 'terminal/create') return { terminalId: 'term-1' };
+      if (method === 'terminal/wait_for_exit') return { exitCode: 0, signal: null };
+      if (method === 'terminal/output') return { output: '', truncated: false };
+      return {};
+    });
+    const params = (method: string) => sent.find((f) => f.method === method)?.params;
+    return {
+      ctx: {
+        transport: { request } as unknown as Pick<StdioTransport, 'request'>,
+        sessionId: 'sess-term',
+        clientSupportsTerminal: true,
+        signal: new AbortController().signal,
+      },
+      methods: () => sent.map((f) => f.method),
+      params,
+      /** The `env` of the terminal that was created, back in Node's shape. */
+      terminalEnv: (): NodeJS.ProcessEnv | undefined => {
+        const list = params('terminal/create')?.env as { name: string; value: string }[] | undefined;
+        return list && Object.fromEntries(list.map((e) => [e.name, e.value]));
+      },
+    };
+  }
+
+  let repo: string;
+  const savedGlobal = process.env.GIT_CONFIG_GLOBAL;
+  const savedSystem = process.env.GIT_CONFIG_SYSTEM;
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'ignore' });
+
+  beforeEach(() => {
+    repo = mkdtempSync(join(tmpdir(), 'codeep-acp-term-'));
+    // The fixtures run real git, and git reads whoever's machine this is on.
+    // Point it at a file that is not there, for the fixture's own commands and
+    // for the scan inside shellCommandEnv, which inherits this process's env.
+    process.env.GIT_CONFIG_GLOBAL = join(repo, 'no-such-gitconfig');
+    process.env.GIT_CONFIG_SYSTEM = join(repo, 'no-such-gitconfig');
+    git('init', '-q');
+  });
+
+  afterEach(() => {
+    if (savedGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = savedGlobal;
+    if (savedSystem === undefined) delete process.env.GIT_CONFIG_SYSTEM; else process.env.GIT_CONFIG_SYSTEM = savedSystem;
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  /** A repository whose `core.fsmonitor` is a program that leaves a mark. */
+  function repoThatRunsAProgramOnStatus(): string {
+    const spy = join(repo, 'spy.sh');
+    const mark = join(repo, 'MARK');
+    // A real executable, not `touch MARK; false`: git spawns core.fsmonitor
+    // directly, with no shell to read that as two commands.
+    writeFileSync(spy, `#!/bin/sh\n: > "${mark}"\nexit 1\n`, { mode: 0o755 });
+    writeFileSync(join(repo, 'a.txt'), 'hi\n');
+    git('add', 'a.txt');
+    git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init');
+    git('config', 'core.fsmonitor', spy);
+    return mark;
+  }
+
+  const statusRanTheProgram = (mark: string, env: NodeJS.ProcessEnv): boolean => {
+    rmSync(mark, { force: true });
+    try {
+      execFileSync('git', ['status', '--porcelain'], { cwd: repo, env, stdio: 'ignore' });
+    } catch {
+      // A hostile fsmonitor makes git exit non-zero; the mark is the answer.
+    }
+    return existsSync(mark);
+  };
+
+  it('hands the terminal an environment the repository cannot run a program through', async () => {
+    // `terminal/create` used to carry no environment at all, so the client
+    // spawned git with its own — and over ACP, which is how Zed runs Codeep,
+    // a `git status` in a hostile repository ran that repository's
+    // `core.fsmonitor` exactly as it did before this hotfix.
+    const mark = repoThatRunsAProgramOnStatus();
+    const client = terminalClient();
+
+    const result = await executeAcpCommand('git', ['status'], repo, client.ctx);
+    expect(result.exitCode).toBe(0);
+
+    const env = client.terminalEnv();
+    expect(env).toBeDefined();
+    // Real git, the real fixture: the control proves the trap is live, and
+    // the environment we hand the client is what disarms it.
+    expect(statusRanTheProgram(mark, process.env)).toBe(true);
+    expect(statusRanTheProgram(mark, env!)).toBe(false);
+  });
+
+  it('sends the whole environment, not only the git overrides', async () => {
+    // A client is free to read `env` as THE environment rather than as
+    // additions to its own, and a terminal that got only GIT_CONFIG_* would
+    // then be running without a PATH.
+    const client = terminalClient();
+    await executeAcpCommand('git', ['status'], repo, client.ctx);
+
+    const env = client.terminalEnv()!;
+    expect(env.PATH).toBe(process.env.PATH);
+    expect(env.HOME).toBe(process.env.HOME);
+    // And nothing is sent as an unreadable `value: undefined`.
+    const list = client.params('terminal/create')!.env as { name: string; value: string }[];
+    expect(list.every((e) => typeof e.value === 'string')).toBe(true);
+  });
+
+  it('fails the command with git\'s own refusal rather than running it unhardened', async () => {
+    // `remote.<name>.uploadpack` names a program git runs on fetch and push,
+    // and git keeps the FIRST value it sees — no override reaches it, so
+    // hardenedGitEnv can only refuse. Running the command anyway would hand
+    // it to a terminal this process has no way to protect.
+    git('config', 'remote.origin.uploadpack', 'anything');
+    const client = terminalClient();
+
+    const result = await executeAcpCommand('git', ['status'], repo, client.ctx);
+
+    expect(result.exitCode).toBe(-1);
+    // Passed through verbatim: it names the key and the `--unset` that clears
+    // it, and this message is all the user gets.
+    expect(result.stderr).toContain('remote.origin.uploadpack');
+    expect(result.stderr).toContain('git config --unset');
+    expect(client.methods()).not.toContain('terminal/create');
+  });
+
+  it('leaves a command that cannot reach git alone in that same repository', async () => {
+    // The refusal is git's, not the repository's: an `npm test` must not stop
+    // working because some checkout sets remote.origin.uploadpack.
+    git('config', 'remote.origin.uploadpack', 'anything');
+    const client = terminalClient();
+
+    const result = await executeAcpCommand('npm', ['test'], repo, client.ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(client.methods()).toContain('terminal/create');
   });
 });

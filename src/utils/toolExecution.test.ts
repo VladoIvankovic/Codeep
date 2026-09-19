@@ -1,8 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, existsSync, chmodSync, symlinkSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { executeTool, FsCallbacks } from './toolExecution';
+
+// resolveHooksDirResult stays REAL: the hook-directory tests below ask real
+// git about a real fixture repository, which is the only thing that proves
+// the gate matches what git would actually run. It is wrapped so its calls
+// can be counted, and so its two non-answers can be told apart on demand —
+// `none` is a fixture away, `unknown` needs git to refuse.
+vi.mock('./gitHookInstaller', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./gitHookInstaller')>();
+  return { ...actual, resolveHooksDirResult: vi.fn(actual.resolveHooksDirResult) };
+});
+
+import { executeTool, trustBearingWrite, forgetHooksDirectory, FsCallbacks } from './toolExecution';
+import { resolveHooksDirResult } from './gitHookInstaller';
 import { ToolCall } from './tools';
 import { trustWorkspaceHooks, untrustWorkspaceHooks } from './hooks';
 import { AcpRequestError, AcpRequestTimeoutError } from '../acp/transport';
@@ -452,5 +465,279 @@ describe('hooks + MCP integration', () => {
     expect(result.success).toBe(false);
     expect(existsSync(marker)).toBe(true);
     expect(readFileSync(marker, 'utf-8').trim()).toBe('fs__read_file');
+  });
+});
+
+describe('trustBearingWrite — the files that decide what runs later', () => {
+  const reasonFor = (tool: string, path: unknown) =>
+    trustBearingWrite(makeCall(tool, { path }), tmpRoot)?.reason ?? null;
+
+  // These fixtures run real git, and git reads whoever's machine this is on:
+  // a `core.hooksPath` or an `init.templateDir` in the developer's own global
+  // config would decide what they assert. Point git at a file that is not
+  // there instead — for the fixture's own `git init`/`git config`, and for
+  // the resolution inside the gate, which inherits this process's env.
+  const savedGlobal = process.env.GIT_CONFIG_GLOBAL;
+  const savedSystem = process.env.GIT_CONFIG_SYSTEM;
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: tmpRoot, stdio: 'ignore' });
+
+  beforeEach(() => {
+    process.env.GIT_CONFIG_GLOBAL = join(tmpRoot, 'no-such-gitconfig');
+    process.env.GIT_CONFIG_SYSTEM = join(tmpRoot, 'no-such-gitconfig');
+    // The answer is cached for a run; each test is its own run. mockReset
+    // rather than mockClear: it puts the REAL resolveHooksDirResult back, so a
+    // test that stubbed it does not leave the next one against a stub.
+    forgetHooksDirectory();
+    vi.mocked(resolveHooksDirResult).mockReset();
+  });
+
+  afterEach(() => {
+    if (savedGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = savedGlobal;
+    if (savedSystem === undefined) delete process.env.GIT_CONFIG_SYSTEM; else process.env.GIT_CONFIG_SYSTEM = savedSystem;
+  });
+
+  it('names what a git path controls, wherever the checkout sits', () => {
+    expect(reasonFor('write_file', '.git/config')).toMatch(/what commands git runs/);
+    expect(reasonFor('write_file', '.git/hooks/pre-commit')).toMatch(/what commands git runs/);
+    // A worktree's `.git` is a file pointing at the real directory.
+    expect(reasonFor('write_file', '.git')).toMatch(/what commands git runs/);
+    expect(reasonFor('write_file', 'vendor/lib/.git/config')).toMatch(/what commands git runs/);
+    // macOS and Windows hand `.GIT/config` to the same file git reads.
+    expect(reasonFor('write_file', '.GIT/config')).toMatch(/what commands git runs/);
+    expect(reasonFor('write_file', join(tmpRoot, '.git', 'config'))).toMatch(/what commands git runs/);
+  });
+
+  it('names what each Codeep path controls', () => {
+    expect(reasonFor('write_file', '.codeep/hooks/pre_tool_call.sh')).toBe('This file runs on every tool call.');
+    expect(reasonFor('write_file', '.codeep/mcp_servers.json')).toMatch(/starts MCP servers/);
+    expect(reasonFor('write_file', '.mcp.json')).toMatch(/starts MCP servers/);
+    expect(reasonFor('write_file', '.codeep/config.json')).toMatch(/Codeep's own configuration/);
+    // A skill's steps are commands Codeep runs when the skill is used.
+    expect(reasonFor('write_file', '.codeep/skills/deploy/SKILL.md')).toMatch(/steps are commands/);
+    // A sub-agent definition: its `tools:` REPLACES the parent's allowlist for
+    // the delegated run and its `model:` picks the provider that run's context
+    // is sent to, both the next time anything delegates to that name. That is
+    // the line `.codeep/commands/` sits on the other side of — see below.
+    expect(reasonFor('write_file', '.codeep/agents/reviewer.md')).toMatch(/defines a sub-agent/);
+  });
+
+  it('covers the hook directory conventions a repo uses instead of .git/hooks', () => {
+    // `core.hooksPath` moves the hooks out of `.git`, so a write here runs on
+    // the user's own next commit in their own terminal.
+    expect(reasonFor('write_file', '.githooks/pre-commit')).toMatch(/git runs it on your next commit/);
+    expect(reasonFor('write_file', '.husky/pre-commit')).toMatch(/git runs it on your next commit/);
+    expect(reasonFor('create_directory', '.githooks')).toMatch(/git runs it on your next commit/);
+  });
+
+  it('asks the repository where its hooks actually live', () => {
+    // Neither name above: only `core.hooksPath` says this directory is where
+    // the next `git commit` looks.
+    execFileSync('git', ['init', '-q'], { cwd: tmpRoot });
+    execFileSync('git', ['config', 'core.hooksPath', 'ci/hooks'], { cwd: tmpRoot });
+
+    expect(reasonFor('write_file', 'ci/hooks/pre-commit')).toMatch(/git runs it on your next commit/);
+    expect(reasonFor('write_file', 'ci/build.sh')).toBeNull();
+  });
+
+  it('asks it even when the answer is the project root itself', () => {
+    // `core.hooksPath` pointing AT the root makes `<root>/pre-commit` the file
+    // git runs on the next commit — verified against git 2.54, which runs it.
+    // The hook directory's path relative to the root is '', which read as
+    // "not inside the project" and left that file ungated.
+    execFileSync('git', ['init', '-q'], { cwd: tmpRoot });
+    execFileSync('git', ['config', 'core.hooksPath', tmpRoot], { cwd: tmpRoot });
+
+    expect(reasonFor('write_file', 'pre-commit')).toMatch(/runs on your next commit/);
+    // And the empty prefix does not swallow the project with it: git looks for
+    // hooks directly in that directory, so a confirmation in front of every
+    // write below the root would be for nothing git would ever run.
+    expect(reasonFor('write_file', 'src/app.ts')).toBeNull();
+  });
+
+  it('does not tell that repository its package.json is a hook', () => {
+    // Every top-level file matches when the hook directory IS the top level,
+    // and `package.json` is one of them. Gating it is right — the repository
+    // really did declare that directory as where git looks for hooks — but
+    // the sentence has to be about the directory, not about the file, or a
+    // user is told their package manifest is a git hook.
+    execFileSync('git', ['init', '-q'], { cwd: tmpRoot });
+    execFileSync('git', ['config', 'core.hooksPath', tmpRoot], { cwd: tmpRoot });
+
+    const manifest = reasonFor('write_file', 'package.json');
+    expect(manifest).toMatch(/core\.hooksPath/);
+    expect(manifest).not.toMatch(/This is a git hook/);
+    // Same sentence for every file at that level, `pre-commit` included:
+    // which of them git will actually run is a question of its name, and
+    // this gate is not the place that answers it.
+    expect(reasonFor('write_file', 'pre-commit')).toBe(manifest);
+
+    // A hook directory of its OWN keeps the plain wording, because there the
+    // file really is one.
+    execFileSync('git', ['config', 'core.hooksPath', 'ci/hooks'], { cwd: tmpRoot });
+    forgetHooksDirectory();
+    expect(reasonFor('write_file', 'ci/hooks/pre-commit')).toMatch(/This is a git hook/);
+  });
+
+  it('gates every write when git would not say where the hooks are', () => {
+    // `remote.<name>.uploadpack` names a program git runs at the far end of a
+    // fetch or push, and git keeps the FIRST value it sees for that key — so
+    // no override reaches it and hardenedGitEnv can only refuse. Which means
+    // nobody can say where this repository keeps its hooks.
+    //
+    // Reading that as "it has none" turned this gate OFF in exactly the
+    // repository that earned the refusal: a `core.hooksPath` nobody could
+    // see, pointed anywhere, written into without a prompt.
+    git('init', '-q');
+    git('config', 'remote.origin.uploadpack', 'anything');
+
+    const reason = reasonFor('write_file', 'src/app.ts');
+    expect(reason).toMatch(/could not ask git where this repository keeps its hooks/);
+    // And it carries git's own refusal, because over ACP this prompt is the
+    // only place the key and the fix are ever said.
+    expect(reason).toContain('remote.origin.uploadpack');
+    expect(reason).toContain('git config --unset');
+    // Every write, not only the ones that look like a hook.
+    expect(reasonFor('write_file', 'build/out.js')).toBe(reason);
+  });
+
+  it('says nothing about a folder that is simply not a repository', () => {
+    // The other direction of the same collapse: `none` gating everything
+    // would put a confirmation in front of every write outside a checkout.
+    expect(reasonFor('write_file', 'src/app.ts')).toBeNull();
+  });
+
+  it('fails closed when the resolution throws instead of answering', () => {
+    // resolveHooksDirResult promises not to throw. This gate does not lean on
+    // that promise: ANY throw is "unknown", so a change on the far side of
+    // that call cannot quietly reopen the hole.
+    vi.mocked(resolveHooksDirResult).mockImplementation(() => { throw new Error('boom'); });
+    expect(reasonFor('write_file', 'src/app.ts')).toMatch(/could not ask git where this repository keeps its hooks/);
+  });
+
+  it('asks git where the hooks are once per run, and again after a command', async () => {
+    // Three git subprocesses per path-writing call at ~25ms each is ~2.5s of
+    // spawning across a 100-edit run, blocking the event loop, almost all of
+    // it on the common path where nothing matches.
+    git('init', '-q');
+    git('config', 'core.hooksPath', 'ci/hooks');
+
+    expect(reasonFor('write_file', 'src/app.ts')).toBeNull();
+    expect(reasonFor('write_file', 'src/other.ts')).toBeNull();
+    expect(reasonFor('write_file', 'ci/hooks/pre-commit')).toMatch(/git runs it on your next commit/);
+    expect(resolveHooksDirResult).toHaveBeenCalledTimes(1);
+
+    // The objection the old comment raised against caching, and the answer to
+    // it: a command is the one thing in a run that can move the hooks without
+    // any write this gate sees, so a command drops the cached answer.
+    git('config', 'core.hooksPath', 'later/hooks');
+    await executeTool(makeCall('execute_command', { command: 'echo', args: ['moved'] }), tmpRoot);
+
+    expect(reasonFor('write_file', 'later/hooks/pre-commit')).toMatch(/git runs it on your next commit/);
+    expect(resolveHooksDirResult).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves ordinary files alone', () => {
+    expect(reasonFor('write_file', 'src/config.json')).toBeNull();
+    expect(reasonFor('write_file', '.gitignore')).toBeNull();
+    expect(reasonFor('write_file', 'README.md')).toBeNull();
+    expect(reasonFor('write_file', '.codeep/sessions/today.json')).toBeNull();
+    expect(reasonFor('write_file', 'docs/.mcp.json.md')).toBeNull();
+    // Deliberately ungated: a custom command is prompt text expanded into a
+    // message to the model, and the model's tool calls go through this gate
+    // anyway. Pinned so a later "fix" has to argue with a test.
+    expect(reasonFor('write_file', '.codeep/commands/deploy.md')).toBeNull();
+  });
+
+  it('sees through the trailing dots and spaces Windows drops', () => {
+    // Both are literal directories on POSIX. On Windows the trailing dot and
+    // the trailing space are stripped by the filesystem, and the write lands
+    // in the real `.git`.
+    expect(reasonFor('write_file', '.git./config')).toMatch(/what commands git runs/);
+    expect(reasonFor('write_file', '.git /config')).toMatch(/what commands git runs/);
+    expect(reasonFor('write_file', '.codeep/hooks./x.sh')).toMatch(/every tool call/);
+  });
+
+  it('follows a symlink that points at one of them', () => {
+    // `ln -s .git tools` and a write to `tools/config` lands in the real one;
+    // validatePath allows it because it never leaves the project.
+    mkdirSync(join(tmpRoot, '.git'));
+    symlinkSync(join(tmpRoot, '.git'), join(tmpRoot, 'tools'));
+
+    expect(reasonFor('write_file', 'tools/config')).toMatch(/what commands git runs/);
+  });
+
+  it('covers every tool that writes a path, and only those', () => {
+    expect(reasonFor('edit_file', '.git/config')).not.toBeNull();
+    expect(reasonFor('delete_file', '.git/config')).not.toBeNull();
+    expect(reasonFor('create_directory', '.git/hooks')).not.toBeNull();
+    expect(reasonFor('writefile', '.git/config')).not.toBeNull();  // pre-normalized name
+    expect(reasonFor('read_file', '.git/config')).toBeNull();      // reading one is not the risk
+    expect(reasonFor('list_files', '.git')).toBeNull();
+  });
+
+  it('has nothing to say about a call without a path', () => {
+    expect(reasonFor('write_file', undefined)).toBeNull();
+    expect(reasonFor('write_file', '')).toBeNull();
+    expect(reasonFor('write_file', { evil: true })).toBeNull();
+    expect(reasonFor('execute_command', '.git/config')).toBeNull();
+  });
+});
+
+// ─── The harness these tests run under ──────────────────────────────────────
+//
+// vitest.setup.ts has no test file of its own, and this is the file that
+// leans hardest on what it provides: every case above writes into a temp
+// project under the throwaway HOME it hands out.
+
+describe("the harness's own temp directories", () => {
+  it('removes the config directory and the HOME it made for a run', () => {
+    // vitest.setup.ts runs once per test file and mkdtemps both, so every
+    // `npx vitest run` used to leave two directories per test file behind in
+    // TMPDIR for good — 14,518 of them and 276MB on the machine this was
+    // found on.
+    //
+    // Proven by running the REAL setup file in a child vitest, over a
+    // throwaway test that writes down the two paths it was given, and then
+    // looking for them: nothing else can observe a teardown that runs after
+    // the test file it belongs to.
+    const probe = mkdtempSync(join(tmpdir(), 'codeep-setup-probe-'));
+    const report = join(probe, 'dirs.txt');
+    try {
+      writeFileSync(join(probe, 'probe.test.ts'), [
+        "import { it } from 'vitest';",
+        "import { writeFileSync } from 'node:fs';",
+        "it('writes down what the harness gave it', () => {",
+        "  writeFileSync(process.env.PROBE_OUT!, [process.env.HOME, process.env.CODEEP_CONFIG_DIR].join('\\n'));",
+        '});',
+      ].join('\n'));
+      // A plain object, not defineConfig(): this config sits outside the
+      // project, so an `import ... from 'vitest/config'` in it would resolve
+      // from a directory with no node_modules above it.
+      writeFileSync(
+        join(probe, 'vitest.config.ts'),
+        `export default { test: { include: ['probe.test.ts'], setupFiles: [${JSON.stringify(join(process.cwd(), 'vitest.setup.ts'))}] } };\n`,
+      );
+
+      // CODEEP_CONFIG_DIR is dropped so the child makes (and so must remove)
+      // one of its own instead of inheriting ours, and VITEST_* with it: the
+      // child is its own run, not a worker of this one.
+      const env: NodeJS.ProcessEnv = { ...process.env, PROBE_OUT: report };
+      delete env.CODEEP_CONFIG_DIR;
+      for (const name of Object.keys(env)) if (name.startsWith('VITEST')) delete env[name];
+
+      execFileSync(
+        process.execPath,
+        [join(process.cwd(), 'node_modules/vitest/vitest.mjs'), 'run', '--root', probe, '--config', join(probe, 'vitest.config.ts')],
+        { env, stdio: 'ignore', timeout: 120_000 },
+      );
+
+      const [childHome, childConfigDir] = readFileSync(report, 'utf-8').split('\n');
+      expect(childHome).toMatch(/codeep-test-home-/);
+      expect(childConfigDir).toMatch(/codeep-test-config-/);
+      expect(existsSync(childHome)).toBe(false);
+      expect(existsSync(childConfigDir)).toBe(false);
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
   });
 });

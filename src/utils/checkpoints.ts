@@ -39,6 +39,7 @@ import { isSafeProjectWriteTarget, writeProjectFile } from './projectPaths';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { execSync } from 'child_process';
+import { hardenedGitEnv } from './git.js';
 
 import type { Message } from '../config/index.js';
 
@@ -77,6 +78,8 @@ function readGitHead(workspaceRoot: string): string | undefined {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 2000,
+      // Read-only and Codeep's own, so the repository's hooks stay out of it.
+      env: hardenedGitEnv({ cwd: workspaceRoot, noHooks: true }),
     }).trim();
     return out || undefined;
   } catch {

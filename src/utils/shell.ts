@@ -7,6 +7,7 @@ import { resolve, relative, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { isIP } from 'net';
 import { assertFetchUrlAllowed, isBlockedIp } from './ssrfGuard';
+import { hardenedGitEnv, GitHardeningError } from './git';
 
 export interface CommandResult {
   success: boolean;
@@ -328,6 +329,165 @@ function hasExecEscape(command: string, args: string[]): boolean {
   return args.some((a) => flags.includes(a) || flags.some((f) => a.startsWith(f + '=')));
 }
 
+// ─── git argv ────────────────────────────────────────────────────────────────
+
+/**
+ * git's own options, before the subcommand, that take a separate argument.
+ * Needed so the subcommand is found at the right place: in
+ * `git -c user.name=x config`, the `config` is the subcommand, and in
+ * `git -C sub status` the `sub` is not.
+ */
+const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--attr-source']);
+
+/**
+ * git options that move the call somewhere hardenedGitEnv() did not look, or
+ * feed it config from a place the caller cannot see. Refused rather than
+ * resolved.
+ *
+ * `--git-dir` / `--work-tree` point git at another repository's config, which
+ * is the one this process never scanned. `--exec-path` makes git load its own
+ * subcommands from a directory of the caller's choosing — that is code
+ * execution outright, not a config question. `--config-env` names an
+ * ENVIRONMENT VARIABLE to read a config value from, so the value that decides
+ * whether git runs a program is not in the command the user approved.
+ *
+ * `-C` is NOT here: it only moves the working directory, so the scan can
+ * simply follow it — see gitEffectiveCwd(). `-c` is not here either, and that
+ * is a deliberate, narrower judgement: `git -c core.pager=/tmp/x log` does
+ * name a program, but it names it IN THE COMMAND, where the user reading the
+ * approval prompt sees it, and the agent could equally have run `/tmp/x`
+ * directly. `--config-env` is the same power with the value hidden, which is
+ * why only that one is refused — and why `-c include.path` is refused too,
+ * by GIT_CONFIG_INCLUDE_KEYS below.
+ */
+const GIT_REDIRECTING_OPTIONS = new Set(['--git-dir', '--work-tree', '--exec-path', '--config-env']);
+
+/**
+ * The `-c` keys that make the argument the user approved stop describing what
+ * git will do.
+ *
+ * The whole case for allowing `-c` is that the value is IN THE COMMAND, so
+ * the approval prompt shows it. `git -c include.path=<file> status` breaks
+ * that: git reads every key in that file — `core.fsmonitor`, a
+ * `filter.<d>.clean`, an alias — and the prompt showed a path, not a program.
+ * Same power as `--config-env` with the value hidden somewhere else, so it
+ * gets the same answer. `includeIf.<condition>.path` is the conditional
+ * spelling of the identical thing.
+ *
+ * Case-insensitive because git's own key lookup is: `-c INCLUDE.PATH=<file>`
+ * pulls the file in exactly as the lower-case spelling does (verified, git
+ * 2.54), so a case-sensitive test here would be no test at all.
+ */
+const GIT_CONFIG_INCLUDE_KEYS = /^(include\.path|includeif\..*\.path)$/i;
+
+/**
+ * `git config` flags that write somewhere the repo-scope scan deliberately
+ * TRUSTS. The scan leaves global and system scope alone so that git-lfs,
+ * commit signing and `git push` keep working — which means an agent that can
+ * run `git config --global core.pager /tmp/x` has moved its own program into
+ * the trusted scope, and the next Codeep git call runs it. Proven with git
+ * 2.54 through GIT_CONFIG_GLOBAL.
+ *
+ * `--file` is the same move against any file the user's config includes;
+ * `--config-env` is caught by GIT_REDIRECTING_OPTIONS already and is listed
+ * here so the reason a `git config` line was refused is the right one.
+ */
+const GIT_CONFIG_ESCALATING_FLAGS = new Set(['--global', '--system', '--file', '-f', '--config-env']);
+
+/** The flag part of `--name=value`, or the argument itself. */
+function flagName(arg: string): string {
+  const eq = arg.indexOf('=');
+  return eq === -1 ? arg : arg.slice(0, eq);
+}
+
+/**
+ * Walk git's global options and report where the subcommand starts. Returns
+ * the refusal reason instead when an option redirects the call.
+ */
+function scanGitArgv(args: string[]): { problem: string } | { subcommandAt: number; chdirs: string[] } {
+  const chdirs: string[] = [];
+  let i = 0;
+  for (; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg.startsWith('-')) break;
+    const name = flagName(arg);
+    if (GIT_REDIRECTING_OPTIONS.has(name)) {
+      return {
+        problem:
+          `'git ${name}' points git at a repository or a program this process has not checked, ` +
+          'and is not allowed in agent mode. Run git in that directory instead (git -C <dir> …), ' +
+          'or run the command yourself.',
+      };
+    }
+    if (arg === '-C') {
+      // git rejects `-C<path>` and `-C=<path>`, so the value is always the
+      // next argument (verified, git 2.54).
+      chdirs.push(args[++i] ?? '');
+      continue;
+    }
+    if (name === '-c' || name === '--config') {
+      // git rejects `-ccore.pager=cat` outright ("unknown option"), so a
+      // `-c` always takes the NEXT argument (verified, git 2.54). `--config`
+      // is not a git option today; it is read here so that the key is
+      // checked rather than skipped if that ever changes.
+      const pair = arg === name ? (args[++i] ?? '') : arg.slice(name.length + 1);
+      const eq = pair.indexOf('=');
+      const key = eq === -1 ? pair : pair.slice(0, eq);
+      if (GIT_CONFIG_INCLUDE_KEYS.test(key)) {
+        return {
+          problem:
+            `'git ${name} ${key}=…' pulls in a whole config file, and every key in that file — a ` +
+            '`core.fsmonitor`, a `filter.<driver>.clean`, an alias — is a program git may run without ' +
+            'the approval prompt ever showing it. That is the same hole as `--config-env`, so it gets ' +
+            'the same answer. Set the keys you need with their own -c, or run the command yourself.',
+        };
+      }
+      continue;
+    }
+    if (GIT_GLOBAL_OPTIONS_WITH_VALUE.has(arg)) i++; // value, not the subcommand
+  }
+  return { subcommandAt: i, chdirs };
+}
+
+/**
+ * Why this `git` command may not run, or null.
+ *
+ * Two different holes, both on the execute_command path: an argv that aims
+ * git at a repository hardenedGitEnv() never scanned, and a `git config`
+ * that writes into the scope the scan trusts. See the two sets above.
+ */
+function gitArgvProblem(args: string[]): string | null {
+  const scan = scanGitArgv(args);
+  if ('problem' in scan) return scan.problem;
+
+  if (args[scan.subcommandAt] !== 'config') return null;
+  for (const arg of args.slice(scan.subcommandAt + 1)) {
+    const name = flagName(arg);
+    if (!GIT_CONFIG_ESCALATING_FLAGS.has(name)) continue;
+    return (
+      `'git config ${name}' writes the git config outside this repository, which Codeep's hardening ` +
+      'deliberately trusts — a program named there runs on the next git call. Change it yourself if ' +
+      'you meant to, or use `git config --local` for this repository.'
+    );
+  }
+  return null;
+}
+
+/**
+ * The directory whose config decides what this `git` call can run.
+ *
+ * `-C` moves git before it reads any repository config, so hardening the
+ * spawn's `cwd` hardens the wrong repository: `git -C vendor/lib status` in a
+ * project whose own config is spotless ran the vendored checkout's
+ * `core.fsmonitor` AND its `filter.h.clean` (proven, git 2.54). Successive
+ * `-C` are relative to each other, exactly as git resolves them.
+ */
+function gitEffectiveCwd(args: string[], cwd: string): string {
+  const scan = scanGitArgv(args);
+  if ('problem' in scan) return cwd; // refused before it ever reaches a spawn
+  return scan.chdirs.reduce((dir, next) => (next ? resolve(dir, next) : dir), cwd);
+}
+
 /**
  * Validate if a command is safe to execute (synchronous checks).
  * See validateCommandAsync for the DNS-resolving SSRF checks.
@@ -357,6 +517,13 @@ export function validateCommand(
   // would bypass the whitelist entirely (find . -exec rm -rf / \;).
   if (hasExecEscape(command, args)) {
     return { valid: false, reason: `'${command}' with exec flags (-exec/-execdir/--to-command…) runs arbitrary commands and is not allowed in agent mode.` };
+  }
+
+  // git's own argv can move the call out from under the hardening, or move a
+  // program INTO the scope the hardening trusts. See gitArgvProblem().
+  if (command === 'git') {
+    const problem = gitArgvProblem(args);
+    if (problem) return { valid: false, reason: problem };
   }
 
   // Check full command string against dangerous patterns
@@ -404,6 +571,122 @@ export function validateCommand(
 }
 
 /**
+ * The environment a validated command runs in.
+ *
+ * `git` is on ALLOWED_COMMANDS, so a skill's shell line, a `!` command or the
+ * agent's own execute_command reaches git with whatever the repository put in
+ * its `.git/config` — and several of those settings make git RUN a program:
+ * a `filter.<driver>.clean` fires during the index refresh `git status` does,
+ * before anything looks like it executed code. Route git through the same
+ * hardening Codeep's own git calls use.
+ *
+ * Hooks are deliberately left alone here. The command was approved as
+ * written, so `git commit` through this path runs the repository's
+ * pre-commit hook exactly as it would in the user's terminal.
+ *
+ * A caller's own `env` goes in as the BASE rather than on top of the result:
+ * spread afterwards, their GIT_CONFIG_COUNT would replace ours and silently
+ * drop every override above their count.
+ *
+ * The bare name is the whole test because it has to be: validateCommand()
+ * only lets a command through when ALLOWED_COMMANDS holds it, and that set
+ * holds `git`, not `/usr/bin/git`. A path-spelled git never reaches here.
+ *
+ * The directory scanned comes from the ARGV, not from the spawn's cwd: `git
+ * -C vendor/lib status` reads the vendored checkout's config, so that is the
+ * config that has to be neutralised. The argv forms that redirect git
+ * somewhere this cannot follow (`--git-dir`, `--work-tree`, `--exec-path`,
+ * `--config-env`) never get here — validateCommand() refuses them.
+ *
+ * Throws `GitHardeningError` when the repository's config cannot be scanned —
+ * both runners below turn that into a failed CommandResult, because a refusal
+ * is this command's own failure and the user reads it as such.
+ */
+function commandEnv(command: string, args: string[], cwd: string, options?: CommandOptions): NodeJS.ProcessEnv {
+  const base = { ...process.env, ...options?.env };
+  return command === 'git' ? hardenedGitEnv({ cwd: gitEffectiveCwd(args, cwd), base }) : base;
+}
+
+/**
+ * `git` as a whole word anywhere in a command line. Deliberately loose:
+ * hardening a line that never runs git costs one `git config --list`, while
+ * missing one that does is the hole this closes. It does not see a git that
+ * runs from inside a script the line calls (`npm test`) — the same limit
+ * commandEnv() has, for the same reason.
+ */
+const SHELL_LINE_MENTIONS_GIT = /(^|\W)git(\W|$)/;
+
+/**
+ * The environment for a whole SHELL COMMAND LINE that may reach git.
+ *
+ * commandEnv() above can check a parsed binary name; a line handed to a shell
+ * can reach git from anywhere inside it — `cd sub && git status`, `make && git
+ * commit`, `foo | git apply` — so it needs its own entry point. This is that
+ * entry point for the callers that spawn with `shell: true`: the skill runner
+ * in src/acp/commands.ts and the one in src/renderer/agentExecution.ts, both
+ * of which used to reach git raw. A hostile `gpg.program` that createCommit
+ * neutralises still executed through those two spawns (proven, git 2.54).
+ *
+ * This is the ONE helper for that job — an earlier cut of this hotfix also
+ * had a `hardenedShellEnv()` in utils/toolExecution.ts, which hardened every
+ * skill step unconditionally and therefore refused an `echo` in a repository
+ * whose config cannot be scanned. Keep it one: two helpers with two different
+ * answers to "does a refusal stop this line?" is how one of them ends up
+ * wrong and unused.
+ *
+ * The contract, since those two call sites are not this file's to edit:
+ *
+ * - Pass the command line, the cwd the shell will get and any env of your
+ *   own, and hand the RESULT to the spawn as `env`. Do not spread anything
+ *   over it — a later `GIT_CONFIG_COUNT` replaces ours and silently drops
+ *   every override above it.
+ * - It THROWS `GitHardeningError` when the repository's config cannot be
+ *   scanned, or names a program no override can switch off. Catch it and fail
+ *   the command with `error.message`, which is written for the user. Letting
+ *   it escape a `spawnSync` call site turns a refusal into a crash; letting
+ *   it escape inside a promise executor leaves the caller hanging.
+ * - Hooks are left alone, as they are for executeCommand(): the line was
+ *   approved as written, so `git commit` in it runs the repository's
+ *   pre-commit hook exactly as it would in the user's terminal.
+ * - A line that cannot reach git comes back unhardened, so a repository with
+ *   an unreadable config does not also break `echo`. That is also why a
+ *   refusal never reaches a non-git line: an `echo` must not stop working
+ *   because some repository in the project sets `remote.origin.uploadpack`.
+ *
+ * WHAT THIS CAN AND CANNOT PROMISE, because a shell line is not an argv:
+ *
+ * - Scanned: the repository at `cwd`, AND every initialised submodule of it,
+ *   whose config lives in `.git/modules/<name>/config` (see
+ *   listSubmoduleConfig in utils/git.ts). Every key in REPO_EXECUTING_RULES
+ *   that any of them sets is neutralised, and because the overrides ride in
+ *   the ENVIRONMENT rather than in an argv, they apply wherever in the line
+ *   git ends up — so `cd vendor/lib && git add` is covered in full when
+ *   `vendor/lib` is a submodule, which is the shape a skill step usually has.
+ * - Not scanned: a repository that is not `cwd` and not one of its
+ *   submodules — an independent checkout under `vendor/`, a sibling clone,
+ *   anywhere a `make` target cds to. There is no way to know where a shell
+ *   line ends up without running it, so this does not pretend to. What still
+ *   covers those is the always-on GIT_EXECUTING_CONFIG layer, which is why
+ *   `core.fsmonitor` is blanket there rather than scope-aware. The gap is the
+ *   keys GIT_CONFIG_* cannot wildcard — `filter.*` above all — in an
+ *   unrelated repository below the one scanned. Proven with git 2.54: `cd
+ *   vendor/lib && git status`, with `vendor/lib` a plain nested clone rather
+ *   than a submodule, did not run the nested `core.fsmonitor` and did run the
+ *   nested `filter.<d>.clean`.
+ * - executeCommand()'s argv path has no such gap: it reads `-C` out of the
+ *   argv and scans where git will actually run, and refuses `--git-dir` /
+ *   `--work-tree` / `--exec-path` / `--config-env` outright.
+ */
+export function shellCommandEnv(
+  commandLine: string,
+  cwd: string,
+  env?: Record<string, string>
+): NodeJS.ProcessEnv {
+  const base = { ...process.env, ...env };
+  return SHELL_LINE_MENTIONS_GIT.test(commandLine) ? hardenedGitEnv({ cwd, base }) : base;
+}
+
+/**
  * Execute a shell command with safety checks
  */
 export function executeCommand(
@@ -442,14 +725,30 @@ export function executeCommand(
     };
   }
   
+  // Built here rather than inline in spawnOptions below: a refusal from
+  // hardenedGitEnv() is this command's own failure and has to read as one,
+  // not as an exception out of a function whose whole contract is to report
+  // failures in its result.
+  let env: NodeJS.ProcessEnv;
+  try {
+    env = commandEnv(command, args, cwd, options);
+  } catch (error) {
+    return {
+      success: false,
+      stdout: '',
+      stderr: error instanceof GitHardeningError ? error.message : String(error),
+      exitCode: -1,
+      duration: Date.now() - startTime,
+      command,
+      args,
+    };
+  }
+
   const spawnOptions: SpawnSyncOptions = {
     cwd,
     timeout,
     encoding: 'utf-8',
-    env: {
-      ...process.env,
-      ...options?.env,
-    },
+    env,
     maxBuffer: 10 * 1024 * 1024, // 10MB
   };
   
@@ -584,9 +883,28 @@ export function executeCommandAsync(
         return;
       }
 
+      // Caught rather than thrown: this runs inside the promise executor, so
+      // a refusal from hardenedGitEnv() would reject a promise nobody holds
+      // and leave the caller waiting forever.
+      let env: NodeJS.ProcessEnv;
+      try {
+        env = commandEnv(command, args, cwd, options);
+      } catch (error) {
+        resolve({
+          success: false,
+          stdout: '',
+          stderr: error instanceof GitHardeningError ? error.message : String(error),
+          exitCode: -1,
+          duration: Date.now() - startTime,
+          command,
+          args,
+        });
+        return;
+      }
+
       const child = spawn(command, args, {
         cwd,
-        env: { ...process.env, ...options?.env },
+        env,
       });
 
       let stdout = '';
