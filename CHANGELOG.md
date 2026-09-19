@@ -99,6 +99,9 @@ adversarial review with real git 2.54.
 
 - 3850 tests. Every fix in this release was checked by putting the bug back and
   watching the test fail.
+- The test suite can no longer ask a human for anything: a fixture that ran
+  `git credential fill` reached the editor's askpass helper and waited for a
+  password dialog, which stalled a release.
 
 ## [3.4.0] — 2026-09-17
 

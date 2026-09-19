@@ -125,6 +125,22 @@ ownTempDirs.push(testHome);
 process.env.HOME = testHome;
 process.env.USERPROFILE = testHome;
 
+// Several suites run real git against fixture repositories, and some of them
+// reach a code path that wants credentials (`git credential fill`, a remote
+// that does not exist). GIT_TERMINAL_PROMPT=0 only stops git asking the
+// TERMINAL; an askpass helper still opens a window. VS Code exports
+// GIT_ASKPASS in its integrated terminal, so `npm test` there popped a
+// "Username for https://example.invalid" dialog and the run sat waiting for it
+// — which is how a release stalled. Nothing in the suite should ever ask a
+// human for anything, so remove every askpass route and refuse terminal
+// prompts outright.
+process.env.GIT_TERMINAL_PROMPT = '0';
+for (const key of [
+  'GIT_ASKPASS', 'SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE', 'DISPLAY',
+  'VSCODE_GIT_ASKPASS_NODE', 'VSCODE_GIT_ASKPASS_MAIN',
+  'VSCODE_GIT_ASKPASS_EXTRA_ARGS', 'VSCODE_GIT_IPC_HANDLE',
+]) delete process.env[key];
+
 /**
  * Remove them once the test file that got them is done.
  *
