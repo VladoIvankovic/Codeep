@@ -628,6 +628,31 @@ model: z.ai/glm-5.3
     expect(isPersonalityModelPreferenceValid(exact)).toBe(true);
     expect(isPersonalityAvailable(exact, process.cwd())).toBe(true);
   });
+
+  // A bot pinned before its model left the picker used to become unavailable:
+  // the exact check found no such id. It now runs on the replacement, as a
+  // stored config or a profile does.
+  it('keeps a bot pinned to a retired or withdrawn id, on its replacement', () => {
+    const current = { providerId: 'z.ai', model: 'glm-5.3', protocol: 'openai' as const };
+    const bot = parsePersonalityMarkdown(`---
+codeep: custom-bot/v1
+model: openai/gpt-6-astra
+---
+# Pinned
+`, 'pinned', 'global');
+    expect(isPersonalityModelPreferenceValid(bot)).toBe(true);
+    expect(isPersonalityAvailable(bot, process.cwd())).toBe(true);
+    expect(resolvePersonalityRuntimeModel(bot, current)).toEqual({
+      providerId: 'openai', model: 'gpt-6-sol', protocol: 'openai',
+    });
+
+    bot.modelPreference = 'z.ai/glm-5-turbo';
+    expect(resolvePersonalityRuntimeModel(bot, current)).toEqual({
+      providerId: 'z.ai', model: 'glm-5.3-flash', protocol: 'openai',
+    });
+    bot.modelPreference = 'qwen-token-plan/qwen3.8-max-preview';
+    expect(resolvePersonalityRuntimeModel(bot, current)?.model).toBe('qwen3.8-max');
+  });
 });
 
 describe('capability disclosure', () => {

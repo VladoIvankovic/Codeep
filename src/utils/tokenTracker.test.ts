@@ -16,6 +16,7 @@ import {
   runWithTokenScope,
   getCacheStats,
   cacheReadRateFor,
+  cacheWriteRateFor,
   formatCacheReadRates,
 } from './tokenTracker';
 
@@ -95,6 +96,22 @@ describe('getModelContextWindow', () => {
     // Moonshot lists K3 at 1,048,576, not a round million.
     expect(getModelContextWindow('kimi-k3')).toBe(1_048_576);
     expect(getModelContextWindow('grok-4.6')).toBe(500_000);
+  });
+
+  // Each of these fell to the 128K fallback before its row existed — a context
+  // meter four to eight times too small.
+  it('sizes the models added on 2026-09-23', () => {
+    expect(getModelContextWindow('claude-opus-5-5')).toBe(1_000_000);
+    expect(getModelContextWindow('gpt-6-sol')).toBe(1_050_000);
+    expect(getModelContextWindow('gpt-6-luna')).toBe(1_050_000);
+    expect(getModelContextWindow('grok-4.7')).toBe(500_000);
+    expect(getModelContextWindow('glm-5.3-flashx')).toBe(1_000_000);
+    // K2.8 Preview since 2026-09-11 — it was sized as K2.7 Code's 256K.
+    expect(getModelContextWindow('kimi-for-coding')).toBe(1_048_576);
+    expect(getModelContextWindow('kimi-for-coding-highspeed')).toBe(262_144);
+    // Kimi's own figure, on Pro/Allegretto (Plus/Moderato: 256K).
+    expect(getModelContextWindow('k3')).toBe(1_048_576);
+    expect(getModelContextWindow('gemini-3-flash-preview')).toBe(1_048_576);
   });
 
   it('falls back to 128K for unknown models', () => {
@@ -309,7 +326,7 @@ describe('getCostBreakdown', () => {
     expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.00354, 8);
   });
 
-  it('bills a historical DeepSeek V4 Pro cache read at its own 1/30 ratio', () => {
+  it('bills a DeepSeek V4 Pro cache read at its own 1/30 ratio', () => {
     expect(cacheReadRateFor('deepseek-v4-pro', 'deepseek')).toBeCloseTo(0.044 / 1.32, 10);
     expect(cacheReadRateFor('deepseek-flash', 'deepseek')).toBe(0.02);
   });
@@ -430,6 +447,19 @@ describe('getCostBreakdown', () => {
     expect(breakdown[0].estimatedCost).toBeCloseTo(0.01575, 6);
   });
 
+  // "On Claude Opus 5.5, a cache hit costs 5% of the standard input price".
+  it('prices Opus 5.5 at $4/$20 and reads its cache at 0.05×', () => {
+    expect(getPricingTable().find(m => m.model === 'claude-opus-5-5'))
+      .toMatchObject({ inputPer1M: 4, outputPer1M: 20 });
+    recordTokenUsage(
+      { promptTokens: 100_000, completionTokens: 0, totalTokens: 100_000, cacheReadTokens: 100_000 },
+      'claude-opus-5-5',
+      'anthropic',
+    );
+    // 100000/1M * $4 * 0.05 = 0.02
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.02, 8);
+  });
+
   it('mixes reported + computed costs in the same session', () => {
     recordTokenUsage(
       { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
@@ -486,7 +516,10 @@ describe('getPricingTable', () => {
     // been cancelled before.
     expect(byModel.get('gemini-3.8-flash')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 3.75 });
     // GPT-6 Astra is twice 5.6 Sol; a run priced at Sol's rate reads half true.
+    // No longer offered, but restored sessions still price.
     expect(byModel.get('gpt-6-astra')).toMatchObject({ inputPer1M: 10, outputPer1M: 50 });
+    expect(byModel.get('gpt-6-sol')).toMatchObject({ inputPer1M: 2, outputPer1M: 10 });
+    expect(byModel.get('gpt-6-luna')).toMatchObject({ inputPer1M: 0.1, outputPer1M: 0.5 });
     // DeepSeek carries PEAK. The old rows were 2–4.6x below it — under-reporting,
     // the one direction this table must never err in.
     expect(byModel.get('deepseek-flash')).toMatchObject({ inputPer1M: 0.30, outputPer1M: 1.20 });
@@ -498,8 +531,12 @@ describe('getPricingTable', () => {
     expect(byModel.get('MiniMax-M3')).toMatchObject({ inputPer1M: 0.30, outputPer1M: 1.20 });
     expect(byModel.get('qwen3.8-max')).toMatchObject({ inputPer1M: 2, outputPer1M: 6 });
     expect(byModel.get('qwen3.8-flash')).toMatchObject({ inputPer1M: 0.15, outputPer1M: 0.47 });
-    // Grok 4.6 inherits 4.5's base-tier rate.
+    // Grok 4.6 inherits 4.5's base-tier rate, and 4.7 keeps it.
     expect(byModel.get('grok-4.6')).toMatchObject({ inputPer1M: 2, outputPer1M: 6 });
+    expect(byModel.get('grok-4.7')).toMatchObject({ inputPer1M: 2, outputPer1M: 6 });
+    // Alibaba lists 3.6 Plus at $0.5/$3 up to 256K; the row carried 3.5 Plus's.
+    expect(byModel.get('qwen3.6-plus')).toMatchObject({ inputPer1M: 0.5, outputPer1M: 3 });
+    expect(byModel.get('glm-5.3-flashx')).toMatchObject({ inputPer1M: 0.37, outputPer1M: 1.25 });
   });
 
   it('prices GLM-5.3 at the rate Z.AI publishes', () => {
@@ -685,5 +722,119 @@ describe('prompt-caching savings vs flat-fee plans', () => {
     const report = formatCostReport();
     expect(report).toContain('Estimated savings vs no caching:');
     expect(report).not.toContain('pay-per-use models only');
+  });
+});
+
+describe('cache writes on the OpenAI protocol (GPT-5.6+, Kimi K3)', () => {
+  // "For GPT-5.6 and later, cache writes cost 1.25× the standard, uncached
+  // input-token rate", reported as prompt_tokens_details.cache_write_tokens and
+  // included in prompt_tokens. Unread, they billed at 1.0× and estimates erred low.
+  it('reads cache_write_tokens as cache creation', () => {
+    expect(extractOpenAIUsage({
+      usage: {
+        prompt_tokens: 10_000, completion_tokens: 100, total_tokens: 10_100,
+        prompt_tokens_details: { cached_tokens: 6_000, cache_write_tokens: 3_000 },
+      },
+    })).toEqual({
+      promptTokens: 10_000, completionTokens: 100, totalTokens: 10_100,
+      cacheCreationTokens: 3_000, cacheReadTokens: 6_000,
+    });
+    // Zero or missing leaves the field out, as for reads.
+    expect(extractOpenAIUsage({ usage: { prompt_tokens: 5, prompt_tokens_details: { cache_write_tokens: 0 } } })!
+      .cacheCreationTokens).toBeUndefined();
+  });
+
+  it('bills a GPT-5.6 cache write at 1.25× and subtracts it from the uncached part once', () => {
+    const usage = extractOpenAIUsage({
+      usage: {
+        prompt_tokens: 100_000, completion_tokens: 0, total_tokens: 100_000,
+        prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 100_000 },
+      },
+    })!;
+    recordTokenUsage(usage, 'gpt-5.6-sol', 'openai');
+    // 100000/1M * $4 * 1.25 = 0.5 — not 0.4 (writes as plain input), and not
+    // 0.9 (writes counted again on top of prompt_tokens).
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.5, 8);
+  });
+
+  it('bills a Kimi K3 write at the plain input rate, which is what its 5-minute write costs', () => {
+    expect(cacheWriteRateFor('kimi-k3', 'kimi-api')).toBe(1);
+    expect(cacheWriteRateFor('kimi-k3', 'kimi-cn')).toBe(1);
+    recordTokenUsage(
+      { promptTokens: 100_000, completionTokens: 0, totalTokens: 100_000, cacheCreationTokens: 100_000 },
+      'kimi-k3',
+      'kimi-api',
+    );
+    // 100000/1M * $3 * 1.0 = 0.3
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.3, 8);
+  });
+
+  it('charges no write premium before GPT-5.6, and 1.25× on Anthropic and GPT-6', () => {
+    expect(cacheWriteRateFor('gpt-5.5', 'openai')).toBe(1);
+    expect(cacheWriteRateFor('gpt-5.4-mini', 'openai')).toBe(1);
+    expect(cacheWriteRateFor('gpt-6-sol', 'openai')).toBe(1.25);
+    expect(cacheWriteRateFor('claude-opus-5-5', 'anthropic')).toBe(1.25);
+  });
+
+  it('nets the write premium it actually charged into savings, and states it', () => {
+    recordTokenUsage(
+      {
+        promptTokens: 200_000, completionTokens: 0, totalTokens: 200_000,
+        cacheCreationTokens: 100_000, cacheReadTokens: 100_000,
+      },
+      'kimi-k3',
+      'kimi-api',
+    );
+    // Reads save 100000/1M * $3 * (1 - 0.1) = 0.27. A Kimi write costs nothing
+    // extra, so it takes nothing off that; a 1.25× premium would take 0.075.
+    expect(getCacheStats().estimatedSavingsUsd).toBeCloseTo(0.27, 8);
+    expect(getCacheStats().cacheWriteRates).toEqual([1]);
+    const report = formatCostReport();
+    expect(report).toContain('**Cache writes:** 100.0K tokens (billed at 1× input rate)');
+    expect(report).not.toContain('1.25×');
+  });
+});
+
+describe('cache-read rates from the 2026-09-23 sweep', () => {
+  it('reads Kimi K3 at a tenth, and China K2.x at a fifth', () => {
+    // $0.30 against $3.00 — the provider's 0.2 billed every K3 hit twice.
+    expect(cacheReadRateFor('kimi-k3', 'kimi-api')).toBe(0.1);
+    expect(cacheReadRateFor('kimi-k3', 'kimi-cn')).toBe(0.1);
+    expect(cacheReadRateFor('k3', 'kimi')).toBe(0.1);
+    expect(cacheReadRateFor('k3-256k', 'kimi')).toBe(0.1);
+    // ¥1.30 against ¥6.50; kimi-cn had no entry and fell to 0.1.
+    expect(cacheReadRateFor('kimi-k2.7-code', 'kimi-cn')).toBe(0.2);
+    expect(cacheReadRateFor('kimi-k2.7-code', 'kimi-api')).toBe(0.2);
+  });
+
+  it('reads each Grok model at its own cached-input ratio, none of them 0.1', () => {
+    expect(cacheReadRateFor('grok-4.7', 'grok')).toBeCloseTo(0.25, 10);
+    expect(cacheReadRateFor('grok-4.6', 'grok')).toBeCloseTo(0.25, 10);
+    expect(cacheReadRateFor('grok-4.5', 'grok')).toBeCloseTo(0.15, 10);
+    expect(cacheReadRateFor('grok-build-0.1', 'grok')).toBeCloseTo(0.2, 10);
+    expect(cacheReadRateFor('grok-4.3', 'grok')).toBeCloseTo(0.16, 10);
+  });
+
+  // The same GLM id caches at a different ratio on each platform, so the rate
+  // is looked up per surface first.
+  it('reads GLM at the ratio of the platform it ran on', () => {
+    expect(cacheReadRateFor('glm-5.3', 'z.ai-api')).toBeCloseTo(0.26 / 1.4, 10);
+    expect(cacheReadRateFor('glm-5.3', 'z.ai-cn-api')).toBeCloseTo(0.25, 10);
+    expect(cacheReadRateFor('glm-5.3-flash', 'z.ai-api')).toBeCloseTo(0.2, 10);
+    expect(cacheReadRateFor('glm-5.3-flash', 'z.ai-cn-api')).toBeCloseTo(0.2875, 10);
+    expect(cacheReadRateFor('glm-5.3-flashx', 'z.ai-api')).toBeCloseTo(0.075 / 0.37, 10);
+    expect(cacheReadRateFor('glm-5.3-flashx', 'z.ai-cn-api')).toBeCloseTo(0.285, 10);
+    // A surface with no row keeps its old lookup.
+    expect(cacheReadRateFor('qwen3.7-max', 'qwen-api')).toBe(0.2);
+  });
+
+  it('bills a China GLM-5.3 cache read at China\'s ratio', () => {
+    recordTokenUsage(
+      { promptTokens: 100_000, completionTokens: 0, totalTokens: 100_000, cacheReadTokens: 100_000 },
+      'glm-5.3',
+      'z.ai-cn-api',
+    );
+    // 100000/1M * $1.40 * 0.25 = 0.035
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.035, 8);
   });
 });

@@ -1047,3 +1047,21 @@ describe('unstreamedText: what the loop added after the model\'s reply', () => {
     expect(result.unstreamedText).toBe('Agent was stopped by user before verification finished');
   });
 });
+
+describe('a turn that only called tools', () => {
+  // Opus 5.5 and Fable 5.1 put the narration between tool calls into thinking
+  // blocks, so the text of such a turn is empty. Sent back as '', it is an
+  // empty non-final message, which Anthropic refuses with a 400 — the run died
+  // on its second request.
+  it('never goes back to the model as an empty message', async () => {
+    writeFileSync(join(root, 'a.txt'), 'hello');
+    setScript(() => (chatCalls().length === 1 ? use(['read_file', { path: 'a.txt' }]) : say('All done.')));
+
+    await runAgent('read a.txt', ctx(), { autoVerify: false, maxIterations: 5 });
+
+    const second = chatCalls()[1];
+    expect(second).toBeDefined();
+    expect(second.messages.filter(m => m.content.trim() === '')).toEqual([]);
+    expect(second.messages.find(m => m.role === 'assistant')?.content).toBe('Using read_file.');
+  });
+});

@@ -16,7 +16,8 @@ import { startAcpServer, executeAcpCommand } from './server';
 import { runAgentSession, type AgentSessionOptions } from './session';
 import { initWorkspace, loadWorkspace, handleCommand } from './commands';
 import { registerSessionServers } from '../utils/mcpRegistry';
-import { config, saveSession } from '../config/index';
+import { config, saveSession, getApiKey } from '../config/index';
+import { ApiError } from '../api/index';
 import { selectSessionMcpServers } from '../utils/mcpConfig';
 import { handleMcpSamplingRequest } from '../utils/mcpSamplingBridge';
 import type { ToolCall } from '../utils/tools';
@@ -55,7 +56,14 @@ vi.mock('../utils/codeepCloud.js', async (importOriginal) => {
 });
 vi.mock('../config/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../config/index.js')>();
-  return { ...actual, saveSession: vi.fn(() => true), autoSaveSession: vi.fn(() => true) };
+  return {
+    ...actual,
+    saveSession: vi.fn(() => true),
+    autoSaveSession: vi.fn(() => true),
+    // The real lookup unless a test says otherwise: the key cache is the one
+    // input the 401 wording depends on.
+    getApiKey: vi.fn((providerId?: string) => actual.getApiKey(providerId)),
+  };
 });
 vi.mock('../utils/project.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../utils/project.js')>();
@@ -1417,5 +1425,43 @@ describe('execute_command in the client terminal', () => {
     // does not run for a command that is not git. Sending it anyway would
     // take a variable off a command Codeep deliberately does not harden.
     expect(client.terminalEnv()).not.toHaveProperty('GIT_CONFIG_PARAMETERS');
+  });
+});
+
+// ─── A prompt the provider refuses with 401 ──────────────────────────────────
+
+describe('a prompt refused with 401', () => {
+  // Kimi Code answers 401 for plan limits, with its reason in the body
+  // (kimi.com/code/docs/en/kimi-code/error-reference.html).
+  const planLimit = () => new ApiError(
+    'API error: 401 - {"error":{"message":"Your current plan supports only kimi-k3 up to 256K context","type":"permission_error"}}',
+    401,
+  );
+  const chunkText = () => client.updates('agent_message_chunk')
+    .map((f) => f.params!.update.content.text as string).join('');
+  let providerBefore: string;
+  beforeEach(() => { providerBefore = config.get('provider'); });
+  afterEach(() => { config.set('provider', providerBefore); });
+
+  it('says a configured key was refused and the plan may not include the model, quoting the provider', async () => {
+    config.set('provider', 'kimi');
+    vi.mocked(getApiKey).mockImplementation((id?: string) => (id === 'kimi' ? 'sk-kimi-test' : ''));
+    vi.mocked(runAgentSession).mockRejectedValueOnce(planLimit());
+    const sessionId = await newSession();
+    const id = prompt(sessionId, 'refactor the parser');
+    expect((await client.waitForResponse(id)).result).toEqual({ stopReason: 'end_turn' });
+    expect(chunkText()).toContain('Your current plan supports only kimi-k3 up to 256K context');
+    expect(chunkText()).toContain('plan may not include this model or limit');
+    expect(chunkText()).not.toContain('No API key configured');
+  });
+
+  it('still says the key is missing when none is configured', async () => {
+    config.set('provider', 'kimi');
+    vi.mocked(getApiKey).mockImplementation(() => '');
+    vi.mocked(runAgentSession).mockRejectedValueOnce(planLimit());
+    const sessionId = await newSession();
+    const id = prompt(sessionId, 'refactor the parser');
+    expect((await client.waitForResponse(id)).result).toEqual({ stopReason: 'end_turn' });
+    expect(chunkText()).toContain('No API key configured');
   });
 });

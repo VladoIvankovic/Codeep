@@ -978,6 +978,45 @@ describe('session names', () => {
     expect(seen).toEqual([0, 1, 2, 2, 3]);
   });
 
+  // A checkpoint predates any later retirement. Restoring its model verbatim
+  // put a withdrawn id (Astra, whose tool calls fail on Chat Completions) back
+  // on the running process until the next load migrated it.
+  describe('/rewind to a checkpoint on a model that is no longer offered', () => {
+    const saved: Record<string, unknown> = {};
+    beforeEach(() => {
+      for (const k of ['provider', 'model'] as const) saved[k] = config.get(k);
+      config.set('provider', 'anthropic');
+      config.set('model', 'claude-opus-5');
+    });
+    afterEach(() => {
+      for (const [k, v] of Object.entries(saved)) config.set(k as 'provider', v as string);
+    });
+
+    const checkpointOn = (provider: string, model: string) => createCheckpoint({
+      workspaceRoot: ws, sessionId: session.codeepSessionId, provider, model,
+      messages: [{ role: 'user', content: 'earlier' }], filesTouched: [],
+    });
+
+    it('restores its replacement and says so', async () => {
+      const res = await run(`/rewind ${checkpointOn('openai', 'gpt-6-astra').id}`);
+      expect(config.get('provider')).toBe('openai');
+      expect(config.get('model')).toBe('gpt-6-sol');
+      expect(res.response).toContain("Model: `gpt-6-sol` (the checkpoint's `gpt-6-astra` is no longer offered)");
+      expect(res.configOptionsChanged).toBe(true);
+
+      await run(`/rewind ${checkpointOn('z.ai', 'glm-5.2').id}`);
+      expect(config.get('model')).toBe('glm-5.3');
+    });
+
+    it('changes nothing when the replacement is already the model in use', async () => {
+      config.set('provider', 'openai');
+      config.set('model', 'gpt-6-sol');
+      const res = await run(`/rewind ${checkpointOn('openai', 'gpt-6-astra').id}`);
+      expect(config.get('model')).toBe('gpt-6-sol');
+      expect(res.configOptionsChanged).toBe(false);
+    });
+  });
+
   it('/save says why a name cannot be used and keeps the session', async () => {
     const res = await run('/save feature/auth');
     expect(res.response).toContain('Session name "feature/auth" cannot contain "/');

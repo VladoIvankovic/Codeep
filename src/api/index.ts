@@ -4,7 +4,7 @@ import { Message, config, getApiKey, resolveBaseUrl, describeUnsendableKey } fro
 import { withRetry, isNetworkError } from '../utils/retry';
 import { checkApiRateLimit } from '../utils/ratelimit';
 import { ProjectContext } from '../utils/project';
-import { getProvider, getProviderBaseUrl, getProviderAuthHeader, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, reasoningParamsFor, type ReasoningTier } from '../config/providers';
+import { getProvider, getProviderBaseUrl, getProviderAuthHeader, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, reasoningParamsFor, minResponseTokensFor, type ReasoningTier } from '../config/providers';
 import { logApiRequest, logApiResponse } from '../utils/logger';
 import { loadProjectIntelligence, generateContextFromIntelligence, ProjectIntelligence } from '../utils/projectIntelligence';
 import { loadProjectRules } from '../utils/agent';
@@ -428,7 +428,8 @@ async function chatOpenAI(
   const stream = Boolean(onChunk);
   const timeout = config.get('apiTimeout');
   const temperature = config.get('temperature');
-  const maxTokens = config.get('maxTokens');
+  // Never below the model's floor (Opus 5.5 on OpenRouter — see minResponseTokensFor).
+  const maxTokens = Math.max(config.get('maxTokens'), minResponseTokensFor(model, config.get('reasoningEffort') as ReasoningTier));
 
   // Get provider-specific URL and auth. resolveBaseUrl applies user
   // overrides: Ollama (ollamaUrl), Custom (customBaseUrl), and OpenAI
@@ -732,7 +733,9 @@ async function chatAnthropic(
   const stream = Boolean(onChunk);
   const timeout = config.get('apiTimeout');
   const temperature = config.get('temperature');
-  const maxTokens = config.get('maxTokens');
+  // Never below the model's floor: Opus 5.5's always-on thinking spends the
+  // same limit as the answer (see minResponseTokensFor).
+  const maxTokens = Math.max(config.get('maxTokens'), minResponseTokensFor(model, config.get('reasoningEffort') as ReasoningTier));
   const baseUrl = getProviderBaseUrl(providerId, 'anthropic');
   const authHeader = getProviderAuthHeader(providerId, 'anthropic');
 

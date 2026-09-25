@@ -30,6 +30,7 @@ import {
   listSessionsWithInfo, deleteSession as deleteSessionFile,
   type LanguageCode,
 } from '../config/index.js';
+import { replacementModelFor } from '../config/providers.js';
 import { disposeSession as disposeMcpSession } from '../utils/mcpRegistry.js';
 import { clearPendingPlan } from '../utils/planMode.js';
 
@@ -163,16 +164,15 @@ export function applyConfigOption(
   value: unknown,
 ): void {
   if (configId === 'model' && typeof value === 'string') {
-    // value is "providerId/modelId" — split and switch both
+    // value is "providerId/modelId" — split and switch both. An editor setting
+    // pinned before a retirement (`openai/gpt-6-astra`) names an id the picker
+    // no longer has, so the model goes through the same map as a stored config,
+    // looked up on the provider actually active: setProvider refuses an unknown
+    // id and leaves the old one in place.
     const slashIdx = value.indexOf('/');
-    if (slashIdx !== -1) {
-      const providerId = value.slice(0, slashIdx);
-      const modelId = value.slice(slashIdx + 1);
-      setProvider(providerId);   // sets provider + defaultModel + protocol
-      config.set('model', modelId);
-    } else {
-      config.set('model', value);
-    }
+    const modelId = slashIdx !== -1 ? value.slice(slashIdx + 1) : value;
+    if (slashIdx !== -1) setProvider(value.slice(0, slashIdx));   // sets provider + defaultModel + protocol
+    config.set('model', replacementModelFor(config.get('provider'), modelId) ?? modelId);
   } else if (configId === 'provider' && typeof value === 'string') {
     // Switch provider without specifying a model — picks the provider's
     // default model + protocol. Used by editor clients that pin a provider

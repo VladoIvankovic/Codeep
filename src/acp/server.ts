@@ -787,6 +787,43 @@ function persistSessionHistory(session: AcpSession): void {
   saveSession(session.codeepSessionId, session.history, session.workspaceRoot);
 }
 
+/** The provider's own words from an `API error: 401 - …` message, if any. */
+function providerErrorDetail(message: string): string {
+  const body = message.replace(/^[\s\S]*?\b401\s*-\s*/, '').trim();
+  let detail: unknown = body;
+  try {
+    const json = JSON.parse(body);
+    detail = json?.error?.message ?? json?.message ?? body;
+  } catch {
+    // Not JSON — the text is the detail.
+  }
+  const text = String(detail).trim();
+  return text.length > 300 ? `${text.slice(0, 300)}…` : text;
+}
+
+/**
+ * What to tell the user when a prompt fails on authentication, or null when
+ * the failure is about something else.
+ *
+ * Every 401 used to read "No API key configured", key or no key. Kimi Code
+ * answers 401 for its plan limits — no K3 on the plan, K3 past 256K on
+ * Plus/Moderato, High-Speed below Pro/Allegretto, an unknown model id
+ * (kimi.com/code/docs/en/kimi-code/error-reference.html) — so a subscriber with
+ * a perfectly good key was sent to /login when the fix was another model. With
+ * a key configured, a 401 now says what else it can mean and quotes the
+ * provider.
+ */
+export function authFailureNotice(err: Error, providerId: string, keyConfigured: boolean): string | null {
+  const is401 = err instanceof ApiError && err.status === 401;
+  if (!is401 && !err.message?.includes('API key')) return null;
+  if (is401 && keyConfigured) {
+    const name = PROVIDERS[providerId]?.name ?? providerId;
+    const detail = providerErrorDetail(err.message ?? '');
+    return `❌ ${name} refused the request (401)${detail ? `: ${detail}` : ''}. A key is configured, so this is not a missing key: the key may be invalid or revoked, or your plan may not include this model or limit (Kimi Code, for one, answers 401 when a plan lacks K3, K3's 1M context or High-Speed). Pick another model with /model, or re-enter the key with /login.`;
+  }
+  return `❌ No API key configured. Use /login <provider> <key> or set the environment variable (e.g. ZAI_API_KEY, ANTHROPIC_API_KEY).`;
+}
+
 export function startAcpServer(transport: StdioTransport = new StdioTransport()): Promise<void> {
   // ACP sessionId → full AcpSession (includes history + codeep session tracking)
   const sessions = new Map<string, AcpServerSessionState>();
@@ -1460,6 +1497,11 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
         },
       });
     };
+    // Read when the prompt fails, not now: /login during the turn counts.
+    const authNotice = (err: Error): string | null => {
+      const providerId = config.get('provider');
+      return authFailureNotice(err, providerId, Boolean(getApiKey(providerId)));
+    };
 
     // Ask the user through the client. A person answers this: wait as long
     // as the dialog is open. Only cancelling the prompt stops the wait. No
@@ -1785,8 +1827,8 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
               sendPlan();
             }
             transport.respond(msg.id, { stopReason: 'cancelled' });
-          } else if (err.message?.includes('API key not configured') || err.message?.includes('API key') || (err instanceof ApiError && err.status === 401)) {
-            sendChunk(`❌ No API key configured. Use /login <provider> <key> or set the environment variable (e.g. ZAI_API_KEY, ANTHROPIC_API_KEY).`);
+          } else if (authNotice(err)) {
+            sendChunk(authNotice(err)!);
             transport.respond(msg.id, { stopReason: 'end_turn' });
           } else if (err instanceof ApiError && err.status >= 500) {
             sendChunk(`⚠️ API server error (${err.status}). Please try again.`);
@@ -1804,8 +1846,8 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
         // when cancelled. The client asked for that, so it is not an error.
         if (err.name === 'AbortError' || abortController.signal.aborted) {
           transport.respond(msg.id, { stopReason: 'cancelled' });
-        } else if (err.message?.includes('API key not configured') || err.message?.includes('API key') || (err instanceof ApiError && err.status === 401)) {
-          sendChunk(`❌ No API key configured. Use /login <provider> <key> or set the environment variable (e.g. ZAI_API_KEY, ANTHROPIC_API_KEY).`);
+        } else if (authNotice(err)) {
+          sendChunk(authNotice(err)!);
           transport.respond(msg.id, { stopReason: 'end_turn' });
         } else if (err instanceof ApiError && err.status >= 500) {
           sendChunk(`⚠️ API server error (${err.status}). Please try again.`);

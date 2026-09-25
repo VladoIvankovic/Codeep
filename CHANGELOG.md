@@ -11,6 +11,74 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.5.0] — 2026-09-25
+
+> TL;DR — Claude Opus 5.5 is the new Anthropic default, Grok 4.7 and GPT-6 Sol and Luna arrive, DeepSeek V4 Pro is back, and saved settings on retired models now move to their replacements.
+
+A full review of every provider's models on 2026-09-23, each change checked
+against the provider's own pages.
+
+### Upgrade notes
+
+- **Opus 5.5 defaults to medium effort.** On `/thinking auto` it runs one level
+  lower than Opus 5 did; set `/thinking high` for the old depth.
+- **GPT-6 Sol and Luna run agent turns with reasoning off.** On the connection
+  Codeep uses for OpenAI (Chat Completions), GPT-6 can call tools only that
+  way, so agent turns send `reasoning_effort: "none"` whatever `/thinking`
+  says; `/thinking` tells you so. Plain chat keeps your tier. Support for
+  OpenAI's Responses API, which lifts this, is being built.
+- **GPT-6 Astra is no longer offered on OpenAI**: it cannot call tools on that
+  connection at all. Saved settings and custom bots on Astra move to GPT-6 Sol.
+  Astra is still available through OpenRouter.
+- **Saved settings on retired models now move to their replacements for
+  everyone.** Earlier migrations only reached configs created before
+  2026-08-15, so some of them run for you for the first time:
+  - GLM Coding Plan: GLM-5.2, 5.1 and 5 move to GLM-5.3, GLM-5 Turbo to 5.3
+    Flash — both plans now accept only those two models. GLM-5 Turbo also moves
+    to 5.3 Flash on Z.AI international pay-per-use.
+  - Qwen: the Token Plan's retired Qwen3.8-Max Preview moves to Qwen3.8-Max;
+    Qwen3-Max and the Qwen3 coders (retiring 2026-10-10) move to Qwen 3.7 Plus
+    or Max, whichever the plan offers.
+  - Gemini 3 previews move to Gemini 3.6 Flash and 3.1 Pro.
+  - ModelScope's old fallback, Qwen3-Coder-480B, is no longer served; it moves
+    to Qwen3.5-397B.
+  - Custom bots, `/rewind` checkpoints and editor settings pinned to a retired
+    model now run on its replacement instead of failing.
+
+### Added
+
+- **Claude Opus 5.5** (`claude-opus-5-5`), now the Anthropic default: $4/$20,
+  1M context, cache reads at 5% of input. Codeep leaves it at least 32K reply
+  tokens (64K at Max), because its thinking shares that limit. Opus 5 stays in
+  the picker.
+- **Grok 4.7** (`grok-4.7`): $2/$6, 500K context. The Grok default stays Grok
+  Build 0.1, which costs half as much.
+- **GPT-6 Sol** ($2/$10) and **GPT-6 Luna** ($0.10/$0.50), 1.05M context.
+- **DeepSeek V4 Pro is back** — DeepSeek cancelled its retirement. Users moved
+  to Flash in 3.3.0 stay on Flash and can pick V4 Pro again.
+- GLM-5.3 FlashX on Z.AI pay-per-use; Qwen 3.8 Max and Flash on Qwen China
+  pay-per-use and on the Token Plan.
+- `/thinking` on Kimi Code (`kimi-for-coding`, now K2.8 Preview with 1M
+  context).
+
+### Changed
+
+- Max sends `max` on GPT-5.6 and GPT-6 (it sent `xhigh`), and `xhigh` on Grok
+  4.6 and 4.7. Through OpenRouter, Max goes as high as each model supports
+  instead of stopping at `high`.
+
+### Fixed
+
+- Cost estimates: OpenAI cache writes (GPT-5.6 on) count at 1.25x input
+  instead of not at all; cache reads use each model's own rate for Opus 5.5,
+  Kimi, every Grok model and GLM (per region); Qwen3.6-Plus is repriced.
+- Agent runs on Claude models that call tools without writing text between
+  calls no longer fail on their second step.
+- Kimi Code plan limits (for example K3 past 256K on a Plus plan) come back as
+  HTTP 401; the editor integration said "No API key configured". It now says
+  the plan may not include that model or limit, and quotes Kimi's message.
+- The task planner no longer sends a temperature to models that reject it.
+
 ## [3.4.1] — 2026-09-19
 
 > TL;DR — Security release: a repository's own .git/config could make git run a program of its choosing, and opening the folder was enough. Codeep now neutralises those settings on every git call it makes.

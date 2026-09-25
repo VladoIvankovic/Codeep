@@ -242,3 +242,50 @@ describe('planTasks runtime', () => {
     expect(plan.tasks[0].description).toBe('Plan with Claude');
   });
 });
+
+describe('planTasks request budget and sampling', () => {
+  function answer(protocol: 'openai' | 'anthropic') {
+    const tasks = JSON.stringify({ tasks: [{ id: 1, description: 'step', dependencies: [] }] });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => (protocol === 'anthropic'
+        ? { content: [{ text: tasks }] }
+        : { choices: [{ message: { content: tasks } }] }),
+    } as Response);
+  }
+  const body = () => JSON.parse(String((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body));
+  const project = { name: 'Codeep', type: 'typescript', structure: 'src/' };
+
+  beforeEach(() => {
+    plannerMocks.getApiKey.mockReturnValue('key');
+    plannerMocks.resolveBaseUrl.mockReturnValue('https://planner.invalid');
+  });
+
+  // Opus 5.5 thinks on every request inside the same max_tokens; 2048 could go
+  // on the thinking alone and leave no JSON.
+  it('gives Opus 5.5 room to think before the plan, and nobody else more than 2048', async () => {
+    answer('anthropic');
+    await planTasks('Build the feature', project, { providerId: 'anthropic', model: 'claude-opus-5-5', protocol: 'anthropic' });
+    expect(body().max_tokens).toBe(32_768);
+
+    answer('anthropic');
+    await planTasks('Build the feature', project, { providerId: 'anthropic', model: 'claude-sonnet-5', protocol: 'anthropic' });
+    expect(body().max_tokens).toBe(2048);
+  });
+
+  // The temperature used to be gated on the provider alone, so OpenRouter sent
+  // 0.3 to models that reject any non-default value.
+  it('sends no temperature to a model that rejects it, on any provider', async () => {
+    answer('openai');
+    await planTasks('Build the feature', project, { providerId: 'openrouter', model: 'anthropic/claude-opus-5.5', protocol: 'openai' });
+    expect(body()).not.toHaveProperty('temperature');
+
+    answer('openai');
+    await planTasks('Build the feature', project, { providerId: 'openrouter', model: 'openai/gpt-6-sol', protocol: 'openai' });
+    expect(body()).not.toHaveProperty('temperature');
+
+    answer('openai');
+    await planTasks('Build the feature', project, { providerId: 'z.ai', model: 'glm-5.3', protocol: 'openai' });
+    expect(body().temperature).toBe(0.3);
+  });
+});

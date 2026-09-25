@@ -3,7 +3,7 @@
  */
 
 import { config, getApiKey, Message, resolveBaseUrl } from '../config/index';
-import { getProviderAuthHeader, isNoApiKeyProvider, requiresDefaultTemperature } from '../config/providers';
+import { getProviderAuthHeader, isNoApiKeyProvider, requiresDefaultTemperature, modelRejectsSamplingParams, minResponseTokensFor } from '../config/providers';
 
 export interface SubTask {
   id: number;
@@ -81,10 +81,14 @@ Break this down into subtasks. Each task = one file or one logical unit. Respond
       { role: 'user', content: systemPrompt }
     ];
 
+    // 2048 is plenty for a JSON plan, but not for a model that thinks on every
+    // request inside the same limit (Opus 5.5 — see minResponseTokensFor). The
+    // planner sends no effort, so the model runs at its own default: 'auto'.
+    const maxTokens = Math.max(2048, minResponseTokensFor(model, 'auto'));
     const requestBody = protocol === 'anthropic'
       ? {
           model,
-          max_tokens: 2048,
+          max_tokens: maxTokens,
           messages,
           system: 'You are a task planning assistant. Respond with JSON only.',
         }
@@ -94,8 +98,12 @@ Break this down into subtasks. Each task = one file or one logical unit. Respond
             { role: 'system', content: 'You are a task planning assistant. Respond with JSON only.' },
             ...messages
           ],
-          ...(requiresDefaultTemperature(provider) ? {} : { temperature: 0.3 }),
-          max_tokens: 2048,
+          // Both guards, as in agentChat: the provider flag covers direct
+          // OpenAI, and the model list covers ids that reach this branch through
+          // OpenRouter (anthropic/claude-opus-5.5, openai/gpt-6-*), which 400 on
+          // a temperature they do not accept.
+          ...(requiresDefaultTemperature(provider) || modelRejectsSamplingParams(model) ? {} : { temperature: 0.3 }),
+          max_tokens: maxTokens,
         };
 
     const headers: Record<string, string> = {

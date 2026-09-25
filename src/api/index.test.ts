@@ -47,6 +47,8 @@ vi.mock('../config/providers', () => ({
   // Thinking-effort param builder — return {} so request bodies are unchanged
   // in these tests (the tier defaults to 'auto' anyway).
   reasoningParamsFor: vi.fn(() => ({})),
+  // No response floor for the models these tests use.
+  minResponseTokensFor: vi.fn(() => 0),
   // Added to match the real module — api/index.ts dynamically imports this
   // to decide whether to skip the API-key requirement (e.g. Ollama runs keyless).
   isNoApiKeyProvider: vi.fn((_id: string) => false),
@@ -88,7 +90,7 @@ vi.mock('./ollamaNative.js', () => ({
 import { chat, validateApiKey, setProjectContext } from './index';
 import { streamOllamaNativeChat } from './ollamaNative.js';
 import { config, getApiKey, resolveBaseUrl } from '../config/index';
-import { getProviderBaseUrl, getProviderAuthHeader, getProvider, modelRejectsSamplingParams } from '../config/providers';
+import { getProviderBaseUrl, getProviderAuthHeader, getProvider, modelRejectsSamplingParams, minResponseTokensFor } from '../config/providers';
 import { withRetry } from '../utils/retry';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from '../utils/tokenTracker';
 
@@ -564,5 +566,48 @@ describe('chat over the native Ollama API', () => {
     } finally {
       mockConfig.get.mockReset();
     }
+  });
+});
+
+describe('chat() — response floor', () => {
+  // Plain chat sends config maxTokens straight through; a model whose thinking
+  // shares that limit (Opus 5.5) must never get less than its floor.
+  const floor = minResponseTokensFor as ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    global.fetch = vi.fn();
+    mockGetApiKey.mockReturnValue('test-key');
+    mockWithRetry.mockImplementation(async (fn: () => Promise<unknown>) => fn());
+    floor.mockImplementation((model: string) => (model.includes('opus-5') ? 32_768 : 0));
+  });
+
+  function useConfig(vals: Record<string, unknown>): void {
+    mockConfig.get.mockImplementation((key: string) => ({
+      language: 'en', apiTimeout: 30000, temperature: 0.7, maxTokens: 4096, reasoningEffort: 'high', ...vals,
+    } as Record<string, unknown>)[key]);
+  }
+
+  it('raises max_tokens to the floor on the Anthropic protocol', async () => {
+    useConfig({ protocol: 'anthropic', provider: 'anthropic', model: 'claude-opus-5-5' });
+    mockGetProviderBaseUrl.mockReturnValue('https://api.anthropic.com');
+    mockGetProviderAuthHeader.mockReturnValue('x-api-key');
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(makeResponse({ content: [{ text: 'ok' }] }));
+    await chat('hello');
+    const body = JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
+    expect(floor).toHaveBeenCalledWith('claude-opus-5-5', 'high');
+    expect(body.max_tokens).toBe(32_768);
+  });
+
+  it('raises max_tokens to the floor on the OpenAI protocol, and leaves other models alone', async () => {
+    useConfig({ protocol: 'openai', provider: 'openrouter', model: 'anthropic/claude-opus-5.5' });
+    mockResolveBaseUrl.mockReturnValue('https://api.example.com');
+    mockGetProviderAuthHeader.mockReturnValue('Bearer');
+    (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(async () => makeResponse({ choices: [{ message: { content: 'ok' } }] }));
+    await chat('hello');
+    useConfig({ protocol: 'openai', provider: 'openai', model: 'gpt-4' });
+    await chat('hello');
+    const bodies = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.map(c => JSON.parse(c[1].body));
+    expect(bodies.map(b => b.max_tokens)).toEqual([32_768, 4096]);
   });
 });

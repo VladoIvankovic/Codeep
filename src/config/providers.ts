@@ -67,11 +67,15 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
         supportsNativeTools: true,
       },
     },
+    // The plan accepts exactly these two ("Only the following two models can be
+    // called: GLM-5.3, GLM-5.3-Flash" — docs.z.ai/devpack/faq, 2026-09-23). It
+    // routes GLM-5.2/5.1 to 5.3, so a 5.2 entry labelled 5.3 as an older model,
+    // and Turbo is not on the plan at all: Z.AI warns other models risk
+    // "unexpected charges", which a flat-fee surface would never show in /cost.
+    // Stored ids migrate via RETIRED_MODEL_REPLACEMENTS.
     models: [
       { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
       { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', description: 'Same 1M context at roughly a ninth of the price' },
-      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
-      { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant, available to all users' },
     ],
     defaultModel: 'glm-5.3',
     defaultProtocol: 'openai',
@@ -98,14 +102,16 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      // GLM-5.3 reached the standalone pay-per-use API on 2026-08-19 and is
-      // priced on docs.z.ai/guides/overview/pricing. The China platform
-      // (`z.ai-cn*`) bills separately and is not covered by that page, so it is
-      // left alone until its own listing is checked.
+      // GLM-5.3 reached the standalone pay-per-use API on 2026-08-18 and is
+      // priced on docs.z.ai/guides/overview/pricing, as is FlashX (not on
+      // either Coding Plan). GLM-5-Turbo is no longer on that price list, the
+      // models overview or the OpenAPI model enum — it was last listed on
+      // 2026-07-31, with no deprecation notice — so it is not offered here;
+      // stored configs move to Flash. China (`z.ai-cn-api`) still sells it.
       { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
       { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', description: 'Same 1M context at roughly a ninth of the price' },
+      { id: 'glm-5.3-flashx', name: 'GLM-5.3 FlashX', description: 'Faster GLM-5.3 Flash (about 200 tokens/s), 1M context' },
       { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
-      { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant' },
     ],
     defaultModel: 'glm-5.3',
     defaultProtocol: 'openai',
@@ -130,12 +136,13 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
         supportsNativeTools: true,
       },
     },
-    // GLM-5.3 is on the China gateway and the China Coding Plan (bigmodel.cn).
-    // Flash is listed only on China pay-per-use, so the plan does not offer it.
+    // The China plan now carries the same two models on every tier ("所有套餐均
+    // 支持 GLM-5.3、GLM-5.3-Flash" — docs.bigmodel.cn/cn/coding-plan/overview) and
+    // switches GLM-5.2/5.1 to 5.3 and GLM-5-Turbo to 5.3-Flash. FlashX is not on
+    // the plan. Stored ids migrate via RETIRED_MODEL_REPLACEMENTS.
     models: [
       { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
-      { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
-      { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant, available to all users' },
+      { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', description: 'Same 1M context, much lighter on plan quota' },
     ],
     defaultModel: 'glm-5.3',
     defaultProtocol: 'openai',
@@ -164,7 +171,10 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     models: [
       { id: 'glm-5.3', name: 'GLM-5.3', description: 'Latest flagship for project-scale engineering (1M context)' },
       { id: 'glm-5.3-flash', name: 'GLM-5.3 Flash', description: 'Same 1M context at a tenth of the price' },
+      { id: 'glm-5.3-flashx', name: 'GLM-5.3 FlashX', description: 'Faster GLM-5.3 Flash (about 200 tokens/s), 1M context' },
       { id: 'glm-5.2', name: 'GLM-5.2', description: 'Previous flagship for project-scale engineering (1M context)' },
+      // Still listed and priced on BigModel pay-per-use (CNY 5/22 below 32K
+      // input); only the China Coding Plan reroutes it.
       { id: 'glm-5-turbo', name: 'GLM-5 Turbo', description: 'Fast GLM-5 variant' },
     ],
     defaultModel: 'glm-5.3',
@@ -262,17 +272,23 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
         supportsNativeTools: true,
       },
     },
-    // One model. DeepSeek's own pricing page names `deepseek-flash` (V4.1 Flash)
-    // as the model to use and says it outperforms V4 Pro. `deepseek-v4-flash`
-    // is already served by it, and from 2026-09-14 12:00 Beijing time every
-    // `deepseek-v4-pro` request is routed to it and billed at its price until
-    // a V4.1 Pro exists — so a Pro entry would be a label on a different model.
-    // Both old ids migrate via RETIRED_MODEL_REPLACEMENTS.
+    // DeepSeek's pricing page names `deepseek-flash` (V4.1 Flash) as the model
+    // to use, so it stays the default; the retired `deepseek-v4-flash` ids are
+    // served by it and migrate via RETIRED_MODEL_REPLACEMENTS.
     //
-    // Note the id differs on OpenRouter, which lists the same model as
-    // `deepseek/deepseek-v4.1-flash`.
+    // V4 Pro was announced to route to Flash from 2026-09-14, and Codeep 3.3.0
+    // migrated it away. DeepSeek reversed that on 2026-09-11, before the
+    // cutover: the changelog's 09-10 entry now says V4 Pro service continues
+    // "with the billing method remaining unchanged", and the pricing page and
+    // API reference list `deepseek-v4-pro` (DeepSeek-V4-Pro-0813) beside Flash.
+    // The 09-10 news post still carries the old routing text; the changelog is
+    // the newer source. So Pro is a separate, separately billed model again.
+    //
+    // The ids differ on OpenRouter: `deepseek/deepseek-v4.1-flash`, and
+    // `deepseek/deepseek-v4-pro-0813` for this Pro (see the fallback list).
     models: [
       { id: 'deepseek-flash', name: 'DeepSeek V4.1 Flash', description: 'Current DeepSeek model — thinking on by default, vision, 1M context, 384K output' },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', description: 'Larger V4 model (V4-Pro-0813) — thinking on, 1M context, no vision, about 4x Flash\'s price' },
     ],
     defaultModel: 'deepseek-flash',
     defaultProtocol: 'openai',
@@ -293,11 +309,18 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     protocols: {
       openai: { baseUrl: 'https://api.kimi.com/coding/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
+    // Kimi Code upgraded `kimi-for-coding` in place to K2.8 Preview on
+    // 2026-09-11 (1,048,576 context on every tier, effort low/high/max). The
+    // plans were then renamed: Plus ≈ Moderato, Pro ≈ Allegretto, and the new Go
+    // tier has no coding quota. K3 reaches 1M context only on Pro/Allegretto; on
+    // Plus/Moderato it is capped at 256K, and going past that returns HTTP 401
+    // "Your current plan supports only kimi-k3 up to 256K context"
+    // (kimi.com/code/docs/en/kimi-code/models.html, error-reference.html).
     models: [
-      { id: 'kimi-for-coding', name: 'Kimi Code', description: 'Available on every Kimi Code plan — maps to K2.7 Code' },
-      { id: 'k3', name: 'Kimi K3', description: '1M-context flagship — Moderato plan or higher' },
-      { id: 'k3-256k', name: 'Kimi K3 (256K)', description: 'K3 with a smaller context window — Moderato plan or higher' },
-      { id: 'kimi-for-coding-highspeed', name: 'Kimi Code (High-Speed)', description: 'Low-latency K2.7 Code — Allegretto plan or higher' },
+      { id: 'kimi-for-coding', name: 'Kimi Code', description: 'K2.8 Preview, 1M context — every Kimi Code plan (Plus/Andante and above)' },
+      { id: 'k3', name: 'Kimi K3', description: 'Flagship — 1M context on Pro/Allegretto and above; Plus/Moderato is capped at 256K (use K3 256K there)' },
+      { id: 'k3-256k', name: 'Kimi K3 (256K)', description: 'K3 with a 256K context window — Plus/Moderato plan or higher' },
+      { id: 'kimi-for-coding-highspeed', name: 'Kimi Code (High-Speed)', description: 'K2.7 Code HighSpeed, 256K context — Pro/Allegretto plan or higher' },
     ],
     defaultModel: 'kimi-for-coding',
     defaultProtocol: 'openai',
@@ -359,15 +382,17 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       openai: { baseUrl: 'https://api.x.ai/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     models: [
-      { id: 'grok-4.6',              name: 'Grok 4.6',              description: 'Flagship reasoning model — xAI recommends it for code, 500K context' },
-      { id: 'grok-4.5',              name: 'Grok 4.5',              description: 'Previous flagship reasoning model, 500K context' },
+      { id: 'grok-4.7',              name: 'Grok 4.7',              description: 'Flagship reasoning model — xAI recommends it for code, 500K context' },
+      { id: 'grok-4.6',              name: 'Grok 4.6',              description: 'Previous flagship reasoning model, 500K context' },
+      { id: 'grok-4.5',              name: 'Grok 4.5',              description: 'Older flagship reasoning model, 500K context' },
       { id: 'grok-build-0.1',        name: 'Grok Build 0.1',        description: 'Agentic coding model — fast, 256K context' },
       { id: 'grok-4.3',              name: 'Grok 4.3',              description: 'Older flagship, 1M context' },
     ],
-    // Stays on the agentic coder, not the new flagship. grok-4.6 is the better
-    // model and xAI recommends it for code, but it bills 2x input and 3x output
-    // against grok-build-0.1 — moving every unpinned user onto it silently is
-    // not ours to decide. It is one `/model` away for anyone who wants it.
+    // Stays on the agentic coder, not the new flagship. grok-4.7 is the better
+    // model — xAI's models page recommends only it, "including code", and it is
+    // the default of xAI's own Grok Build agent — but it bills 2x input and 3x
+    // output against grok-build-0.1, so moving every unpinned user onto it
+    // silently is not ours to decide. It is one `/model` away.
     defaultModel: 'grok-build-0.1',
     defaultProtocol: 'openai',
     useMaxCompletionTokens: true, // reasoning models reject max_tokens
@@ -408,8 +433,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       openai: { baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
     // 3.8 Max and Flash are GA on Model Studio international and cost less
-    // than the 3.7 Max / 3.6 Flash they sit above. China (`qwen-cn-api`) is a
-    // separate listing and is not changed on this evidence.
+    // than the 3.7 Max / 3.6 Flash they sit above.
     models: [
       { id: 'qwen3.8-max',   name: 'Qwen3.8-Max',   description: 'Latest flagship for complex coding and reasoning (1M context)' },
       { id: 'qwen3.8-flash', name: 'Qwen3.8-Flash', description: 'Low-latency, low-cost multimodal model (1M context)' },
@@ -432,14 +456,22 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     protocols: {
       openai: { baseUrl: 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
+    // qwen3.8-max-preview is retired here: Alibaba routes it to qwen3.8-max,
+    // bills it at that rate and says to update the id (token-plan-personal-
+    // overview, 2026-09-23); stored configs migrate. The plan now has Personal
+    // and Team editions on this same URL and key format, with different
+    // allowlists — qwen3.6-plus is Team-only, and a Personal key gets
+    // "403 AccessDenied.Unpurchased" for it. Nothing here can tell the two
+    // editions apart, so the entry says so rather than disappearing on Team.
     models: [
-      { id: 'qwen3.8-max-preview', name: 'Qwen3.8-Max Preview', description: 'Newest Token Plan flagship for complex agentic work' },
-      { id: 'qwen3.7-max',         name: 'Qwen3.7-Max',         description: 'Production flagship for complex coding and reasoning' },
-      { id: 'qwen3.7-plus',        name: 'Qwen3.7-Plus',        description: 'Balanced quality and throughput' },
-      { id: 'qwen3.6-plus',        name: 'Qwen3.6-Plus',        description: 'Fast multimodal model with a 1M context window' },
-      { id: 'qwen3.6-flash',       name: 'Qwen3.6-Flash',       description: 'Low-latency, credit-efficient model' },
+      { id: 'qwen3.8-max',   name: 'Qwen3.8-Max',   description: 'Token Plan flagship for complex agentic work (1M context)' },
+      { id: 'qwen3.8-flash', name: 'Qwen3.8-Flash', description: 'Low-latency, credit-efficient model (1M context)' },
+      { id: 'qwen3.7-max',   name: 'Qwen3.7-Max',   description: 'Previous flagship for complex coding and reasoning' },
+      { id: 'qwen3.7-plus',  name: 'Qwen3.7-Plus',  description: 'Balanced quality and throughput' },
+      { id: 'qwen3.6-plus',  name: 'Qwen3.6-Plus',  description: 'Team edition only — a Personal plan returns 403 for it' },
+      { id: 'qwen3.6-flash', name: 'Qwen3.6-Flash', description: 'Previous low-latency, credit-efficient model' },
     ],
-    defaultModel: 'qwen3.8-max-preview',
+    defaultModel: 'qwen3.8-max',
     defaultProtocol: 'openai',
     maxOutputTokens: 131_072,
     noStreamWithTools: true,
@@ -476,10 +508,18 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     protocols: {
       openai: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
+    // 3.8 Max and Flash have been GA in China (Beijing) since 2026-08-02 and
+    // 2026-08-26, at CNY 12/36 and 0.8/2.7 (help.aliyun.com/zh/model-studio/
+    // qwen3-8-max, qwen3-8-flash). Pricing is keyed by id, so they reuse the
+    // international USD rows — an over-estimate, the same policy as z.ai-cn.
+    // The default is unchanged: 3.8 Max costs the same as 3.7 Max in Beijing,
+    // and moving unpinned users was not part of adding it.
     models: [
-      { id: 'qwen3.7-max',   name: 'Qwen3.7-Max',   description: 'Latest flagship for complex coding and reasoning' },
+      { id: 'qwen3.8-max',   name: 'Qwen3.8-Max',   description: 'Latest flagship for complex coding and reasoning (1M context)' },
+      { id: 'qwen3.8-flash', name: 'Qwen3.8-Flash', description: 'Low-latency, low-cost multimodal model (1M context)' },
+      { id: 'qwen3.7-max',   name: 'Qwen3.7-Max',   description: 'Previous flagship for complex coding and reasoning' },
       { id: 'qwen3.7-plus',  name: 'Qwen3.7-Plus',  description: 'Balanced quality, speed, and price (1M context)' },
-      { id: 'qwen3.6-flash', name: 'Qwen3.6-Flash', description: 'Low-latency, low-cost multimodal model' },
+      { id: 'qwen3.6-flash', name: 'Qwen3.6-Flash', description: 'Previous low-latency, low-cost multimodal model' },
     ],
     defaultModel: 'qwen3.7-max',
     defaultProtocol: 'openai',
@@ -496,10 +536,16 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     protocols: {
       openai: { baseUrl: 'https://api-inference.modelscope.cn/v1', authHeader: 'Bearer', supportsNativeTools: true },
     },
+    // Shown only until the live catalogue loads. The previous fallback,
+    // Qwen/Qwen3-Coder-480B-A35B-Instruct, is no longer served: it is absent from
+    // api-inference.modelscope.cn/v1/models (2026-09-23) and its hub entry has
+    // SupportApiInference false. ModelScope names no successor, so this pick is
+    // Codeep's: the largest Qwen in the live list, whose model card documents
+    // tool calling ("Qwen3.5 excels in tool calling capabilities").
     models: [
-      { id: 'Qwen/Qwen3-Coder-480B-A35B-Instruct', name: 'Qwen3-Coder 480B', description: 'Fallback model shown until the live catalog loads' },
+      { id: 'Qwen/Qwen3.5-397B-A17B', name: 'Qwen3.5 397B', description: 'Fallback model shown until the live catalog loads' },
     ],
-    defaultModel: 'Qwen/Qwen3-Coder-480B-A35B-Instruct',
+    defaultModel: 'Qwen/Qwen3.5-397B-A17B',
     defaultProtocol: 'openai',
     maxOutputTokens: 65_536,
     noStreamWithTools: true,
@@ -512,7 +558,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
   },
   'openai': {
     name: 'OpenAI',
-    description: 'GPT and o-series models',
+    description: 'GPT models',
     protocols: {
       openai: {
         baseUrl: 'https://api.openai.com/v1',
@@ -520,9 +566,21 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
         supportsNativeTools: true,
       },
     },
+    // Chat Completions is the only OpenAI endpoint Codeep calls, and GPT-6 has a
+    // documented tool restriction there (developers.openai.com guides/
+    // latest-model and reasoning): Sol and Luna call tools only with
+    // reasoning_effort "none", and "Chat Completions does not support function
+    // calling with GPT-6 Astra" at all. So Astra is not offered until a
+    // Responses API transport exists — stored configs move to Sol — and Sol and
+    // Luna run agent turns with reasoning off (see reasoningParamsFor).
+    //
+    // The default stays 5.6 Sol: it is the newest model OpenAI documents with
+    // reasoning AND tool calls on Chat Completions ("The Chat Completions
+    // examples use GPT-5.6 for compatibility" — function-calling guide).
     models: [
-      { id: 'gpt-6-astra',   name: 'GPT-6 Astra',   description: 'Frontier GPT — 1M context, 128K output. Rolling out by organization, so a key may not have it yet. 2x the price of 5.6 Sol' },
-      { id: 'gpt-5.6-sol',   name: 'GPT-5.6 Sol',   description: 'Most capable GPT — best for coding & agentic work' },
+      { id: 'gpt-5.6-sol',   name: 'GPT-5.6 Sol',   description: 'Most capable GPT for coding & agentic work on Codeep\'s transport' },
+      { id: 'gpt-6-sol',     name: 'GPT-6 Sol',     description: 'GPT-6 at $2/$10, 1M context — agent turns run with reasoning off (tools need effort "none" here); /thinking applies to plain chat' },
+      { id: 'gpt-6-luna',    name: 'GPT-6 Luna',    description: 'Cheapest GPT-6 ($0.10/$0.50), 1M context — agent turns run with reasoning off, as for Sol' },
       { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', description: 'Balanced — GPT-5.5 quality at about half the price' },
       { id: 'gpt-5.6-luna',  name: 'GPT-5.6 Luna',  description: 'Fast and cheap — high-volume workloads' },
     ],
@@ -547,12 +605,20 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     },
     models: [
       { id: 'claude-fable-5-1',          name: 'Claude Fable 5.1',      description: 'Most capable — hardest reasoning & long-horizon agentic work' },
+      { id: 'claude-opus-5-5',           name: 'Claude Opus 5.5',       description: 'Complex agentic coding & deep reasoning — $4/$20, 1M context' },
       { id: 'claude-fable-5',            name: 'Claude Fable 5',        description: 'Superseded by 5.1 — same price, kept for pinned configs' },
-      { id: 'claude-opus-5',             name: 'Claude Opus 5',         description: 'Complex agentic coding & deep reasoning — the Opus workhorse' },
+      { id: 'claude-opus-5',             name: 'Claude Opus 5',         description: 'Legacy since Opus 5.5 — kept for pinned configs' },
       { id: 'claude-sonnet-5',           name: 'Claude Sonnet 5',       description: 'Best balance of speed and intelligence' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku',          description: 'Fastest and most affordable' },
     ],
-    defaultModel: 'claude-opus-5',
+    // Anthropic's models overview now says to "start with Claude Opus 5.5 for
+    // most workloads", and it is 20% cheaper than Opus 5 (now "Active
+    // (legacy)", retiring no sooner than 2027-07-24 — so no migration). One
+    // behaviour change comes with it: Opus 5.5 defaults to MEDIUM effort where
+    // Opus 5 defaulted to high, and /thinking auto sends no effort, so an
+    // unpinned user runs one level lower than before. It also thinks more per
+    // turn at a given effort — see minResponseTokensFor.
+    defaultModel: 'claude-opus-5-5',
     defaultProtocol: 'anthropic',
     envKey: 'ANTHROPIC_API_KEY',
     groupLabel: 'Anthropic',
@@ -593,28 +659,38 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
         supportsNativeTools: true,
       },
     },
-    // Top 12 — the full catalog (100+) is fetched lazily via
+    // A short fallback — the full catalog (100+) is fetched lazily via
     // fetchOpenRouterModels() because dynamicModels is true.
     // We keep these hardcoded so first-time users without network
     // get a working dropdown.
     models: [
       { id: 'openrouter/auto',                  name: 'Auto-route',         description: 'OpenRouter picks the best model for the task' },
-      { id: 'anthropic/claude-fable-5-1',       name: 'Claude Fable 5.1',   description: 'Anthropic — most capable' },
+      // Dotted, as OpenRouter's /api/v1/models lists them. The hyphenated
+      // `anthropic/claude-fable-5-1` this used to carry resolves on OpenRouter's
+      // metadata lookup but is absent from the models list, so a pick made
+      // before the live catalogue loaded matched nothing in it.
+      { id: 'anthropic/claude-fable-5.1',       name: 'Claude Fable 5.1',   description: 'Anthropic — most capable' },
+      { id: 'anthropic/claude-opus-5.5',        name: 'Claude Opus 5.5',    description: 'Anthropic — current Opus' },
       { id: 'anthropic/claude-fable-5',         name: 'Claude Fable 5',     description: 'Anthropic — superseded by 5.1' },
-      { id: 'anthropic/claude-opus-5',          name: 'Claude Opus 5',      description: 'Anthropic — flagship Opus tier' },
+      { id: 'anthropic/claude-opus-5',          name: 'Claude Opus 5',      description: 'Anthropic — legacy Opus' },
       { id: 'anthropic/claude-sonnet-5',        name: 'Claude Sonnet 5',    description: 'Anthropic — balanced' },
       { id: 'openai/gpt-6-astra',               name: 'GPT-6 Astra',        description: 'OpenAI — frontier' },
+      { id: 'openai/gpt-6-sol',                 name: 'GPT-6 Sol',          description: 'OpenAI — GPT-6, balanced' },
+      { id: 'openai/gpt-6-luna',                name: 'GPT-6 Luna',         description: 'OpenAI — GPT-6, fast/cheap' },
       { id: 'openai/gpt-5.6-sol',               name: 'GPT-5.6 Sol',        description: 'OpenAI — flagship' },
       { id: 'openai/gpt-5.6-luna',              name: 'GPT-5.6 Luna',       description: 'OpenAI — fast/efficient' },
       { id: 'google/gemini-3.8-flash',          name: 'Gemini 3.8 Flash',   description: 'Google — latest production Flash' },
       { id: 'google/gemini-3.7-flash',          name: 'Gemini 3.7 Flash',   description: 'Google — previous production Flash' },
       { id: 'deepseek/deepseek-v4.1-flash',     name: 'DeepSeek V4.1 Flash', description: 'DeepSeek — current model' },
+      // The GA Pro, with a DeepSeek-hosted endpoint. `deepseek/deepseek-v4-pro`
+      // is the April 0423 preview, served only by third parties.
+      { id: 'deepseek/deepseek-v4-pro-0813',    name: 'DeepSeek V4 Pro',    description: 'DeepSeek — larger V4 model' },
       { id: 'moonshotai/kimi-k3',               name: 'Kimi K3',            description: 'Moonshot — long-horizon coding' },
       // Dated on purpose: OpenRouter lists only the snapshot. The undated
       // `qwen/qwen3.8-max` this used to carry does not exist there, so picking
       // it before the live catalogue loaded was an error.
       { id: 'qwen/qwen3.8-max-0902',            name: 'Qwen 3.8 Max',       description: 'Alibaba — latest flagship' },
-      { id: 'x-ai/grok-4.6',                    name: 'Grok 4.6',           description: 'xAI — flagship reasoning' },
+      { id: 'x-ai/grok-4.7',                    name: 'Grok 4.7',           description: 'xAI — flagship reasoning' },
     ],
     defaultModel: 'openrouter/auto',
     defaultProtocol: 'openai',
@@ -674,22 +750,36 @@ export function getProvider(id: string): ProviderConfig | null {
  * Exact migrations for curated model ids that vendors replaced.
  *
  * Keep this deliberately narrower than the provider catalogue. Dynamic
- * OpenRouter/Ollama/custom ids are user-controlled and must never be rewritten.
+ * OpenRouter/Ollama/custom ids are user-controlled and must never be rewritten;
+ * ModelScope's one entry is the exception, explained where it sits.
  */
 const RETIRED_MODEL_REPLACEMENTS: Record<string, Record<string, string>> = {
-  'z.ai':        { 'glm-5.1': 'glm-5.2', 'glm-5': 'glm-5.2' },
-  'z.ai-api':    { 'glm-5.1': 'glm-5.2', 'glm-5': 'glm-5.2' },
-  'z.ai-cn':     { 'glm-5.1': 'glm-5.2', 'glm-5': 'glm-5.2' },
+  // Both GLM Coding Plans accept exactly GLM-5.3 and GLM-5.3-Flash. Z.AI routes
+  // 5.2 and 5.1 to 5.3 on both, and the China plan routes Turbo to 5.3-Flash.
+  // Plain glm-5, and Turbo on the international plan, are Codeep's extension of
+  // the same routing: neither plan's text names them.
+  'z.ai':        { 'glm-5.2': 'glm-5.3', 'glm-5.1': 'glm-5.3', 'glm-5': 'glm-5.3', 'glm-5-turbo': 'glm-5.3-flash' },
+  // Pay-per-use still sells 5.2 as its own id. Turbo left the international
+  // price list and model enum with no notice and no named successor, so it
+  // follows the China plan's routing to Flash.
+  'z.ai-api':    { 'glm-5.1': 'glm-5.2', 'glm-5': 'glm-5.2', 'glm-5-turbo': 'glm-5.3-flash' },
+  'z.ai-cn':     { 'glm-5.2': 'glm-5.3', 'glm-5.1': 'glm-5.3', 'glm-5': 'glm-5.3', 'glm-5-turbo': 'glm-5.3-flash' },
   'z.ai-cn-api': { 'glm-5.1': 'glm-5.2', 'glm-5': 'glm-5.2' },
   google: {
     'gemini-3.1-flash-lite': 'gemini-3.5-flash-lite',
+    // Google's deprecations table names 3.6 Flash (no shutdown date yet). Its
+    // /whats-new-gemini-3.5 guide suggests 3.5 Flash instead; the lifecycle
+    // table is the dedicated source, and 3.5 Flash would cost twice as much.
+    'gemini-3-flash-preview': 'gemini-3.6-flash',
+    // Shut down 2026-03-09; the server already aliases the id to 3.1 Pro.
+    'gemini-3-pro-preview': 'gemini-3.1-pro-preview',
   },
-  // DeepSeek named V4.1 Flash the model to use: the V4 Flash ids are retired
-  // and served by it, and V4 Pro is routed to it from 2026-09-14.
+  // The V4 Flash ids are retired and served by V4.1 Flash. There is no V4 Pro
+  // entry: DeepSeek cancelled its routing to Flash (see the catalogue above),
+  // and rewriting it moved users off a live, separately billed model.
   deepseek: {
     'deepseek-v4-flash': 'deepseek-flash',
     'deepseek-v4-flash-vision-exp': 'deepseek-flash',
-    'deepseek-v4-pro': 'deepseek-flash',
   },
   grok: {
     'grok-code-fast-1': 'grok-build-0.1',
@@ -699,6 +789,13 @@ const RETIRED_MODEL_REPLACEMENTS: Record<string, Record<string, string>> = {
     'gpt-5.5': 'gpt-5.6-sol',
     'gpt-5.4': 'gpt-5.6-terra',
     'gpt-5.4-mini': 'gpt-5.6-luna',
+    // Not retired by OpenAI. Astra cannot call tools on Chat Completions at all
+    // ("Chat Completions does not support function calling with GPT-6 Astra"),
+    // and agentChat turns a 400 on a tools request into the text-tool fallback,
+    // so every agent turn on it silently ran without native tools. Sol is the
+    // GPT-6 that can call tools here. Drop this entry once a Responses API
+    // transport exists and Astra is offered again.
+    'gpt-6-astra': 'gpt-6-sol',
   },
   'kimi-api': {
     'kimi-k3-code': 'kimi-k3',
@@ -712,30 +809,67 @@ const RETIRED_MODEL_REPLACEMENTS: Record<string, Record<string, string>> = {
     'kimi-k3-thinking': 'kimi-k3',
     'kimi-k2.5': 'kimi-k2.6',
   },
+  // Alibaba retires qwen3-coder-plus, qwen3-coder-next and bare qwen3-max on
+  // 2026-10-10, on the plans as well (notices 1949 and 1950). It names
+  // qwen3.7-plus for both coders and qwen3.7-max for qwen3-max — but 3.7 Max is
+  // not on the Coding Plan allowlist, so the two Coding Plan surfaces land
+  // qwen3-max on 3.7 Plus, exactly as their own qwen3.7-max entry does.
   qwen: {
     'qwen3-coder-plus': 'qwen3.7-plus',
     'qwen3-coder-next': 'qwen3.7-plus',
     'qwen3.7-max': 'qwen3.7-plus',
+    'qwen3-max': 'qwen3.7-plus',
   },
+  // The coders used to go to qwen3.7-max here, which bills 6.25x the input rate
+  // of the qwen3.7-plus Alibaba names. Configs already moved stay where they
+  // are: 3.7 Max is a valid model.
   'qwen-api': {
-    'qwen3-coder-plus': 'qwen3.7-max',
-    'qwen3-coder-next': 'qwen3.7-max',
+    'qwen3-coder-plus': 'qwen3.7-plus',
+    'qwen3-coder-next': 'qwen3.7-plus',
     'qwen3-coder-flash': 'qwen3.6-flash',
+    'qwen3-max': 'qwen3.7-max',
+  },
+  // The preview is retired and routed to qwen3.8-max, which Alibaba says to use.
+  'qwen-token-plan': {
+    'qwen3.8-max-preview': 'qwen3.8-max',
+    'qwen3-coder-plus': 'qwen3.7-plus',
+    'qwen3-coder-next': 'qwen3.7-plus',
+    'qwen3-max': 'qwen3.7-max',
   },
   'qwen-cn': {
     'qwen3-coder-plus': 'qwen3.7-plus',
     'qwen3-coder-next': 'qwen3.7-plus',
     'qwen3.7-max': 'qwen3.7-plus',
+    'qwen3-max': 'qwen3.7-plus',
   },
   'qwen-cn-api': {
-    'qwen3-coder-plus': 'qwen3.7-max',
-    'qwen3-coder-next': 'qwen3.7-max',
+    'qwen3-coder-plus': 'qwen3.7-plus',
+    'qwen3-coder-next': 'qwen3.7-plus',
     'qwen3-coder-flash': 'qwen3.6-flash',
+    'qwen3-max': 'qwen3.7-max',
+  },
+  // The one entry on a dynamic catalogue, and the exception to the rule above:
+  // the 480B coder was Codeep's own fallback default, so most configs holding
+  // it never chose it, and ModelScope stopped serving it (see the catalogue
+  // entry). Exact id only; every other ModelScope id stays the user's. Drop
+  // this if ModelScope serves the 480B again.
+  modelscope: {
+    'Qwen/Qwen3-Coder-480B-A35B-Instruct': 'Qwen/Qwen3.5-397B-A17B',
   },
 };
 
+/**
+ * One exact lookup, never followed further: every target must already be a
+ * model its own provider offers (providers.test.ts holds the map to that), so a
+ * chain can never be needed and the macOS mirror stays a flat table too.
+ */
 export function replacementModelFor(providerId: string, modelId: string): string | undefined {
   return RETIRED_MODEL_REPLACEMENTS[providerId]?.[modelId];
+}
+
+/** The whole map, read-only — for the invariant test and nothing else. */
+export function retiredModelReplacements(): Readonly<Record<string, Readonly<Record<string, string>>>> {
+  return RETIRED_MODEL_REPLACEMENTS;
 }
 
 /**
@@ -873,11 +1007,16 @@ export function providerNoStreamWithTools(providerId: string): boolean {
  * omission as default. Kimi K2.x code/thinking models fix temperature
  * internally and 400 on any custom value, so they're here too. Google removed
  * the deprecated sampling parameters outright in the Gemini 3.7 generation.
+ * GPT-6 takes temperature/top_p only at reasoning_effort "none" (Astra never):
+ * the direct `openai` provider already omits them for every model through
+ * requiresDefaultTemperature, so this entry is for `openai/gpt-6-*` on
+ * OpenRouter, the one path where a GPT-6 id could still be sent one.
  */
 const SAMPLING_PARAMS_REJECTED = [
   'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5',
   'kimi-k3', 'kimi-k2.7-code', 'kimi-for-coding', 'k3',
   'gemini-3.7-flash', 'gemini-3.8-flash',
+  'gpt-6',
 ];
 
 export function modelRejectsSamplingParams(model: string): boolean {
@@ -901,6 +1040,25 @@ export function getEffectiveMaxTokens(providerId: string, requested: number): nu
   return Math.min(requested, provider.maxOutputTokens);
 }
 
+/**
+ * The smallest response budget (`max_tokens`) worth sending this model, or 0
+ * for no floor. Callers take the larger of this and whatever they would have
+ * sent, then apply getEffectiveMaxTokens as usual.
+ *
+ * Claude Opus 5.5 thinks on every request — adaptive thinking cannot be turned
+ * off — and "tends to think more per turn than Claude Opus 5" at the same
+ * effort; Anthropic's notes say to "leave room in max_tokens for the thinking",
+ * which spends the same limit as the answer. The task planner's 2048, or a
+ * maxTokens lowered in /settings, could go on thinking alone and cut the reply
+ * off. 32K is Codeep's own default; the Max tier gets 64K, where Anthropic's
+ * advice for max effort on Opus 5 is "starting at 64k tokens". Matched on the
+ * canonical id, so `anthropic/claude-opus-5.5` on OpenRouter is covered too.
+ */
+export function minResponseTokensFor(model: string, tier: ReasoningTier | undefined): number {
+  if (!idMatches(canonicalModelId(model), 'claude-opus-5-5')) return 0;
+  return tier === 'max' ? 65_536 : 32_768;
+}
+
 // ---------------------------------------------------------------------------
 // Thinking / reasoning-effort tiers
 // ---------------------------------------------------------------------------
@@ -913,7 +1071,7 @@ export function getEffectiveMaxTokens(providerId: string, requested: number): nu
  *
  * The four tiers are CONCEPTUAL. `reasoningParamsFor()` clamps each one to the
  * nearest level the active provider+model actually accepts, so we never send a
- * value that would 400 (e.g. Gemini rejects "medium"; OpenAI has no "max").
+ * value that would 400 (e.g. Gemini has no "max"; GPT-5.5 tops out at "xhigh").
  * The control is a pure DEPTH knob on models that already think — it never
  * toggles thinking on/off, which keeps us clear of the reasoning_content-replay
  * contract that DeepSeek/GLM impose when thinking mode is flipped.
@@ -938,6 +1096,64 @@ export function canonicalModelId(model: string): string {
 /** True when `id` equals `prefix` or starts with `prefix-` (catches dated variants). */
 function idMatches(id: string, prefix: string): boolean {
   return id === prefix || id.startsWith(`${prefix}-`);
+}
+
+/**
+ * GPT-6 Sol and Luna on Chat Completions support function calling "only with
+ * `reasoning_effort` set to `none`" (developers.openai.com models/gpt-6-sol,
+ * guides/latest-model). So a request that carries tools to them must send
+ * "none", whatever /thinking says. Direct `openai` only: OpenRouter may reach
+ * OpenAI through the Responses API, where the rule does not apply, and Astra
+ * rejects "none" with a 400 (it is not offered on `openai` at all).
+ */
+export function toolsForceReasoningOff(providerId: string, model: string): boolean {
+  if (providerId !== 'openai') return false;
+  const id = canonicalModelId(model);
+  return idMatches(id, 'gpt-6-sol') || idMatches(id, 'gpt-6-luna');
+}
+
+/**
+ * What /thinking must tell the user when the tier does not reach every request
+ * for this model, or null. Without it the setting would look applied while
+ * agent turns quietly ran at "none".
+ */
+export function agentTurnReasoningNote(providerId: string, model: string): string | null {
+  if (!toolsForceReasoningOff(providerId, model)) return null;
+  return `Agent turns on ${model} send reasoning_effort "none" whatever the tier — OpenAI's Chat Completions API lets GPT-6 Sol and Luna call tools only with reasoning off. The tier applies to plain chat.`;
+}
+
+/**
+ * What our Max tier sends as OpenRouter's unified `reasoning.effort`.
+ *
+ * OpenRouter accepts "xhigh" and "max", but only where the model does. Its
+ * /api/v1/models `reasoning.supported_efforts` (read 2026-09-23) lists "max"
+ * for GPT-5.6 and GPT-6, the Claude 5 family and Opus 4.7/4.8, DeepSeek V4.1
+ * Flash and V4 Pro 0813, and Kimi K3; "xhigh" is the ceiling for GPT-5.4/5.5,
+ * Grok 4.6/4.7 and Qwen 3.8 Max. Everything else keeps the old "high" cap —
+ * including the 0423 `deepseek/deepseek-v4-pro` preview (xhigh|high only) and
+ * Grok 4.5/4.3, which list no xhigh — because OpenRouter does not document what
+ * happens to a level a model does not list.
+ */
+function openRouterMaxEffort(model: string): 'max' | 'xhigh' | 'high' {
+  const id = canonicalModelId(model);
+  const max = ['gpt-5-6', 'gpt-6', 'claude-opus-5', 'claude-fable-5', 'claude-sonnet-5',
+    'claude-opus-4-7', 'claude-opus-4-8', 'deepseek-v4-1-flash', 'deepseek-v4-pro-0813', 'kimi-k3'];
+  if (max.some(prefix => idMatches(id, prefix))) return 'max';
+  const xhigh = ['gpt-5-5', 'gpt-5-4', 'grok-4-6', 'grok-4-7', 'qwen3-8-max'];
+  if (xhigh.some(prefix => idMatches(id, prefix))) return 'xhigh';
+  return 'high';
+}
+
+/**
+ * Grok models whose ceiling is "xhigh". xAI's reasoning guide: "`xhigh` is
+ * available on `grok-4.6` and later", and grok-4.7 lists it. grok-4.5 and
+ * grok-4.3 are disputed — their model pages list xhigh, while the guide says 4.5
+ * treats it as "high" and the May-15 page gives 4.3 four levels ending at high —
+ * so they keep the high ceiling until a live request settles it.
+ */
+function grokHasXhigh(model: string): boolean {
+  const id = canonicalModelId(model);
+  return idMatches(id, 'grok-4-6') || idMatches(id, 'grok-4-7');
 }
 
 /**
@@ -971,15 +1187,20 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
       // Turbo is a plain toggle.
       return idMatches(id, 'glm-5-2') || idMatches(id, 'glm-5-3');
     case 'kimi':
-      return idMatches(id, 'k3');
+      // `kimi-for-coding` is K2.8 Preview since 2026-09-11 and takes low/high/max
+      // (default max). Matched EXACTLY: idMatches would also take in
+      // `kimi-for-coding-highspeed`, which is K2.7 Code HighSpeed — thinking
+      // always on, no effort ladder.
+      return idMatches(id, 'k3') || id === 'kimi-for-coding';
     case 'kimi-api': case 'kimi-cn':
       return idMatches(id, 'kimi-k3');
     case 'grok':
-      // Grok reasoning models accept reasoning_effort (none/low/medium/high).
-      // The coders (grok-code-fast, grok-build — the default) are NON-reasoning
-      // and 400 on reasoning_effort; a 400 here silently drops the whole turn
-      // into the weaker text-tool fallback (agentChat.ts), so exclude them
-      // alongside the explicit *-non-reasoning variants.
+      // Grok reasoning models accept reasoning_effort (low/medium/high, plus
+      // xhigh from grok-4.6; 4.3 also takes none, which no tier sends). The
+      // coders (grok-code-fast, grok-build — the default) reason internally but
+      // have no effort control and 400 on the parameter; a 400 here silently
+      // drops the whole turn into the weaker text-tool fallback (agentChat.ts),
+      // so exclude them alongside the explicit *-non-reasoning variants.
       if (id.startsWith('grok-build') || id.startsWith('grok-code')) return false;
       return id.startsWith('grok') && !id.includes('non-reasoning');
     // GLM Turbo and Qwen coders expose thinking on/off, not a graded knob.
@@ -1003,7 +1224,13 @@ export function reasoningParamsFor(
   providerId: string,
   model: string,
   tier: ReasoningTier,
+  /** The request carries a non-empty `tools` array (native tool calling). */
+  opts: { tools?: boolean } = {},
 ): Record<string, unknown> {
+  // Before the 'auto' return on purpose: auto sends nothing, GPT-6 Sol/Luna then
+  // run at their default "medium", and that is exactly the combination OpenAI
+  // documents as unable to call tools on Chat Completions.
+  if (opts.tools && toolsForceReasoningOff(providerId, model)) return { reasoning_effort: 'none' };
   // 'auto', or any unexpected value from an older/garbled config, → no param.
   // (Guards against ever emitting e.g. `effort: undefined`, which could 400.)
   if (tier === 'auto' || !REASONING_TIERS.includes(tier)) return {};
@@ -1013,9 +1240,14 @@ export function reasoningParamsFor(
     case 'anthropic':
       // low / medium / high / max — all valid on the capable Claude models.
       return { output_config: { effort: tier } };
-    case 'openai':
-      // none/low/medium/high/xhigh — no "max"; map our Max → xhigh (the ceiling).
-      return { reasoning_effort: tier === 'max' ? 'xhigh' : tier };
+    case 'openai': {
+      // Chat Completions takes none/minimal/low/medium/high/xhigh/max, but "max"
+      // is per model: it arrived with GPT-5.6 (changelog 2026-07-09) and every
+      // GPT-6 page lists it. GPT-5.5 and earlier top out at xhigh.
+      const id = canonicalModelId(model);
+      const hasMax = idMatches(id, 'gpt-5-6') || idMatches(id, 'gpt-6');
+      return { reasoning_effort: tier === 'max' ? (hasMax ? 'max' : 'xhigh') : tier };
+    }
     case 'google':
       // Gemini's OpenAI-compat layer maps reasoning_effort onto thinking_level
       // and documents low | medium | high. (Medium 400'd on Gemini 3 Preview,
@@ -1024,13 +1256,12 @@ export function reasoningParamsFor(
       // 'minimal' is deliberately not emitted: 3.7 Flash rejects it outright.
       return { reasoning_effort: tier === 'max' ? 'high' : tier };
     case 'deepseek':
-      // V4.1 Flash distinguishes low / high / max (DeepSeek's mapping table:
-      // minimal+low→low, medium+high+xhigh→high, max+ultra→max). The retired V4
-      // ids graded only high|max. Always an effort, never a disabled block.
-      if (idMatches(canonicalModelId(model), 'deepseek-flash')) {
-        return { reasoning_effort: tier === 'low' ? 'low' : tier === 'max' ? 'max' : 'high' };
-      }
-      return { reasoning_effort: tier === 'max' ? 'max' : 'high' };
+      // V4.1 Flash and V4 Pro both distinguish low / high / max — "The thinking
+      // modes of V4-Pro and V4-Flash now support three thinking effort levels"
+      // (changelog 2026-08-13; mapping table: minimal+low→low,
+      // medium+high+xhigh→high, max+ultra→max). Always an effort, never a
+      // disabled block.
+      return { reasoning_effort: tier === 'low' ? 'low' : tier === 'max' ? 'max' : 'high' };
     case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
       // GLM-5.3 accepts low/high/max; GLM-5.2 grades only high|max, so lower
       // tiers collapse to high there. Either way we always send an effort and
@@ -1043,11 +1274,12 @@ export function reasoningParamsFor(
       // Kimi K3 accepts low/high/max; collapse our medium tier to high.
       return { reasoning_effort: tier === 'low' ? 'low' : tier === 'max' ? 'max' : 'high' };
     case 'grok':
-      // none/low/medium/high — no "max"; map our Max → high (the ceiling).
-      return { reasoning_effort: tier === 'max' ? 'high' : tier };
+      // No "max" on xAI; our Max maps to the model's own ceiling — xhigh from
+      // grok-4.6, high below it (see grokHasXhigh).
+      return { reasoning_effort: tier === 'max' ? (grokHasXhigh(model) ? 'xhigh' : 'high') : tier };
     case 'openrouter':
-      // Unified reasoning object; no "max" effort → cap at high.
-      return { reasoning: { effort: tier === 'max' ? 'high' : tier } };
+      // Unified reasoning object; Max goes as high as the model lists.
+      return { reasoning: { effort: tier === 'max' ? openRouterMaxEffort(model) : tier } };
     default:
       return {};
   }
@@ -1056,8 +1288,11 @@ export function reasoningParamsFor(
 /**
  * The DISTINCT tiers a given provider+model actually exposes — used to build a
  * per-model picker that only offers levels the model can tell apart (e.g.
- * GLM-5.2/DeepSeek grade only high|max; Gemini via the OpenAI-compat layer only
- * low|high). Always leads with 'auto'. `[]` for models with no graded knob.
+ * GLM-5.2 grades only high|max; Gemini via the OpenAI-compat layer has no max).
+ * Always leads with 'auto'. `[]` for models with no graded knob.
+ *
+ * GPT-6 Sol/Luna list their full set: it is what they run on plain chat. Agent
+ * turns send "none" regardless (toolsForceReasoningOff), and /thinking says so.
  *
  * Kept in lockstep with `reasoningParamsFor` (the providers-test asserts every
  * listed tier yields a DISTINCT param, so this can't silently drift). Mirrors
@@ -1075,9 +1310,7 @@ export function availableReasoningTiers(providerId: string, model: string): Reas
       // coding, so collapsing it hid the setting most users want.
       return ['auto', 'low', 'medium', 'high'];
     case 'deepseek':
-      return idMatches(canonicalModelId(model), 'deepseek-flash')
-        ? ['auto', 'low', 'high', 'max']
-        : ['auto', 'high', 'max'];
+      return ['auto', 'low', 'high', 'max'];
     case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':
       // GLM-5.3 distinguishes a Low tier; GLM-5.2 grades only high|max.
       return idMatches(canonicalModelId(model), 'glm-5-3')
@@ -1086,9 +1319,13 @@ export function availableReasoningTiers(providerId: string, model: string): Reas
     case 'kimi': case 'kimi-api': case 'kimi-cn':
       return ['auto', 'low', 'high', 'max'];
     case 'grok':
-      return ['auto', 'low', 'medium', 'high'];
+      return grokHasXhigh(model)
+        ? ['auto', 'low', 'medium', 'high', 'max']
+        : ['auto', 'low', 'medium', 'high'];
     case 'openrouter':
-      return ['auto', 'low', 'medium', 'high'];
+      return openRouterMaxEffort(model) === 'high'
+        ? ['auto', 'low', 'medium', 'high']
+        : ['auto', 'low', 'medium', 'high', 'max'];
     default:
       return [];
   }

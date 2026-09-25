@@ -92,6 +92,27 @@ function truncateToolResult(output: string, toolName: string): string {
   return `${kept}\n[... ${truncated} chars truncated — use search_code or read specific sections if you need more]`;
 }
 
+// ─── Assistant turns in the flattened history ─────────────────────────────────
+
+/**
+ * The text an assistant turn is kept as in the history sent back next time.
+ *
+ * The loop stores each turn as plain text, and a turn that only called tools
+ * has none: Claude often skips the narration, and Opus 5.5 and Fable 5.1 move
+ * it into thinking blocks, which the stream parser does not keep. Stored as
+ * '', that turn is an empty non-final message on the next request, which
+ * Anthropic's Messages API refuses with a 400 ("all messages must have
+ * non-empty content except for the optional final assistant message").
+ * agentChat turns that 400 into the text-tool fallback, which sends the same
+ * history and fails the same way, so the run died on its second iteration.
+ * Naming the tools keeps the turn truthful and non-empty.
+ */
+export function assistantHistoryText(content: string, toolCalls: ReadonlyArray<{ tool: string }>): string {
+  if (content.trim()) return content;
+  if (toolCalls.length > 0) return `Using ${[...new Set(toolCalls.map(t => t.tool))].join(', ')}.`;
+  return '(no reply)';
+}
+
 // ─── Context window compression ───────────────────────────────────────────────
 
 const CONTEXT_COMPRESS_THRESHOLD = 200_000; // ~50K tokens, safe for all providers
@@ -1351,7 +1372,7 @@ export async function runAgent(
         if (hasIncompleteWork) {
           debug('Model wants to continue, prompting for next action');
           incompleteWorkRetries++;
-          messages.push({ role: 'assistant', content });
+          messages.push({ role: 'assistant', content: assistantHistoryText(content, toolCalls) });
           messages.push({
             role: 'user',
             content: 'Continue. Execute the tool calls now.'
@@ -1369,8 +1390,8 @@ export async function runAgent(
         break;
       }
       
-      // Add assistant response to history
-      messages.push({ role: 'assistant', content });
+      // Add assistant response to history — never empty (see assistantHistoryText).
+      messages.push({ role: 'assistant', content: assistantHistoryText(content, toolCalls) });
       
       // Execute tool calls
       const toolResults: string[] = [];

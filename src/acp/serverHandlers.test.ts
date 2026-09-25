@@ -169,6 +169,32 @@ describe('applyConfigOption', () => {
     expect(config.get('model')).toBe('custom-model');
   });
 
+  // An editor setting pinned before a retirement would otherwise bring back an
+  // id the picker no longer has for the whole running process — Astra's tool
+  // calls fail on Chat Completions, and the GLM plans refuse 5.2.
+  it('maps an editor-pinned retired model to its replacement', () => {
+    applyConfigOption('model', 'openai/gpt-6-astra');
+    expect(config.get('provider')).toBe('openai');
+    expect(config.get('model')).toBe('gpt-6-sol');
+
+    applyConfigOption('model', 'z.ai/glm-5.2');
+    expect(config.get('model')).toBe('glm-5.3');
+    // Pay-per-use still sells 5.2, and OpenRouter ids are never rewritten.
+    applyConfigOption('model', 'z.ai-api/glm-5.2');
+    expect(config.get('model')).toBe('glm-5.2');
+    applyConfigOption('model', 'openrouter/openai/gpt-6-astra');
+    expect(config.get('model')).toBe('openai/gpt-6-astra');
+  });
+
+  it('maps a retired model on the provider that is actually active', () => {
+    applyConfigOption('model', 'glm-5.2');
+    expect(config.get('model')).toBe('glm-5.3');
+    // An unknown provider is refused, so z.ai stays active and its map applies.
+    applyConfigOption('model', 'no-such-provider/glm-5.2');
+    expect(config.get('provider')).toBe('z.ai');
+    expect(config.get('model')).toBe('glm-5.3');
+  });
+
   it('switches provider via the "provider" configId', () => {
     applyConfigOption('provider', 'anthropic');
     expect(config.get('provider')).toBe('anthropic');

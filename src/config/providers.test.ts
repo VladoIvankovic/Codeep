@@ -15,6 +15,10 @@ import {
   resolveReasoningTier,
   providerNoStreamWithTools,
   replacementModelFor,
+  retiredModelReplacements,
+  toolsForceReasoningOff,
+  agentTurnReasoningNote,
+  minResponseTokensFor,
   isDynamicModelsProvider,
   isFlatFeeProvider,
   REASONING_TIERS,
@@ -145,12 +149,11 @@ describe('providers', () => {
       expect(models.length).toBe(0);
     });
 
-    it('should include current GLM models for z.ai', () => {
-      const models = getProviderModels('z.ai');
-      const ids = models.map(m => m.id);
-      expect(ids).toContain('glm-5.2');
-      expect(ids).toContain('glm-5-turbo');
-      expect(ids).not.toContain('glm-5.1');
+    // The GLM Coding Plan accepts exactly these two; 5.2 is routed to 5.3 and
+    // Turbo is off the plan (billed outside the quota, invisible in /cost).
+    it('offers exactly the two models the GLM Coding Plan accepts', () => {
+      const ids = getProviderModels('z.ai').map(m => m.id);
+      expect(ids).toEqual(['glm-5.3', 'glm-5.3-flash']);
     });
   });
 
@@ -226,9 +229,12 @@ describe('providers', () => {
   });
 
   describe('anthropic provider', () => {
-    it('should include Claude Opus 5 as default model', () => {
-      expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-5');
+    it('should include Claude Opus 5.5 as default model, and keep Opus 5', () => {
+      // Anthropic: "start with Claude Opus 5.5 for most workloads".
+      expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-5-5');
       const modelIds = PROVIDERS['anthropic'].models.map(m => m.id);
+      expect(modelIds).toContain('claude-opus-5-5');
+      // Legacy, not retired — pinned configs keep it.
       expect(modelIds).toContain('claude-opus-5');
       expect(modelIds).toContain('claude-sonnet-5');
       expect(modelIds).toContain('claude-haiku-4-5-20251001');
@@ -249,6 +255,8 @@ describe('providers', () => {
     it('flags models that reject sampling params (Fable 5 / Opus 4.7+)', () => {
       expect(modelRejectsSamplingParams('claude-fable-5')).toBe(true);
       expect(modelRejectsSamplingParams('claude-opus-5')).toBe(true);
+      expect(modelRejectsSamplingParams('claude-opus-5-5')).toBe(true);
+      expect(modelRejectsSamplingParams('anthropic/claude-opus-5.5')).toBe(true);
       expect(modelRejectsSamplingParams('claude-opus-4-7')).toBe(true);
       // Dated variants of a flagged family are covered too
       expect(modelRejectsSamplingParams('claude-opus-5-20260601')).toBe(true);
@@ -263,19 +271,32 @@ describe('providers', () => {
   });
 
   describe('September 2026 models', () => {
-    it('offers GPT-6 Astra without making it the default', () => {
+    it('offers GPT-6 Sol and Luna, not Astra, and keeps 5.6 Sol the default', () => {
       const provider = getProvider('openai')!;
       const ids = provider.models.map(m => m.id);
-      expect(ids).toContain('gpt-6-astra');
-      // Twice the price of 5.6 Sol, and rolling out by organization — becoming
-      // the default would double every user's bill without them choosing it.
+      expect(ids).toContain('gpt-6-sol');
+      expect(ids).toContain('gpt-6-luna');
+      // Astra cannot call tools on Chat Completions, Codeep's only OpenAI
+      // transport, so every agent turn on it fell back to text tools.
+      expect(ids).not.toContain('gpt-6-astra');
+      // 5.6 Sol is the newest model OpenAI documents with reasoning AND tools
+      // on Chat Completions.
       expect(provider.defaultModel).toBe('gpt-5.6-sol');
-      // Ids are added beside, never in place of: dropping one sends a pinned
-      // config to whatever the provider's default happens to be.
-      expect(ids).toContain('gpt-5.6-sol');
+      // The picker says what happens to reasoning on agent turns.
+      for (const id of ['gpt-6-sol', 'gpt-6-luna']) {
+        expect(provider.models.find(m => m.id === id)!.description, id).toMatch(/reasoning off/);
+      }
+    });
+
+    it('moves a stored Astra to Sol on openai only, and leaves OpenRouter alone', () => {
+      expect(replacementModelFor('openai', 'gpt-6-astra')).toBe('gpt-6-sol');
+      expect(replacementModelFor('openrouter', 'openai/gpt-6-astra')).toBeUndefined();
+      expect(getProvider('openrouter')!.models.map(m => m.id)).toContain('openai/gpt-6-astra');
     });
 
     it('gives GPT-6 the thinking control, which a gpt-5 prefix would have missed', () => {
+      expect(modelSupportsReasoningEffort('openai', 'gpt-6-sol')).toBe(true);
+      expect(modelSupportsReasoningEffort('openai', 'gpt-6-luna')).toBe(true);
       expect(modelSupportsReasoningEffort('openai', 'gpt-6-astra')).toBe(true);
       expect(modelSupportsReasoningEffort('openai', 'gpt-5.6-sol')).toBe(true);
       // GPT-4 and earlier are not reasoning models and must not be offered it.
@@ -296,15 +317,14 @@ describe('providers', () => {
   });
 
   describe('deepseek provider', () => {
-    it('offers V4.1 Flash alone, as the default', () => {
+    it('offers V4.1 Flash as the default, and V4 Pro again', () => {
       const provider = getProvider('deepseek');
       expect(provider).not.toBeNull();
       expect(provider!.defaultModel).toBe('deepseek-flash');
       const modelIds = provider!.models.map(m => m.id);
-      expect(modelIds).toEqual(['deepseek-flash']);
-      // V4 Flash is retired and served by V4.1 Flash; V4 Pro is routed to it
-      // from 2026-09-14. Listing either would label one model as another.
-      expect(modelIds).not.toContain('deepseek-v4-pro');
+      // DeepSeek cancelled the V4 Pro → Flash routing before 2026-09-14; Pro
+      // is live and billed separately. V4 Flash is retired and served by V4.1.
+      expect(modelIds).toEqual(['deepseek-flash', 'deepseek-v4-pro']);
       expect(modelIds).not.toContain('deepseek-v4-flash');
       expect(modelIds).not.toContain('deepseek-chat');
       expect(modelIds).not.toContain('deepseek-reasoner');
@@ -318,13 +338,20 @@ describe('providers', () => {
       expect(reasoningParamsFor('deepseek', 'deepseek-flash', 'low')).toEqual({ reasoning_effort: 'low' });
       expect(reasoningParamsFor('deepseek', 'deepseek-flash', 'medium')).toEqual({ reasoning_effort: 'high' });
       expect(reasoningParamsFor('deepseek', 'deepseek-flash', 'max')).toEqual({ reasoning_effort: 'max' });
-      // The retired V4 ids keep the narrower high|max grading.
-      expect(availableReasoningTiers('deepseek', 'deepseek-v4-pro')).toEqual(['auto', 'high', 'max']);
     });
 
-    it('migrates both V4 ids to V4.1 Flash', () => {
-      expect(replacementModelFor('deepseek', 'deepseek-v4-pro')).toBe('deepseek-flash');
+    // "The thinking modes of V4-Pro and V4-Flash now support three thinking
+    // effort levels: low / high / max" (changelog 2026-08-13). Low used to
+    // collapse to high on Pro.
+    it('grades V4 Pro low / high / max as well', () => {
+      expect(availableReasoningTiers('deepseek', 'deepseek-v4-pro')).toEqual(['auto', 'low', 'high', 'max']);
+      expect(reasoningParamsFor('deepseek', 'deepseek-v4-pro', 'low')).toEqual({ reasoning_effort: 'low' });
+    });
+
+    it('migrates the retired V4 Flash ids, and no longer V4 Pro', () => {
       expect(replacementModelFor('deepseek', 'deepseek-v4-flash')).toBe('deepseek-flash');
+      expect(replacementModelFor('deepseek', 'deepseek-v4-flash-vision-exp')).toBe('deepseek-flash');
+      expect(replacementModelFor('deepseek', 'deepseek-v4-pro')).toBeUndefined();
       // A current id has no replacement: the function answers only for retired ones.
       expect(replacementModelFor('deepseek', 'deepseek-flash')).toBeUndefined();
     });
@@ -342,9 +369,20 @@ describe('providers', () => {
 
     it('carries the current DeepSeek, and the models added in 3.2.0', () => {
       expect(ids()).toContain('deepseek/deepseek-v4.1-flash');
+      // The GA V4 Pro. The undated id is the April 0423 preview, which only
+      // third parties serve.
+      expect(ids()).toContain('deepseek/deepseek-v4-pro-0813');
       expect(ids()).not.toContain('deepseek/deepseek-v4-pro');
       expect(ids()).toContain('openai/gpt-6-astra');
       expect(ids()).toContain('google/gemini-3.8-flash');
+    });
+
+    it('uses the dotted Anthropic ids OpenRouter lists, and carries the 2026-09-22 models', () => {
+      expect(ids()).toContain('anthropic/claude-fable-5.1');
+      expect(ids()).not.toContain('anthropic/claude-fable-5-1');
+      expect(ids()).toContain('anthropic/claude-opus-5.5');
+      expect(ids()).toContain('openai/gpt-6-sol');
+      expect(ids()).toContain('openai/gpt-6-luna');
     });
   });
 
@@ -364,15 +402,16 @@ describe('providers', () => {
   });
 
   describe('newly added models (this release)', () => {
-    it('lists Grok 4.6 as the grok default and keeps 4.5 available', () => {
+    it('lists Grok 4.7 first, keeps 4.6/4.5, and keeps the coder as the default', () => {
       const ids = getProvider('grok')!.models.map(m => m.id);
+      expect(ids[0]).toBe('grok-4.7');
       expect(ids).toContain('grok-4.6');
       expect(ids).toContain('grok-4.5');
-      // 4.6 supersedes 4.5 on the same price/context and xAI recommends it for code.
-      // Deliberately NOT the new flagship: grok-4.6 bills 2x input / 3x output
-      // against the agentic coder, so it is opt-in rather than a silent upgrade.
+      // xAI recommends 4.7 for code, but it bills 2x input / 3x output against
+      // the agentic coder, so it is opt-in rather than a silent upgrade.
       expect(getProvider('grok')!.defaultModel).toBe('grok-build-0.1');
-      // Both are reasoning models → graded effort supported.
+      // All reasoning models → graded effort supported.
+      expect(modelSupportsReasoningEffort('grok', 'grok-4.7')).toBe(true);
       expect(modelSupportsReasoningEffort('grok', 'grok-4.6')).toBe(true);
       expect(modelSupportsReasoningEffort('grok', 'grok-4.5')).toBe(true);
     });
@@ -383,16 +422,22 @@ describe('providers', () => {
       expect(modelRejectsSamplingParams('gemini-3.6-flash')).toBe(false);
       expect(modelSupportsReasoningEffort('google', 'gemini-3.7-flash')).toBe(true);
     });
-    it('lists GLM-5.3 on every Z.AI roster, and Flash only where it is sold', () => {
-      // International since 2026-08-19. China checked 2026-09-11: bigmodel.cn
-      // lists GLM-5.3 on the gateway and the China Coding Plan, and GLM-5.3
-      // Flash on China pay-per-use only.
+    it('lists GLM-5.3 on every Z.AI roster; the plans carry exactly 5.3 and 5.3 Flash', () => {
       for (const id of ['z.ai', 'z.ai-api', 'z.ai-cn', 'z.ai-cn-api']) {
         expect(getProvider(id)!.models.map(m => m.id), id).toContain('glm-5.3');
         expect(getProvider(id)!.defaultModel, id).toBe('glm-5.3');
       }
-      expect(getProvider('z.ai-cn-api')!.models.map(m => m.id)).toContain('glm-5.3-flash');
-      expect(getProvider('z.ai-cn')!.models.map(m => m.id)).not.toContain('glm-5.3-flash');
+      // Both Coding Plans: "Only the following two models can be called".
+      expect(getProvider('z.ai')!.models.map(m => m.id)).toEqual(['glm-5.3', 'glm-5.3-flash']);
+      expect(getProvider('z.ai-cn')!.models.map(m => m.id)).toEqual(['glm-5.3', 'glm-5.3-flash']);
+      // FlashX is pay-per-use only, on both platforms.
+      expect(getProvider('z.ai-api')!.models.map(m => m.id)).toContain('glm-5.3-flashx');
+      expect(getProvider('z.ai-cn-api')!.models.map(m => m.id)).toContain('glm-5.3-flashx');
+      // Turbo left the international price list; China still sells it.
+      expect(getProvider('z.ai-api')!.models.map(m => m.id)).not.toContain('glm-5-turbo');
+      expect(getProvider('z.ai-cn-api')!.models.map(m => m.id)).toContain('glm-5-turbo');
+      // FlashX shares 5.3's effort ladder through the glm-5-3 gate.
+      expect(availableReasoningTiers('z.ai-api', 'glm-5.3-flashx')).toEqual(['auto', 'low', 'high', 'max']);
     });
     it('grades GLM-5.3 effort low/high/max and never disables thinking', () => {
       expect(modelSupportsReasoningEffort('z.ai', 'glm-5.3')).toBe(true);
@@ -406,7 +451,9 @@ describe('providers', () => {
     });
     it('refreshes the OpenRouter fallback with the ids OpenRouter actually carries', () => {
       const ids = getProvider('openrouter')!.models.map(m => m.id);
-      expect(ids).toContain('x-ai/grok-4.6');
+      // OpenRouter's x-ai/grok-4.6 now says "It is succeeded by Grok 4.7".
+      expect(ids).toContain('x-ai/grok-4.7');
+      expect(ids).not.toContain('x-ai/grok-4.6');
       expect(ids).toContain('google/gemini-3.7-flash');
       // OpenRouter does not carry GLM-5.3 (Coding-Plan only).
       expect(ids.some(id => id.includes('glm-5.3'))).toBe(false);
@@ -434,9 +481,8 @@ describe('providers', () => {
     it('prices and sizes every curated model (pricing/context lockstep holds)', () => {
       // Models that deliberately carry a context window but no pricing row.
       // Each needs a matching comment in tokenTracker.ts saying why.
-      const UNPRICED_BY_DESIGN = new Set([
-        'qwen3.8-max-preview',      // Token-Plan credits only; no pay-per-use rate published
-      ]);
+      // Empty since qwen3.8-max-preview left the Token Plan picker.
+      const UNPRICED_BY_DESIGN = new Set<string>([]);
       const priced = new Set(getPricingTable().map(entry => entry.model));
 
       // The exemptions must stay exemptions: if a rate is ever added, delete the
@@ -494,8 +540,8 @@ describe('providers', () => {
 
   describe('retired model migrations', () => {
     it('maps exact curated aliases to their supported replacements', () => {
-      expect(replacementModelFor('z.ai', 'glm-5.1')).toBe('glm-5.2');
       expect(replacementModelFor('z.ai-api', 'glm-5')).toBe('glm-5.2');
+      expect(replacementModelFor('z.ai-cn-api', 'glm-5.1')).toBe('glm-5.2');
       expect(replacementModelFor('openai', 'gpt-5.5')).toBe('gpt-5.6-sol');
       expect(replacementModelFor('google', 'gemini-3.5-flash')).toBeUndefined();
       expect(replacementModelFor('grok', 'grok-code-fast-1')).toBe('grok-build-0.1');
@@ -509,6 +555,59 @@ describe('providers', () => {
       expect(replacementModelFor('openrouter', 'openai/gpt-5.5')).toBeUndefined();
       expect(replacementModelFor('ollama', 'qwen3-coder-plus:latest')).toBeUndefined();
       expect(replacementModelFor('custom', 'company/private-model')).toBeUndefined();
+    });
+
+    // A migration target the provider does not offer lands the user on a model
+    // the picker cannot show and, on a plan, one the plan may reject. And the
+    // lookup is one step, so a target that is itself a key would never finish.
+    it('only ever lands on a model the same provider offers, in one step', () => {
+      const problems: string[] = [];
+      for (const [providerId, map] of Object.entries(retiredModelReplacements())) {
+        const offered = new Set((getProvider(providerId)?.models ?? []).map(m => m.id));
+        for (const [from, to] of Object.entries(map)) {
+          if (!offered.has(to)) problems.push(`${providerId}: ${from} → ${to} is not offered`);
+          if (to in map) problems.push(`${providerId}: ${from} → ${to} is itself migrated`);
+          if (offered.has(from)) problems.push(`${providerId}: ${from} is still offered`);
+        }
+      }
+      expect(problems).toEqual([]);
+    });
+
+    // Both GLM Coding Plans accept exactly GLM-5.3 and 5.3 Flash and route
+    // 5.2/5.1 to 5.3 (China also Turbo to Flash); pay-per-use still sells 5.2.
+    it('moves GLM plan users onto the two models their plan accepts', () => {
+      for (const plan of ['z.ai', 'z.ai-cn']) {
+        expect(replacementModelFor(plan, 'glm-5.2'), plan).toBe('glm-5.3');
+        expect(replacementModelFor(plan, 'glm-5.1'), plan).toBe('glm-5.3');
+        expect(replacementModelFor(plan, 'glm-5'), plan).toBe('glm-5.3');
+        expect(replacementModelFor(plan, 'glm-5-turbo'), plan).toBe('glm-5.3-flash');
+      }
+      expect(replacementModelFor('z.ai-api', 'glm-5.2')).toBeUndefined();
+      expect(replacementModelFor('z.ai-cn-api', 'glm-5.2')).toBeUndefined();
+      // Turbo left the international list only.
+      expect(replacementModelFor('z.ai-api', 'glm-5-turbo')).toBe('glm-5.3-flash');
+      expect(replacementModelFor('z.ai-cn-api', 'glm-5-turbo')).toBeUndefined();
+    });
+
+    it('moves the Gemini 3 previews to the replacements Google names', () => {
+      expect(replacementModelFor('google', 'gemini-3-flash-preview')).toBe('gemini-3.6-flash');
+      expect(replacementModelFor('google', 'gemini-3-pro-preview')).toBe('gemini-3.1-pro-preview');
+    });
+
+    // Alibaba retires qwen3-coder-plus/next and bare qwen3-max on 2026-10-10,
+    // naming qwen3.7-plus and qwen3.7-max. 3.7 Max is not on the Coding Plan.
+    it('moves the Qwen ids retiring on 2026-10-10 to a model each surface accepts', () => {
+      for (const id of ['qwen-api', 'qwen-cn-api', 'qwen-token-plan']) {
+        expect(replacementModelFor(id, 'qwen3-max'), id).toBe('qwen3.7-max');
+        expect(replacementModelFor(id, 'qwen3-coder-plus'), id).toBe('qwen3.7-plus');
+        expect(replacementModelFor(id, 'qwen3-coder-next'), id).toBe('qwen3.7-plus');
+      }
+      for (const plan of ['qwen', 'qwen-cn']) {
+        expect(replacementModelFor(plan, 'qwen3-max'), plan).toBe('qwen3.7-plus');
+        expect(replacementModelFor(plan, 'qwen3-coder-plus'), plan).toBe('qwen3.7-plus');
+      }
+      // Retired on the Token Plan and routed to 3.8 Max by Alibaba.
+      expect(replacementModelFor('qwen-token-plan', 'qwen3.8-max-preview')).toBe('qwen3.8-max');
     });
   });
 
@@ -616,9 +715,46 @@ describe('providers', () => {
       expect(reasoningParamsFor('anthropic', 'claude-opus-5', 'low')).toEqual({ output_config: { effort: 'low' } });
       expect(reasoningParamsFor('anthropic', 'claude-opus-5', 'max')).toEqual({ output_config: { effort: 'max' } });
     });
-    it('OpenAI → reasoning_effort, max maps to xhigh (no native max)', () => {
+    it('OpenAI → reasoning_effort; Max is "max" from GPT-5.6 on, xhigh before it', () => {
       expect(reasoningParamsFor('openai', 'gpt-5.5', 'medium')).toEqual({ reasoning_effort: 'medium' });
       expect(reasoningParamsFor('openai', 'gpt-5.5', 'max')).toEqual({ reasoning_effort: 'xhigh' });
+      // "max" arrived with GPT-5.6 and every GPT-6 page lists it.
+      expect(reasoningParamsFor('openai', 'gpt-5.6-sol', 'max')).toEqual({ reasoning_effort: 'max' });
+      expect(reasoningParamsFor('openai', 'gpt-5.6-luna', 'max')).toEqual({ reasoning_effort: 'max' });
+      expect(reasoningParamsFor('openai', 'gpt-6-sol', 'max')).toEqual({ reasoning_effort: 'max' });
+      expect(reasoningParamsFor('openai', 'gpt-6-sol', 'high')).toEqual({ reasoning_effort: 'high' });
+    });
+
+    // Chat Completions: GPT-6 Sol/Luna call tools only at reasoning_effort
+    // "none". Auto sends nothing and the model runs at medium — the exact case
+    // the docs rule out — so the override must come before the auto return.
+    it('sends reasoning_effort "none" to GPT-6 Sol/Luna on a request with tools, whatever the tier', () => {
+      for (const model of ['gpt-6-sol', 'gpt-6-luna']) {
+        for (const tier of REASONING_TIERS) {
+          expect(reasoningParamsFor('openai', model, tier, { tools: true }), `${model} ${tier}`)
+            .toEqual({ reasoning_effort: 'none' });
+        }
+      }
+    });
+
+    it('leaves the tier alone without tools, on Astra, on other GPTs and on OpenRouter', () => {
+      // Plain chat carries no tools, so the tier applies there.
+      expect(reasoningParamsFor('openai', 'gpt-6-sol', 'max')).toEqual({ reasoning_effort: 'max' });
+      expect(reasoningParamsFor('openai', 'gpt-6-sol', 'auto')).toEqual({});
+      // Astra rejects "none" with a 400.
+      expect(reasoningParamsFor('openai', 'gpt-6-astra', 'high', { tools: true })).toEqual({ reasoning_effort: 'high' });
+      expect(reasoningParamsFor('openai', 'gpt-5.6-sol', 'auto', { tools: true })).toEqual({});
+      // OpenRouter may reach OpenAI through the Responses API.
+      expect(reasoningParamsFor('openrouter', 'openai/gpt-6-sol', 'high', { tools: true })).toEqual({ reasoning: { effort: 'high' } });
+      expect(toolsForceReasoningOff('openrouter', 'openai/gpt-6-sol')).toBe(false);
+      expect(toolsForceReasoningOff('openai', 'gpt-6-astra')).toBe(false);
+    });
+
+    it('says where the user can see it that agent turns run GPT-6 Sol/Luna with reasoning off', () => {
+      expect(agentTurnReasoningNote('openai', 'gpt-6-sol')).toMatch(/reasoning_effort "none"/);
+      expect(agentTurnReasoningNote('openai', 'gpt-6-luna')).toMatch(/plain chat/);
+      expect(agentTurnReasoningNote('openai', 'gpt-5.6-sol')).toBeNull();
+      expect(agentTurnReasoningNote('openrouter', 'openai/gpt-6-sol')).toBeNull();
     });
     // Medium used to be collapsed to high because Gemini 3 Preview 400'd on it.
     // That was a preview-era bug; Google's OpenAI-compat mapping table now
@@ -631,8 +767,8 @@ describe('providers', () => {
       expect(reasoningParamsFor('google', 'gemini-3.1-pro-preview', 'max')).toEqual({ reasoning_effort: 'high' });
       expect(reasoningParamsFor('google', 'gemini-3.7-flash', 'medium')).toEqual({ reasoning_effort: 'medium' });
     });
-    it('DeepSeek / GLM-5.2 → reasoning_effort high|max', () => {
-      expect(reasoningParamsFor('deepseek', 'deepseek-v4-pro', 'low')).toEqual({ reasoning_effort: 'high' });
+    it('DeepSeek V4 Pro → low|high|max; GLM-5.2 → high|max', () => {
+      expect(reasoningParamsFor('deepseek', 'deepseek-v4-pro', 'low')).toEqual({ reasoning_effort: 'low' });
       expect(reasoningParamsFor('deepseek', 'deepseek-v4-pro', 'max')).toEqual({ reasoning_effort: 'max' });
       expect(reasoningParamsFor('z.ai', 'glm-5.2', 'high')).toEqual({ reasoning_effort: 'high' });
       expect(reasoningParamsFor('z.ai', 'glm-5.2', 'max')).toEqual({ reasoning_effort: 'max' });
@@ -642,9 +778,23 @@ describe('providers', () => {
       expect(reasoningParamsFor('kimi-api', 'kimi-k3', 'medium')).toEqual({ reasoning_effort: 'high' });
       expect(reasoningParamsFor('kimi-api', 'kimi-k3', 'max')).toEqual({ reasoning_effort: 'max' });
     });
-    it('OpenRouter → reasoning.effort, max capped at high', () => {
+    // OpenRouter accepts "xhigh" and "max" where the model lists them in
+    // /api/v1/models reasoning.supported_efforts (read 2026-09-23).
+    it('OpenRouter → reasoning.effort, Max as high as the model lists', () => {
       expect(reasoningParamsFor('openrouter', 'openai/gpt-5.5', 'medium')).toEqual({ reasoning: { effort: 'medium' } });
-      expect(reasoningParamsFor('openrouter', 'openai/gpt-5.5', 'max')).toEqual({ reasoning: { effort: 'high' } });
+      expect(reasoningParamsFor('openrouter', 'openai/gpt-5.5', 'max')).toEqual({ reasoning: { effort: 'xhigh' } });
+      for (const id of ['openai/gpt-6-sol', 'openai/gpt-5.6-sol', 'anthropic/claude-opus-5.5', 'anthropic/claude-fable-5.1',
+        'deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4-pro-0813', 'moonshotai/kimi-k3']) {
+        expect(reasoningParamsFor('openrouter', id, 'max'), id).toEqual({ reasoning: { effort: 'max' } });
+      }
+      for (const id of ['x-ai/grok-4.7', 'x-ai/grok-4.6', 'qwen/qwen3.8-max-0902']) {
+        expect(reasoningParamsFor('openrouter', id, 'max'), id).toEqual({ reasoning: { effort: 'xhigh' } });
+      }
+      // Lists neither: Gemini tops out at high; grok-4.5 and the 0423 V4 Pro
+      // preview list no max, and an unknown id keeps the old cap.
+      for (const id of ['google/gemini-3.8-flash', 'x-ai/grok-4.5', 'deepseek/deepseek-v4-pro', 'openrouter/auto']) {
+        expect(reasoningParamsFor('openrouter', id, 'max'), id).toEqual({ reasoning: { effort: 'high' } });
+      }
     });
     it('never emits a value Gemini/OpenAI reject across all tiers', () => {
       for (const tier of REASONING_TIERS) {
@@ -653,6 +803,8 @@ describe('providers', () => {
         if (g.reasoning_effort) expect(['low', 'medium', 'high']).toContain(g.reasoning_effort);
         const o = reasoningParamsFor('openai', 'gpt-5.5', tier) as { reasoning_effort?: string };
         if (o.reasoning_effort) expect(['none', 'low', 'medium', 'high', 'xhigh']).toContain(o.reasoning_effort);
+        const o6 = reasoningParamsFor('openai', 'gpt-6-sol', tier) as { reasoning_effort?: string };
+        if (o6.reasoning_effort) expect(['none', 'low', 'medium', 'high', 'xhigh', 'max']).toContain(o6.reasoning_effort);
       }
     });
   });
@@ -663,9 +815,10 @@ describe('providers', () => {
       expect(availableReasoningTiers('openai', 'gpt-5.5')).toEqual(['auto', 'low', 'medium', 'high', 'max']);
       expect(availableReasoningTiers('google', 'gemini-3.1-pro-preview')).toEqual(['auto', 'low', 'medium', 'high']);
       expect(availableReasoningTiers('z.ai', 'glm-5.2')).toEqual(['auto', 'high', 'max']);
-      expect(availableReasoningTiers('deepseek', 'deepseek-v4-pro')).toEqual(['auto', 'high', 'max']);
+      expect(availableReasoningTiers('deepseek', 'deepseek-v4-pro')).toEqual(['auto', 'low', 'high', 'max']);
       expect(availableReasoningTiers('kimi-api', 'kimi-k3')).toEqual(['auto', 'low', 'high', 'max']);
-      expect(availableReasoningTiers('openrouter', 'openai/gpt-5.5')).toEqual(['auto', 'low', 'medium', 'high']);
+      expect(availableReasoningTiers('openrouter', 'openai/gpt-5.5')).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+      expect(availableReasoningTiers('openrouter', 'google/gemini-3.8-flash')).toEqual(['auto', 'low', 'medium', 'high']);
     });
     it('returns [] for unsupported models', () => {
       expect(availableReasoningTiers('anthropic', 'claude-haiku-4-5-20251001')).toEqual([]);
@@ -673,11 +826,14 @@ describe('providers', () => {
     });
     it('drift guard — every listed non-auto tier yields a DISTINCT param', () => {
       const cases = [
-        ['anthropic', 'claude-opus-5'], ['openai', 'gpt-5.5'],
-        ['google', 'gemini-3.1-pro-preview'], ['z.ai', 'glm-5.2'], ['z.ai', 'glm-5.3'],
-        ['kimi-api', 'kimi-k3'],
-        ['deepseek', 'deepseek-v4-pro'], ['openrouter', 'openai/gpt-5.5'],
-        ['grok', 'grok-4.3'],
+        ['anthropic', 'claude-opus-5'], ['anthropic', 'claude-opus-5-5'], ['openai', 'gpt-5.5'],
+        ['openai', 'gpt-5.6-sol'], ['openai', 'gpt-6-sol'], ['openai', 'gpt-6-luna'],
+        ['google', 'gemini-3.1-pro-preview'], ['z.ai-api', 'glm-5.2'], ['z.ai', 'glm-5.3'],
+        ['kimi-api', 'kimi-k3'], ['kimi', 'kimi-for-coding'],
+        ['deepseek', 'deepseek-flash'], ['deepseek', 'deepseek-v4-pro'],
+        ['openrouter', 'openai/gpt-5.5'], ['openrouter', 'openai/gpt-6-sol'], ['openrouter', 'x-ai/grok-4.7'],
+        ['openrouter', 'google/gemini-3.8-flash'],
+        ['grok', 'grok-4.3'], ['grok', 'grok-4.5'], ['grok', 'grok-4.6'], ['grok', 'grok-4.7'],
       ];
       for (const [pid, model] of cases) {
         const tiers = availableReasoningTiers(pid, model).filter(t => t !== 'auto');
@@ -726,17 +882,23 @@ describe('providers', () => {
       expect(PROVIDERS['qwen-api'].defaultModel).toBe('qwen3.8-max');
       expect(PROVIDERS['qwen-api'].models.map(m => m.id)).toEqual(
         expect.arrayContaining(['qwen3.8-max', 'qwen3.8-flash', 'qwen3.7-max']));
-      // China pay-per-use is a separate listing, not verified for 3.8.
+      // 3.8 Max and Flash are GA in China (Beijing) too; the default stays put.
       expect(PROVIDERS['qwen-cn-api'].defaultModel).toBe('qwen3.7-max');
-      expect(PROVIDERS['qwen-cn-api'].models.map(m => m.id)).not.toContain('qwen3.8-max');
+      expect(PROVIDERS['qwen-cn-api'].models.map(m => m.id)).toEqual(
+        expect.arrayContaining(['qwen3.8-max', 'qwen3.8-flash', 'qwen3.7-max']));
       expect(PROVIDERS['qwen-api'].models.map(m => m.id)).not.toContain('qwen3-coder-plus');
     });
     it('keeps Qwen Token Plan isolated from Coding Plan and pay-per-use', () => {
       const tokenPlan = PROVIDERS['qwen-token-plan'];
       expect(tokenPlan.protocols.openai?.baseUrl).toBe('https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1');
       expect(tokenPlan.envKey).toBe('BAILIAN_TOKEN_PLAN_API_KEY');
-      expect(tokenPlan.defaultModel).toBe('qwen3.8-max-preview');
-      expect(tokenPlan.models.map(m => m.id)).toContain('qwen3.8-max-preview');
+      // The preview is retired and routed to 3.8 Max; both editions list 3.8 Flash.
+      expect(tokenPlan.defaultModel).toBe('qwen3.8-max');
+      const ids = tokenPlan.models.map(m => m.id);
+      expect(ids).not.toContain('qwen3.8-max-preview');
+      expect(ids).toContain('qwen3.8-flash');
+      // Team-only: a Personal key gets 403 for it, and the picker says so.
+      expect(tokenPlan.models.find(m => m.id === 'qwen3.6-plus')!.description).toMatch(/Team edition only/);
       expect(tokenPlan.noStreamWithTools).toBe(true);
     });
     it('Grok uses api.x.ai + max_completion_tokens (reasoning models)', () => {
@@ -768,16 +930,67 @@ describe('providers', () => {
       expect(modelSupportsReasoningEffort('grok', 'grok-build-0.1')).toBe(false);
       expect(modelSupportsReasoningEffort('grok', 'grok-code-fast-1')).toBe(false);
       expect(modelSupportsReasoningEffort('grok', 'grok-4-fast-non-reasoning')).toBe(false);
-      expect(modelSupportsReasoningEffort('kimi', 'kimi-for-coding')).toBe(false);
+      // K2.8 Preview since 2026-09-11 takes low/high/max; HighSpeed (K2.7 Code
+      // HighSpeed) has no ladder, so the match must be exact.
+      expect(modelSupportsReasoningEffort('kimi', 'kimi-for-coding')).toBe(true);
+      expect(availableReasoningTiers('kimi', 'kimi-for-coding')).toEqual(['auto', 'low', 'high', 'max']);
+      expect(modelSupportsReasoningEffort('kimi', 'kimi-for-coding-highspeed')).toBe(false);
       expect(modelSupportsReasoningEffort('kimi', 'k3')).toBe(true);
       expect(modelSupportsReasoningEffort('kimi', 'k3-256k')).toBe(true);
       expect(modelSupportsReasoningEffort('kimi-api', 'kimi-k3')).toBe(true);
       expect(modelSupportsReasoningEffort('qwen', 'qwen3.7-plus')).toBe(false);
     });
-    it('Grok reasoning_effort: none/low/medium/high, Max → high', () => {
+    it('Grok reasoning_effort: Max → high where xhigh is disputed (4.3, 4.5)', () => {
       expect(reasoningParamsFor('grok', 'grok-4.3', 'medium')).toEqual({ reasoning_effort: 'medium' });
       expect(reasoningParamsFor('grok', 'grok-4.3', 'max')).toEqual({ reasoning_effort: 'high' });
       expect(availableReasoningTiers('grok', 'grok-4.3')).toEqual(['auto', 'low', 'medium', 'high']);
+      expect(reasoningParamsFor('grok', 'grok-4.5', 'max')).toEqual({ reasoning_effort: 'high' });
+      expect(availableReasoningTiers('grok', 'grok-4.5')).toEqual(['auto', 'low', 'medium', 'high']);
+    });
+    // "`xhigh` is available on `grok-4.6` and later" — xAI reasoning guide.
+    it('Grok reasoning_effort: Max → xhigh on 4.6 and 4.7', () => {
+      for (const model of ['grok-4.7', 'grok-4.6']) {
+        expect(reasoningParamsFor('grok', model, 'max'), model).toEqual({ reasoning_effort: 'xhigh' });
+        expect(reasoningParamsFor('grok', model, 'high'), model).toEqual({ reasoning_effort: 'high' });
+        expect(availableReasoningTiers('grok', model), model).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+      }
+    });
+  });
+
+  describe('2026-09-23 sweep', () => {
+    // GPT-6 takes sampling params only at effort "none" (Astra never). The
+    // direct openai provider omits them for every model; OpenRouter's
+    // openai/gpt-6-* ids reach the model-level check only.
+    it('omits sampling params for GPT-6 on OpenRouter', () => {
+      expect(modelRejectsSamplingParams('openai/gpt-6-sol')).toBe(true);
+      expect(modelRejectsSamplingParams('openai/gpt-6-luna')).toBe(true);
+      expect(modelRejectsSamplingParams('gpt-6-astra')).toBe(true);
+      expect(modelRejectsSamplingParams('openai/gpt-5.6-sol')).toBe(false);
+    });
+
+    // Opus 5.5 thinks on every request and more per turn than Opus 5; the
+    // thinking spends the same max_tokens as the answer.
+    it('gives Opus 5.5 a response floor, more at Max, and nobody else one', () => {
+      expect(minResponseTokensFor('claude-opus-5-5', 'auto')).toBe(32_768);
+      expect(minResponseTokensFor('claude-opus-5-5', undefined)).toBe(32_768);
+      expect(minResponseTokensFor('claude-opus-5-5', 'max')).toBe(65_536);
+      expect(minResponseTokensFor('anthropic/claude-opus-5.5', 'high')).toBe(32_768);
+      expect(minResponseTokensFor('claude-opus-5', 'max')).toBe(0);
+      expect(minResponseTokensFor('gpt-6-sol', 'max')).toBe(0);
+    });
+
+    // The old fallback is no longer served by ModelScope API-Inference.
+    it('falls back to a ModelScope model that is still served', () => {
+      expect(PROVIDERS['modelscope'].defaultModel).toBe('Qwen/Qwen3.5-397B-A17B');
+      expect(getModelContextWindow('Qwen/Qwen3.5-397B-A17B')).toBe(262_144);
+    });
+
+    // A config still on the old fallback held an id ModelScope no longer
+    // serves. Only that exact id moves: the rest of the catalogue is live.
+    it('moves the old ModelScope fallback, and no other ModelScope id', () => {
+      expect(replacementModelFor('modelscope', 'Qwen/Qwen3-Coder-480B-A35B-Instruct')).toBe('Qwen/Qwen3.5-397B-A17B');
+      expect(replacementModelFor('modelscope', 'Qwen/Qwen3-Coder-30B-A3B-Instruct')).toBeUndefined();
+      expect(replacementModelFor('openrouter', 'Qwen/Qwen3-Coder-480B-A35B-Instruct')).toBeUndefined();
     });
   });
 

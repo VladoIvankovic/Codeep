@@ -10,9 +10,10 @@ export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
-  /** Anthropic prompt caching: tokens written to the cache on this call
-   *  (billed at ~1.25× input rate). Undefined for providers that don't
-   *  support caching or for calls below the cache size threshold. */
+  /** Prompt caching: tokens written to the cache on this call — Anthropic's
+   *  cache_creation_input_tokens, or OpenAI-protocol
+   *  prompt_tokens_details.cache_write_tokens (GPT-5.6+, Kimi K3). Billed at
+   *  cacheWriteRateFor(). Undefined when the provider reports none. */
   cacheCreationTokens?: number;
   /** Anthropic prompt caching: tokens read from cache on this call
    *  (billed at ~0.1× input rate — the big savings live here). */
@@ -59,10 +60,15 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Z.AI / ZhipuAI
   'glm-5.3':            1_000_000,
   'glm-5.3-flash':      1_000_000,
+  'glm-5.3-flashx':     1_000_000,
   'glm-5.2':            1_000_000,
   'glm-5.1':              200_000,
   'glm-5-turbo':          202_752,
-  // OpenAI
+  // OpenAI — every 5.6 and GPT-6 page gives a 1,050,000 window with a
+  // "Maximum input tokens: 922,000"; this sizes the context meter only, and
+  // compaction is character-based, so the window figure is what belongs here.
+  'gpt-6-sol':            1_050_000,
+  'gpt-6-luna':           1_050_000,
   'gpt-6-astra':          1_050_000,
   'gpt-5.6-sol':          1_050_000,
   'gpt-5.6-terra':        1_050_000,
@@ -73,6 +79,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic
   'claude-fable-5-1':             1_000_000,
   'claude-fable-5':               1_000_000,
+  'claude-opus-5-5':              1_000_000,
   'claude-opus-5':                1_000_000,
   'claude-sonnet-4-6':            1_000_000,
   'claude-sonnet-5':              1_000_000,
@@ -88,7 +95,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gemini-3.6-flash':              1_048_576,
   'gemini-3.5-flash':              1_048_576,
   'gemini-3.5-flash-lite':         1_048_576,
-  'gemini-3-flash-preview':        1_000_000,
+  'gemini-3-flash-preview':        1_048_576,
   // MiniMax
   'MiniMax-M3':           1_000_000,
   // Kimi (Moonshot) — 1M on K3, 256K across K2.x
@@ -96,11 +103,17 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'kimi-k2.7-code':            262_144,
   'kimi-k2.7-code-highspeed':  262_144,
   'kimi-k2.6':                 262_144,
-  'kimi-for-coding':           262_144,
+  // K2.8 Preview since 2026-09-11: 1,048,576 on every Kimi Code tier.
+  'kimi-for-coding':           1_048_576,
   'kimi-for-coding-highspeed': 262_144,
-  'k3':                      1_000_000,
+  // 1,048,576 on Pro/Allegretto and above, 262,144 on Plus/Moderato. Codeep
+  // cannot see the plan, so this carries the plan-independent window of the id;
+  // a Plus user past 256K gets Kimi's 401, which the ACP server now words as a
+  // plan limit rather than a missing key.
+  'k3':                        1_048_576,
   'k3-256k':                   262_144,
   // Grok (xAI)
+  'grok-4.7':                  500_000,
   'grok-4.6':                  500_000,
   'grok-4.5':                  500_000,
   'grok-build-0.1':            256_000,
@@ -111,11 +124,15 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'qwen3.8-max':               1_000_000,
   'qwen3.8-flash':               1_000_000,
   'qwen3.7-max':               1_000_000,
+  // Retired on the Token Plan (routed to qwen3.8-max); kept for old sessions.
   'qwen3.8-max-preview':       1_000_000,
   'qwen3.7-plus':              1_000_000,
   'qwen3.6-plus':              1_000_000,
   'qwen3.5-plus':              1_000_000,
   'qwen3.6-flash':             1_000_000,
+  // ModelScope fallback default: 262,144 native, per its model card.
+  'Qwen/Qwen3.5-397B-A17B':    262_144,
+  // The previous ModelScope fallback, no longer served there.
   'Qwen/Qwen3-Coder-480B-A35B-Instruct': 262_144,
 };
 
@@ -139,16 +156,27 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // inferred from the match — the two being equal today is a coincidence of the
   // price list, not a rule.
   'glm-5.3':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
-  // Flash lists at $0.15/$0.50 with a 50% launch promotion in force at the
-  // time of writing. The list price is what belongs here: a promotional rate
-  // would quietly understate every session's cost the day it ends.
+  // Flash lists at $0.15/$0.50. It launched with a promotion that the
+  // international page no longer shows; the list price is what belongs here
+  // either way, since a promotional rate understates every session the day it
+  // ends.
   'glm-5.3-flash':     { inputPer1M: 0.15,  outputPer1M: 0.50 },
+  'glm-5.3-flashx':    { inputPer1M: 0.37,  outputPer1M: 1.25 },
   'glm-5.2':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
   'glm-5.1':           { inputPer1M: 1.40,  outputPer1M: 4.40 },
+  // Turbo's last international list price (2026-07-31); it has since left that
+  // list. China still sells it at CNY 5/22 below 32K input, which this
+  // over-estimates.
   'glm-5-turbo':       { inputPer1M: 1.20,  outputPer1M: 4.00 },
   // OpenAI
-  // 2.5x 5.6 Sol at its current promotional rate. Cached reads are $1.00/M — 0.1x input, which is
-  // what DEFAULT_CACHE_READ_RATE already applies, so no model row is needed.
+  // GPT-6 Sol and Luna, released 2026-09-22. Cached reads are 0.1x input and
+  // cache writes 1.25x — the defaults below — so no rate rows are needed.
+  // Above 272K input a request bills $4/$15 (Sol) or $0.20/$0.75 (Luna); like
+  // every row here, these hold the standard short-context tier.
+  'gpt-6-sol':     { inputPer1M: 2.00,  outputPer1M: 10.00 },
+  'gpt-6-luna':    { inputPer1M: 0.10,  outputPer1M: 0.50 },
+  // No longer offered on `openai` (no tool calls on Chat Completions); kept so
+  // restored sessions still price. 2.5x 5.6 Sol at its promotional rate.
   'gpt-6-astra':   { inputPer1M: 10.00, outputPer1M: 50.00 },
   // Promotional rate "available at least through 2026-11-21" per OpenAI's
   // pricing page. Carried because it is what users are billed now, and no end
@@ -163,6 +191,8 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // Anthropic
   'claude-fable-5-1':             { inputPer1M: 10.00, outputPer1M: 50.00 },
   'claude-fable-5':               { inputPer1M: 10.00, outputPer1M: 50.00 },
+  // No long-context tier: 4.6+ models bill the full 1M at these rates.
+  'claude-opus-5-5':              { inputPer1M: 4.00,  outputPer1M: 20.00 },
   'claude-opus-5':                { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-sonnet-4-6':            { inputPer1M: 3.00,  outputPer1M: 15.00 },
   'claude-sonnet-5':              { inputPer1M: 2.00,  outputPer1M: 10.00 },
@@ -185,8 +215,8 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'deepseek-flash':    { inputPer1M: 0.30, outputPer1M: 1.20 },
   // Retired V4 Flash is served by V4.1 Flash and billed at its price.
   'deepseek-v4-flash': { inputPer1M: 0.30, outputPer1M: 1.20 },
-  // Pro's own peak rate, right for every run until 2026-09-14; after that the id
-  // is routed to Flash, and configs holding it have been migrated away from it.
+  // Pro's own peak rate. DeepSeek cancelled its routing to Flash, so this is a
+  // live, separately billed model again (off-peak halves it).
   'deepseek-v4-pro':   { inputPer1M: 1.32, outputPer1M: 3.96 },
   // Google
   // Gemini 3.6/3.7/3.8 Flash carry PROMOTIONAL rates that run through 2026-12-31
@@ -206,22 +236,26 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // 0.60/2.40. The old 0.60/2.40 row was the long-context tier and doubled the
   // estimate for virtually every real request.
   'MiniMax-M3':             { inputPer1M: 0.30,  outputPer1M: 1.20 },
-  // Kimi (Moonshot) — pay-per-use cache-miss rates; `kimi-for-coding` is the
-  // subscription alias (flat-fee in reality, priced notionally like K2.7 Code).
+  // Kimi (Moonshot) — pay-per-use cache-miss rates. `kimi-for-coding` is the
+  // subscription alias: flat-fee, so this figure is never shown as a cost. It
+  // is now K2.8 Preview, which has no pay-per-use price at all; the row keeps
+  // the K2.7 Code rate it was given so old exports read the same.
   'kimi-k3':                   { inputPer1M: 3.00, outputPer1M: 15.00 },
   'kimi-k2.7-code':            { inputPer1M: 0.95, outputPer1M: 4.00 },
   // Highspeed is the same model served faster, at exactly double the rate
-  // across every token category (platform.kimi.ai/docs/pricing/chat-k27-code).
+  // across every token category (platform.kimi.ai/docs/pricing/chat).
   'kimi-k2.7-code-highspeed':  { inputPer1M: 1.90, outputPer1M: 8.00 },
-  // Kimi doesn't publish a distinct high-speed price in its main table.
-  // Leave that variant unpriced rather than presenting an invented estimate.
   'kimi-k2.6':                 { inputPer1M: 0.95, outputPer1M: 4.00 },
   'kimi-for-coding':           { inputPer1M: 0.95, outputPer1M: 4.00 },
   'kimi-for-coding-highspeed': { inputPer1M: 0.95, outputPer1M: 4.00 },
   'k3':                        { inputPer1M: 3.00, outputPer1M: 15.00 },
   'k3-256k':                   { inputPer1M: 3.00, outputPer1M: 15.00 },
-  // Grok (xAI) — base-tier rates. xAI doubles Grok 4.5/4.6 at prompts ≥200K;
-  // this table stores one flat rate per model, so the base tier is what we show.
+  // Grok (xAI) — base-tier rates. EVERY Grok text model (4.7, 4.6, 4.5,
+  // build-0.1, 4.3) doubles once a prompt reaches 200K tokens, and then bills
+  // all tokens in that request at the higher rate, not just those past 200K
+  // (docs.x.ai pricing). This table stores one rate per model, so it shows the
+  // base tier and under-states those long requests.
+  'grok-4.7':                  { inputPer1M: 2.00, outputPer1M: 6.00 },
   'grok-4.6':                  { inputPer1M: 2.00, outputPer1M: 6.00 },
   'grok-4.5':                  { inputPer1M: 2.00, outputPer1M: 6.00 },
   'grok-build-0.1':            { inputPer1M: 1.00, outputPer1M: 2.00 },
@@ -230,17 +264,19 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'grok-4-fast-reasoning':     { inputPer1M: 0.20, outputPer1M: 0.50 },
   // Qwen (Alibaba) — list prices for the first context tier. Coding Plan
   // variants are flat-fee; these rates describe pay-per-use calls.
-  // `qwen3.8-max-preview` is Token-Plan-only (credit-metered, promotional
-  // preview rate); Alibaba publishes no pay-per-use per-token price for it.
-  // Leave it unpriced rather than borrowing the GA qwen3.8-max rate.
+  // `qwen3.8-max-preview` was Token-Plan-only with no published per-token
+  // price; it is retired there now and stays unpriced.
   'qwen3.8-max':               { inputPer1M: 2.00, outputPer1M: 6.00 },
   'qwen3.8-flash':             { inputPer1M: 0.15, outputPer1M: 0.47 },
   'qwen3.7-max':               { inputPer1M: 2.50, outputPer1M: 7.50 },
   'qwen3.7-plus':              { inputPer1M: 0.40, outputPer1M: 1.60 },
-  'qwen3.6-plus':              { inputPer1M: 0.40, outputPer1M: 2.40 },
+  // $0.5/$3 up to 256K, $2/$6 above (model-pricing, 2026-09-22). This row
+  // used to carry 3.5 Plus's $0.40/$2.40, 20% low.
+  'qwen3.6-plus':              { inputPer1M: 0.50, outputPer1M: 3.00 },
   'qwen3.5-plus':              { inputPer1M: 0.40, outputPer1M: 2.40 },
   'qwen3.6-flash':             { inputPer1M: 0.25, outputPer1M: 1.50 },
   // ModelScope free tier — no per-token charge.
+  'Qwen/Qwen3.5-397B-A17B':    { inputPer1M: 0, outputPer1M: 0 },
   'Qwen/Qwen3-Coder-480B-A35B-Instruct': { inputPer1M: 0, outputPer1M: 0 },
 };
 
@@ -335,10 +371,18 @@ export function extractOpenAIUsage(data: any): TokenUsage | null {
     const nested = data.usage.prompt_tokens_details?.cached_tokens;
     const topLevel = data.usage.cached_tokens ?? data.usage.prompt_cache_hit_tokens;
     const cached = (typeof nested === 'number' ? nested : topLevel) || 0;
+    // Cache WRITES, reported by OpenAI from GPT-5.6 on ("For GPT-5.6 and later,
+    // cache writes cost 1.25× the standard, uncached input-token rate") and by
+    // Kimi K3. Like cached_tokens they are part of prompt_tokens — OpenAI's own
+    // formula is input_tokens - cached_tokens - cache_write_tokens — so the
+    // cost maths subtracts them from the uncached remainder rather than adding
+    // them. Unread, they billed at 1.0× and every estimate erred low.
+    const written = data.usage.prompt_tokens_details?.cache_write_tokens;
     return {
       promptTokens: data.usage.prompt_tokens || 0,
       completionTokens: data.usage.completion_tokens || 0,
       totalTokens: data.usage.total_tokens || 0,
+      cacheCreationTokens: (typeof written === 'number' && written > 0) ? written : undefined,
       cacheReadTokens: cached || undefined,
     };
   }
@@ -373,8 +417,8 @@ export interface ProviderCostBreakdown {
   model: string;
   promptTokens: number;
   completionTokens: number;
-  /** Anthropic prompt caching: tokens written to cache (billed ~1.25× input).
-   *  0 for providers that don't report caching. */
+  /** Prompt caching: tokens written to cache (billed at cacheWriteRateFor()).
+   *  0 for providers that don't report writes. */
   cacheCreationTokens: number;
   /** Anthropic prompt caching: tokens read from cache (billed ~0.1× input).
    *  0 for providers that don't report caching. */
@@ -400,10 +444,53 @@ export interface ProviderCostBreakdown {
  */
 const MODEL_CACHE_READ_RATE: Record<string, number> = {
   'claude-fable-5-1': 0.025,
+  // "On Claude Opus 5.5, a cache hit costs 5% of the standard input price
+  // ($0.20 USD per million tokens)" — half the 0.1× every other Opus pays.
+  'claude-opus-5-5': 0.05,
   // V4 Pro's own ratio: $0.044 hit against $1.32 miss (peak; off-peak halves
-  // both, so the ratio holds). Historical — V4 Pro routes to V4.1 Flash from
-  // 2026-09-14 and configs holding it are migrated.
+  // both, so the ratio holds).
   'deepseek-v4-pro': 0.044 / 1.32,
+  // K3's cached input is one tenth of a miss ($0.30 against $3.00; CNY 2
+  // against 20) and has been since launch. The provider-level 0.2 below is
+  // K2.7 Code's ratio and billed every K3 hit at twice its price. `k3` and
+  // `k3-256k` are the Kimi Code aliases for the same model.
+  'kimi-k3': 0.1,
+  'k3': 0.1,
+  'k3-256k': 0.1,
+  // xAI's cached-input price over its input price, below 200K prompt tokens
+  // (docs.x.ai models / pricing, 2026-09-21). None is Anthropic's 0.1, so
+  // every Grok cache hit used to bill below its cost.
+  'grok-4.7': 0.50 / 2.00,
+  'grok-4.6': 0.50 / 2.00,
+  'grok-4.5': 0.30 / 2.00,
+  'grok-build-0.1': 0.20 / 1.00,
+  'grok-4.3': 0.20 / 1.25,
+};
+
+/**
+ * Surface-specific read rates, checked first: the same GLM id has a different
+ * cached/uncached ratio on Z.AI's international API and on BigModel China, so
+ * neither a model row nor a provider row can hold both. Read off each
+ * platform's own price table (docs.z.ai/guides/overview/pricing in USD,
+ * docs.bigmodel.cn/cn/guide/start/pricing in CNY). The two Coding Plans are
+ * flat-fee and need none.
+ */
+const SURFACE_CACHE_READ_RATE: Record<string, Record<string, number>> = {
+  'z.ai-api': {
+    'glm-5.3': 0.26 / 1.4,
+    'glm-5.2': 0.26 / 1.4,
+    'glm-5.3-flash': 0.03 / 0.15,
+    'glm-5.3-flashx': 0.075 / 0.37,
+    // Its last international listing (2026-07-31): $0.24 against $1.2.
+    'glm-5-turbo': 0.24 / 1.2,
+  },
+  'z.ai-cn-api': {
+    'glm-5.3': 2 / 8,
+    'glm-5.2': 2 / 8,
+    'glm-5.3-flash': 0.23 / 0.8,
+    'glm-5.3-flashx': 0.57 / 2,
+    'glm-5-turbo': 1.2 / 5,
+  },
 };
 
 const CACHE_READ_RATE: Record<string, number> = {
@@ -411,8 +498,11 @@ const CACHE_READ_RATE: Record<string, number> = {
   // off-peak — 0.02 either way. Without an entry DeepSeek fell to the 0.1
   // default and every cached token billed at five times its price.
   'deepseek': 0.02,
+  // K2.7 Code (and HighSpeed): $0.19 against $0.95, ¥1.30 against ¥6.50. China
+  // had no entry and fell to 0.1, billing its K2.x hits at half their cost.
   'kimi': 0.2,
   'kimi-api': 0.2,
+  'kimi-cn': 0.2,
   'qwen': 0.2,
   'qwen-api': 0.2,
   'qwen-cn': 0.2,
@@ -432,9 +522,46 @@ const DEFAULT_CACHE_READ_RATE = 0.1;
  * cost and a "saved" figure that disagreed with each other.
  */
 export function cacheReadRateFor(model: string, provider: string | undefined): number {
-  return MODEL_CACHE_READ_RATE[model]
-    ?? CACHE_READ_RATE[provider?.trim().toLowerCase() ?? '']
+  const surface = provider?.trim().toLowerCase() ?? '';
+  return SURFACE_CACHE_READ_RATE[surface]?.[model]
+    ?? MODEL_CACHE_READ_RATE[model]
+    ?? CACHE_READ_RATE[surface]
     ?? DEFAULT_CACHE_READ_RATE;
+}
+
+/**
+ * Models that write to the cache at their plain input rate. GPT-5.5 and
+ * earlier have "No additional cache-write charge" (OpenAI prompt-caching
+ * guide); only GPT-5.6 and later bill writes at 1.25×.
+ */
+const MODEL_CACHE_WRITE_RATE: Record<string, number> = {
+  'gpt-5.5': 1,
+  'gpt-5.4': 1,
+  'gpt-5.4-mini': 1,
+};
+
+/**
+ * Kimi K3 reports writes in the same field as OpenAI, but its default
+ * 5-minute write costs exactly a cache-miss input token ($3.00 against $3.00;
+ * the 1-hour TTL, which Codeep never asks for, is 2×).
+ */
+const CACHE_WRITE_RATE: Record<string, number> = {
+  'kimi': 1,
+  'kimi-api': 1,
+  'kimi-cn': 1,
+};
+
+/** Anthropic's 5-minute write and OpenAI's GPT-5.6+ write both cost 1.25×. */
+const DEFAULT_CACHE_WRITE_RATE = 1.25;
+
+/**
+ * What writing a prompt token into the cache costs, as a multiple of the
+ * model's input rate. Same order as reads: model, then provider, then default.
+ */
+export function cacheWriteRateFor(model: string, provider: string | undefined): number {
+  return MODEL_CACHE_WRITE_RATE[model]
+    ?? CACHE_WRITE_RATE[provider?.trim().toLowerCase() ?? '']
+    ?? DEFAULT_CACHE_WRITE_RATE;
 }
 
 /**
@@ -477,17 +604,18 @@ export function getCostBreakdown(startIndex = 0): ProviderCostBreakdown[] {
     } else {
       const pricing = MODEL_PRICING[record.model];
       if (pricing) {
-        // Cache writes bill at 1.25× the base input rate (Anthropic's, and the
-        // only provider here that charges for them at all); cache reads bill
-        // at whatever fraction the provider charges. The remaining (uncached)
-        // prompt tokens bill at the standard 1.0× rate.
+        // Cache writes and cache reads each bill at the fraction of the input
+        // rate the model's provider charges for them (writes: 1.25× on
+        // Anthropic and GPT-5.6+, 1.0× on Kimi and older GPT). The remaining
+        // (uncached) prompt tokens bill at the standard 1.0× rate.
         const cacheCreate = record.cacheCreationTokens ?? 0;
         const cacheRead = record.cacheReadTokens ?? 0;
         const cacheReadRate = cacheReadRateFor(record.model, record.provider);
+        const cacheWriteRate = cacheWriteRateFor(record.model, record.provider);
         const uncachedPrompt = Math.max(0, record.promptTokens - cacheCreate - cacheRead);
         existing.estimatedCost +=
           (uncachedPrompt / 1_000_000) * pricing.inputPer1M
-          + (cacheCreate / 1_000_000) * pricing.inputPer1M * 1.25
+          + (cacheCreate / 1_000_000) * pricing.inputPer1M * cacheWriteRate
           + (cacheRead / 1_000_000) * pricing.inputPer1M * cacheReadRate
           + (record.completionTokens / 1_000_000) * pricing.outputPer1M;
       }
@@ -518,6 +646,8 @@ export interface CacheStats {
   /** The read rate of each metered record that read from cache, so a report
    *  can state the rate that actually applied instead of assuming 0.1×. */
   cacheReadRates: number[];
+  /** Likewise for writes, which are not 1.25× everywhere (Kimi: 1.0×). */
+  cacheWriteRates: number[];
 }
 
 export function getCacheStats(): CacheStats {
@@ -527,6 +657,7 @@ export function getCacheStats(): CacheStats {
   let flatFeeCached = 0;
   let meteredCached = 0;
   const readRates: number[] = [];
+  const writeRates: number[] = [];
   for (const record of currentRecords()) {
     const cached = (record.cacheCreationTokens ?? 0) + (record.cacheReadTokens ?? 0);
     cacheCreate += record.cacheCreationTokens ?? 0;
@@ -543,13 +674,16 @@ export function getCacheStats(): CacheStats {
     // minus what they cost at the model's own read rate. This hardcoded 0.9
     // (a 0.1 read) for every provider, so Kimi and Qwen (0.2) over-reported
     // savings while DeepSeek (0.02) and Fable 5.1 (0.025) under-reported them.
-    // (Cache creation is a slight *penalty* of 0.25× — netted in.)
+    // Cache creation costs whatever its write rate is above a plain input
+    // token — 0.25× where writes bill at 1.25×, nothing on Kimi — netted in.
     const pricing = MODEL_PRICING[record.model];
     if (pricing) {
       const readRate = cacheReadRateFor(record.model, record.provider);
+      const writeRate = cacheWriteRateFor(record.model, record.provider);
       if ((record.cacheReadTokens ?? 0) > 0) readRates.push(readRate);
+      if ((record.cacheCreationTokens ?? 0) > 0) writeRates.push(writeRate);
       const cReadSaved = ((record.cacheReadTokens ?? 0) / 1_000_000) * pricing.inputPer1M * (1 - readRate);
-      const cCreateCost = ((record.cacheCreationTokens ?? 0) / 1_000_000) * pricing.inputPer1M * 0.25;
+      const cCreateCost = ((record.cacheCreationTokens ?? 0) / 1_000_000) * pricing.inputPer1M * (writeRate - 1);
       savings += cReadSaved - cCreateCost;
     }
   }
@@ -560,6 +694,7 @@ export function getCacheStats(): CacheStats {
     hasFlatFeeCacheUsage: flatFeeCached > 0,
     isEntirelyFlatFeeCache: flatFeeCached > 0 && meteredCached === 0,
     cacheReadRates: readRates,
+    cacheWriteRates: writeRates,
   };
 }
 
@@ -682,7 +817,8 @@ export function formatCostReport(): string {
     // nothing is billed per token, so quoting a rate there would be as invented
     // as the per-model prices this report already refuses to show.
     const readNote = cache.isEntirelyFlatFeeCache ? '' : formatCacheReadRates(cache.cacheReadRates);
-    const writeNote = cache.isEntirelyFlatFeeCache ? '' : ' (billed at 1.25× input rate)';
+    // The same wording fits writes: a rate against the input price.
+    const writeNote = cache.isEntirelyFlatFeeCache ? '' : formatCacheReadRates(cache.cacheWriteRates);
     lines.push(`**Cache reads:** ${formatTokenCount(cache.cacheReadTokens)} tokens${readNote}`);
     if (cache.cacheCreationTokens > 0) {
       lines.push(`**Cache writes:** ${formatTokenCount(cache.cacheCreationTokens)} tokens${writeNote}`);

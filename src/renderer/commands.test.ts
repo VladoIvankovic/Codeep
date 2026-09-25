@@ -60,6 +60,7 @@ import { trustWorkspaceMcp } from '../utils/mcpConfig';
 import { loadProjectPreferences } from '../utils/learning';
 import { MCP_MARKETPLACE } from '../utils/mcpMarketplace';
 import { loadCustomSkills, getSkippedCustomSkills } from '../utils/skills';
+import { createCheckpoint } from '../utils/checkpoints';
 
 const mockRegister = registerSessionServers as unknown as ReturnType<typeof vi.fn>;
 const mockPush = pushUserProfileResult as unknown as ReturnType<typeof vi.fn>;
@@ -97,6 +98,7 @@ function makeCtx(projectPath: string) {
     addMessage: vi.fn((m: { role: string; content: string }) => { messages.push(m); }),
     showConfirm: vi.fn(),
     getMessages: () => history,
+    setMessages: vi.fn(),
   };
   const ctx = {
     app,
@@ -549,5 +551,75 @@ describe('/go', () => {
     setPendingPlan(newer);
     onFinished('success');
     expect(getPendingPlan()).toBe(newer);
+  });
+});
+
+// ─── /thinking on a model whose agent turns ignore the tier ─────────────────
+
+describe('/thinking on GPT-6 Sol', () => {
+  const saved: Record<string, unknown> = {};
+  beforeEach(() => {
+    for (const k of ['provider', 'model', 'reasoningEffort'] as const) saved[k] = config.get(k);
+    config.set('provider', 'openai');
+    config.set('model', 'gpt-6-sol');
+    config.set('reasoningEffort', 'auto');
+  });
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) config.set(k as 'provider', v as string);
+  });
+
+  // Chat Completions takes tools on GPT-6 Sol/Luna only at reasoning_effort
+  // "none", so agent turns send that whatever the tier. Setting a tier without
+  // saying so would make /thinking a silent no-op in the agent.
+  it('says agent turns run with reasoning off when a tier is set', async () => {
+    const { ctx, notices } = makeCtx(projectDir);
+    await handleCommand('thinking', ['max'], ctx);
+    expect(notices.join('\n')).toContain('Agent turns on gpt-6-sol send reasoning_effort "none"');
+  });
+
+  it('says it in the status too', async () => {
+    const { ctx, messages } = makeCtx(projectDir);
+    await handleCommand('thinking', [], ctx);
+    const status = messages.map(m => m.content).join('\n');
+    expect(status).toContain('**Agent turns**  reasoning off');
+    expect(status).toContain('The tier applies to plain chat');
+  });
+
+  it('says nothing of the kind for a model that reasons with tools', async () => {
+    config.set('model', 'gpt-5.6-sol');
+    const { ctx, messages, notices } = makeCtx(projectDir);
+    await handleCommand('thinking', ['max'], ctx);
+    await handleCommand('thinking', [], ctx);
+    expect([...notices, ...messages.map(m => m.content)].join('\n')).not.toContain('Agent turns');
+  });
+});
+
+// ─── /rewind to a checkpoint on a model that is no longer offered ───────────
+
+describe('/rewind to a checkpoint on a model that is no longer offered', () => {
+  const saved: Record<string, unknown> = {};
+  beforeEach(() => {
+    for (const k of ['provider', 'model'] as const) saved[k] = config.get(k);
+    config.set('provider', 'anthropic');
+    config.set('model', 'claude-opus-5');
+  });
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) config.set(k as 'provider', v as string);
+  });
+
+  // A checkpoint predates any later retirement. Restoring its model verbatim
+  // put a withdrawn id (Astra, whose tool calls fail on Chat Completions) back
+  // on the running process until the next load migrated it.
+  it('restores its replacement and says so', async () => {
+    const cp = createCheckpoint({
+      workspaceRoot: projectDir, sessionId: 'test-session', provider: 'openai', model: 'gpt-6-astra',
+      messages: [{ role: 'user', content: 'earlier' }], filesTouched: [],
+    });
+    const { ctx, messages } = makeCtx(projectDir);
+    await handleCommand('rewind', [cp.id], ctx);
+    expect(config.get('provider')).toBe('openai');
+    expect(config.get('model')).toBe('gpt-6-sol');
+    expect(messages.map(m => m.content).join('\n'))
+      .toContain("Model: `gpt-6-sol` (the checkpoint's `gpt-6-astra` is no longer offered)");
   });
 });

@@ -483,10 +483,18 @@ if (currentMigrationVersion < 1) {
   }
 }
 
-if (currentMigrationVersion < 4) {
-  // Vendor aliases below were removed from Codeep's curated catalogue after
-  // their replacements became available. Migrate only exact known aliases:
-  // OpenRouter/Ollama/custom model ids remain user-controlled.
+// Retired model ids: on EVERY load, not once. This sat inside
+// `currentMigrationVersion < 4` until 2026-09-23, and MIGRATION_VERSION had
+// been 4 since 2026-08-15 — so every RETIRED_MODEL_REPLACEMENTS entry added
+// after that (the GPT-5.5/5.4, Grok, DeepSeek and Gemini ones) reached only
+// fresh configs and profile loads, never an existing user's active model. The
+// lookup is exact and idempotent, it touches only ids a vendor retired or
+// rerouted (never OpenRouter/Ollama/custom ids, which the map does not key),
+// and it is what applyProfile and the macOS app already do on every load. The
+// one-shot rule above protects settings a user chooses; the ids in that map are
+// ones the vendor retired or reroutes, or that cannot work from Codeep (GPT-6
+// Astra's tool calls), so rewriting them again cannot undo a working choice.
+{
   const provider = config.get('provider');
   const model = config.get('model');
   const replacement = replacementModelFor(provider, model);

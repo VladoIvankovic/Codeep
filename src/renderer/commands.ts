@@ -36,7 +36,7 @@ import {
 import { setTelegramToken, clearTelegramToken, hasTelegramToken } from '../utils/telegramCredentials';
 import { getProjectContext } from '../utils/project';
 import { getCurrentVersion } from '../utils/update';
-import { getProviderList, getProvider, modelSupportsReasoningEffort, reasoningParamsFor, availableReasoningTiers, resolveReasoningTier, REASONING_TIERS, type ReasoningTier } from '../config/providers';
+import { getProviderList, getProvider, modelSupportsReasoningEffort, reasoningParamsFor, availableReasoningTiers, resolveReasoningTier, agentTurnReasoningNote, replacementModelFor, REASONING_TIERS, type ReasoningTier } from '../config/providers';
 import { setProjectContext } from '../api/index';
 import { AppExecutionContext, runSkill, runCommandChain } from './agentExecution';
 import { loadProjectIntelligence, saveProjectIntelligence, INTELLIGENCE_NOT_SAVED } from '../utils/projectIntelligence';
@@ -341,13 +341,14 @@ export async function handleCommand(
         if (sub === 'auto') {
           ctx.app.notify('Thinking effort: auto — each model uses its own default.');
         } else if (!supported) {
-          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 5, GPT-5.x or GPT-6, Gemini 3, DeepSeek V4.1 Flash, GLM-5.x, Kimi K3).`);
+          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 5.5, GPT-5.x or GPT-6, Gemini 3, DeepSeek V4, GLM-5.x, Kimi K3).`);
         } else {
           // Tell the user what THIS model will actually run (the tier may
           // collapse onto a level the model distinguishes, e.g. medium→high on Kimi K3).
           const resolved = resolveReasoningTier(providerId, model, sub as ReasoningTier);
           const note = resolved === sub ? '' : ` (${model} runs this as "${resolved}")`;
-          ctx.app.notify(`Thinking effort: ${sub}${note} — sending ${JSON.stringify(reasoningParamsFor(providerId, model, sub as ReasoningTier))}.`);
+          const agentNote = agentTurnReasoningNote(providerId, model);
+          ctx.app.notify(`Thinking effort: ${sub}${note} — sending ${JSON.stringify(reasoningParamsFor(providerId, model, sub as ReasoningTier))}.${agentNote ? ` ${agentNote}` : ''}`);
         }
         break;
       }
@@ -370,8 +371,10 @@ export async function handleCommand(
         tLines.push(`**Effective**  ${JSON.stringify(reasoningParamsFor(providerId, model, tier))}`);
       }
       if (supported) tLines.push(`**Available**  ${available.join(' · ')}`);
+      const agentNote = agentTurnReasoningNote(providerId, model);
+      if (agentNote) tLines.push(`**Agent turns**  reasoning off — ${agentNote}`);
       tLines.push('');
-      tLines.push('Sets how hard the model reasons. Each model offers only the levels it distinguishes (DeepSeek → high · max; Kimi K3 → low · high · max; Gemini → low · high; Opus/Sonnet & GPT-5.x → the full set). The setting is global and clamps to the active model, so it never sends a value the API rejects. `/effort` is an alias.');
+      tLines.push('Sets how hard the model reasons. Each model offers only the levels it distinguishes (DeepSeek & Kimi K3 → low · high · max; Gemini → low · medium · high; Opus/Sonnet & GPT-5.x/6 → the full set). The setting is global and clamps to the active model, so it never sends a value the API rejects. `/effort` is an alias.');
       ctx.app.addMessage({ role: 'system', content: tLines.join('\n') } as Message);
       break;
     }
@@ -1706,13 +1709,18 @@ Format: use headers per category, only include categories where you found issues
       ctx.app.setMessages(cp.messages);
       saveSession(ctx.sessionId, cp.messages, ctx.projectPath);
 
-      // Switch provider/model back to checkpoint state if different.
+      // Switch provider/model back to checkpoint state if different. A
+      // checkpoint predates any later retirement, so its model goes through the
+      // same map as a stored config (`gpt-6-astra` comes back as `gpt-6-sol`),
+      // looked up on the provider actually active after the switch.
       if (cp.provider && cp.provider !== getCurrentProvider().id) setProvider(cp.provider);
-      if (cp.model && cp.model !== (config.get('model') as string)) config.set('model', cp.model);
+      const cpModel = cp.model && (replacementModelFor(config.get('provider'), cp.model) ?? cp.model);
+      if (cpModel && cpModel !== (config.get('model') as string)) config.set('model', cpModel);
+      const movedNote = cpModel !== cp.model ? ` (the checkpoint's \`${cp.model}\` is no longer offered)` : '';
 
       ctx.app.addMessage({
         role: 'system',
-        content: `# Rewound to ${cp.name ? `**${cp.name}**` : `\`${cp.id}\``}\n\nRestored ${cp.messages.length} message${cp.messages.length === 1 ? '' : 's'} (was ${replacedCount}). Provider: \`${cp.provider}\` · Model: \`${cp.model}\`\n\n${buildRewindGitHint(cp)}`,
+        content: `# Rewound to ${cp.name ? `**${cp.name}**` : `\`${cp.id}\``}\n\nRestored ${cp.messages.length} message${cp.messages.length === 1 ? '' : 's'} (was ${replacedCount}). Provider: \`${cp.provider}\` · Model: \`${cpModel}\`${movedNote}\n\n${buildRewindGitHint(cp)}`,
       });
       break;
     }

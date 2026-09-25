@@ -40,7 +40,7 @@ import { basename, join } from 'path';
 import { homedir } from 'os';
 import { leadsOutsideProject } from './projectPaths.js';
 import { config } from '../config/index.js';
-import { getProvider } from '../config/providers.js';
+import { getProvider, replacementModelFor } from '../config/providers.js';
 import type { ToolCall } from './tools.js';
 
 export type PersonalityScope = 'builtin' | 'project' | 'global';
@@ -177,7 +177,12 @@ function exactModelPreference(preference: string | undefined): { providerId: str
   if (slash <= 0 || slash === value.length - 1) return null;
   const providerId = value.slice(0, slash).trim();
   const model = value.slice(slash + 1).trim();
-  return providerId && model ? { providerId, model } : null;
+  if (!providerId || !model) return null;
+  // A bot written before a vendor retired its model (or before Codeep stopped
+  // offering one, like `openai/gpt-6-astra`) names an id the picker no longer
+  // has, and the exact check below would make the whole bot unavailable. Map it
+  // the way the startup migration and applyProfile map a stored id.
+  return { providerId, model: replacementModelFor(providerId, model) ?? model };
 }
 
 /** Whether a structured bot's model field satisfies the portable v1 contract. */

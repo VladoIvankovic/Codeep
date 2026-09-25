@@ -22,7 +22,7 @@ import { config, getApiKey, Message, resolveBaseUrl } from '../config/index';
 import { loadProjectIntelligence, generateContextFromIntelligence } from './projectIntelligence';
 import { formatCommandIndex } from './commandIndex';
 import { syncProgress, generateProjectId } from './codeepCloud';
-import { getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, isNoApiKeyProvider, reasoningParamsFor, providerNoStreamWithTools, type ReasoningTier } from '../config/providers';
+import { getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, isNoApiKeyProvider, reasoningParamsFor, providerNoStreamWithTools, minResponseTokensFor, type ReasoningTier } from '../config/providers';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { formatToolDefinitions, getOpenAITools, getAnthropicTools, AdditionalToolDef } from './tools';
@@ -527,10 +527,17 @@ export async function agentChat(
     // Provider-level guard (OpenAI GPT-5+) OR model-level guard — Anthropic's
     // Fable 5 / Opus 4.7+ reject temperature with a 400; omission is safe.
     const tempParam = (requiresDefaultTemperature(providerId) || modelRejectsSamplingParams(model)) ? {} : { temperature: config.get('temperature') };
-    // Thinking-effort tier → provider-shaped param ({} for 'auto'/unsupported).
-    const reasoningParam = reasoningParamsFor(providerId, model, config.get('reasoningEffort') as ReasoningTier);
+    const tier = config.get('reasoningEffort') as ReasoningTier;
+    // Room for the answer after the thinking (Opus 5.5 thinks on every turn).
+    const responseBudget = Math.max(config.get('maxTokens'), 16384, minResponseTokensFor(model, tier));
     if (protocol === 'openai') {
-      const maxTok = getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384));
+      const openAITools = getOpenAITools(additionalTools, allowedTools);
+      // Thinking-effort tier → provider-shaped param ({} for 'auto'/unsupported).
+      // This request carries tools, which GPT-6 Sol/Luna on Chat Completions
+      // accept only at reasoning_effort "none"; told so, reasoningParamsFor
+      // sends that for them whatever the tier.
+      const openAIReasoning = reasoningParamsFor(providerId, model, tier, { tools: openAITools.length > 0 });
+      const maxTok = getEffectiveMaxTokens(providerId, responseBudget);
       const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };
       endpoint = `${baseUrl}/chat/completions`;
 
@@ -584,8 +591,8 @@ export async function agentChat(
 
       body = {
         model, messages: [{ role: 'system', content: systemPrompt }, ...messages],
-        tools: getOpenAITools(additionalTools, allowedTools), tool_choice: 'auto', stream: useStreaming,
-        ...tempParam, ...tokParam, ...reasoningParam,
+        tools: openAITools, tool_choice: 'auto', stream: useStreaming,
+        ...tempParam, ...tokParam, ...openAIReasoning,
         // Ask ALL OpenAI-compatible providers to emit a usage block in the
         // stream — without this most (DeepSeek/Kimi/Grok/Qwen/GLM/…) send no
         // usage on streamed responses and the whole turn records zero tokens.
@@ -614,7 +621,8 @@ export async function agentChat(
         system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' as const } }],
         messages,
         tools: cachedTools, stream: useStreaming,
-        ...tempParam, ...reasoningParam, max_tokens: getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384)),
+        ...tempParam, ...reasoningParamsFor(providerId, model, tier),
+        max_tokens: getEffectiveMaxTokens(providerId, responseBudget),
       };
     }
 
@@ -756,10 +764,14 @@ export async function agentChatFallback(
     // Provider-level guard (OpenAI GPT-5+) OR model-level guard — Anthropic's
     // Fable 5 / Opus 4.7+ reject temperature with a 400; omission is safe.
     const tempParam = (requiresDefaultTemperature(providerId) || modelRejectsSamplingParams(model)) ? {} : { temperature: config.get('temperature') };
+    const tier = config.get('reasoningEffort') as ReasoningTier;
     // Thinking-effort tier → provider-shaped param ({} for 'auto'/unsupported).
-    const reasoningParam = reasoningParamsFor(providerId, model, config.get('reasoningEffort') as ReasoningTier);
+    // No `tools` array goes out on this path — the tools are text in the
+    // prompt — so GPT-6 Sol/Luna keep the user's tier here.
+    const reasoningParam = reasoningParamsFor(providerId, model, tier);
+    const responseBudget = Math.max(config.get('maxTokens'), 16384, minResponseTokensFor(model, tier));
     if (protocol === 'openai') {
-      const maxTok = getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384));
+      const maxTok = getEffectiveMaxTokens(providerId, responseBudget);
       const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };
       endpoint = `${baseUrl}/chat/completions`;
       body = {
@@ -781,7 +793,7 @@ export async function agentChatFallback(
           ...messages,
         ],
         stream: Boolean(onChunk), ...tempParam, ...reasoningParam,
-        max_tokens: getEffectiveMaxTokens(providerId, Math.max(config.get('maxTokens'), 16384)),
+        max_tokens: getEffectiveMaxTokens(providerId, responseBudget),
       };
     }
 

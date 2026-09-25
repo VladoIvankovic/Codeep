@@ -23,7 +23,7 @@ import {
   sessionNameTaken,
 } from '../config/index.js';
 import { symlinkedCodeepNotice } from '../utils/projectPaths.js';
-import { getProviderList, getProvider } from '../config/providers.js';
+import { getProviderList, getProvider, replacementModelFor } from '../config/providers.js';
 import { telemetryCommand } from '../commands/core/telemetry.js';
 import { keysyncCommand } from '../commands/core/keysync.js';
 import { getProjectContext } from '../utils/project.js';
@@ -1534,21 +1534,26 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
 
       // If the checkpoint captured a different provider/model, switch back.
       // configOptionsChanged signals the client to refresh its dropdowns.
+      // A checkpoint predates any later retirement, so its model goes through
+      // the same map as a stored config (`gpt-6-astra` comes back as
+      // `gpt-6-sol`), looked up on the provider actually active after the switch.
       let providerChanged = false;
       if (cp.provider && cp.provider !== getCurrentProvider().id) {
         setProvider(cp.provider);
         providerChanged = true;
       }
-      if (cp.model && cp.model !== config.get('model')) {
-        config.set('model', cp.model);
+      const cpModel = cp.model && (replacementModelFor(config.get('provider'), cp.model) ?? cp.model);
+      if (cpModel && cpModel !== config.get('model')) {
+        config.set('model', cpModel);
         providerChanged = true;
       }
+      const movedNote = cpModel !== cp.model ? ` (the checkpoint's \`${cp.model}\` is no longer offered)` : '';
 
       const lines = [
         `## Rewound to ${cp.name ? `**${cp.name}**` : `\`${cp.id}\``}`,
         '',
         `Restored ${cp.messages.length} message${cp.messages.length === 1 ? '' : 's'} (was ${replacedCount}).`,
-        cp.provider && cp.model ? `Provider: \`${cp.provider}\` · Model: \`${cp.model}\`` : '',
+        cp.provider && cpModel ? `Provider: \`${cp.provider}\` · Model: \`${cpModel}\`${movedNote}` : '',
         '',
         buildRewindGitHint(cp),
       ].filter(Boolean);
