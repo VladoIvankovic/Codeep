@@ -91,8 +91,19 @@ const messages = [{ role: 'user' as const, content: 'Read a.txt and b.txt.' }];
 const onChunk = () => {};
 
 describe('routing', () => {
-  it('ships on Chat Completions: no setting, official URL, still /chat/completions', async () => {
+  // On since the owner's live run of 2026-09-26: no setting at the official
+  // URL means /responses, for Astra as for Sol.
+  it('ships on the Responses API: no setting, official URL, /responses for GPT-6 Sol and Astra', async () => {
     useModel('openai', 'gpt-6-sol', 'openai');
+    await agentChat(messages, 'system', onChunk);
+    useModel('openai', 'gpt-6-astra', 'openai');
+    await agentChat(messages, 'system', onChunk);
+    expect(requests.map(r => r.url)).toEqual(['https://api.openai.com/v1/responses', 'https://api.openai.com/v1/responses']);
+    expect(requests.map(r => r.body.model)).toEqual(['gpt-6-sol', 'gpt-6-astra']);
+  });
+
+  it('keeps the kill switch: openaiWireApi "chat" goes to /chat/completions', async () => {
+    useModel('openai', 'gpt-6-sol', 'openai', { openaiWireApi: 'chat' });
     await agentChat(messages, 'system', onChunk);
     expect(requests.map(r => r.url)).toEqual(['https://api.openai.com/v1/chat/completions']);
   });

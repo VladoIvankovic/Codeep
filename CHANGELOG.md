@@ -11,6 +11,55 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.6.0] — 2026-09-26
+
+> TL;DR — OpenAI agent turns now use the Responses API: GPT-6 Astra is back with tool calls, GPT-6 Sol and Luna reason while they work, and GPT-6 Sol is the new OpenAI default.
+
+3.5.0 had to work around GPT-6 on Chat Completions, the only OpenAI API Codeep
+spoke: Astra could not call tools there at all, and Sol and Luna could only
+with reasoning switched off. Codeep now talks to OpenAI's Responses API for
+agent turns. Before turning it on, it was checked against OpenAI with real
+requests: Astra calls tools, Sol reasons at `high` while calling two tools at
+once, and the reasoning Codeep hands back between tool calls is accepted.
+
+### Upgrade notes
+
+- **This reverses two 3.5.0 upgrade notes.** GPT-6 Sol and Luna no longer run
+  agent turns with reasoning off — `/thinking` applies to them again — and
+  **GPT-6 Astra is back** in the OpenAI picker. If 3.5.0 moved you from Astra
+  to Sol, you stay on Sol; pick Astra again with `/model` if you want it.
+- **The OpenAI default model is now GPT-6 Sol** ($2/$10). It applies when you
+  switch to OpenAI; a model you already picked is kept.
+- **Proxies stay on Chat Completions.** With `OPENAI_BASE_URL` set (Azure,
+  LiteLLM and the like) nothing changes, and there GPT-6 Astra still cannot
+  call tools — Codeep says so once instead of quietly falling back to text
+  tools.
+- **Kill switch, for this release:** `CODEEP_OPENAI_WIRE_API=chat` (or the
+  config key `openaiWireApi`) puts OpenAI agent turns back on Chat
+  Completions.
+
+### Added
+
+- **OpenAI Responses API for agent turns** on the official endpoint. Codeep
+  keeps its own history as before (`store: false`); the reasoning a model
+  produced is handed back to it within one run and never written to your
+  session files.
+- A cut-off reply now says it hit the output limit, and a reply that reached
+  it while still thinking tells you instead of ending silently.
+
+### Changed
+
+- Agent turns on OpenAI get at least 32K output tokens (64K at Max), because
+  reasoning counts toward that limit on the Responses API.
+
+### Internal
+
+- The requests Codeep makes to the Responses API are pinned by tests built from
+  recordings of the real exchange (`src/utils/__fixtures__/responses/recorded/`),
+  made with `scripts/record-responses-fixture.mjs` — a script the maintainer
+  runs with their own key, which asks before sending anything and never
+  stores the key.
+
 ## [3.5.0] — 2026-09-25
 
 > TL;DR — Claude Opus 5.5 is the new Anthropic default, Grok 4.7 and GPT-6 Sol and Luna arrive, DeepSeek V4 Pro is back, and saved settings on retired models now move to their replacements.

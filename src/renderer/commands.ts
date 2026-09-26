@@ -1729,7 +1729,7 @@ Format: use headers per category, only include categories where you found issues
 
       // Switch provider/model back to checkpoint state if different. A
       // checkpoint predates any later retirement, so its model goes through the
-      // same map as a stored config (`gpt-6-astra` comes back as `gpt-6-sol`),
+      // same map as a stored config (`gpt-5.5` comes back as `gpt-5.6-sol`),
       // looked up on the provider actually active after the switch.
       if (cp.provider && cp.provider !== getCurrentProvider().id) setProvider(cp.provider);
       const cpModel = cp.model && (replacementModelFor(config.get('provider'), cp.model) ?? cp.model);

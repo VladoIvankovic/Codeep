@@ -441,6 +441,9 @@ vi.mock('../config/providers', () => ({
   supportsNativeTools: vi.fn(() => true),
   getProviderBaseUrl: vi.fn(() => 'https://api.example.com'),
   getProviderAuthHeader: vi.fn(() => 'Bearer sk-test'),
+  // The one-time Astra-over-Chat-Completions notice; none of these runs is one.
+  chatCompletionsCannotCallTools: vi.fn(() => false),
+  agentToolsNote: vi.fn(() => null),
 }));
 
 vi.mock('./history', () => ({

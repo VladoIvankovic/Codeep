@@ -1,0 +1,72 @@
+{
+  "url": "https://api.openai.com/v1/responses",
+  "method": "POST",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "model": "gpt-6-sol",
+    "instructions": "You are a test harness. Use the read_file tool when asked to read a file. Reply in one short line.",
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": "Work out the smallest prime factor of 391, then use read_file to read the file p<that number>.txt and reply with the code word only."
+      },
+      {
+        "id": "rs_01869a298289b959016ab7bb3dbaa487d28d61f7a5fc0c1c02",
+        "type": "reasoning",
+        "content": [],
+        "encrypted_content": "gAAAAABqt7s9VKvi41BB6SPL6ZAe-5mN…[truncated 1240 chars]",
+        "summary": []
+      },
+      {
+        "id": "fc_01869a298289b959016ab7bb3dff5087d283f3f6d15c40e39b",
+        "type": "function_call",
+        "status": "completed",
+        "arguments": "{\"path\":\"p17.txt\"}",
+        "call_id": "call_2MyZkViEoidpHyIMgEscSvsd",
+        "name": "read_file"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_2MyZkViEoidpHyIMgEscSvsd",
+        "output": "The code word is HERON."
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "read_file",
+        "description": "Read the contents of a file. Use this to examine existing files.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Path to the file relative to project root"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        },
+        "strict": false
+      }
+    ],
+    "tool_choice": "auto",
+    "parallel_tool_calls": true,
+    "store": false,
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "reasoning": {
+      "effort": "high"
+    },
+    "max_output_tokens": 2048,
+    "stream": true,
+    "stream_options": {
+      "include_obfuscation": false
+    }
+  }
+}

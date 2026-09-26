@@ -632,18 +632,23 @@ model: z.ai/glm-5.3
   // A bot pinned before its model left the picker used to become unavailable:
   // the exact check found no such id. It now runs on the replacement, as a
   // stored config or a profile does.
-  it('keeps a bot pinned to a retired or withdrawn id, on its replacement', () => {
+  it('keeps a bot pinned to a retired id, on its replacement', () => {
     const current = { providerId: 'z.ai', model: 'glm-5.3', protocol: 'openai' as const };
     const bot = parsePersonalityMarkdown(`---
 codeep: custom-bot/v1
-model: openai/gpt-6-astra
+model: openai/gpt-5.5
 ---
 # Pinned
 `, 'pinned', 'global');
     expect(isPersonalityModelPreferenceValid(bot)).toBe(true);
     expect(isPersonalityAvailable(bot, process.cwd())).toBe(true);
     expect(resolvePersonalityRuntimeModel(bot, current)).toEqual({
-      providerId: 'openai', model: 'gpt-6-sol', protocol: 'openai',
+      providerId: 'openai', model: 'gpt-5.6-sol', protocol: 'openai',
+    });
+    // Offered again (Responses API, 2026-09-26): a bot pinned to Astra runs on it.
+    bot.modelPreference = 'openai/gpt-6-astra';
+    expect(resolvePersonalityRuntimeModel(bot, current)).toEqual({
+      providerId: 'openai', model: 'gpt-6-astra', protocol: 'openai',
     });
 
     bot.modelPreference = 'z.ai/glm-5-turbo';

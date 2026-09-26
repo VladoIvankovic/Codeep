@@ -1,0 +1,106 @@
+{
+  "note": "Combined from both owner-run recordings on 2026-09-26 (the second run, --only astra-reason,sol-reason, overwrote the first run's summary; this file restates both from the saved streams and the terminal output). No API key and no credential header is stored in this directory.",
+  "runs": [
+    {
+      "scenarios": [
+        "astra-auto",
+        "astra-high",
+        "sol-high-tools",
+        "luna-5.6"
+      ],
+      "requestsSent": 8
+    },
+    {
+      "scenarios": [
+        "astra-reason",
+        "sol-reason"
+      ],
+      "requestsSent": 5
+    }
+  ],
+  "a_replayed_reasoning_under_store_false": {
+    "astra-reason.2": "accepted (completed)",
+    "sol-reason.2": "accepted (completed)"
+  },
+  "b_followup_without_reasoning": {
+    "astra-reason.probe": "accepted (completed)",
+    "input_tokens_without": 158,
+    "input_tokens_with": 177
+  },
+  "c_astra_default_effort": {
+    "effort": "medium",
+    "context": "all_turns"
+  },
+  "c_echoed_by_sol": {
+    "effort": "high",
+    "context": "all_turns"
+  },
+  "d_usage_details": "cached_tokens, cache_write_tokens and reasoning_tokens present on all 13 responses",
+  "parallel_calls_in_one_response": 2,
+  "output_items_with_created_by": false,
+  "reasoning_tokens": {
+    "trivial prompts (first run, any effort)": 0,
+    "astra-reason.1": 17,
+    "sol-reason.1": 24
+  },
+  "second_run_summary_as_written": {
+    "requestsSent": 5,
+    "a_replayed_reasoning_under_store_false": [
+      {
+        "request": "astra-reason.2",
+        "outcome": "accepted (completed)"
+      },
+      {
+        "request": "sol-reason.2",
+        "outcome": "accepted (completed)"
+      }
+    ],
+    "b_followup_without_reasoning": {
+      "outcome": "accepted (completed)",
+      "input_tokens_without": 158,
+      "input_tokens_with": 177
+    },
+    "c_astra_default_effort": "astra-auto not run",
+    "c_echoed_by_sol": "sol-high-tools not run",
+    "d_usage_details": [
+      {
+        "request": "astra-reason.1",
+        "input_tokens_details": true,
+        "cached_tokens": true,
+        "cache_write_tokens": true,
+        "reasoning_tokens": true
+      },
+      {
+        "request": "astra-reason.2",
+        "input_tokens_details": true,
+        "cached_tokens": true,
+        "cache_write_tokens": true,
+        "reasoning_tokens": true
+      },
+      {
+        "request": "astra-reason.probe",
+        "input_tokens_details": true,
+        "cached_tokens": true,
+        "cache_write_tokens": true,
+        "reasoning_tokens": true
+      },
+      {
+        "request": "sol-reason.1",
+        "input_tokens_details": true,
+        "cached_tokens": true,
+        "cache_write_tokens": true,
+        "reasoning_tokens": true
+      },
+      {
+        "request": "sol-reason.2",
+        "input_tokens_details": true,
+        "cached_tokens": true,
+        "cache_write_tokens": true,
+        "reasoning_tokens": true
+      }
+    ],
+    "parallel_calls_in_one_response": 1,
+    "output_items_with_created_by": false,
+    "incomplete": []
+  }
+}

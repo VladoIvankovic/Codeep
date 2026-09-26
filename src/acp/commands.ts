@@ -1535,8 +1535,8 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       // If the checkpoint captured a different provider/model, switch back.
       // configOptionsChanged signals the client to refresh its dropdowns.
       // A checkpoint predates any later retirement, so its model goes through
-      // the same map as a stored config (`gpt-6-astra` comes back as
-      // `gpt-6-sol`), looked up on the provider actually active after the switch.
+      // the same map as a stored config (`gpt-5.5` comes back as
+      // `gpt-5.6-sol`), looked up on the provider actually active after the switch.
       let providerChanged = false;
       if (cp.provider && cp.provider !== getCurrentProvider().id) {
         setProvider(cp.provider);

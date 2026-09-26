@@ -178,10 +178,10 @@ function exactModelPreference(preference: string | undefined): { providerId: str
   const providerId = value.slice(0, slash).trim();
   const model = value.slice(slash + 1).trim();
   if (!providerId || !model) return null;
-  // A bot written before a vendor retired its model (or before Codeep stopped
-  // offering one, like `openai/gpt-6-astra`) names an id the picker no longer
-  // has, and the exact check below would make the whole bot unavailable. Map it
-  // the way the startup migration and applyProfile map a stored id.
+  // A bot written before a vendor retired its model (like `openai/gpt-5.5`)
+  // names an id the picker no longer has, and the exact check below would make
+  // the whole bot unavailable. Map it the way the startup migration and
+  // applyProfile map a stored id.
   return { providerId, model: replacementModelFor(providerId, model) ?? model };
 }
 

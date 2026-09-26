@@ -4,8 +4,10 @@
  * Why it exists: on Chat Completions GPT-6 Astra cannot call tools at all, and
  * GPT-6 Sol/Luna only with reasoning off. On `POST /v1/responses` they reason
  * and call tools together. Agent turns use it when openAIWireApi() says so —
- * which, as shipped, it does not (DEFAULT_OPENAI_WIRE_API is 'chat' until the
- * owner's live verification run).
+ * by default, for `openai` catalogue models at the official base URL
+ * (DEFAULT_OPENAI_WIRE_API is 'auto' since the owner's live verification run
+ * of 2026-09-26; the recordings in utils/__fixtures__/responses/recorded pin
+ * this file against what the API really sent).
  *
  * Stateless by design:
  *   - every request carries `store: false` (omitting it defaults to true) and

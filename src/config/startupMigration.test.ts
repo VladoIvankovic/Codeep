@@ -41,7 +41,6 @@ describe('stored model migration at startup', () => {
 
   it('applies the entries added after the gate closed', async () => {
     const cases: [string, string, string][] = [
-      ['openai', 'gpt-6-astra', 'gpt-6-sol'],
       ['z.ai', 'glm-5.2', 'glm-5.3'],
       ['google', 'gemini-3-flash-preview', 'gemini-3.6-flash'],
       ['openai', 'gpt-5.5', 'gpt-5.6-sol'],
@@ -73,8 +72,13 @@ describe('stored model migration at startup', () => {
     expect(config.get('model')).toBe('Qwen/Qwen3.5-397B-A17B');
   });
 
+  // GPT-6 Astra was moved to Sol here while Chat Completions was the only
+  // transport. It is offered again (Responses API, 2026-09-26), and this runs
+  // on every load: a leftover entry would undo the pick at every launch.
   it('leaves current, user-controlled and un-retired ids alone', async () => {
     const cases: [string, string][] = [
+      ['openai', 'gpt-6-astra'],
+      ['openai', 'gpt-6-sol'],
       ['openrouter', 'openai/gpt-6-astra'],
       ['deepseek', 'deepseek-v4-pro'],
       ['z.ai-api', 'glm-5.2'],

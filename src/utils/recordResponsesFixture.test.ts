@@ -14,11 +14,12 @@ import { join } from 'path';
 import { pathToFileURL } from 'url';
 import { PassThrough, Writable } from 'stream';
 
-interface Scenario { id: string; model: string; effort?: string; probe?: boolean }
+interface Scenario { id: string; model: string; effort?: string; probe?: boolean; optIn?: boolean }
 interface Recorder {
   API_URL: string;
   MAX_REQUESTS: number;
   SCENARIOS: Scenario[];
+  FAKE_FILES: Record<string, string>;
   parseArgs(argv: string[]): { dryRun: boolean; help: boolean; only: string[]; outDir: string; maxOutputTokens: number };
   planRequests(opts: { only: string[] }): { scenarios: Scenario[]; requests: number; models: string[] };
   buildRequestBody(o: { model: string; effort?: string; input: unknown[]; maxOutputTokens: number }): Record<string, unknown>;
@@ -94,8 +95,19 @@ describe('arguments and plan', () => {
     const ids = rec.SCENARIOS.map(s => s.id);
     for (let mask = 1; mask < 1 << ids.length; mask++) {
       const only = ids.filter((_, i) => mask & (1 << i));
-      expect(rec.planRequests({ only }).requests).toBeLessThanOrEqual(10);
+      let requests: number | null = null;
+      try { requests = rec.planRequests({ only }).requests; } catch (e) { expect(String(e)).toMatch(/the cap is 10/); }
+      if (requests !== null) expect(requests).toBeLessThanOrEqual(10);
     }
+  });
+
+  it('runs the reasoning scenarios only when they are named', () => {
+    const ids = (argv: string[]) => rec.planRequests(rec.parseArgs(argv)).scenarios.map(s => s.id);
+    expect(ids([])).not.toContain('astra-reason');
+    expect(ids([])).not.toContain('sol-reason');
+    const plan = rec.planRequests(rec.parseArgs(['--only', 'astra-reason,sol-reason']));
+    expect(plan.requests).toBe(5); // Astra: call, answer, answer without reasoning; Sol: call, answer
+    expect(rec.FAKE_FILES['p17.txt']).toMatch(/HERON/);
   });
 
   it('sends the transport\'s shape: stateless, strict:false, no sampling params', () => {

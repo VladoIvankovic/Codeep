@@ -1,0 +1,9 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "text/event-stream; charset=utf-8",
+    "openai-processing-ms": "753",
+    "openai-version": "2020-10-01",
+    "x-request-id": "req_cb6de2ac60ba49a9b873fed5c56bfb34"
+  }
+}

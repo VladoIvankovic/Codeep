@@ -61,6 +61,8 @@ const INSTRUCTIONS = 'You are a test harness. Use the read_file tool when asked 
 export const FAKE_FILES = {
   'notes.txt': 'The code word is PELICAN.',
   'todo.txt': '1. Water the plants.',
+  'p17.txt': 'The code word is HERON.',
+  'p23.txt': 'Wrong file: 23 is not the smallest prime factor of 391.',
 };
 
 export const READ_FILE_TOOL = {
@@ -84,12 +86,20 @@ export const SCENARIOS = [
   { id: 'astra-high', model: 'gpt-6-astra', effort: 'high', prompt: 'Use read_file to read notes.txt, then reply with the code word only.', probe: true },
   { id: 'sol-high-tools', model: 'gpt-6-sol', effort: 'high', prompt: 'Use read_file on notes.txt and on todo.txt — call both at once — then reply with the code word and the first todo, in one line.' },
   { id: 'luna-5.6', model: 'gpt-5.6-luna', effort: undefined, prompt: 'Use read_file to read notes.txt, then reply with the code word only.' },
+  // Opt-in (--only). The first run (2026-09-26) could not answer (a) or (b):
+  // with a prompt that needs no thought, every model — Astra and Sol at high
+  // included — spent 0 reasoning tokens, so there was no reasoning item to
+  // replay or to leave out. These make the model work something out before
+  // the call: 391 = 17 × 23, so the file to read is p17.txt.
+  { id: 'astra-reason', model: 'gpt-6-astra', effort: 'high', optIn: true, probe: true, prompt: 'Work out the smallest prime factor of 391, then use read_file to read the file p<that number>.txt and reply with the code word only.' },
+  { id: 'sol-reason', model: 'gpt-6-sol', effort: 'high', optIn: true, prompt: 'Work out the smallest prime factor of 391, then use read_file to read the file p<that number>.txt and reply with the code word only.' },
 ];
 
 const USAGE = `Usage: node scripts/record-responses-fixture.mjs [options]
 
   --dry-run                 print the plan and the first request bodies; send nothing
-  --only <id,id>            run only these scenarios (${SCENARIOS.map(s => s.id).join(', ')})
+  --only <id,id>            run only these scenarios (${SCENARIOS.map(s => s.id).join(', ')});
+                            astra-reason and sol-reason run only when named here
   --out <dir>               where to save (default: src/utils/__fixtures__/responses/recorded)
   --max-output-tokens <n>   per request, 16..32768 (default ${DEFAULT_MAX_OUTPUT_TOKENS})
   --help                    this text
@@ -99,7 +109,7 @@ Reads OPENAI_API_KEY from the environment. Asks y/N before sending.`;
 // ─── Arguments and plan ──────────────────────────────────────────────────────
 
 export function parseArgs(argv) {
-  const opts = { dryRun: false, help: false, only: SCENARIOS.map(s => s.id), outDir: DEFAULT_OUT_DIR, maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS };
+  const opts = { dryRun: false, help: false, only: SCENARIOS.filter(s => !s.optIn).map(s => s.id), outDir: DEFAULT_OUT_DIR, maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const value = () => {

@@ -271,25 +271,30 @@ describe('providers', () => {
   });
 
   describe('September 2026 models', () => {
-    it('offers GPT-6 Sol and Luna, not Astra, and keeps 5.6 Sol the default', () => {
+    // Agent turns go over the Responses API since the live run of 2026-09-26,
+    // where GPT-6 reasons and calls tools together — Astra included, which
+    // cannot call tools on Chat Completions at all.
+    it('offers all three GPT-6 models, with GPT-6 Sol the default', () => {
       const provider = getProvider('openai')!;
       const ids = provider.models.map(m => m.id);
+      expect(ids).toContain('gpt-6-astra');
       expect(ids).toContain('gpt-6-sol');
       expect(ids).toContain('gpt-6-luna');
-      // Astra cannot call tools on Chat Completions, Codeep's only OpenAI
-      // transport, so every agent turn on it fell back to text tools.
-      expect(ids).not.toContain('gpt-6-astra');
-      // 5.6 Sol is the newest model OpenAI documents with reasoning AND tools
-      // on Chat Completions.
-      expect(provider.defaultModel).toBe('gpt-5.6-sol');
-      // The picker says what happens to reasoning on agent turns.
+      expect(provider.defaultModel).toBe('gpt-6-sol');
+      // "Reasoning off" was the Chat Completions rule; the picker no longer
+      // says it of every agent turn (/thinking says it where it still holds).
       for (const id of ['gpt-6-sol', 'gpt-6-luna']) {
-        expect(provider.models.find(m => m.id === id)!.description, id).toMatch(/reasoning off/);
+        expect(provider.models.find(m => m.id === id)!.description, id).not.toMatch(/reasoning off/);
       }
+      // Through a proxy Astra's agent turns stay on Chat Completions, where it
+      // has no tool calls; the picker says so.
+      expect(provider.models.find(m => m.id === 'gpt-6-astra')!.description).toMatch(/Responses API only/);
     });
 
-    it('moves a stored Astra to Sol on openai only, and leaves OpenRouter alone', () => {
-      expect(replacementModelFor('openai', 'gpt-6-astra')).toBe('gpt-6-sol');
+    // The migration runs on every load: an entry for an offered id would move
+    // anyone who picks Astra straight back to Sol at the next launch.
+    it('no longer moves a stored Astra anywhere, on openai or OpenRouter', () => {
+      expect(replacementModelFor('openai', 'gpt-6-astra')).toBeUndefined();
       expect(replacementModelFor('openrouter', 'openai/gpt-6-astra')).toBeUndefined();
       expect(getProvider('openrouter')!.models.map(m => m.id)).toContain('openai/gpt-6-astra');
     });
@@ -387,10 +392,10 @@ describe('providers', () => {
   });
 
   describe('openai provider', () => {
-    it('should include the GPT-5.6 family with gpt-5.6-sol as default', () => {
+    it('should include the GPT-5.6 family, with gpt-6-sol as default', () => {
       const provider = getProvider('openai');
       expect(provider).not.toBeNull();
-      expect(provider!.defaultModel).toBe('gpt-5.6-sol');
+      expect(provider!.defaultModel).toBe('gpt-6-sol');
       const modelIds = provider!.models.map(m => m.id);
       expect(modelIds).toContain('gpt-5.6-sol');
       expect(modelIds).toContain('gpt-5.6-terra');

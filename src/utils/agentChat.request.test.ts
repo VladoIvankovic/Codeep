@@ -15,6 +15,9 @@ const cfg = vi.hoisted(() => ({ values: {} as Record<string, unknown> }));
 vi.mock('../config/index', () => ({
   config: { get: vi.fn((k: string) => cfg.values[k]) },
   getApiKey: vi.fn(() => 'sk-test'),
+  // Not OpenAI's own URL, so `openai` agent turns stay on Chat Completions
+  // under the shipped 'auto' switch — the OPENAI_BASE_URL-proxy case. The
+  // Responses wire is agentChat.responses.test.ts.
   resolveBaseUrl: vi.fn(() => 'https://api.example.test'),
   Message: {},
 }));

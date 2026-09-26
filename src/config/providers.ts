@@ -568,34 +568,38 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
         baseUrl: 'https://api.openai.com/v1',
         authHeader: 'Bearer',
         supportsNativeTools: true,
-        // Agent turns can go over the Responses API, where GPT-6 reasons AND
-        // calls tools. Off until the owner's live verification run: the
-        // switch (openAIWireSetting) ships as 'chat', so today this changes
-        // nothing on the wire.
+        // Agent turns go over the Responses API, where GPT-6 reasons AND calls
+        // tools — on by default since the owner's live run of 2026-09-26
+        // (DEFAULT_OPENAI_WIRE_API is 'auto'; openAIWireApi() decides per turn).
         responses: { dialect: 'openai' },
       },
     },
-    // Chat Completions is the OpenAI endpoint Codeep calls as shipped — the
-    // Responses transport is built but switched off (DEFAULT_OPENAI_WIRE_API)
-    // — and GPT-6 has a documented tool restriction there (developers.openai.com
-    // guides/latest-model and reasoning): Sol and Luna call tools only with
-    // reasoning_effort "none", and "Chat Completions does not support function
-    // calling with GPT-6 Astra" at all. So Astra is not offered until the
-    // Responses transport is switched on after live verification — stored
-    // configs move to Sol — and Sol and Luna run agent turns with reasoning off
-    // on the chat wire (see reasoningParamsFor).
+    // GPT-6 has a documented tool restriction on Chat Completions
+    // (developers.openai.com guides/latest-model and reasoning): Sol and Luna
+    // call tools only with reasoning_effort "none", and "Chat Completions does
+    // not support function calling with GPT-6 Astra" at all. Agent turns avoid
+    // it by going over the Responses API, which the live run of 2026-09-26
+    // confirmed (scripts/record-responses-fixture.mjs; recordings in
+    // utils/__fixtures__/responses/recorded): Astra called tools, Sol at effort
+    // high made two calls in parallel, and replayed reasoning was accepted
+    // under store:false. So Astra is offered again, and the default is GPT-6 Sol.
     //
-    // The default stays 5.6 Sol: it is the newest model OpenAI documents with
-    // reasoning AND tool calls on Chat Completions ("The Chat Completions
-    // examples use GPT-5.6 for compatibility" — function-calling guide).
+    // Chat Completions remains for an OPENAI_BASE_URL proxy and for the switch
+    // forced to 'chat'. There the old rules still hold, keyed to the wire:
+    // Sol/Luna agent turns send "none" (toolsForceReasoningOff, which /thinking
+    // reports) and Astra's agent turns fall back to text tools (a one-time
+    // notice says so — agentToolsNote). 5.6 Sol is the GPT that reasons with
+    // tools on either API ("The Chat Completions examples use GPT-5.6 for
+    // compatibility" — function-calling guide).
     models: [
-      { id: 'gpt-5.6-sol',   name: 'GPT-5.6 Sol',   description: 'Most capable GPT for coding & agentic work on Codeep\'s transport' },
-      { id: 'gpt-6-sol',     name: 'GPT-6 Sol',     description: 'GPT-6 at $2/$10, 1M context — agent turns run with reasoning off (tools need effort "none" here); /thinking applies to plain chat' },
-      { id: 'gpt-6-luna',    name: 'GPT-6 Luna',    description: 'Cheapest GPT-6 ($0.10/$0.50), 1M context — agent turns run with reasoning off, as for Sol' },
+      { id: 'gpt-6-astra',   name: 'GPT-6 Astra',   description: 'Frontier GPT-6 ($10/$50), 1M context — calls tools over the Responses API only; through a Chat Completions proxy, agent turns use text tools' },
+      { id: 'gpt-6-sol',     name: 'GPT-6 Sol',     description: 'GPT-6 at $2/$10, 1M context — reasons and calls tools together' },
+      { id: 'gpt-6-luna',    name: 'GPT-6 Luna',    description: 'Cheapest GPT-6 ($0.10/$0.50), 1M context' },
+      { id: 'gpt-5.6-sol',   name: 'GPT-5.6 Sol',   description: 'GPT-5.6 flagship ($4/$20) — reasons with tools on Chat Completions too, e.g. through a proxy' },
       { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', description: 'Balanced — GPT-5.5 quality at about half the price' },
       { id: 'gpt-5.6-luna',  name: 'GPT-5.6 Luna',  description: 'Fast and cheap — high-volume workloads' },
     ],
-    defaultModel: 'gpt-5.6-sol',
+    defaultModel: 'gpt-6-sol',
     defaultProtocol: 'openai',
     useMaxCompletionTokens: true,
     requiresDefaultTemperature: true,
@@ -800,13 +804,11 @@ const RETIRED_MODEL_REPLACEMENTS: Record<string, Record<string, string>> = {
     'gpt-5.5': 'gpt-5.6-sol',
     'gpt-5.4': 'gpt-5.6-terra',
     'gpt-5.4-mini': 'gpt-5.6-luna',
-    // Not retired by OpenAI. Astra cannot call tools on Chat Completions at all
-    // ("Chat Completions does not support function calling with GPT-6 Astra"),
-    // and agentChat turns a 400 on a tools request into the text-tool fallback,
-    // so every agent turn on it silently ran without native tools. Sol is the
-    // GPT-6 that can call tools here. Drop this entry once a Responses API
-    // transport exists and Astra is offered again.
-    'gpt-6-astra': 'gpt-6-sol',
+    // No gpt-6-astra entry. It moved Astra to Sol while Chat Completions was
+    // the only transport (Astra cannot call tools there); agent turns go over
+    // the Responses API since 2026-09-26 and Astra is offered again. The map
+    // runs on every load, so the entry would move anyone who picks Astra back
+    // to Sol. Configs it already moved stay on Sol — a valid model.
   },
   'kimi-api': {
     'kimi-k3-code': 'kimi-k3',
@@ -1132,14 +1134,19 @@ export type OpenAIWireSetting = 'auto' | 'chat' | 'responses';
 const OPENAI_WIRE_SETTINGS: readonly OpenAIWireSetting[] = ['auto', 'chat', 'responses'];
 
 /**
- * What an unset switch means. SHIPPED AS 'chat': the Responses transport stays
- * OFF until the owner's live verification run (scripts/record-responses-
- * fixture.mjs) settles the open questions in the design. Turning it on for
- * everyone is this one line — 'chat' → 'auto'. The config key is deliberately
- * absent from Conf's defaults (Conf writes defaults to disk), so the flip
- * reaches every existing install that never set the key.
+ * What an unset switch means: 'auto', since the owner's live verification run
+ * of 2026-09-26 (scripts/record-responses-fixture.mjs, recordings in
+ * utils/__fixtures__/responses/recorded) — GPT-6 Astra called tools, Sol at
+ * effort high called two in parallel, and replayed reasoning items were
+ * accepted under store:false. The config key is deliberately absent from
+ * Conf's defaults (Conf writes defaults to disk), so this reaches every
+ * existing install that never set the key.
+ *
+ * 'chat' stays a valid setting for one release, as the kill switch. An
+ * OPENAI_BASE_URL proxy stays on Chat Completions under 'auto' either way, so
+ * the chat-wire rules below (toolsForceReasoningOff, agentToolsNote) stay too.
  */
-export const DEFAULT_OPENAI_WIRE_API: OpenAIWireSetting = 'chat';
+export const DEFAULT_OPENAI_WIRE_API: OpenAIWireSetting = 'auto';
 
 /**
  * The effective switch: CODEEP_OPENAI_WIRE_API, then the config value, then
@@ -1222,11 +1229,13 @@ export function responsesMaxOutputTokens(configMaxTokens: number, tier: Reasonin
  * guides/latest-model). So a request that carries tools to them must send
  * "none", whatever /thinking says. Direct `openai` only: OpenRouter may reach
  * OpenAI through the Responses API, where the rule does not apply, and Astra
- * rejects "none" with a 400 (it is not offered on `openai` at all).
+ * rejects "none" with a 400 (and has no tool calls on Chat Completions at all
+ * — see agentToolsNote).
  *
- * Keyed to the WIRE: the rule is Chat Completions', so over Responses it never
- * applies and /thinking reaches agent turns. `wire` defaults to 'chat' — the
- * kill switch and OPENAI_BASE_URL proxies still send tools there.
+ * Keyed to the WIRE: the rule is Chat Completions', so over Responses — where
+ * `openai` agent turns go by default — it never applies and /thinking reaches
+ * agent turns. `wire` defaults to 'chat': OPENAI_BASE_URL proxies and the
+ * switch forced to 'chat' still send tools there.
  */
 export function toolsForceReasoningOff(providerId: string, model: string, wire: OpenAIWire = 'chat'): boolean {
   if (wire !== 'chat') return false;
@@ -1244,6 +1253,32 @@ export function toolsForceReasoningOff(providerId: string, model: string, wire: 
 export function agentTurnReasoningNote(providerId: string, model: string, wire: OpenAIWire = 'chat'): string | null {
   if (!toolsForceReasoningOff(providerId, model, wire)) return null;
   return `Agent turns on ${model} send reasoning_effort "none" whatever the tier — OpenAI's Chat Completions API lets GPT-6 Sol and Luna call tools only with reasoning off. The tier applies to plain chat.`;
+}
+
+/**
+ * GPT-6 Astra on Chat Completions: "Chat Completions does not support function
+ * calling with GPT-6 Astra" (developers.openai.com guides/latest-model). Over
+ * Responses — the default for `openai` at its official URL — it calls tools
+ * (live run, 2026-09-26). Through an OPENAI_BASE_URL proxy, or with the switch
+ * forced to 'chat', its agent turns stay on Chat Completions: the tools
+ * request comes back 400 and agentChat drops to the text-tool fallback, which
+ * works but used to happen without a word. Direct `openai` only, as for
+ * toolsForceReasoningOff; `wire` defaults to 'chat' likewise.
+ */
+export function chatCompletionsCannotCallTools(providerId: string, model: string, wire: OpenAIWire = 'chat'): boolean {
+  if (wire !== 'chat') return false;
+  if (providerId !== 'openai') return false;
+  return idMatches(canonicalModelId(model), 'gpt-6-astra');
+}
+
+/**
+ * The one-time notice runAgent gives when this model's agent turns cannot call
+ * tools natively on the wire they go to, or null. It names how to get native
+ * tool calls back, since each way out is a setting the user controls.
+ */
+export function agentToolsNote(providerId: string, model: string, wire: OpenAIWire = 'chat'): string | null {
+  if (!chatCompletionsCannotCallTools(providerId, model, wire)) return null;
+  return `${model} cannot call tools over Chat Completions, and its agent turns go there (an OPENAI_BASE_URL proxy, or openaiWireApi / CODEEP_OPENAI_WIRE_API set to "chat"), so they use Codeep's text tool format instead. For native tool calls use the official base URL with the switch on auto, set it to "responses" if your proxy serves /v1/responses, or pick GPT-6 Sol.`;
 }
 
 /**
@@ -1426,8 +1461,10 @@ export function reasoningParamsFor(
  * GLM-5.2 grades only high|max; Gemini via the OpenAI-compat layer has no max).
  * Always leads with 'auto'. `[]` for models with no graded knob.
  *
- * GPT-6 Sol/Luna list their full set: it is what they run on plain chat. Agent
- * turns send "none" regardless (toolsForceReasoningOff), and /thinking says so.
+ * GPT-6 Sol/Luna list their full set: plain chat and agent turns over the
+ * Responses API (the default) both take it. Only agent turns on Chat
+ * Completions — a proxy, or the switch forced to 'chat' — send "none"
+ * regardless (toolsForceReasoningOff), and /thinking says so there.
  *
  * Kept in lockstep with `reasoningParamsFor` (the providers-test asserts every
  * listed tier yields a DISTINCT param, so this can't silently drift). Mirrors

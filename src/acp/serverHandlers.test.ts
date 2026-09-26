@@ -170,12 +170,16 @@ describe('applyConfigOption', () => {
   });
 
   // An editor setting pinned before a retirement would otherwise bring back an
-  // id the picker no longer has for the whole running process — Astra's tool
-  // calls fail on Chat Completions, and the GLM plans refuse 5.2.
+  // id the picker no longer has for the whole running process — OpenAI retired
+  // GPT-5.5, and the GLM plans refuse 5.2.
   it('maps an editor-pinned retired model to its replacement', () => {
-    applyConfigOption('model', 'openai/gpt-6-astra');
+    applyConfigOption('model', 'openai/gpt-5.5');
     expect(config.get('provider')).toBe('openai');
-    expect(config.get('model')).toBe('gpt-6-sol');
+    expect(config.get('model')).toBe('gpt-5.6-sol');
+    // Offered again since agent turns go over the Responses API (2026-09-26):
+    // an editor pinned to Astra keeps it.
+    applyConfigOption('model', 'openai/gpt-6-astra');
+    expect(config.get('model')).toBe('gpt-6-astra');
 
     applyConfigOption('model', 'z.ai/glm-5.2');
     expect(config.get('model')).toBe('glm-5.3');

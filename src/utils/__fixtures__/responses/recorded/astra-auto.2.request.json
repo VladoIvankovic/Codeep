@@ -1,0 +1,62 @@
+{
+  "url": "https://api.openai.com/v1/responses",
+  "method": "POST",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "model": "gpt-6-astra",
+    "instructions": "You are a test harness. Use the read_file tool when asked to read a file. Reply in one short line.",
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": "Use read_file to read notes.txt, then reply with the code word only."
+      },
+      {
+        "id": "fc_012c705439a0fa89016ab7b4155f6887d2a36aed70814eba4a",
+        "type": "function_call",
+        "status": "completed",
+        "arguments": "{\"path\":\"notes.txt\"}",
+        "call_id": "call_zZJadOJxqKWYW44w767LUiCo",
+        "name": "read_file"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_zZJadOJxqKWYW44w767LUiCo",
+        "output": "The code word is PELICAN."
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "read_file",
+        "description": "Read the contents of a file. Use this to examine existing files.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Path to the file relative to project root"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        },
+        "strict": false
+      }
+    ],
+    "tool_choice": "auto",
+    "parallel_tool_calls": true,
+    "store": false,
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "max_output_tokens": 2048,
+    "stream": true,
+    "stream_options": {
+      "include_obfuscation": false
+    }
+  }
+}

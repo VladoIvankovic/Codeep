@@ -1,0 +1,78 @@
+{
+  "url": "https://api.openai.com/v1/responses",
+  "method": "POST",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "model": "gpt-6-sol",
+    "instructions": "You are a test harness. Use the read_file tool when asked to read a file. Reply in one short line.",
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": "Use read_file on notes.txt and on todo.txt — call both at once — then reply with the code word and the first todo, in one line."
+      },
+      {
+        "id": "fc_025cb3c2c5529141016ab7b41d87bc87d2a4659d2593686c93",
+        "type": "function_call",
+        "status": "completed",
+        "arguments": "{\"path\":\"notes.txt\"}",
+        "call_id": "call_NIG85k8uBizp2b0scokI0HAi",
+        "name": "read_file"
+      },
+      {
+        "id": "fc_025cb3c2c5529141016ab7b41d87cc87d282d8e17431b4ed04",
+        "type": "function_call",
+        "status": "completed",
+        "arguments": "{\"path\":\"todo.txt\"}",
+        "call_id": "call_bTAMFj4LPZOvFhbTISaiCRDs",
+        "name": "read_file"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_NIG85k8uBizp2b0scokI0HAi",
+        "output": "The code word is PELICAN."
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call_bTAMFj4LPZOvFhbTISaiCRDs",
+        "output": "1. Water the plants."
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "read_file",
+        "description": "Read the contents of a file. Use this to examine existing files.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Path to the file relative to project root"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        },
+        "strict": false
+      }
+    ],
+    "tool_choice": "auto",
+    "parallel_tool_calls": true,
+    "store": false,
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "reasoning": {
+      "effort": "high"
+    },
+    "max_output_tokens": 2048,
+    "stream": true,
+    "stream_options": {
+      "include_obfuscation": false
+    }
+  }
+}

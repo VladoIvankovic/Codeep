@@ -61,11 +61,15 @@ Last full review: **2026-09-23**
   - macOS applies it wherever a saved model is restored (`resolvedModel`,
     `migratedModel`), except on the dynamic catalogues, which `resolvedModel`
     returns untouched (see ModelScope under the Qwen entry below).
+  - A source must NOT be a model the provider offers: the map runs on every
+    load, so an entry for an offered id undoes the user's pick at each launch.
+    `providers.test.ts` checks it. (GPT-6 Astra's entry went for this reason
+    when it was offered again on 2026-09-26.)
   - A target must be a model the same provider offers, which
     `providers.test.ts` and `ProviderChoiceTests` check. On a plan that means
     the plan's allowlist, not the vendor's named replacement: bare `qwen3-max`
     → `qwen3.7-plus` on the Coding Plans, because 3.7 Max is not on them.
-  - Custom bots pinned to a migrated id (`model: openai/gpt-6-astra`) resolve
+  - Custom bots pinned to a migrated id (`model: openai/gpt-5.5`) resolve
     through the same map on both clients (CLI `exactModelPreference`, macOS
     `resolvePersonalityModelDeclaration`), so removing an id no longer makes
     those bots unavailable. An id that a curated provider neither offers nor
@@ -144,23 +148,67 @@ Last full review: **2026-09-23**
   input too: every Kimi surface writes at 1.0× in both clients. Before
   2026-09-23 neither client read the field, so written tokens billed as ordinary
   input (1.0×) and GPT estimates erred low.
-- **GPT-6 on Chat Completions cannot reason and call tools at once.** Codeep's
-  only OpenAI transport is Chat Completions. There, GPT-6 Sol and Luna support
-  function calling "only with `reasoning_effort` set to `none`", and Astra does
-  not support it at all ("Chat Completions does not support function calling
-  with GPT-6 Astra"; this was already in its 2026-09-03 launch notes). So:
-  - Sol and Luna are offered, and every request that carries tools sends
-    `reasoning_effort: "none"`, even on Auto (`/thinking auto` in the CLI), which
-    would run them at medium. Requests without `tools` keep the tier: plain
-    chat and the text-tool fallback in the CLI, Plan mode on macOS. The CLI's
-    `/thinking` and picker descriptions say so; on macOS, Settings and the
-    thinking menu do.
-  - Astra is **not** offered on `openai`. Stored `gpt-6-astra` migrates to
-    `gpt-6-sol` on `openai` only. OpenRouter's `openai/gpt-6-astra` is untouched,
-    since OpenRouter may call OpenAI's Responses API upstream.
-  - Revisit all of this when a Responses API transport exists, and drop the
-    Astra migration then. The default stays `gpt-5.6-sol`, the newest model
-    OpenAI documents with reasoning and tools together on Chat Completions.
+- **GPT-6 agent turns go over the Responses API** (`POST /v1/responses`) since
+  2026-09-26. On Chat Completions GPT-6 cannot reason and call tools at once:
+  Sol and Luna support function calling "only with `reasoning_effort` set to
+  `none`", and Astra does not support it at all ("Chat Completions does not
+  support function calling with GPT-6 Astra"; already in its 2026-09-03 launch
+  notes). The Responses transport (CLI `src/api/responses.ts`, stateless:
+  `store: false`, `include: ["reasoning.encrypted_content"]`, every turn's
+  output items replayed as returned) was verified live by the owner on
+  **2026-09-26**, with their own key (`scripts/record-responses-fixture.mjs`;
+  recordings in `src/utils/__fixtures__/responses/recorded`, key redacted,
+  `encrypted_content` truncated):
+  - GPT-6 Astra calls tools over Responses.
+  - GPT-6 Sol at effort high calls tools, two in parallel in one response. The
+    interim "tools force reasoning `none`" is not needed there.
+  - (a) Replayed reasoning items, with `encrypted_content`, are **accepted**
+    under `store: false` (Astra and Sol). Both reasoned first (17 and 24
+    reasoning tokens), called `read_file` on the right file, and answered after
+    the replay. OpenAI encrypts a reasoning item afresh for
+    `output_item.added` (a shorter token), `output_item.done` and
+    `response.completed`; the accepted replay used the `.done` one, which is
+    what the parser keeps. Whether the other two would be accepted is untested.
+  - (b) A follow-up **without** the reasoning items is accepted too (158 input
+    tokens against 177 with them). Replay is not enforced; Codeep keeps
+    replaying, as OpenAI's docs recommend.
+  - (c) Astra's default effort is `medium`, with `reasoning.context:
+    "all_turns"`, so `/thinking auto` runs it at medium.
+  - (d) `usage` carries `input_tokens_details.cached_tokens`,
+    `input_tokens_details.cache_write_tokens` and
+    `output_tokens_details.reasoning_tokens` on every model. The recorded
+    requests were too small for the cache, so the cache counts were 0: the
+    cache-read and cache-write paths are pinned for presence only.
+
+  What shipped on that basis:
+  - The switch's shipped default is `auto` (CLI `DEFAULT_OPENAI_WIRE_API`,
+    macOS `WireAPIPreference.shippedDefault`): `openai` catalogue models at the
+    official base URL use `/v1/responses`. `chat` (config `openaiWireApi` or
+    `CODEEP_OPENAI_WIRE_API` in the CLI) forces Chat Completions and stays for
+    one release as the kill switch.
+  - **Chat Completions remains for proxies.** An `OPENAI_BASE_URL` override
+    (Azure, LiteLLM, …) stays on Chat Completions unless the switch forces
+    `responses`, and so does a model id the catalogue does not list. There the
+    old rules still apply, keyed to the wire: Sol/Luna agent turns send
+    `reasoning_effort: "none"` (the CLI's `/thinking` says so), and Astra's
+    agent turns get a 400 on tools and fall back to the text tool format. The
+    CLI says that once per process at the start of a run (`agentToolsNote`),
+    and its picker description mentions it. The macOS app has no text-tool
+    fallback: there Astra's tool turns fail, and the model's thinking/tools
+    note (`ModelTuning.toolCallingNote`) says why. Its kill switch is
+    `defaults write dev.codeep.mac OpenAIWireAPI chat`. 5.6 Sol reasons with
+    tools on either API.
+  - Astra is back in the `openai` picker, and its `gpt-6-astra` → `gpt-6-sol`
+    migration is gone (see the rule above). Configs it already moved stay on
+    Sol. OpenRouter's `openai/gpt-6-astra` was never migrated.
+  - The OpenAI default model is `gpt-6-sol` (was `gpt-5.6-sol`). The global
+    fresh-install provider is unchanged.
+  - The recordings are the transport's regression tests against reality:
+    `src/api/responses.recorded.test.ts` parses them through the real parser,
+    and `src/utils/responsesLoop.test.ts` checks that the step-2 input the
+    agent loop builds from step 1's recorded stream matches the accepted step-2
+    request item for item. Re-record with the script when OpenAI changes the
+    event stream, and keep the key out of the files (a test checks).
 - **OpenAI `reasoning_effort: "max"`** is valid from GPT-5.6 on (changelog
   2026-07-09) and on every GPT-6 model. Our Max tier sends it there; GPT-5.5 and
   earlier still get `xhigh`.
@@ -282,7 +330,8 @@ Last full review: **2026-09-23**
 - Anthropic: <https://platform.claude.com/docs/en/models/overview>
   (the older /docs/en/docs/about-claude/… and docs.anthropic.com addresses redirect here)
 - Anthropic pricing (per-model cache ratios): <https://platform.claude.com/docs/en/about-claude/pricing>
-- OpenAI GPT-6 on Chat Completions: <https://developers.openai.com/api/docs/guides/latest-model>
+- OpenAI GPT-6 on Chat Completions (the tool restrictions), and why Responses:
+  <https://developers.openai.com/api/docs/guides/latest-model>
   and <https://developers.openai.com/api/docs/guides/reasoning>
 - OpenAI prompt caching (cache-write billing): <https://developers.openai.com/api/docs/guides/prompt-caching>
 - Google Gemini: <https://ai.google.dev/gemini-api/docs/latest-model> (now 3.8

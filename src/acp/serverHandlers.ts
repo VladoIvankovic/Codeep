@@ -165,7 +165,7 @@ export function applyConfigOption(
 ): void {
   if (configId === 'model' && typeof value === 'string') {
     // value is "providerId/modelId" — split and switch both. An editor setting
-    // pinned before a retirement (`openai/gpt-6-astra`) names an id the picker
+    // pinned before a retirement (`openai/gpt-5.5`) names an id the picker
     // no longer has, so the model goes through the same map as a stored config,
     // looked up on the provider actually active: setProvider refuses an unknown
     // id and leaves the old one in place.

@@ -1,9 +1,10 @@
 /**
  * Which endpoint an OpenAI-protocol agent turn goes to, and what the thinking
- * tier becomes there. The Responses API is switched OFF as shipped (the
- * default is 'chat' until the owner's live verification run); these pin that
- * default, the routing table behind the switch, and the wire-keyed interim
- * rules for GPT-6 Sol/Luna.
+ * tier becomes there. The Responses API is ON as shipped (the default is
+ * 'auto' since the owner's live verification run of 2026-09-26); these pin
+ * that default, the routing table behind the switch, and the wire-keyed rules
+ * that still hold on Chat Completions (proxies, the 'chat' kill switch) for
+ * GPT-6 Sol/Luna and Astra.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -18,6 +19,8 @@ import {
   reasoningParamsFor,
   toolsForceReasoningOff,
   agentTurnReasoningNote,
+  chatCompletionsCannotCallTools,
+  agentToolsNote,
 } from './providers';
 
 const OFFICIAL = 'https://api.openai.com/v1';
@@ -30,10 +33,21 @@ afterEach(() => {
 });
 
 describe('the shipped switch', () => {
-  it('is Chat Completions until the owner flips it after live verification', () => {
-    expect(DEFAULT_OPENAI_WIRE_API).toBe('chat');
-    expect(openAIWireSetting(undefined)).toBe('chat');
-    expect(openAIWireApi('openai', 'gpt-6-sol', OFFICIAL, openAIWireSetting(undefined))).toBe('chat');
+  // The owner's live run (2026-09-26, utils/__fixtures__/responses/recorded):
+  // Astra called tools over Responses, Sol at effort high called two at once,
+  // and replayed reasoning was accepted under store:false. So an unset switch
+  // now sends both GPT-6 models there — and nothing else changes: a proxy and
+  // the 'chat' kill switch stay on Chat Completions.
+  it('is auto: GPT-6 Sol and Astra go over Responses with nothing set', () => {
+    expect(DEFAULT_OPENAI_WIRE_API).toBe('auto');
+    expect(openAIWireSetting(undefined)).toBe('auto');
+    for (const model of ['gpt-6-sol', 'gpt-6-astra']) {
+      expect(openAIWireApi('openai', model, OFFICIAL, openAIWireSetting(undefined)), model).toBe('responses');
+      // The default parameter is the shipped default too.
+      expect(openAIWireApi('openai', model, OFFICIAL), model).toBe('responses');
+      expect(openAIWireApi('openai', model, 'https://litellm.internal/v1', openAIWireSetting(undefined)), model).toBe('chat');
+      expect(openAIWireApi('openai', model, OFFICIAL, openAIWireSetting('chat')), model).toBe('chat');
+    }
   });
 
   it('takes the config value, lets CODEEP_OPENAI_WIRE_API override it, and ignores nonsense', () => {
@@ -114,6 +128,20 @@ describe('the thinking tier over Responses', () => {
     expect(reasoningParamsFor('openai', 'gpt-6-sol', 'high', { tools: true, wire: 'chat' })).toEqual({ reasoning_effort: 'none' });
     expect(toolsForceReasoningOff('openai', 'gpt-6-luna', 'chat')).toBe(true);
     expect(agentTurnReasoningNote('openai', 'gpt-6-sol', 'chat')).toMatch(/reasoning_effort "none"/);
+  });
+
+  it('says Astra cannot call tools only where its agent turns really go over Chat Completions', () => {
+    expect(chatCompletionsCannotCallTools('openai', 'gpt-6-astra', 'chat')).toBe(true);
+    expect(agentToolsNote('openai', 'gpt-6-astra', 'chat')).toMatch(/cannot call tools over Chat Completions/);
+    expect(agentToolsNote('openai', 'gpt-6-astra', 'chat')).toMatch(/text tool format/);
+    // Over Responses it calls tools (live run, 2026-09-26).
+    expect(chatCompletionsCannotCallTools('openai', 'gpt-6-astra', 'responses')).toBe(false);
+    expect(agentToolsNote('openai', 'gpt-6-astra', 'responses')).toBeNull();
+    // Sol and Luna call tools on Chat Completions (with effort "none"); other
+    // GPTs call them anywhere; OpenRouter may reach Responses upstream.
+    for (const [provider, model] of [['openai', 'gpt-6-sol'], ['openai', 'gpt-6-luna'], ['openai', 'gpt-5.6-sol'], ['openrouter', 'openai/gpt-6-astra']]) {
+      expect(agentToolsNote(provider, model, 'chat'), `${provider} ${model}`).toBeNull();
+    }
   });
 
   it('never sends Astra "none", on either wire, at any tier', () => {

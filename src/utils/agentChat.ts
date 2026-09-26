@@ -477,10 +477,10 @@ export async function agentChat(
   if (!baseUrl) throw new Error(`Provider ${providerId} does not support ${protocol} protocol`);
 
   // Chat Completions or the Responses API for this turn. Responses only for
-  // `openai`, and only when the switch allows it — which, as shipped, it does
-  // not (see DEFAULT_OPENAI_WIRE_API); under 'auto', also only for a
-  // catalogue model at the official URL. The switch is read from config here
-  // directly: env over config, decided by the pure openAIWireApi().
+  // `openai`, and only when the switch allows it — under 'auto', the default
+  // since 2026-09-26 (see DEFAULT_OPENAI_WIRE_API), only for a catalogue model
+  // at the official URL; 'chat' is the kill switch. The switch is read from
+  // config here directly: env over config, decided by the pure openAIWireApi().
   const wire: OpenAIWire = protocol === 'openai'
     ? openAIWireApi(providerId, model, baseUrl, openAIWireSetting(config.get('openaiWireApi')))
     : 'chat';

@@ -117,8 +117,9 @@ export interface ConfigSchema {
    *  an OPENAI_BASE_URL proxy, and for model ids Codeep does not list).
    *  CODEEP_OPENAI_WIRE_API overrides it. Deliberately OPTIONAL and
    *  absent from the defaults below: Conf persists defaults, and an unset key
-   *  must follow DEFAULT_OPENAI_WIRE_API (config/providers.ts) — 'chat' until
-   *  the owner's live verification, then flipped there in one line. */
+   *  must follow DEFAULT_OPENAI_WIRE_API (config/providers.ts) — 'auto' since
+   *  the owner's live verification of 2026-09-26, which reached every install
+   *  that never set the key. 'chat' is the kill switch for one release. */
   openaiWireApi?: 'auto' | 'chat' | 'responses';
   customBaseUrl: string; // Base URL for the "custom" OpenAI-compatible provider (e.g. vLLM/LiteLLM: http://host:8000/v1)
   agentConfirmation: 'always' | 'dangerous' | 'never'; // Confirmation mode for agent actions
@@ -501,8 +502,10 @@ if (currentMigrationVersion < 1) {
 // rerouted (never OpenRouter/Ollama/custom ids, which the map does not key),
 // and it is what applyProfile and the macOS app already do on every load. The
 // one-shot rule above protects settings a user chooses; the ids in that map are
-// ones the vendor retired or reroutes, or that cannot work from Codeep (GPT-6
-// Astra's tool calls), so rewriting them again cannot undo a working choice.
+// ones the vendor retired or reroutes, so rewriting them again cannot undo a
+// working choice. The flip side: an id Codeep offers must never be in the map,
+// or picking it would be undone at the next launch — why GPT-6 Astra's entry
+// went when the Responses API made it work again (2026-09-26).
 {
   const provider = config.get('provider');
   const model = config.get('model');

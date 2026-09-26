@@ -998,10 +998,10 @@ describe('session names', () => {
     });
 
     it('restores its replacement and says so', async () => {
-      const res = await run(`/rewind ${checkpointOn('openai', 'gpt-6-astra').id}`);
+      const res = await run(`/rewind ${checkpointOn('openai', 'gpt-5.5').id}`);
       expect(config.get('provider')).toBe('openai');
-      expect(config.get('model')).toBe('gpt-6-sol');
-      expect(res.response).toContain("Model: `gpt-6-sol` (the checkpoint's `gpt-6-astra` is no longer offered)");
+      expect(config.get('model')).toBe('gpt-5.6-sol');
+      expect(res.response).toContain("Model: `gpt-5.6-sol` (the checkpoint's `gpt-5.5` is no longer offered)");
       expect(res.configOptionsChanged).toBe(true);
 
       await run(`/rewind ${checkpointOn('z.ai', 'glm-5.2').id}`);
@@ -1010,10 +1010,17 @@ describe('session names', () => {
 
     it('changes nothing when the replacement is already the model in use', async () => {
       config.set('provider', 'openai');
-      config.set('model', 'gpt-6-sol');
-      const res = await run(`/rewind ${checkpointOn('openai', 'gpt-6-astra').id}`);
-      expect(config.get('model')).toBe('gpt-6-sol');
+      config.set('model', 'gpt-5.6-sol');
+      const res = await run(`/rewind ${checkpointOn('openai', 'gpt-5.5').id}`);
+      expect(config.get('model')).toBe('gpt-5.6-sol');
       expect(res.configOptionsChanged).toBe(false);
+    });
+
+    // Offered again since agent turns go over the Responses API (2026-09-26).
+    it('restores a checkpoint on GPT-6 Astra as Astra', async () => {
+      const res = await run(`/rewind ${checkpointOn('openai', 'gpt-6-astra').id}`);
+      expect(config.get('model')).toBe('gpt-6-astra');
+      expect(res.response).not.toContain('no longer offered');
     });
   });
 

@@ -556,16 +556,30 @@ describe('/go', () => {
 
 // ─── /thinking on a model whose agent turns ignore the tier ─────────────────
 
-describe('/thinking on GPT-6 Sol', () => {
+describe('/thinking on GPT-6 Sol with the switch forced to Chat Completions', () => {
   const saved: Record<string, unknown> = {};
+  const envBefore = { wire: process.env.CODEEP_OPENAI_WIRE_API, base: process.env.OPENAI_BASE_URL };
   beforeEach(() => {
-    for (const k of ['provider', 'model', 'reasoningEffort'] as const) saved[k] = config.get(k);
+    for (const k of ['provider', 'model', 'protocol', 'reasoningEffort', 'openaiWireApi'] as const) saved[k] = config.get(k);
+    delete process.env.CODEEP_OPENAI_WIRE_API;
+    delete process.env.OPENAI_BASE_URL;
     config.set('provider', 'openai');
     config.set('model', 'gpt-6-sol');
+    config.set('protocol', 'openai');
     config.set('reasoningEffort', 'auto');
+    // The kill switch. Unset, agent turns go over the Responses API (the
+    // describe below), where none of this applies.
+    config.set('openaiWireApi', 'chat');
   });
   afterEach(() => {
-    for (const [k, v] of Object.entries(saved)) config.set(k as 'provider', v as string);
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) config.delete(k as 'openaiWireApi');
+      else config.set(k as 'provider', v as string);
+    }
+    if (envBefore.wire === undefined) delete process.env.CODEEP_OPENAI_WIRE_API;
+    else process.env.CODEEP_OPENAI_WIRE_API = envBefore.wire;
+    if (envBefore.base === undefined) delete process.env.OPENAI_BASE_URL;
+    else process.env.OPENAI_BASE_URL = envBefore.base;
   });
 
   // Chat Completions takes tools on GPT-6 Sol/Luna only at reasoning_effort
@@ -607,7 +621,9 @@ describe('/thinking on GPT-6 Sol over the Responses API', () => {
     config.set('model', 'gpt-6-sol');
     config.set('protocol', 'openai');
     config.set('reasoningEffort', 'auto');
-    config.set('openaiWireApi', 'auto');
+    // Unset, as on every install that never touched the switch: the shipped
+    // default (auto since 2026-09-26) is what these describe.
+    config.delete('openaiWireApi');
   });
   afterEach(() => {
     for (const [k, v] of Object.entries(saved)) {
@@ -670,18 +686,30 @@ describe('/rewind to a checkpoint on a model that is no longer offered', () => {
   });
 
   // A checkpoint predates any later retirement. Restoring its model verbatim
-  // put a withdrawn id (Astra, whose tool calls fail on Chat Completions) back
-  // on the running process until the next load migrated it.
+  // put a retired id (GPT-5.5) back on the running process until the next
+  // load migrated it.
   it('restores its replacement and says so', async () => {
+    const cp = createCheckpoint({
+      workspaceRoot: projectDir, sessionId: 'test-session', provider: 'openai', model: 'gpt-5.5',
+      messages: [{ role: 'user', content: 'earlier' }], filesTouched: [],
+    });
+    const { ctx, messages } = makeCtx(projectDir);
+    await handleCommand('rewind', [cp.id], ctx);
+    expect(config.get('provider')).toBe('openai');
+    expect(config.get('model')).toBe('gpt-5.6-sol');
+    expect(messages.map(m => m.content).join('\n'))
+      .toContain("Model: `gpt-5.6-sol` (the checkpoint's `gpt-5.5` is no longer offered)");
+  });
+
+  // Offered again since agent turns go over the Responses API (2026-09-26).
+  it('restores a checkpoint on GPT-6 Astra as Astra', async () => {
     const cp = createCheckpoint({
       workspaceRoot: projectDir, sessionId: 'test-session', provider: 'openai', model: 'gpt-6-astra',
       messages: [{ role: 'user', content: 'earlier' }], filesTouched: [],
     });
     const { ctx, messages } = makeCtx(projectDir);
     await handleCommand('rewind', [cp.id], ctx);
-    expect(config.get('provider')).toBe('openai');
-    expect(config.get('model')).toBe('gpt-6-sol');
-    expect(messages.map(m => m.content).join('\n'))
-      .toContain("Model: `gpt-6-sol` (the checkpoint's `gpt-6-astra` is no longer offered)");
+    expect(config.get('model')).toBe('gpt-6-astra');
+    expect(messages.map(m => m.content).join('\n')).not.toContain('no longer offered');
   });
 });

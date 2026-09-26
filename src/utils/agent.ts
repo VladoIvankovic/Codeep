@@ -73,8 +73,8 @@ import {
   ActionLog
 } from './tools';
 import { trustBearingWrite, forgetHooksDirectory, NO_CONFIRMER_REFUSAL, type TrustBearingWrite } from './toolExecution';
-import { config, Message } from '../config/index';
-import { supportsNativeTools } from '../config/providers';
+import { config, Message, agentOpenAIWire } from '../config/index';
+import { supportsNativeTools, chatCompletionsCannotCallTools, agentToolsNote } from '../config/providers';
 import { isMcpToolName, isVirtualMcpToolName } from './mcpRegistry';
 import { startSession, endSession, undoLastAction, undoAllActions, getCurrentSession, getRecentSessions, formatSession, ActionSession } from './history';
 import { runAllVerifications, formatErrorsForAgent, hasVerificationErrors, getVerificationSummary, failedChecks, checksNotRun, VerifyResult } from './verify';
@@ -82,6 +82,23 @@ import { gatherSmartContext, formatSmartContext, extractTargetFile } from './sma
 import { planTasks, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
 import { getTaskContextPrompt } from './taskContext';
 import { getLastUsage, getModelContextWindow } from './tokenTracker';
+
+// ─── Notices given once per process ───────────────────────────────────────────
+
+/**
+ * provider/model pairs already told, in this process, that their agent turns
+ * cannot call tools natively on the wire they go to (agentToolsNote). Once is
+ * enough: the notice is about a setting, and one repeated after every run is
+ * one the user learns to scroll past.
+ */
+const agentToolsNoticeShown = new Set<string>();
+
+/** Forget which models were already told about. Tests only: the set lives for
+ *  the process, so without this a test that expects the notice passes or
+ *  fails depending on which test ran before it. */
+export function resetAgentToolsNoticeForTests(): void {
+  agentToolsNoticeShown.clear();
+}
 
 // ─── Tool result truncation ───────────────────────────────────────────────────
 
@@ -571,6 +588,26 @@ export async function runAgent(
   const protocol = chatRuntime.protocol ?? config.get('protocol');
   const providerId = chatRuntime.providerId ?? config.get('provider');
   const useNativeTools = supportsNativeTools(providerId, protocol);
+
+  // GPT-6 Astra through a Chat Completions proxy, or with the switch forced to
+  // 'chat': its tools request comes back 400 and agentChat drops to the text
+  // tool format. That works, but it used to happen without a word — say so,
+  // once. The model the run talks to (a bot may have overridden it); the pure
+  // model check first, so the wire is only worked out for Astra.
+  {
+    const model = String(chatRuntime.model ?? config.get('model'));
+    const key = `${providerId}/${model}`;
+    if (protocol === 'openai' && chatCompletionsCannotCallTools(providerId, model) && !agentToolsNoticeShown.has(key)) {
+      const note = agentToolsNote(providerId, model, agentOpenAIWire(providerId, model, protocol));
+      // Recorded as told only when it was actually shown: a run with no
+      // onIteration (a sub-agent, a headless review) must not use up the one
+      // notice the user would have seen.
+      if (note && opts.onIteration) {
+        agentToolsNoticeShown.add(key);
+        opts.onIteration(0, `⚠ ${note}`);
+      }
+    }
+  }
 
   // Fetch the MCP tool catalog once per agent run. The session id keys into
   // mcpRegistry; if no MCP servers are registered (or mcpSessionId is unset,
