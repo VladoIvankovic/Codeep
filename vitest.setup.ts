@@ -141,6 +141,13 @@ for (const key of [
   'VSCODE_GIT_ASKPASS_EXTRA_ARGS', 'VSCODE_GIT_IPC_HANDLE',
 ]) delete process.env[key];
 
+// CODEEP_OPENAI_WIRE_API overrides the config's `openaiWireApi` switch, so a
+// developer who exported it (to try the Responses transport, say) would send
+// every OpenAI agent turn in the suite to /responses — and the Chat Completions
+// suites (agentChat.request.test.ts and the rest) would fail for a reason that
+// is not in the code. Tests that exercise the switch set it themselves.
+delete process.env.CODEEP_OPENAI_WIRE_API;
+
 /**
  * Remove them once the test file that got them is done.
  *

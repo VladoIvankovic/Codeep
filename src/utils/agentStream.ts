@@ -7,6 +7,7 @@
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { ToolCall } from './tools';
+import type { NativeTurn } from '../api/responses';
 import { logger } from './logger';
 
 // Debug logging helper - writes to log file when CODEEP_DEBUG=1
@@ -21,6 +22,12 @@ export interface AgentChatResponse {
   content: string;
   toolCalls: ToolCall[];
   usedNativeTools: boolean;
+  /** Responses API turns only: the output items to replay within this run,
+   *  and the calls the agent could not run but must still answer. */
+  native?: NativeTurn;
+  /** Responses API turns only: why the reply stopped short
+   *  ("max_output_tokens", "content_filter", …). */
+  incompleteReason?: string;
 }
 
 function tryParseJSON(str: string): Record<string, unknown> {

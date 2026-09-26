@@ -1,0 +1,30 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_ref","object":"response","created_at":1790000000,"status":"in_progress","model":"gpt-6-sol","output":[],"store":false,"reasoning":{"effort":"high","summary":null},"usage":null}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_ref","object":"response","created_at":1790000000,"status":"in_progress","model":"gpt-6-sol","output":[],"store":false,"reasoning":{"effort":"high","summary":null},"usage":null}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"msg_r","type":"message","status":"in_progress","role":"assistant","phase":"final_answer","content":[]}}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","sequence_number":3,"item_id":"msg_r","output_index":0,"content_index":0,"part":{"type":"refusal","refusal":""}}
+
+event: response.refusal.delta
+data: {"type":"response.refusal.delta","sequence_number":4,"item_id":"msg_r","output_index":0,"content_index":0,"delta":"I can't help "}
+
+event: response.refusal.delta
+data: {"type":"response.refusal.delta","sequence_number":5,"item_id":"msg_r","output_index":0,"content_index":0,"delta":"with that."}
+
+event: response.refusal.done
+data: {"type":"response.refusal.done","sequence_number":6,"item_id":"msg_r","output_index":0,"content_index":0,"refusal":"I can't help with that."}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","sequence_number":7,"item_id":"msg_r","output_index":0,"content_index":0,"part":{"type":"refusal","refusal":"I can't help with that."}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":8,"output_index":0,"item":{"id":"msg_r","type":"message","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"refusal","refusal":"I can't help with that."}]}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":9,"response":{"id":"resp_ref","object":"response","created_at":1790000000,"status":"completed","model":"gpt-6-sol","output":[{"id":"msg_r","type":"message","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"refusal","refusal":"I can't help with that."}]}],"store":false,"reasoning":{"effort":"high","summary":null},"usage":{"input_tokens":40,"output_tokens":8,"total_tokens":48}}}
+

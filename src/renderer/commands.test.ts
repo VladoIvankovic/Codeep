@@ -594,6 +594,68 @@ describe('/thinking on GPT-6 Sol', () => {
   });
 });
 
+// ─── /thinking when agent turns go over the Responses API ───────────────────
+
+describe('/thinking on GPT-6 Sol over the Responses API', () => {
+  const saved: Record<string, unknown> = {};
+  const envBefore = { wire: process.env.CODEEP_OPENAI_WIRE_API, base: process.env.OPENAI_BASE_URL };
+  beforeEach(() => {
+    for (const k of ['provider', 'model', 'protocol', 'reasoningEffort', 'openaiWireApi'] as const) saved[k] = config.get(k);
+    delete process.env.CODEEP_OPENAI_WIRE_API;
+    delete process.env.OPENAI_BASE_URL;
+    config.set('provider', 'openai');
+    config.set('model', 'gpt-6-sol');
+    config.set('protocol', 'openai');
+    config.set('reasoningEffort', 'auto');
+    config.set('openaiWireApi', 'auto');
+  });
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) config.delete(k as 'openaiWireApi');
+      else config.set(k as 'provider', v as string);
+    }
+    if (envBefore.wire === undefined) delete process.env.CODEEP_OPENAI_WIRE_API;
+    else process.env.CODEEP_OPENAI_WIRE_API = envBefore.wire;
+    if (envBefore.base === undefined) delete process.env.OPENAI_BASE_URL;
+    else process.env.OPENAI_BASE_URL = envBefore.base;
+  });
+
+  // Over Responses the Chat Completions "tools force effort none" rule does
+  // not apply, so /thinking must not claim agent turns run with reasoning off.
+  it('does not say agent turns run with reasoning off', async () => {
+    const { ctx, messages, notices } = makeCtx(projectDir);
+    await handleCommand('thinking', ['max'], ctx);
+    await handleCommand('thinking', [], ctx);
+    expect([...notices, ...messages.map(m => m.content)].join('\n')).not.toContain('Agent turns');
+  });
+
+  it('still says it for an OPENAI_BASE_URL proxy, which stays on Chat Completions', async () => {
+    process.env.OPENAI_BASE_URL = 'https://litellm.internal/v1';
+    const { ctx, notices } = makeCtx(projectDir);
+    await handleCommand('thinking', ['max'], ctx);
+    expect(notices.join('\n')).toContain('Agent turns on gpt-6-sol send reasoning_effort "none"');
+    // Everything goes over Chat Completions there, so only its shape is named.
+    expect(notices.join('\n')).toContain('sending {"reasoning_effort":"max"}.');
+    expect(notices.join('\n')).not.toContain('"reasoning":{');
+  });
+
+  // Agent turns carry the tier as `reasoning.effort` over Responses; plain
+  // chat still goes to Chat Completions as `reasoning_effort`.
+  it('names the Responses shape agent turns send when a tier is set', async () => {
+    const { ctx, notices } = makeCtx(projectDir);
+    await handleCommand('thinking', ['high'], ctx);
+    expect(notices.join('\n')).toContain('sending {"reasoning":{"effort":"high"}} on agent turns (Responses API), {"reasoning_effort":"high"} on plain chat.');
+  });
+
+  it('names it in the status too', async () => {
+    config.set('reasoningEffort', 'high');
+    const { ctx, messages } = makeCtx(projectDir);
+    await handleCommand('thinking', [], ctx);
+    expect(messages.map(m => m.content).join('\n'))
+      .toContain('**Effective**  {"reasoning":{"effort":"high"}} on agent turns (Responses API), {"reasoning_effort":"high"} on plain chat');
+  });
+});
+
 // ─── /rewind to a checkpoint on a model that is no longer offered ───────────
 
 describe('/rewind to a checkpoint on a model that is no longer offered', () => {

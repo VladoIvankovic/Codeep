@@ -117,6 +117,62 @@ function extractPartialToolParams(toolName: string, rawArgs: string): Record<str
   }
 }
 
+/**
+ * One function call's name and raw JSON arguments → a ToolCall, or the reason
+ * it cannot be run. Shared by the Chat Completions and Responses parsers so
+ * both apply the same name normalisation, truncated-JSON salvage and
+ * required-parameter checks.
+ */
+function parseFunctionCall(
+  name: string,
+  rawArguments: string | undefined,
+  id: string | undefined,
+  /** Reject arguments that parse to something other than a JSON object
+   *  (`null`, a number, an array). Off for Chat Completions, whose behaviour
+   *  predates this helper and is kept as it was. */
+  requireObject = false,
+): { call: ToolCall } | { reason: string } {
+  const toolName = normalizeToolName(name || '');
+  if (!toolName) return { reason: 'the call has no tool name' };
+
+  let parameters: Record<string, unknown> = {};
+  const rawArgs = rawArguments || '{}';
+
+  try {
+    parameters = JSON.parse(rawArgs);
+  } catch {
+    debug(`Failed to parse tool arguments for ${toolName}, attempting partial extraction...`);
+    debug('Raw args preview:', rawArgs.substring(0, 200));
+
+    const partialParams = extractPartialToolParams(toolName, rawArgs);
+    if (partialParams) {
+      debug(`Successfully extracted partial params for ${toolName}:`, Object.keys(partialParams));
+      parameters = partialParams;
+    } else {
+      debug(`Could not extract params, skipping ${toolName}`);
+      return { reason: 'its arguments are not valid JSON' };
+    }
+  }
+  if (requireObject && (parameters === null || typeof parameters !== 'object' || Array.isArray(parameters))) {
+    return { reason: 'its arguments are not a JSON object' };
+  }
+
+  if (toolName === 'write_file' && !parameters.path) {
+    debug(`Skipping write_file - missing path. Raw args:`, rawArgs.substring(0, 200));
+    return { reason: 'write_file needs "path"' };
+  }
+  if (toolName === 'read_file' && !parameters.path) {
+    debug(`Skipping read_file - missing path`);
+    return { reason: 'read_file needs "path"' };
+  }
+  if (toolName === 'edit_file' && (!parameters.path || parameters.old_text === undefined || parameters.new_text === undefined)) {
+    debug(`Skipping edit_file - missing required params`);
+    return { reason: 'edit_file needs "path", "old_text" and "new_text"' };
+  }
+
+  return { call: { tool: toolName, parameters, id } };
+}
+
 export function parseOpenAIToolCalls(toolCalls: unknown[]): ToolCall[] {
   if (!toolCalls || !Array.isArray(toolCalls)) return [];
 
@@ -124,45 +180,46 @@ export function parseOpenAIToolCalls(toolCalls: unknown[]): ToolCall[] {
 
   for (const tc of toolCalls) {
     const t = tc as { function?: { name?: string; arguments?: string }; id?: string };
-    const toolName = normalizeToolName(t.function?.name || '');
-    if (!toolName) continue;
-
-    let parameters: Record<string, unknown> = {};
-    const rawArgs = t.function?.arguments || '{}';
-
-    try {
-      parameters = JSON.parse(rawArgs);
-    } catch {
-      debug(`Failed to parse tool arguments for ${toolName}, attempting partial extraction...`);
-      debug('Raw args preview:', rawArgs.substring(0, 200));
-
-      const partialParams = extractPartialToolParams(toolName, rawArgs);
-      if (partialParams) {
-        debug(`Successfully extracted partial params for ${toolName}:`, Object.keys(partialParams));
-        parameters = partialParams;
-      } else {
-        debug(`Could not extract params, skipping ${toolName}`);
-        continue;
-      }
-    }
-
-    if (toolName === 'write_file' && !parameters.path) {
-      debug(`Skipping write_file - missing path. Raw args:`, rawArgs.substring(0, 200));
-      continue;
-    }
-    if (toolName === 'read_file' && !parameters.path) {
-      debug(`Skipping read_file - missing path`);
-      continue;
-    }
-    if (toolName === 'edit_file' && (!parameters.path || parameters.old_text === undefined || parameters.new_text === undefined)) {
-      debug(`Skipping edit_file - missing required params`);
-      continue;
-    }
-
-    parsed.push({ tool: toolName, parameters, id: t.id });
+    // A call that cannot be run is skipped here: Chat Completions replays
+    // Codeep's flat text history, so nothing is left waiting for an answer.
+    const result = parseFunctionCall(t.function?.name || '', t.function?.arguments, t.id);
+    if ('call' in result) parsed.push(result.call);
   }
 
   return parsed;
+}
+
+/** A Responses `function_call` the agent could not run, and why. */
+export interface RejectedFunctionCall {
+  call_id: string;
+  name: string;
+  reason: string;
+}
+
+/**
+ * Responses API function calls (`function_call` output items) → ToolCalls.
+ *
+ * Each ToolCall's `id` is the item's `call_id` — the id the matching
+ * `function_call_output` must carry — never the `fc_…` item id.
+ *
+ * Unlike parseOpenAIToolCalls, a call that cannot be run is RETURNED in
+ * `rejected` instead of silently dropped: on Responses the model's
+ * `function_call` item is replayed verbatim, and every one needs an answer
+ * with the same call_id, or the next request is a 400. The agent answers
+ * rejected calls with the reason, so the model can call again properly.
+ */
+export function parseResponsesFunctionCalls(
+  calls: ReadonlyArray<{ call_id: string; name: string; arguments: string }>,
+): { toolCalls: ToolCall[]; rejected: RejectedFunctionCall[] } {
+  const toolCalls: ToolCall[] = [];
+  const rejected: RejectedFunctionCall[] = [];
+  for (const c of calls ?? []) {
+    const result = parseFunctionCall(c.name || '', c.arguments, c.call_id, true);
+    if ('call' in result) toolCalls.push(result.call);
+    else rejected.push({ call_id: c.call_id, name: c.name || '(unnamed)', reason: result.reason });
+  }
+  debug('Responses function calls:', toolCalls.length, 'rejected:', rejected.length);
+  return { toolCalls, rejected };
 }
 
 export function parseAnthropicToolCalls(content: unknown[]): ToolCall[] {

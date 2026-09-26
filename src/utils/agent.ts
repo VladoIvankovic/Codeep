@@ -28,6 +28,8 @@ import {
 import { ApiError } from '../api/index';
 import type { AgentChatResponse } from './agentChat';
 import type { AgentChatRuntime } from './agentChat';
+import { ResponsesRunState } from './responsesRunState';
+import type { ToolOutputEntry } from '../api/responses';
 import { loadUserProfilePrompt } from './userProfile';
 import { beginAuditRun, endAuditRun, recordAuditEvent, describeAuditTarget } from './auditLog';
 import {
@@ -504,8 +506,13 @@ export async function runAgent(
   const personalityModel = activePersonality
     ? resolvePersonalityRuntimeModel(activePersonality, currentRuntime)
     : null;
+  // The run's Responses API replay table (used only when agentChat sends a
+  // turn over /responses). One per run: a delegated sub-agent calls runAgent
+  // again and gets its own, so no item crosses between parent and child.
+  const responsesState = new ResponsesRunState();
   const chatRuntime: AgentChatRuntime = {
     ...(personalityModel ?? currentRuntime),
+    responsesState,
   };
   
   // Start history session for undo support. Skipped for nested (delegated)
@@ -1320,10 +1327,21 @@ export async function runAgent(
       }
 
       let { content, toolCalls, usedNativeTools } = chatResponse;
+      // Responses API turns only (undefined on Chat Completions and Anthropic):
+      // the items to replay, and calls whose arguments did not parse. Those
+      // still need an answer, so a turn with only rejected calls is a tool
+      // turn, not a final reply.
+      const native = chatResponse.native;
+      const rejectedCalls = native?.rejectedCalls ?? [];
+      if (chatResponse.incompleteReason) {
+        opts.onIteration?.(iteration, chatResponse.incompleteReason === 'max_output_tokens'
+          ? '⚠ Reply cut off at the output-token limit (reasoning counts toward it) — raise maxTokens in /settings if this repeats'
+          : `⚠ Reply incomplete (${chatResponse.incompleteReason})`);
+      }
 
       // If native tools were used but no tool calls returned, try parsing text-based tool calls
       // This handles models that accept tools parameter but respond with text anyway
-      if (usedNativeTools && toolCalls.length === 0 && iteration === 1) {
+      if (usedNativeTools && toolCalls.length === 0 && rejectedCalls.length === 0 && iteration === 1) {
         const textToolCalls = parseToolCalls(content);
         if (textToolCalls.length > 0) {
           toolCalls = textToolCalls;
@@ -1341,7 +1359,7 @@ export async function runAgent(
       }
       
       // If no tool calls, check if model wants to continue or is really done
-      if (toolCalls.length === 0) {
+      if (toolCalls.length === 0 && rejectedCalls.length === 0) {
         debug(`No tool calls at iteration ${iteration}, content length: ${content.length}`);
         
         // Remove <think>...</think> tags from response (some models include thinking)
@@ -1372,7 +1390,9 @@ export async function runAgent(
         if (hasIncompleteWork) {
           debug('Model wants to continue, prompting for next action');
           incompleteWorkRetries++;
-          messages.push({ role: 'assistant', content: assistantHistoryText(content, toolCalls) });
+          const fragment: Message = { role: 'assistant', content: assistantHistoryText(content, toolCalls) };
+          messages.push(fragment);
+          if (native) responsesState.tagAssistant(fragment, native);
           messages.push({
             role: 'user',
             content: 'Continue. Execute the tool calls now.'
@@ -1391,20 +1411,29 @@ export async function runAgent(
       }
       
       // Add assistant response to history — never empty (see assistantHistoryText).
-      messages.push({ role: 'assistant', content: assistantHistoryText(content, toolCalls) });
+      const assistantTurn: Message = { role: 'assistant', content: assistantHistoryText(content, toolCalls) };
+      messages.push(assistantTurn);
+      if (native) responsesState.tagAssistant(assistantTurn, native);
       
       // Execute tool calls
       const toolResults: string[] = [];
+      // The same texts keyed by the call they answer — the Responses API
+      // sends them as function_call_output items instead of one user message.
+      const outputsByCall: ToolOutputEntry[] = [];
       
       for (const toolCall of toolCalls) {
         // Stop kills a running command at once; the calls queued behind it in
         // the same reply must not go ahead and write files after that.
         if (opts.abortSignal?.aborted) break;
         opts.onToolCall?.(toolCall);
+        const record = (text: string) => {
+          toolResults.push(text);
+          if (toolCall.id) outputsByCall.push({ call_id: toolCall.id, output: text });
+        };
 
         const { result: toolResult, refusal } = await dispatchToolCall(toolCall);
         if (refusal) {
-          toolResults.push(refusal);
+          record(refusal);
           continue;
         }
 
@@ -1416,36 +1445,36 @@ export async function runAgent(
           if (prevHash === contentKey) {
             duplicateWriteCount++;
             if (duplicateWriteCount >= 2) {
-              toolResults.push(`[WARNING] You have written the same content to \`${filePath}\` ${duplicateWriteCount + 1} times in a row. You are stuck in a loop. Stop and think differently — read the file to check its current state, then try a completely different approach.`);
+              record(`[WARNING] You have written the same content to \`${filePath}\` ${duplicateWriteCount + 1} times in a row. You are stuck in a loop. Stop and think differently — read the file to check its current state, then try a completely different approach.`);
               duplicateWriteCount = 0;
             } else {
-              toolResults.push(`Tool ${toolCall.tool} succeeded (note: same content as previous write to this file):\n${toolResult.output}`);
+              record(`Tool ${toolCall.tool} succeeded (note: same content as previous write to this file):\n${toolResult.output}`);
             }
           } else {
             duplicateWriteCount = 0;
             lastWriteHashByPath.set(filePath, contentKey);
             if (toolResult.success) {
-              toolResults.push(`Tool ${toolCall.tool} succeeded:\n${toolResult.output}`);
+              record(`Tool ${toolCall.tool} succeeded:\n${toolResult.output}`);
             } else {
-              toolResults.push(`Tool ${toolCall.tool} failed:\n${toolResult.error || 'Unknown error'}`);
+              record(`Tool ${toolCall.tool} failed:\n${toolResult.error || 'Unknown error'}`);
             }
           }
         // ── Duplicate read cache ────────────────────────────────────────────
         } else if (toolCall.tool === 'read_file' && toolResult.success) {
           const filePath = toolCall.parameters.path as string || '';
           if (readCache.has(filePath)) {
-            toolResults.push(`Tool read_file succeeded (cached — file unchanged since last read):\n${readCache.get(filePath)}`);
+            record(`Tool read_file succeeded (cached — file unchanged since last read):\n${readCache.get(filePath)}`);
           } else {
             const truncated = truncateToolResult(toolResult.output, toolCall.tool);
             readCache.set(filePath, truncated);
-            toolResults.push(`Tool read_file succeeded:\n${truncated}`);
+            record(`Tool read_file succeeded:\n${truncated}`);
           }
         // ── General truncation for other tools ─────────────────────────────
         } else if (toolResult.success) {
           const truncated = truncateToolResult(toolResult.output, toolCall.tool);
-          toolResults.push(`Tool ${toolCall.tool} succeeded:\n${truncated}`);
+          record(`Tool ${toolCall.tool} succeeded:\n${truncated}`);
         } else {
-          toolResults.push(`Tool ${toolCall.tool} failed:\n${toolResult.error || 'Unknown error'}`);
+          record(`Tool ${toolCall.tool} failed:\n${toolResult.error || 'Unknown error'}`);
         }
 
         // Invalidate read cache when files may have changed
@@ -1457,11 +1486,29 @@ export async function runAgent(
         }
       }
       
+      if (native) {
+        // Calls whose arguments did not parse still get an answer, so the
+        // model can call again properly; calls a Stop skipped are said to be
+        // unexecuted. On Chat Completions `native` is undefined and neither
+        // applies — its history is text, with nothing left waiting.
+        for (const rejected of rejectedCalls) {
+          const text = `Error: arguments for ${rejected.name} could not be parsed (${rejected.reason}). Call it again with valid JSON.`;
+          toolResults.push(text);
+          outputsByCall.push({ call_id: rejected.call_id, output: text });
+        }
+        const answered = new Set(outputsByCall.map(o => o.call_id));
+        for (const toolCall of toolCalls) {
+          if (toolCall.id && !answered.has(toolCall.id)) outputsByCall.push({ call_id: toolCall.id, output: '[not executed: run stopped]' });
+        }
+      }
+
       // Add tool results to messages
-      messages.push({
+      const toolResultsMessage: Message = {
         role: 'user',
         content: `Tool results:\n\n${toolResults.join('\n\n')}\n\nContinue with the task. Keep working until everything is fully done.`,
-      });
+      };
+      messages.push(toolResultsMessage);
+      if (native && outputsByCall.length > 0) responsesState.tagToolOutputs(toolResultsMessage, outputsByCall);
     }
     
     // Check if we hit max iterations — build partial summary from actions log
@@ -1623,32 +1670,46 @@ export async function runAgent(
             }
             
             // Execute fix tool calls
-            messages.push({ role: 'assistant', content: fixContent });
+            const fixTurn: Message = { role: 'assistant', content: fixContent };
+            messages.push(fixTurn);
+            if (fixResponse.native) responsesState.tagAssistant(fixTurn, fixResponse.native);
             const fixResults: string[] = [];
+            const fixOutputsByCall: ToolOutputEntry[] = [];
             
             for (const toolCall of fixToolCalls) {
               if (opts.abortSignal?.aborted) break;
               opts.onToolCall?.(toolCall);
+              const recordFix = (text: string) => {
+                fixResults.push(text);
+                if (toolCall.id) fixOutputsByCall.push({ call_id: toolCall.id, output: text });
+              };
 
               // Same gates as the main loop: a fix is still a tool call.
               const { result: toolResult, refusal } = await dispatchToolCall(toolCall);
               if (refusal) {
-                fixResults.push(refusal);
+                recordFix(refusal);
                 continue;
               }
 
               if (toolResult.success) {
                 const truncated = truncateToolResult(toolResult.output, toolCall.tool);
-                fixResults.push(`Tool ${toolCall.tool} succeeded:\n${truncated}`);
+                recordFix(`Tool ${toolCall.tool} succeeded:\n${truncated}`);
               } else {
-                fixResults.push(`Tool ${toolCall.tool} failed:\n${toolResult.error || 'Unknown error'}`);
+                recordFix(`Tool ${toolCall.tool} failed:\n${toolResult.error || 'Unknown error'}`);
+              }
+            }
+            if (fixResponse.native) {
+              for (const rejected of fixResponse.native.rejectedCalls) {
+                fixOutputsByCall.push({ call_id: rejected.call_id, output: `Error: arguments for ${rejected.name} could not be parsed (${rejected.reason}). Call it again with valid JSON.` });
               }
             }
             
-            messages.push({
+            const fixResultsMessage: Message = {
               role: 'user',
               content: `Fix results:\n\n${fixResults.join('\n\n')}\n\nContinue fixing if needed. Re-running verification...`,
-            });
+            };
+            messages.push(fixResultsMessage);
+            if (fixResponse.native && fixOutputsByCall.length > 0) responsesState.tagToolOutputs(fixResultsMessage, fixOutputsByCall);
             
           } catch (error) {
             // If fix attempt failed, continue to next attempt

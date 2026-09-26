@@ -18,6 +18,10 @@ export interface TokenUsage {
   /** Anthropic prompt caching: tokens read from cache on this call
    *  (billed at ~0.1× input rate — the big savings live here). */
   cacheReadTokens?: number;
+  /** Reasoning tokens the provider reports for this call (Responses API
+   *  `output_tokens_details.reasoning_tokens`). Informational: OpenAI already
+   *  counts them inside completionTokens, which is what gets billed. */
+  reasoningTokens?: number;
 }
 
 export interface SessionTokenStats {
@@ -47,6 +51,8 @@ interface TokenRecord {
   /** Anthropic prompt caching breakdown — see TokenUsage. */
   cacheCreationTokens?: number;
   cacheReadTokens?: number;
+  /** See TokenUsage.reasoningTokens — already inside completionTokens. */
+  reasoningTokens?: number;
   model: string;
   provider: string;
   /** Authoritative per-call USD from the provider (OpenRouter), if available. */
@@ -344,6 +350,7 @@ export function recordTokenUsage(
     totalTokens: usage.totalTokens,
     cacheCreationTokens: usage.cacheCreationTokens,
     cacheReadTokens: usage.cacheReadTokens,
+    ...(usage.reasoningTokens !== undefined ? { reasoningTokens: usage.reasoningTokens } : {}),
     model,
     provider,
     actualCostUsd,
@@ -387,6 +394,66 @@ export function extractOpenAIUsage(data: any): TokenUsage | null {
     };
   }
   return null;
+}
+
+/** A usage count as a non-negative integer, or 0 for anything else. */
+function usageCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/**
+ * Extract token usage from a Responses API response (the `response` object of
+ * `response.completed` / `response.incomplete`, or a non-streamed reply).
+ *
+ * Responses names the fields differently from Chat Completions —
+ * `input_tokens`/`output_tokens`, details under `input_tokens_details` /
+ * `output_tokens_details` — so extractOpenAIUsage, which reads `prompt_tokens`,
+ * would record zero for every turn. Semantics match it, though:
+ *   - `input_tokens` INCLUDES cached reads and cache writes (OpenAI's hit rate
+ *     is cached_tokens ÷ input_tokens), so they are surfaced, not added;
+ *   - `output_tokens` already counts reasoning on OpenAI, which is billed as
+ *     output — reasoning_tokens is carried for information only.
+ * Missing details count as 0: OpenAI's own `response.completed` example omits
+ * `input_tokens_details`. `usage: null` (created, failed) returns null.
+ *
+ * xAI (dialect 'xai', not switched on yet): its examples disagree on whether
+ * `output_tokens` includes reasoning. When `total_tokens` equals input +
+ * output + reasoning, reasoning was reported separately and is added to the
+ * completion count; otherwise `output_tokens` is taken as the whole. Chat-style
+ * `prompt_tokens`/`completion_tokens` keys are read if they appear instead.
+ */
+export function extractResponsesUsage(response: any, dialect: 'openai' | 'xai' = 'openai'): TokenUsage | null {
+  const usage = response?.usage;
+  if (!usage || typeof usage !== 'object') return null;
+  const input = usageCount(usage.input_tokens ?? usage.prompt_tokens);
+  const output = usageCount(usage.output_tokens ?? usage.completion_tokens);
+  const reasoning = usageCount(usage.output_tokens_details?.reasoning_tokens ?? usage.completion_tokens_details?.reasoning_tokens);
+  const cached = usageCount(usage.input_tokens_details?.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens);
+  const written = usageCount(usage.input_tokens_details?.cache_write_tokens ?? usage.prompt_tokens_details?.cache_write_tokens);
+  const reportedTotal = usageCount(usage.total_tokens);
+  let completion = output;
+  if (dialect === 'xai' && reasoning > 0 && reportedTotal === input + output + reasoning) {
+    completion = output + reasoning;
+  }
+  return {
+    promptTokens: input,
+    completionTokens: completion,
+    totalTokens: reportedTotal || input + completion,
+    cacheCreationTokens: written || undefined,
+    cacheReadTokens: cached || undefined,
+    reasoningTokens: reasoning || undefined,
+  };
+}
+
+/**
+ * The per-call USD a Responses reply reports itself, or undefined. xAI puts it
+ * in `usage.cost_in_usd_ticks` (1 tick = 1e-10 USD); OpenAI reports none, so
+ * its turns are priced from MODEL_PRICING like every other call.
+ */
+export function responsesReportedCost(response: any, dialect: 'openai' | 'xai' = 'openai'): number | undefined {
+  if (dialect !== 'xai') return undefined;
+  const ticks = response?.usage?.cost_in_usd_ticks;
+  return typeof ticks === 'number' && Number.isFinite(ticks) && ticks >= 0 ? ticks / 1e10 : undefined;
 }
 
 /**

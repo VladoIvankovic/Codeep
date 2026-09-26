@@ -1,0 +1,78 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_tools","object":"response","created_at":1790000000,"status":"in_progress","model":"gpt-6-sol","output":[],"store":false,"reasoning":{"effort":"high","summary":null},"usage":null}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_tools","object":"response","created_at":1790000000,"status":"in_progress","model":"gpt-6-sol","output":[],"store":false,"reasoning":{"effort":"high","summary":null},"usage":null}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"rs_1","type":"reasoning","summary":[],"encrypted_content":"ENC-partial"}}
+
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","sequence_number":3,"item_id":"rs_1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":4,"item_id":"rs_1","output_index":0,"summary_index":0,"delta":"Need both files."}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","sequence_number":5,"item_id":"rs_1","output_index":0,"summary_index":0,"text":"Need both files."}
+
+event: response.reasoning_summary_part.done
+data: {"type":"response.reasoning_summary_part.done","sequence_number":6,"item_id":"rs_1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"Need both files."}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":7,"output_index":0,"item":{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"Need both files."}],"encrypted_content":"ENC-full"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":8,"output_index":1,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","phase":"commentary","content":[]}}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","sequence_number":9,"item_id":"msg_1","output_index":1,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":10,"item_id":"msg_1","output_index":1,"content_index":0,"delta":"Reading ","logprobs":[]}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":11,"item_id":"msg_1","output_index":1,"content_index":0,"delta":"both files.","logprobs":[]}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","sequence_number":12,"item_id":"msg_1","output_index":1,"content_index":0,"text":"Reading both files.","logprobs":[]}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","sequence_number":13,"item_id":"msg_1","output_index":1,"content_index":0,"part":{"type":"output_text","text":"Reading both files.","annotations":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":14,"output_index":1,"item":{"id":"msg_1","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Reading both files.","annotations":[],"logprobs":[]}]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":15,"output_index":2,"item":{"id":"fc_1","type":"function_call","status":"in_progress","arguments":"","call_id":"call_A","name":"read_file"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":16,"output_index":3,"item":{"id":"fc_2","type":"function_call","status":"in_progress","arguments":"","call_id":"call_B","name":"read_file"}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":17,"item_id":"fc_1","output_index":2,"delta":"{\"path\":"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":18,"item_id":"fc_2","output_index":3,"delta":"{\"path\":"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":19,"item_id":"fc_1","output_index":2,"delta":"\"a.txt\"}"}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":20,"item_id":"fc_2","output_index":3,"delta":"\"b.txt\"}"}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","sequence_number":21,"item_id":"fc_2","output_index":3,"arguments":"{\"path\":\"b.txt\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":22,"output_index":3,"item":{"id":"fc_2","type":"function_call","status":"completed","arguments":"{\"path\":\"b.txt\"}","call_id":"call_B","name":"read_file"}}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","sequence_number":23,"item_id":"fc_1","output_index":2,"arguments":"{\"path\":\"a.txt\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":24,"output_index":2,"item":{"id":"fc_1","type":"function_call","status":"completed","arguments":"{\"path\":\"a.txt\"}","call_id":"call_A","name":"read_file"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":25,"response":{"id":"resp_tools","object":"response","created_at":1790000000,"status":"completed","model":"gpt-6-sol","output":[{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"Need both files."}],"encrypted_content":"ENC-full"},{"id":"msg_1","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Reading both files.","annotations":[],"logprobs":[]}]},{"id":"fc_1","type":"function_call","status":"completed","arguments":"{\"path\":\"a.txt\"}","call_id":"call_A","name":"read_file"},{"id":"fc_2","type":"function_call","status":"completed","arguments":"{\"path\":\"b.txt\"}","call_id":"call_B","name":"read_file"}],"store":false,"reasoning":{"effort":"high","summary":null},"usage":{"input_tokens":1200,"input_tokens_details":{"cached_tokens":1024,"cache_write_tokens":128},"output_tokens":300,"output_tokens_details":{"reasoning_tokens":200},"total_tokens":1500},"parallel_tool_calls":true,"tool_choice":"auto"}}
+

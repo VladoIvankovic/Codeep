@@ -32,11 +32,12 @@ import {
   deleteProfile,
   initializeAsProject,
   isManuallyInitializedProject,
+  agentOpenAIWire,
 } from '../config/index';
 import { setTelegramToken, clearTelegramToken, hasTelegramToken } from '../utils/telegramCredentials';
 import { getProjectContext } from '../utils/project';
 import { getCurrentVersion } from '../utils/update';
-import { getProviderList, getProvider, modelSupportsReasoningEffort, reasoningParamsFor, availableReasoningTiers, resolveReasoningTier, agentTurnReasoningNote, replacementModelFor, REASONING_TIERS, type ReasoningTier } from '../config/providers';
+import { getProviderList, getProvider, modelSupportsReasoningEffort, reasoningParamsFor, availableReasoningTiers, resolveReasoningTier, agentTurnReasoningNote, replacementModelFor, REASONING_TIERS, type ReasoningTier, type OpenAIWire } from '../config/providers';
 import { setProjectContext } from '../api/index';
 import { AppExecutionContext, runSkill, runCommandChain } from './agentExecution';
 import { loadProjectIntelligence, saveProjectIntelligence, INTELLIGENCE_NOT_SAVED } from '../utils/projectIntelligence';
@@ -58,6 +59,21 @@ export interface AppCommandContext extends AppExecutionContext {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * The thinking param /thinking says is sent for `tier`, in the shape each
+ * request actually carries. Plain chat is always Chat Completions
+ * (`reasoning_effort`); agent turns go over the Responses API when
+ * agentOpenAIWire() says so, and there the same tier is `reasoning.effort` —
+ * so then both are named, each with where it applies. On the chat wire it is
+ * the one Chat Completions object, as before.
+ */
+function reasoningParamsShown(providerId: string, model: string, tier: ReasoningTier, agentWire: OpenAIWire): string {
+  const chat = JSON.stringify(reasoningParamsFor(providerId, model, tier));
+  if (agentWire !== 'responses') return chat;
+  const responses = JSON.stringify(reasoningParamsFor(providerId, model, tier, { wire: 'responses' }));
+  return `${responses} on agent turns (Responses API), ${chat} on plain chat`;
+}
 
 /**
  * Returns a hint for an Ollama model name based on parameter count.
@@ -347,8 +363,9 @@ export async function handleCommand(
           // collapse onto a level the model distinguishes, e.g. medium→high on Kimi K3).
           const resolved = resolveReasoningTier(providerId, model, sub as ReasoningTier);
           const note = resolved === sub ? '' : ` (${model} runs this as "${resolved}")`;
-          const agentNote = agentTurnReasoningNote(providerId, model);
-          ctx.app.notify(`Thinking effort: ${sub}${note} — sending ${JSON.stringify(reasoningParamsFor(providerId, model, sub as ReasoningTier))}.${agentNote ? ` ${agentNote}` : ''}`);
+          const agentWire = agentOpenAIWire(providerId, model);
+          const agentNote = agentTurnReasoningNote(providerId, model, agentWire);
+          ctx.app.notify(`Thinking effort: ${sub}${note} — sending ${reasoningParamsShown(providerId, model, sub as ReasoningTier, agentWire)}.${agentNote ? ` ${agentNote}` : ''}`);
         }
         break;
       }
@@ -360,6 +377,7 @@ export async function handleCommand(
 
       const tier = (config.get('reasoningEffort') ?? 'auto') as ReasoningTier;
       const resolved = resolveReasoningTier(providerId, model, tier);
+      const agentWire = agentOpenAIWire(providerId, model);
       const tLines: string[] = ['## Thinking effort', ''];
       tLines.push(`**Tier**       ${tier}${resolved !== tier && tier !== 'auto' ? ` → ${resolved} on this model` : ''}`);
       tLines.push(`**Model**      ${model} (${providerId})`);
@@ -368,10 +386,10 @@ export async function handleCommand(
       } else if (tier === 'auto') {
         tLines.push('**Effective**  model default (no param sent)');
       } else {
-        tLines.push(`**Effective**  ${JSON.stringify(reasoningParamsFor(providerId, model, tier))}`);
+        tLines.push(`**Effective**  ${reasoningParamsShown(providerId, model, tier, agentWire)}`);
       }
       if (supported) tLines.push(`**Available**  ${available.join(' · ')}`);
-      const agentNote = agentTurnReasoningNote(providerId, model);
+      const agentNote = agentTurnReasoningNote(providerId, model, agentWire);
       if (agentNote) tLines.push(`**Agent turns**  reasoning off — ${agentNote}`);
       tLines.push('');
       tLines.push('Sets how hard the model reasons. Each model offers only the levels it distinguishes (DeepSeek & Kimi K3 → low · high · max; Gemini → low · medium · high; Opus/Sonnet & GPT-5.x/6 → the full set). The setting is global and clamps to the active model, so it never sends a value the API rejects. `/effort` is an alias.');

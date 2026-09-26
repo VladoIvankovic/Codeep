@@ -22,15 +22,17 @@ import { config, getApiKey, Message, resolveBaseUrl } from '../config/index';
 import { loadProjectIntelligence, generateContextFromIntelligence } from './projectIntelligence';
 import { formatCommandIndex } from './commandIndex';
 import { syncProgress, generateProjectId } from './codeepCloud';
-import { getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, isNoApiKeyProvider, reasoningParamsFor, providerNoStreamWithTools, minResponseTokensFor, type ReasoningTier } from '../config/providers';
-import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './tokenTracker';
-import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
+import { getProviderAuthHeader, supportsNativeTools, getEffectiveMaxTokens, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, isNoApiKeyProvider, reasoningParamsFor, providerNoStreamWithTools, minResponseTokensFor, openAIWireApi, openAIWireSetting, responsesDialectFor, responsesMaxOutputTokens, type ReasoningTier, type OpenAIWire } from '../config/providers';
+import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage, extractResponsesUsage, responsesReportedCost } from './tokenTracker';
+import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls, parseResponsesFunctionCalls } from './toolParsing';
 import { formatToolDefinitions, getOpenAITools, getAnthropicTools, AdditionalToolDef } from './tools';
 import { readOpenRouterPreferences } from './openrouterPrefs';
 import { checkApiRateLimit } from './ratelimit';
 import { ApiError } from '../api/index';
 import { handleStream, handleOpenAIAgentStream, handleAnthropicAgentStream } from './agentStream';
 import type { AgentChatResponse } from './agentStream';
+import { buildResponsesBody, buildResponsesInput, parseResponsesJSON, parseResponsesSSE, toResponsesTools, type NativeTurn, type ResponsesTurn } from '../api/responses';
+import type { ResponsesRunState } from './responsesRunState';
 import { logger } from './logger';
 
 export type { AgentChatResponse };
@@ -41,6 +43,9 @@ export interface AgentChatRuntime {
   model?: string;
   protocol?: 'openai' | 'anthropic';
   allowedToolNames?: string[];
+  /** The run's Responses replay table (one per runAgent call). Read only when
+   *  the turn goes over the Responses API; see utils/responsesRunState.ts. */
+  responsesState?: ResponsesRunState;
 }
 
 const debug = (...args: unknown[]) => {
@@ -471,6 +476,15 @@ export async function agentChat(
 
   if (!baseUrl) throw new Error(`Provider ${providerId} does not support ${protocol} protocol`);
 
+  // Chat Completions or the Responses API for this turn. Responses only for
+  // `openai`, and only when the switch allows it — which, as shipped, it does
+  // not (see DEFAULT_OPENAI_WIRE_API); under 'auto', also only for a
+  // catalogue model at the official URL. The switch is read from config here
+  // directly: env over config, decided by the pure openAIWireApi().
+  const wire: OpenAIWire = protocol === 'openai'
+    ? openAIWireApi(providerId, model, baseUrl, openAIWireSetting(config.get('openaiWireApi')))
+    : 'chat';
+
   // Global API throttle — same choke point as api/chat(). Checked here so
   // the agent loop (which can run up to agentMaxIterations iterations, each
   // with its own API call) is rate-limited even when it never routes
@@ -528,6 +542,14 @@ export async function agentChat(
     // Fable 5 / Opus 4.7+ reject temperature with a 400; omission is safe.
     const tempParam = (requiresDefaultTemperature(providerId) || modelRejectsSamplingParams(model)) ? {} : { temperature: config.get('temperature') };
     const tier = config.get('reasoningEffort') as ReasoningTier;
+    if (wire === 'responses') {
+      // Returns or throws — never falls through to Chat Completions, and the
+      // catch below does not turn its errors into the text-tool fallback.
+      return await agentChatResponses({
+        messages, systemPrompt, onChunk, additionalTools, allowedTools, runtime,
+        providerId, model, baseUrl, headers, tier, signal: controller.signal,
+      });
+    }
     // Room for the answer after the thinking (Opus 5.5 thinks on every turn).
     const responseBudget = Math.max(config.get('maxTokens'), 16384, minResponseTokensFor(model, tier));
     if (protocol === 'openai') {
@@ -690,7 +712,11 @@ export async function agentChat(
       if (isTimeout) throw new TimeoutError(`API request timed out after ${timeoutMs}ms`);
       throw error;
     }
-    if (err.message.includes('tools') || err.message.includes('function')) {
+    // Not on the Responses wire: there a 400 (a pairing slip, a schema the
+    // API refuses) must stop the run with the provider's message. Quietly
+    // re-sending over Chat Completions without tools would hide it and drop
+    // the run's reasoning.
+    if (wire !== 'responses' && (err.message.includes('tools') || err.message.includes('function'))) {
       return await agentChatFallback(messages, systemPrompt, onChunk, abortSignal, dynamicTimeout, additionalTools, runtime);
     }
     throw error;
@@ -698,6 +724,89 @@ export async function agentChat(
     clearTimeout(timeout);
     if (abortSignal) abortSignal.removeEventListener('abort', onExternalAbort);
   }
+}
+
+interface ResponsesCallArgs {
+  messages: Message[];
+  systemPrompt: string;
+  onChunk?: (chunk: string) => void;
+  additionalTools?: AdditionalToolDef[];
+  allowedTools?: ReadonlySet<string>;
+  runtime?: AgentChatRuntime;
+  providerId: string;
+  model: string;
+  baseUrl: string;
+  headers: Record<string, string>;
+  tier: ReasoningTier;
+  signal: AbortSignal;
+}
+
+/**
+ * One agent turn over the Responses API (`POST {baseUrl}/responses`).
+ *
+ * The input is rebuilt from the flat history plus the run's replay table, so
+ * earlier turns go back with their reasoning, `phase` and calls exactly as
+ * returned and every call is answered (api/responses.ts). /thinking applies
+ * as-is — the Chat Completions "tools force effort none" rule does not exist
+ * here — and `max_output_tokens`, which counts reasoning, is floored at 32K
+ * (64K at Max).
+ *
+ * An HTTP error is thrown as ApiError, never turned into the text-tool
+ * fallback. Called inside agentChat's try, so its timeout and abort handling
+ * apply unchanged.
+ */
+async function agentChatResponses(a: ResponsesCallArgs): Promise<AgentChatResponse> {
+  const dialect = responsesDialectFor(a.providerId) ?? 'openai';
+  const tools = toResponsesTools(getOpenAITools(a.additionalTools, a.allowedTools), dialect);
+  const reasoningParam = reasoningParamsFor(a.providerId, a.model, a.tier, { tools: tools.length > 0, wire: 'responses' });
+  const reasoning = reasoningParam.reasoning as { effort: string } | undefined;
+  const maxOutputTokens = getEffectiveMaxTokens(a.providerId, responsesMaxOutputTokens(Number(config.get('maxTokens')), a.tier));
+  const input = buildResponsesInput(a.messages, a.runtime?.responsesState, { providerId: a.providerId, model: a.model, dialect });
+  const stream = Boolean(a.onChunk);
+  // OpenAI rejects sampling params whenever effort is not "none"
+  // (requiresDefaultTemperature covers it); xAI keeps the configured value.
+  const temperature = dialect === 'xai' && !requiresDefaultTemperature(a.providerId) && !modelRejectsSamplingParams(a.model)
+    ? Number(config.get('temperature'))
+    : undefined;
+  const body = buildResponsesBody({
+    model: a.model, instructions: a.systemPrompt, input, tools, dialect, reasoning,
+    maxOutputTokens, stream, temperature,
+  });
+
+  const response = await fetch(`${a.baseUrl}/responses`, {
+    method: 'POST', headers: a.headers, body: JSON.stringify(body), signal: a.signal,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new ApiError(`API error: ${response.status} - ${errorText}`, response.status);
+  }
+
+  let turn: ResponsesTurn;
+  if (stream && response.body) {
+    turn = await parseResponsesSSE(response.body, { onChunk: a.onChunk });
+  } else {
+    turn = parseResponsesJSON(await response.json());
+  }
+
+  // Responses names its usage fields differently: extractOpenAIUsage, which
+  // reads prompt_tokens, would record every turn as zero.
+  const usage = extractResponsesUsage(turn.rawResponse, dialect);
+  if (usage) recordTokenUsage(usage, a.model, a.providerId, responsesReportedCost(turn.rawResponse, dialect));
+
+  const { toolCalls, rejected } = parseResponsesFunctionCalls(turn.functionCalls);
+  const content = turn.text || turn.refusal || '';
+  if (!stream && a.onChunk && content) a.onChunk(content);
+  const native: NativeTurn = { providerId: a.providerId, model: a.model, dialect, items: turn.items, rejectedCalls: rejected };
+  const extra = turn.incompleteReason ? { incompleteReason: turn.incompleteReason } : {};
+  debug('Responses turn:', turn.status, 'items', turn.items.length, 'calls', toolCalls.length, 'rejected', rejected.length);
+
+  // Same safety net as the Chat path: a model that wrote its tool calls as
+  // text. The native items still replay; the results go back as plain text.
+  if (toolCalls.length === 0 && rejected.length === 0 && content) {
+    const textToolCalls = parseToolCalls(content);
+    if (textToolCalls.length > 0) return { content, toolCalls: textToolCalls, usedNativeTools: false, native, ...extra };
+  }
+  return { content, toolCalls, usedNativeTools: true, native, ...extra };
 }
 
 /**

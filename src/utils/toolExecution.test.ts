@@ -741,3 +741,42 @@ describe("the harness's own temp directories", () => {
     }
   });
 });
+
+describe("the harness's environment", () => {
+  it('runs every test without an exported CODEEP_OPENAI_WIRE_API', () => {
+    // The switch overrides config, so a developer who exported it would send
+    // every OpenAI agent turn in the suite to /responses and fail the Chat
+    // Completions suites for a reason that is not in the code. Only a child
+    // run that starts with it exported can show the setup file removes it —
+    // the same arrangement as the test above.
+    const probe = mkdtempSync(join(tmpdir(), 'codeep-setup-probe-'));
+    const report = join(probe, 'wire.txt');
+    try {
+      writeFileSync(join(probe, 'probe.test.ts'), [
+        "import { it } from 'vitest';",
+        "import { writeFileSync } from 'node:fs';",
+        "it('writes down the wire switch it sees', () => {",
+        "  writeFileSync(process.env.PROBE_OUT!, process.env.CODEEP_OPENAI_WIRE_API ?? '<unset>');",
+        '});',
+      ].join('\n'));
+      writeFileSync(
+        join(probe, 'vitest.config.ts'),
+        `export default { test: { include: ['probe.test.ts'], setupFiles: [${JSON.stringify(join(process.cwd(), 'vitest.setup.ts'))}] } };\n`,
+      );
+
+      const env: NodeJS.ProcessEnv = { ...process.env, PROBE_OUT: report, CODEEP_OPENAI_WIRE_API: 'responses' };
+      delete env.CODEEP_CONFIG_DIR;
+      for (const name of Object.keys(env)) if (name.startsWith('VITEST')) delete env[name];
+
+      execFileSync(
+        process.execPath,
+        [join(process.cwd(), 'node_modules/vitest/vitest.mjs'), 'run', '--root', probe, '--config', join(probe, 'vitest.config.ts')],
+        { env, stdio: 'ignore', timeout: 120_000 },
+      );
+
+      expect(readFileSync(report, 'utf-8')).toBe('<unset>');
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+  });
+});

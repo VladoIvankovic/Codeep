@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlink
 import { join, dirname, resolve, sep, isAbsolute } from 'path';
 import { randomUUID } from 'crypto';
 
-import { PROVIDERS, getProvider, getProviderBaseUrl, replacementModelFor } from './providers';
+import { PROVIDERS, getProvider, getProviderBaseUrl, replacementModelFor, openAIWireApi, openAIWireSetting, type OpenAIWire } from './providers';
 import { logSession } from '../utils/logger';
 import { createSecureStorage, type SecureStorage } from '../utils/keychain';
 import { isSafeProjectDir, leadsOutsideProject, writeFileNoFollow, writeProjectFile } from '../utils/projectPaths';
@@ -111,6 +111,15 @@ export interface ConfigSchema {
   /** Override num_ctx (context window) for Ollama. 0 = auto-detect the model's
    *  real max via /api/show. Set a specific number to cap VRAM use. Default 0. */
   ollamaNumCtx: number;
+  /** Hidden switch for the endpoint OpenAI-protocol agent turns use:
+   *  'auto' (Responses API for `openai` catalogue models at its official
+   *  URL), 'chat' (Chat Completions everywhere) or 'responses' (also through
+   *  an OPENAI_BASE_URL proxy, and for model ids Codeep does not list).
+   *  CODEEP_OPENAI_WIRE_API overrides it. Deliberately OPTIONAL and
+   *  absent from the defaults below: Conf persists defaults, and an unset key
+   *  must follow DEFAULT_OPENAI_WIRE_API (config/providers.ts) — 'chat' until
+   *  the owner's live verification, then flipped there in one line. */
+  openaiWireApi?: 'auto' | 'chat' | 'responses';
   customBaseUrl: string; // Base URL for the "custom" OpenAI-compatible provider (e.g. vLLM/LiteLLM: http://host:8000/v1)
   agentConfirmation: 'always' | 'dangerous' | 'never'; // Confirmation mode for agent actions
   /** Also send a pending confirmation to Telegram, so it can be answered away
@@ -1017,6 +1026,23 @@ export function resolveBaseUrl(providerId: string, protocol: 'openai' | 'anthrop
     if (env) return env;
   }
   return fallback;
+}
+
+/**
+ * The endpoint an agent turn on this provider+model goes to right now — the
+ * switch (env over config), the provider's declared capability, the model's
+ * place in the catalogue and the resolved base URL, decided by
+ * openAIWireApi(). Anything not on the OpenAI
+ * protocol is 'chat' by definition. For display (/thinking); agentChat reads
+ * the same inputs itself.
+ */
+export function agentOpenAIWire(
+  providerId: string,
+  model: string,
+  protocol: 'openai' | 'anthropic' = config.get('protocol'),
+): OpenAIWire {
+  if (protocol !== 'openai') return 'chat';
+  return openAIWireApi(providerId, model, resolveBaseUrl(providerId, 'openai'), openAIWireSetting(config.get('openaiWireApi')));
 }
 
 // Re-export PROVIDERS for convenience

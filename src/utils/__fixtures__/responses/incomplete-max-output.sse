@@ -1,0 +1,21 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_inc","object":"response","created_at":1790000000,"status":"in_progress","model":"gpt-6-sol","output":[],"store":false,"reasoning":{"effort":"high","summary":null},"usage":null}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_inc","object":"response","created_at":1790000000,"status":"in_progress","model":"gpt-6-sol","output":[],"store":false,"reasoning":{"effort":"high","summary":null},"usage":null}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"rs_3","type":"reasoning","summary":[],"encrypted_content":"ENC-3-partial"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"id":"rs_3","type":"reasoning","summary":[],"encrypted_content":"ENC-3"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":4,"output_index":1,"item":{"id":"fc_3","type":"function_call","status":"in_progress","arguments":"","call_id":"call_X","name":"write_file"}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":5,"item_id":"fc_3","output_index":1,"delta":"{\"path\":\"out.txt\",\"content\":\"par"}
+
+event: response.incomplete
+data: {"type":"response.incomplete","sequence_number":6,"response":{"id":"resp_inc","object":"response","created_at":1790000000,"status":"incomplete","model":"gpt-6-sol","output":[{"id":"rs_3","type":"reasoning","summary":[],"encrypted_content":"ENC-3"},{"id":"fc_3","type":"function_call","status":"in_progress","arguments":"{\"path\":\"out.txt\",\"content\":\"par","call_id":"call_X","name":"write_file"}],"store":false,"reasoning":{"effort":"high","summary":null},"usage":{"input_tokens":800,"output_tokens":4096,"output_tokens_details":{"reasoning_tokens":4000},"total_tokens":4896},"incomplete_details":{"reason":"max_output_tokens"}}}
+

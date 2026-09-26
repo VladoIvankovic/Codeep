@@ -10,6 +10,10 @@ export interface ProviderConfig {
       baseUrl: string;
       authHeader: 'Bearer' | 'x-api-key';
       supportsNativeTools?: boolean; // Whether native tool calling works
+      /** The provider also serves a Responses API (`POST {baseUrl}/responses`)
+       *  in this dialect, and agent turns may use it — see openAIWireApi(). Only
+       *  a provider that declares it can ever leave /chat/completions. */
+      responses?: { dialect: 'openai' | 'xai' };
     };
     anthropic?: {
       baseUrl: string;
@@ -564,15 +568,22 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
         baseUrl: 'https://api.openai.com/v1',
         authHeader: 'Bearer',
         supportsNativeTools: true,
+        // Agent turns can go over the Responses API, where GPT-6 reasons AND
+        // calls tools. Off until the owner's live verification run: the
+        // switch (openAIWireSetting) ships as 'chat', so today this changes
+        // nothing on the wire.
+        responses: { dialect: 'openai' },
       },
     },
-    // Chat Completions is the only OpenAI endpoint Codeep calls, and GPT-6 has a
-    // documented tool restriction there (developers.openai.com guides/
-    // latest-model and reasoning): Sol and Luna call tools only with
+    // Chat Completions is the OpenAI endpoint Codeep calls as shipped — the
+    // Responses transport is built but switched off (DEFAULT_OPENAI_WIRE_API)
+    // — and GPT-6 has a documented tool restriction there (developers.openai.com
+    // guides/latest-model and reasoning): Sol and Luna call tools only with
     // reasoning_effort "none", and "Chat Completions does not support function
-    // calling with GPT-6 Astra" at all. So Astra is not offered until a
-    // Responses API transport exists — stored configs move to Sol — and Sol and
-    // Luna run agent turns with reasoning off (see reasoningParamsFor).
+    // calling with GPT-6 Astra" at all. So Astra is not offered until the
+    // Responses transport is switched on after live verification — stored
+    // configs move to Sol — and Sol and Luna run agent turns with reasoning off
+    // on the chat wire (see reasoningParamsFor).
     //
     // The default stays 5.6 Sol: it is the newest model OpenAI documents with
     // reasoning AND tool calls on Chat Completions ("The Chat Completions
@@ -1098,6 +1109,113 @@ function idMatches(id: string, prefix: string): boolean {
   return id === prefix || id.startsWith(`${prefix}-`);
 }
 
+// ---------------------------------------------------------------------------
+// Wire API for OpenAI-protocol agent turns: Chat Completions or Responses
+// ---------------------------------------------------------------------------
+
+/** The endpoint an OpenAI-protocol agent turn goes to. */
+export type OpenAIWire = 'chat' | 'responses';
+
+/**
+ * The user-facing switch (hidden config key `openaiWireApi`, env
+ * CODEEP_OPENAI_WIRE_API over it):
+ *   'auto'      — Responses for a catalogue model of a provider that declares
+ *                 it, at its official base URL; everything else on Chat
+ *                 Completions.
+ *   'chat'      — Chat Completions everywhere (the kill switch).
+ *   'responses' — also force Responses through an OPENAI_BASE_URL override
+ *                 (Azure, LiteLLM, other proxies) and for model ids the
+ *                 catalogue does not list, for providers that declare it.
+ */
+export type OpenAIWireSetting = 'auto' | 'chat' | 'responses';
+
+const OPENAI_WIRE_SETTINGS: readonly OpenAIWireSetting[] = ['auto', 'chat', 'responses'];
+
+/**
+ * What an unset switch means. SHIPPED AS 'chat': the Responses transport stays
+ * OFF until the owner's live verification run (scripts/record-responses-
+ * fixture.mjs) settles the open questions in the design. Turning it on for
+ * everyone is this one line — 'chat' → 'auto'. The config key is deliberately
+ * absent from Conf's defaults (Conf writes defaults to disk), so the flip
+ * reaches every existing install that never set the key.
+ */
+export const DEFAULT_OPENAI_WIRE_API: OpenAIWireSetting = 'chat';
+
+/**
+ * The effective switch: CODEEP_OPENAI_WIRE_API, then the config value, then
+ * DEFAULT_OPENAI_WIRE_API. An unrecognised value at either level is ignored
+ * rather than trusted, so a typo can never route traffic somewhere new.
+ */
+export function openAIWireSetting(configValue?: unknown): OpenAIWireSetting {
+  const env = (process.env.CODEEP_OPENAI_WIRE_API ?? '').trim().toLowerCase();
+  if ((OPENAI_WIRE_SETTINGS as readonly string[]).includes(env)) return env as OpenAIWireSetting;
+  const cfg = typeof configValue === 'string' ? configValue.trim().toLowerCase() : '';
+  if ((OPENAI_WIRE_SETTINGS as readonly string[]).includes(cfg)) return cfg as OpenAIWireSetting;
+  return DEFAULT_OPENAI_WIRE_API;
+}
+
+/**
+ * Whether `model` is one of the ids the provider's catalogue lists, exactly.
+ * The static list: for a provider with `dynamicModels` it is only the
+ * fallback shown before the live catalogue loads, so openAIWireApi() would
+ * need another source of truth before such a provider declares `responses`.
+ */
+function isCatalogueModel(providerId: string, model: string): boolean {
+  return PROVIDERS[providerId]?.models.some(m => m.id === model) ?? false;
+}
+
+/** The Responses dialect a provider declares, or null when it has none. */
+export function responsesDialectFor(providerId: string): 'openai' | 'xai' | null {
+  return PROVIDERS[providerId]?.protocols.openai?.responses?.dialect ?? null;
+}
+
+/**
+ * Which endpoint an agent turn for this provider goes to. 'responses' only
+ * when the switch is not 'chat', the provider declares a Responses dialect
+ * (today only `openai`; `grok` gets one after its own verification), and —
+ * unless the switch forces 'responses' — the model is in the provider's
+ * catalogue and the request goes to the provider's own base URL. A user-set
+ * override (Azure, LiteLLM, another proxy) and a model id Codeep does not
+ * list stay on Chat Completions. Everything else — other providers, custom,
+ * OpenRouter, Ollama — is 'chat', byte-for-byte as before.
+ *
+ * The catalogue check is there because an id can reach an agent turn without
+ * being offered: an old config or saved profile with `gpt-4.1` or `gpt-4o`
+ * (applyProfile keeps unknown ids), or the ACP set-model handler, which takes
+ * any id. Those are not reasoning models — GPT-4o's output limit (16,384) is
+ * below responsesMaxOutputTokens()'s 32K floor, and non-reasoning models are
+ * reported to reject the encrypted-reasoning `include` — and the Responses
+ * path has no text-tool fallback, so their agent turns would stop on a 400.
+ * Chat Completions is the path that works for them today. A dated snapshot
+ * of a listed model is not listed either, and stays there too.
+ */
+export function openAIWireApi(
+  providerId: string,
+  model: string,
+  resolvedBaseUrl: string | null | undefined,
+  setting: OpenAIWireSetting = DEFAULT_OPENAI_WIRE_API,
+): OpenAIWire {
+  if (setting === 'chat') return 'chat';
+  if (!responsesDialectFor(providerId)) return 'chat';
+  if (setting === 'responses') return 'responses';
+  if (!isCatalogueModel(providerId, model)) return 'chat';
+  const official = (PROVIDERS[providerId]?.protocols.openai?.baseUrl ?? '').replace(/\/+$/, '');
+  const resolved = (resolvedBaseUrl ?? '').trim().replace(/\/+$/, '');
+  return official !== '' && resolved === official ? 'responses' : 'chat';
+}
+
+/**
+ * The response budget for a Responses turn. `max_output_tokens` there counts
+ * reasoning too, and OpenAI advises reserving at least 25,000 tokens for
+ * reasoning plus output, so the floor is 32K — 64K at the Max tier — above
+ * whatever the config asks for.
+ */
+export function responsesMaxOutputTokens(configMaxTokens: number, tier: ReasoningTier | undefined): number {
+  const floor = tier === 'max' ? 65_536 : 32_768;
+  const configured = Number.isFinite(configMaxTokens) ? configMaxTokens : 0;
+  return Math.max(configured, floor);
+}
+
 /**
  * GPT-6 Sol and Luna on Chat Completions support function calling "only with
  * `reasoning_effort` set to `none`" (developers.openai.com models/gpt-6-sol,
@@ -1105,8 +1223,13 @@ function idMatches(id: string, prefix: string): boolean {
  * "none", whatever /thinking says. Direct `openai` only: OpenRouter may reach
  * OpenAI through the Responses API, where the rule does not apply, and Astra
  * rejects "none" with a 400 (it is not offered on `openai` at all).
+ *
+ * Keyed to the WIRE: the rule is Chat Completions', so over Responses it never
+ * applies and /thinking reaches agent turns. `wire` defaults to 'chat' — the
+ * kill switch and OPENAI_BASE_URL proxies still send tools there.
  */
-export function toolsForceReasoningOff(providerId: string, model: string): boolean {
+export function toolsForceReasoningOff(providerId: string, model: string, wire: OpenAIWire = 'chat'): boolean {
+  if (wire !== 'chat') return false;
   if (providerId !== 'openai') return false;
   const id = canonicalModelId(model);
   return idMatches(id, 'gpt-6-sol') || idMatches(id, 'gpt-6-luna');
@@ -1115,10 +1238,11 @@ export function toolsForceReasoningOff(providerId: string, model: string): boole
 /**
  * What /thinking must tell the user when the tier does not reach every request
  * for this model, or null. Without it the setting would look applied while
- * agent turns quietly ran at "none".
+ * agent turns quietly ran at "none". Null on the Responses wire, where agent
+ * turns take the tier like any other request.
  */
-export function agentTurnReasoningNote(providerId: string, model: string): string | null {
-  if (!toolsForceReasoningOff(providerId, model)) return null;
+export function agentTurnReasoningNote(providerId: string, model: string, wire: OpenAIWire = 'chat'): string | null {
+  if (!toolsForceReasoningOff(providerId, model, wire)) return null;
   return `Agent turns on ${model} send reasoning_effort "none" whatever the tier — OpenAI's Chat Completions API lets GPT-6 Sol and Luna call tools only with reasoning off. The tier applies to plain chat.`;
 }
 
@@ -1224,13 +1348,24 @@ export function reasoningParamsFor(
   providerId: string,
   model: string,
   tier: ReasoningTier,
-  /** The request carries a non-empty `tools` array (native tool calling). */
-  opts: { tools?: boolean } = {},
+  /** `tools`: the request carries a non-empty `tools` array (native tool
+   *  calling). `wire`: the endpoint it goes to — 'responses' returns the
+   *  Responses shape `{ reasoning: { effort } }` from the same per-model
+   *  ladder; omitted means Chat Completions, as before. */
+  opts: { tools?: boolean; wire?: OpenAIWire } = {},
 ): Record<string, unknown> {
+  const wire = opts.wire ?? 'chat';
+  if (wire === 'responses') {
+    // Same ladder, Responses shape. No tools-force-"none" here: that is a Chat
+    // Completions restriction, and GPT-6 Astra would 400 on "none" anyway.
+    const chatShaped = reasoningParamsFor(providerId, model, tier, { tools: false });
+    const effort = chatShaped.reasoning_effort;
+    return typeof effort === 'string' ? { reasoning: { effort } } : {};
+  }
   // Before the 'auto' return on purpose: auto sends nothing, GPT-6 Sol/Luna then
   // run at their default "medium", and that is exactly the combination OpenAI
   // documents as unable to call tools on Chat Completions.
-  if (opts.tools && toolsForceReasoningOff(providerId, model)) return { reasoning_effort: 'none' };
+  if (opts.tools && toolsForceReasoningOff(providerId, model, wire)) return { reasoning_effort: 'none' };
   // 'auto', or any unexpected value from an older/garbled config, → no param.
   // (Guards against ever emitting e.g. `effort: undefined`, which could 400.)
   if (tier === 'auto' || !REASONING_TIERS.includes(tier)) return {};

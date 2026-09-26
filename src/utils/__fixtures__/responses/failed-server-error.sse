@@ -1,0 +1,9 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_fail","object":"response","created_at":1790000000,"status":"in_progress","model":"gpt-6-sol","output":[],"store":false,"reasoning":{"effort":"high","summary":null},"usage":null}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_fail","object":"response","created_at":1790000000,"status":"in_progress","model":"gpt-6-sol","output":[],"store":false,"reasoning":{"effort":"high","summary":null},"usage":null}}
+
+event: response.failed
+data: {"type":"response.failed","sequence_number":2,"response":{"id":"resp_fail","object":"response","created_at":1790000000,"status":"failed","model":"gpt-6-sol","output":[],"store":false,"reasoning":{"effort":"high","summary":null},"usage":null,"error":{"code":"server_error","message":"The server had an error while processing your request."}}}
+
