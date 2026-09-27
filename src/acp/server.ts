@@ -25,7 +25,7 @@ import {
 import { runAgentSession } from './session.js';
 import { loadCustomCommands } from '../utils/customCommands.js';
 import { registerSessionServers, disposeAllSessions as disposeAllMcpSessions } from '../utils/mcpRegistry.js';
-import { selectSessionMcpServers } from '../utils/mcpConfig.js';
+import { selectSessionMcpServers, shadowedServerNotice } from '../utils/mcpConfig.js';
 import { handleMcpSamplingRequest } from '../utils/mcpSamplingBridge.js';
 import { executeCommandAsync, validateCommandAsync, commandEnv } from '../utils/shell.js';
 import { checkCommandRateLimit } from '../utils/ratelimit.js';
@@ -998,7 +998,12 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
     // (same gate the TUI prompts for at startup). ACP-provided servers are
     // the editor's own config and global ~/.codeep entries are the user's —
     // both spawn unconditionally. /mcp in commands.ts selects the same way.
-    const { servers: merged, skipped } = selectSessionMcpServers(cwd, { fromClient: acpServers });
+    const { servers: merged, skipped, shadowed } = selectSessionMcpServers(cwd, { fromClient: acpServers });
+    // A trusted workspace entry named like a global server does not start:
+    // the global one keeps the name (a repo must not replace the user's).
+    for (const s of shadowed) {
+      process.stderr.write(`[codeep-acp] MCP (${label}): ${shadowedServerNotice(s.name)}\n`);
+    }
     if (skipped.length > 0) {
       process.stderr.write(
         `[codeep-acp] MCP (${label}): skipped ${skipped.length} workspace server(s) — untrusted workspace. ` +

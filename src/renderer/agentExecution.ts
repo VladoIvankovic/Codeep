@@ -19,6 +19,7 @@ import { describeAuditTarget } from '../utils/auditLog';
 import { trustBearingWrite, forgetHooksDirectory, type TrustBearingWrite } from '../utils/toolExecution';
 import { shellCommandEnv } from '../utils/shell';
 import { charWidth } from './ansi';
+import { showControls } from '../utils/controlChars';
 import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
@@ -104,22 +105,9 @@ export function requestToolConfirmation(
   });
 }
 
-/**
- * Model-written text shown in a permission dialog, with every character that
- * could change how the rest of it looks spelled out: an ESC sequence would be
- * read as a style (conceal, black on black) and a bidi override or zero-width
- * character reorders or hides text, so the user could approve a command they
- * were not shown. Newlines are left for the caller to lay out.
- */
-export function showControls(text: string): string {
-  return text.replace(
-    /[\x00-\x09\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g,
-    (c) => {
-      const code = c.charCodeAt(0);
-      return code <= 0xff ? `\\x${code.toString(16).padStart(2, '0')}` : `\\u${code.toString(16).padStart(4, '0')}`;
-    },
-  );
-}
+// Lives in utils/ so the MCP client can use it too; re-exported for the
+// callers and tests that import it from here.
+export { showControls };
 
 /**
  * The target of a tool call as dialog lines, each `width` terminal columns at

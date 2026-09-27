@@ -4,8 +4,86 @@ import {
   findMarketplaceEntry,
   formatMarketplaceList,
   formatMarketplaceEntry,
+  formatInstallUsage,
+  missingRequiredArgs,
   type MarketplaceEntry,
 } from './mcpMarketplace';
+
+/** The package an entry runs: the first argument that is not a flag, with a
+ *  trailing `@latest` / `@1.2.3` dropped (split on the LAST `@` past index 0,
+ *  so a scope such as `@playwright/mcp` survives). */
+function packageOf(e: MarketplaceEntry): string {
+  const pkg = (e.server.args ?? []).find(a => !a.startsWith('-')) ?? '';
+  const at = pkg.lastIndexOf('@');
+  return at > 0 ? pkg.slice(0, at) : pkg;
+}
+
+describe('MCP_MARKETPLACE', () => {
+  it('lists exactly the packages checked against their registries', () => {
+    // Checked on 2026-09-27: `npm view <pkg> name deprecated` for npx
+    // entries; for uvx ones PyPI's simple API with
+    // `Accept: application/vnd.pypi.simple.v1+json`, whose `project-status`
+    // must be "active" (the /pypi/<pkg>/json API has no status at all — it
+    // shows the archived mcp-server-sqlite as a normal project). Before that
+    // check the catalog offered four packages npm marks "no longer
+    // supported" and one archived on PyPI. Changing this list means running
+    // those checks again for what you add.
+    expect(MCP_MARKETPLACE.map(e => [e.id, e.server.command, packageOf(e)])).toEqual([
+      ['filesystem', 'npx', '@modelcontextprotocol/server-filesystem'],
+      ['git', 'uvx', 'mcp-server-git'],
+      ['fetch', 'uvx', 'mcp-server-fetch'],
+      ['brave-search', 'npx', '@brave/brave-search-mcp-server'],
+      ['memory', 'npx', '@modelcontextprotocol/server-memory'],
+      ['time', 'uvx', 'mcp-server-time'],
+      ['playwright', 'npx', '@playwright/mcp'],
+      ['ios-simulator', 'npx', 'ios-simulator-mcp'],
+      ['mobile', 'npx', '@mobilenext/mobile-mcp'],
+    ]);
+  });
+
+  it('runs Brave Search from Brave\'s own package over stdio', () => {
+    // @modelcontextprotocol/server-brave-search is deprecated on npm.
+    expect(findMarketplaceEntry('brave-search')!.server.args).toEqual(['-y', '@brave/brave-search-mcp-server', '--transport', 'stdio']);
+  });
+
+  it('passes git\'s repository as --repository, the only form mcp-server-git accepts', () => {
+    // A bare path after `mcp-server-git` is rejected at start.
+    const git = findMarketplaceEntry('git')!;
+    expect(git.argHints?.[0].placeholder).toMatch(/^--repository /);
+    expect(git.argHints?.[0].required).toBeFalsy();
+  });
+});
+
+describe('formatInstallUsage', () => {
+  it('marks required arguments <…> and optional ones […]', () => {
+    expect(formatInstallUsage(findMarketplaceEntry('filesystem')!)).toBe('/mcp install filesystem </Users/you/projects/notes>');
+    expect(formatInstallUsage(findMarketplaceEntry('git')!)).toBe('/mcp install git [--repository /path/to/repo]');
+    expect(formatInstallUsage(findMarketplaceEntry('memory')!)).toBe('/mcp install memory');
+  });
+});
+
+describe('missingRequiredArgs', () => {
+  const fs = () => findMarketplaceEntry('filesystem')!;
+
+  it('refuses an entry whose required argument is missing, and says what to pass', () => {
+    const why = missingRequiredArgs(fs(), []);
+    expect(why).toContain('Nothing was saved');
+    expect(why).toContain('/mcp install filesystem </Users/you/projects/notes>');
+  });
+
+  it('does not count blank arguments', () => {
+    expect(missingRequiredArgs(fs(), ['', '  '])).not.toBeNull();
+  });
+
+  it('lets the install go ahead once the argument is there', () => {
+    expect(missingRequiredArgs(fs(), ['/tmp'])).toBeNull();
+  });
+
+  it('never stops an entry with only optional arguments, or none', () => {
+    expect(missingRequiredArgs(findMarketplaceEntry('git')!, [])).toBeNull();
+    expect(missingRequiredArgs(findMarketplaceEntry('memory')!, [])).toBeNull();
+  });
+});
 
 describe('findMarketplaceEntry', () => {
   it('finds an entry by id (case-insensitive)', () => {

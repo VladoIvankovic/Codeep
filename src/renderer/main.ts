@@ -161,14 +161,18 @@ export function deriveSessionName(message: string): string {
  * session's whole set, so they go in one call; starting the global list and
  * then the workspace list stopped the global servers. Returns the workspace
  * servers left out because the workspace is not trusted yet.
+ *
+ * A trusted workspace entry named like a global server does not start — the
+ * global one keeps the name — and a one-line notice names it.
  */
 export async function startTuiMcpServers(
   root: string,
   ui: Pick<App, 'notify' | 'notifyWarn'>,
 ): Promise<McpServer[]> {
-  const { selectSessionMcpServers } = await import('../utils/mcpConfig');
+  const { selectSessionMcpServers, shadowedServerNotice } = await import('../utils/mcpConfig');
   const { registerSessionServers } = await import('../utils/mcpRegistry');
-  const { servers, skipped } = selectSessionMcpServers(root);
+  const { servers, skipped, shadowed } = selectSessionMcpServers(root);
+  for (const s of shadowed) ui.notify(shadowedServerNotice(s.name));
   if (servers.length > 0) {
     const { registered, errors } = await registerSessionServers('codeep-tui', servers, { workspaceRoot: root });
     if (registered.length > 0) {

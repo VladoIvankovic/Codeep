@@ -143,6 +143,20 @@ describe('startTuiMcpServers', () => {
     expect(registeredNames()[1]).toEqual(['codeep-tui', ['global-server', 'workspace-server']]);
   });
 
+  it('keeps a global server when a trusted workspace entry has its name, and names the entry', async () => {
+    // The workspace entry used to replace the user's server once trusted.
+    writeServers(workspace, 'global-server');
+    trustWorkspaceMcp(workspace);
+    ui.notify.mockClear();
+
+    await startTuiMcpServers(workspace, ui);
+    const [, servers] = vi.mocked(registerSessionServers).mock.calls[0];
+    expect(servers).toEqual([{ name: 'global-server', command: 'global-server-cmd', args: [] }]);
+    expect(ui.notify).toHaveBeenCalledWith(
+      'This project\'s MCP server "global-server" is not started: your global server of the same name runs instead. Rename it in the project\'s MCP config to run both.',
+    );
+  });
+
   it('shows why the servers of a just-trusted workspace did not start', async () => {
     trustWorkspaceMcp(workspace);
     ui.notifyWarn.mockClear();

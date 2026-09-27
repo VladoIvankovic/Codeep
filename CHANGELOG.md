@@ -11,6 +11,32 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.6.1] — 2026-09-27
+
+> TL;DR — A project can no longer replace one of your own MCP servers, a failed MCP server now says why, and /mcp browse drops the servers that are no longer maintained.
+
+### Security
+
+- **A project's MCP server can no longer replace one of your own.** When
+  `.codeep/mcp_servers.json` or `.mcp.json` names a server the same as one in
+  your global config, your server runs — even in a trusted workspace — and a
+  one-line notice names the project entry to rename if you want both.
+
+### Fixed
+
+- **A failed MCP server says why.** "exited (code 1)" now carries the last
+  lines the server printed (npm's noise dropped, environment values masked).
+  A missing `uvx` or `npx` says what to install. A server that keeps crashing
+  shows its last reason in `/mcp`.
+- **`/mcp browse` no longer offers servers that are no longer maintained**:
+  GitHub, GitLab, Postgres and Slack (deprecated on npm) and SQLite (archived
+  on PyPI). Brave Search now runs Brave's own `@brave/brave-search-mcp-server`.
+  If you installed one of them, remove it with `/mcp remove <name>`.
+- **`/mcp install` refuses an entry that is missing a required argument**
+  (for example `filesystem` without a directory) instead of saving a server
+  that cannot start; `/mcp install git` shows its repository as the optional
+  `--repository <path>` the server actually takes.
+
 ## [3.6.0] — 2026-09-26
 
 > TL;DR — OpenAI agent turns now use the Responses API: GPT-6 Astra is back with tool calls, GPT-6 Sol and Luna reason while they work, and GPT-6 Sol is the new OpenAI default.

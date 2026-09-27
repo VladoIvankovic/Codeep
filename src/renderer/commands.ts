@@ -2421,7 +2421,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         return true;
       };
 
-      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfigSplit, selectSessionMcpServers, isWorkspaceMcpTrusted, trustWorkspaceMcp, untrustWorkspaceMcp } = await import('../utils/mcpConfig');
+      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfigSplit, selectSessionMcpServers, shadowedServerNotice, isWorkspaceMcpTrusted, trustWorkspaceMcp, untrustWorkspaceMcp } = await import('../utils/mcpConfig');
       const { registerSessionServers } = await import('../utils/mcpRegistry');
 
       // The servers this session may run, chosen by the same rule startup and
@@ -2432,19 +2432,17 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       // should keep running has to be in the list.
       const serversToStart = (addedHere?: string) =>
         selectSessionMcpServers(projectPath!, { userAdded: addedHere ? [addedHere] : [] });
-      const untrustedNote = ({ servers, skipped }: ReturnType<typeof serversToStart>): string => {
-        if (skipped.length === 0) return '';
-        const n = skipped.length;
-        let note = `\n\n${n} workspace MCP server${n === 1 ? '' : 's'} not started — this workspace isn't trusted. Run \`/mcp trust\` to start ${n === 1 ? 'it' : 'them'}.`;
-        // A repo entry that shares a name with one of the user's own servers
-        // can keep that one from starting too; say so rather than let it look
-        // like the user's server just vanished.
-        const running = new Set(servers.map(s => s.name));
-        const globalNames = new Set(loadMcpServerConfigSplit(undefined).global.map(s => s.name));
-        const shadowed = skipped.map(s => s.name).filter(name => globalNames.has(name) && !running.has(name));
-        if (shadowed.length > 0) {
-          const list = shadowed.map(name => `\`${name}\``).join(', ');
-          note += `\n\nYour own server${shadowed.length === 1 ? '' : 's'} ${list} ${shadowed.length === 1 ? 'is' : 'are'} not running either: this workspace defines a server with the same name, which takes its place once trusted.`;
+      // What the selection left out, and why. A workspace entry named like one
+      // of the user's global servers never runs — the global one keeps the
+      // name — and gets a line of its own, so it does not look like the
+      // project's server started when the user's did. (It used to be the
+      // other way round: a trusted repo entry replaced the user's server.)
+      const untrustedNote = ({ skipped, shadowed }: ReturnType<typeof serversToStart>): string => {
+        let note = '';
+        for (const s of shadowed) note += `\n\n${shadowedServerNotice(s.name)}`;
+        if (skipped.length > 0) {
+          const n = skipped.length;
+          note += `\n\n${n} workspace MCP server${n === 1 ? '' : 's'} not started — this workspace isn't trusted. Run \`/mcp trust\` to start ${n === 1 ? 'it' : 'them'}.`;
         }
         return note;
       };
@@ -2461,8 +2459,12 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
           ctx.app.notify('Workspace trusted — no workspace MCP servers defined yet.');
           break;
         }
-        ctx.app.notify(`Workspace trusted. Restarting MCP servers with ${workspace.length} from this workspace…`);
-        const { registered, errors } = await registerSessionServers(TUI_SESSION, serversToStart().servers, { workspaceRoot: projectPath });
+        const selection = serversToStart();
+        // Entries named like a global server stay stopped even now.
+        for (const s of selection.shadowed) ctx.app.notify(shadowedServerNotice(s.name));
+        const starting = workspace.length - selection.shadowed.length;
+        ctx.app.notify(`Workspace trusted. Restarting MCP servers with ${starting} from this workspace…`);
+        const { registered, errors } = await registerSessionServers(TUI_SESSION, selection.servers, { workspaceRoot: projectPath });
         if (registered.length > 0) ctx.app.notify(`MCP: ${registered.length} tool(s) ready. Type /mcp.`);
         for (const e of errors) ctx.app.notifyWarn(`MCP server "${e.server}" failed: ${e.error}`);
         break;
@@ -2490,11 +2492,17 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         const { registered, errors } = await registerSessionServers(TUI_SESSION, selection.servers, { workspaceRoot: projectPath });
         const ok = registered.filter(t => t.serverName === name);
         const failed = errors.find(e => e.server === name);
+        // Named like one of the user's global servers: that one runs, so the
+        // tools (or the failure) under this name are the global server's,
+        // not what was just added. Say it was saved but not started.
+        const shadowedHere = selection.shadowed.some(s => s.name === name);
         ctx.app.addMessage({
           role: 'system',
-          content: (failed
-            ? `Saved \`${name}\` but spawn failed: \`${failed.error}\``
-            : `Added \`${name}\` (${ok.length} tool${ok.length === 1 ? '' : 's'} available).`) + untrustedNote(selection),
+          content: (shadowedHere
+            ? `Saved \`${name}\` to .codeep/mcp_servers.json but did not start it.`
+            : failed
+              ? `Saved \`${name}\` but spawn failed: \`${failed.error}\``
+              : `Added \`${name}\` (${ok.length} tool${ok.length === 1 ? '' : 's'} available).`) + untrustedNote(selection),
         });
         break;
       }
@@ -2515,15 +2523,14 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       }
 
       if (sub === 'browse') {
-        const { formatMarketplaceList, findMarketplaceEntry, formatMarketplaceEntry, MCP_MARKETPLACE } = await import('../utils/mcpMarketplace');
+        const { formatMarketplaceList, findMarketplaceEntry, formatMarketplaceEntry, formatInstallUsage, MCP_MARKETPLACE } = await import('../utils/mcpMarketplace');
         const detail = args[1];
         if (detail) {
           const entry = findMarketplaceEntry(detail);
           if (!entry) {
             ctx.app.addMessage({ role: 'system', content: `Marketplace id not found: \`${detail}\`. Run \`/mcp browse\` for the list.` });
           } else {
-            const argHints = entry.argHints?.map(h => `<${h.placeholder ?? 'arg'}>`).join(' ') ?? '';
-            ctx.app.addMessage({ role: 'system', content: formatMarketplaceEntry(entry) + `\n\nInstall with \`/mcp install ${entry.id} ${argHints}\`` });
+            ctx.app.addMessage({ role: 'system', content: formatMarketplaceEntry(entry) + `\n\nInstall with \`${formatInstallUsage(entry)}\`` });
           }
           break;
         }
@@ -2538,13 +2545,20 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
           ctx.app.addMessage({ role: 'system', content: 'Usage: `/mcp install <id> [extra args...]` — run `/mcp browse` to see ids.' });
           break;
         }
-        const { findMarketplaceEntry } = await import('../utils/mcpMarketplace');
+        const { findMarketplaceEntry, missingRequiredArgs } = await import('../utils/mcpMarketplace');
         const entry = findMarketplaceEntry(id);
         if (!entry) {
           ctx.app.addMessage({ role: 'system', content: `Marketplace id not found: \`${id}\`. Run \`/mcp browse\` for the list.` });
           break;
         }
         const extraArgs = args.slice(2);
+        // Before anything is written: an entry saved without its required
+        // argument fails on every start until the user edits the file.
+        const missing = missingRequiredArgs(entry, extraArgs);
+        if (missing) {
+          ctx.app.addMessage({ role: 'system', content: missing });
+          break;
+        }
         const fullArgs = [...(entry.server.args ?? []), ...extraArgs];
         addProjectMcpServer(projectPath!, {
           name: entry.id,
@@ -2559,7 +2573,11 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         const { registered, errors } = await registerSessionServers(TUI_SESSION, selection.servers, { workspaceRoot: projectPath });
         const failed = errors.find(e => e.server === entry.id);
         const lines: string[] = [];
-        if (failed) {
+        if (selection.shadowed.some(s => s.name === entry.id)) {
+          // A global server has this id and runs instead; its tools are not
+          // this install's.
+          lines.push(`Saved \`${entry.id}\` to project config but did not start it.`);
+        } else if (failed) {
           lines.push(`Saved \`${entry.id}\` but spawn failed: \`${failed.error}\``);
         } else {
           const ok = registered.filter(t => t.serverName === entry.id);

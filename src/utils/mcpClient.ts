@@ -22,6 +22,126 @@
 import { spawn, ChildProcess } from 'child_process';
 import type { McpServer } from '../acp/protocol.js';
 import { StreamableHttpClient } from './mcpStreamableHttp.js';
+import { showControlsInline } from './controlChars.js';
+
+// ── Why a server is gone ──────────────────────────────────────────────────────
+// A server that exits used to be reported as `MCP server "x" exited (code 1)`
+// and nothing else: its stderr was piped and never read. The reason — a
+// missing DATABASE_URL, an npm 404, a bad path — was right there and thrown
+// away, and the user had nothing to act on. The end of stderr now rides along
+// on the exit reason, which is what `/mcp` lists under "Failed servers".
+
+/** How much of a server's stderr is kept (its end — the lines that say why). */
+const STDERR_TAIL_CHARS = 8 * 1024;
+
+/**
+ * How long, once the server has exited, its stderr gets to reach end of file
+ * before the exit is reported with what arrived. Node may deliver 'exit'
+ * before the last stderr chunk, and something the server started may hold
+ * the pipe open, so this neither reports early nor waits for good.
+ */
+export const STDERR_DRAIN_GRACE_MS = 250;
+
+/**
+ * npm lines that say nothing about the failure: the pointer to its debug log
+ * and the "you can also install from a tarball" boilerplate under every 404.
+ * With them in, the last three lines of an npx 404 were all boilerplate and
+ * the "Not Found - GET …/<package>" line that names the problem fell off.
+ */
+const NPM_NOISE = [
+  'A complete log of this run can be found in',
+  'Note that you can also install from a',
+  'tarball, folder, http url, or git url.',
+];
+/** A line made only of these words (and numbers) — npm's `npm error 404` spacer — is noise too. */
+const NPM_FILLER_WORDS = new Set(['npm', 'error', 'ERR!', 'warn', 'WARN']);
+
+/**
+ * The last non-empty lines of `stderr` — at most `maxLines`, joined with
+ * " · ", the last `maxChars` of them — safe to show on one line.
+ *
+ * Each of `secrets` (the server's env values) is replaced FIRST, longest
+ * first so a secret that contains another is hidden whole, and before the
+ * text is cut, so a cut cannot leave a fragment of one: a server that cannot
+ * connect may well print back the password or token it was given. Values
+ * shorter than 4 characters are left alone — masking "1" or "true" everywhere
+ * would garble the text and hides nothing secret.
+ *
+ * Control characters and line breaks are spelled out last (the text is the
+ * server's, shown in the terminal), and backticks become `'`: the reason is
+ * shown inside a Markdown code span in `/mcp`, which a backtick would end.
+ */
+export function stderrSummary(stderr: string, secrets: string[], maxLines = 3, maxChars = 300): string {
+  let text = stderr;
+  for (const secret of [...secrets].sort((a, b) => b.length - a.length)) {
+    if (secret.length >= 4) text = text.split(secret).join('•••');
+  }
+  const lines = text.split(/\r\n|\r|\n/)
+    .map(line => line.trim())
+    .filter(line => {
+      if (!line || NPM_NOISE.some(noise => line.includes(noise))) return false;
+      return !line.split(/\s+/).every(word => NPM_FILLER_WORDS.has(word) || /^\d+$/.test(word));
+    });
+  // By code point, so the cut never splits a surrogate pair.
+  let summary = Array.from(lines.slice(-maxLines).join(' · '));
+  if (summary.length > maxChars) summary = ['…', ...summary.slice(-(maxChars - 1))];
+  return showControlsInline(summary.join('')).replace(/`/g, "'");
+}
+
+/**
+ * The server's env values — what `stderrSummary` hides. Only strings: the
+ * config loader passes a `null` or a number through as it is, and
+ * `stderrSummary` reads `.length`, so one of those would throw inside the exit
+ * handler and leave the pending requests hanging. An ACP client may also send
+ * the spec's `[{ name, value }]` list rather than a map; its values are
+ * secrets just the same.
+ */
+export function envSecrets(env: unknown): string[] {
+  if (!env || typeof env !== 'object') return [];
+  const out: string[] = [];
+  for (const v of Object.values(env)) {
+    if (typeof v === 'string') out.push(v);
+    else if (v && typeof v === 'object' && typeof (v as { value?: unknown }).value === 'string') out.push((v as { value: string }).value);
+  }
+  return out;
+}
+
+/**
+ * The sentence an exit is reported as — `MCP server "<name>" exited (code N)`,
+ * or "was killed by signal X" when there is no code — then the end of the
+ * server's stderr (`stderrSummary`), so "exited (code 1)" says what to do.
+ * The name may come from a repository's config, so it is escaped too.
+ */
+export function exitReason(
+  server: string,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  stderr: string,
+  secrets: string[],
+): string {
+  const how = code === null && signal ? `was killed by signal ${signal}` : `exited (code ${code})`;
+  const sentence = `MCP server "${showControlsInline(server)}" ${how}`;
+  const tail = stderrSummary(stderr, secrets);
+  return tail ? `${sentence}: ${tail}` : sentence;
+}
+
+/**
+ * Why a server whose command does not exist could not start. Node reports it
+ * as `spawn uvx ENOENT` — true, but it does not say that uv is what is
+ * missing. "Not found on PATH" rather than "not installed": on Windows `npx`
+ * is `npx.cmd`, which a plain spawn does not find even when Node is there.
+ * No backticks, for the same code-span reason as `stderrSummary`.
+ */
+export function missingCommandReason(server: string, command: string): string {
+  const shown = showControlsInline(command).replace(/`/g, "'");
+  const base = (command.split(/[\\/]/).pop() ?? command).replace(/\.(cmd|exe)$/i, '');
+  const fix = base === 'uvx' || base === 'uv'
+    ? 'Install uv, which provides uvx (https://docs.astral.sh/uv/getting-started/installation/)'
+    : base === 'npx' || base === 'npm' || base === 'node'
+      ? 'Install Node.js, which provides npx (https://nodejs.org/)'
+      : "Install it, or fix the command in the server's MCP config";
+  return `MCP server "${showControlsInline(server)}" could not start: "${shown}" was not found on PATH. ${fix}, then run /mcp reload.`;
+}
 
 export interface McpTool {
   name: string;
@@ -121,6 +241,9 @@ export class McpClient {
   private readonly RESTART_WINDOW_MS = 60_000;
   /** Has the agent loop been notified that this server is fully gone? */
   private gaveUp = false;
+  /** Why the server last went away — handed to `onGaveUp`, so the entry
+   *  "Failed servers" shows says what killed it, not just how often. */
+  private lastExitReason: string | undefined;
   /**
    * Optional callback fired after a successful auto-restart. The registry
    * uses this to drop its tools cache so the next `listTools()` re-queries
@@ -130,9 +253,10 @@ export class McpClient {
   /**
    * Optional callback fired when the client gives up after exceeding the
    * restart budget. The registry uses this to surface a visible "MCP
-   * server died" error in /mcp.
+   * server died" error in /mcp. `lastExit` is the last exit reason
+   * (`exitReason`), when there was one.
    */
-  onGaveUp?: (reason: string) => void;
+  onGaveUp?: (reason: string, lastExit?: string) => void;
   /**
    * Optional callback fired when the server sends a `notifications/*`
    * indicating its catalog changed (tools, resources, prompts). The
@@ -300,7 +424,7 @@ export class McpClient {
     if (this.crashTimestamps.length > this.MAX_RESTARTS) {
       this.gaveUp = true;
       const reason = `crashed ${this.crashTimestamps.length} times in ${Math.round(this.RESTART_WINDOW_MS / 1000)}s`;
-      try { this.onGaveUp?.(reason); } catch { /* never let a callback throw kill us */ }
+      try { this.onGaveUp?.(reason, this.lastExitReason); } catch { /* never let a callback throw kill us */ }
       return;
     }
 
@@ -342,22 +466,60 @@ export class McpClient {
 
   /** Wire up data/exit/error listeners on the current child. Used by start() and attemptRestart(). */
   private attachChildHandlers(): void {
-    if (!this.child) return;
-    this.child.on('exit', (code) => {
-      const err = new Error(`MCP server "${this.server.name}" exited (code ${code})`);
-      for (const [, req] of this.pending) req.reject(err);
-      this.pending.clear();
-      this.child = null;
-      if (!this.stopped && !this.gaveUp) {
-        void this.attemptRestart();
-      }
+    const child = this.child;
+    if (!child) return;
+
+    // The end of THIS child's stderr — per child, so a restart's exit reason
+    // never carries the previous process's lines. Reading it also keeps a
+    // chatty server from filling the pipe and blocking.
+    let stderrTail = '';
+    let stderrEnded = !child.stderr;
+    let onStderrEnd: (() => void) | null = null;
+    const markStderrEnded = () => {
+      stderrEnded = true;
+      onStderrEnd?.();
+    };
+    child.stderr?.setEncoding('utf-8');
+    child.stderr?.on('data', (chunk: string) => {
+      stderrTail += chunk;
+      if (stderrTail.length > STDERR_TAIL_CHARS) stderrTail = stderrTail.slice(-STDERR_TAIL_CHARS);
     });
-    this.child.on('error', (err) => {
-      for (const [, req] of this.pending) req.reject(err);
+    child.stderr?.on('end', markStderrEnded);
+    child.stderr?.on('close', markStderrEnded);
+    const stderrDrained = () => new Promise<void>(resolve => {
+      if (stderrEnded) return resolve();
+      const timer = setTimeout(resolve, STDERR_DRAIN_GRACE_MS);
+      onStderrEnd = () => { clearTimeout(timer); resolve(); };
+    });
+
+    child.on('exit', (code, signal) => {
+      // Gone: nothing more is written to it while its stderr drains. (Only if
+      // it is still ours — a late exit must not drop a restarted child.)
+      if (this.child === child) this.child = null;
+      // Reject only once the last stderr is in: 'exit' can arrive before the
+      // final chunk, and the reason is what those lines say.
+      void stderrDrained().then(() => {
+        const reason = exitReason(this.server.name, code, signal, stderrTail, envSecrets(this.server.env));
+        this.lastExitReason = reason;
+        const err = new Error(reason);
+        for (const [, req] of this.pending) req.reject(err);
+        this.pending.clear();
+        if (!this.stopped && !this.gaveUp) {
+          void this.attemptRestart();
+        }
+      });
+    });
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      // A command that does not exist never starts, so there is no 'exit' and
+      // no stderr — only this, as `spawn uvx ENOENT`. Say what is missing.
+      const missing = err.code === 'ENOENT' && String(err.syscall ?? '').startsWith('spawn');
+      const reason = missing ? new Error(missingCommandReason(this.server.name, this.server.command ?? '')) : err;
+      if (missing) this.lastExitReason = reason.message;
+      for (const [, req] of this.pending) req.reject(reason);
       this.pending.clear();
     });
-    this.child.stdout?.setEncoding('utf-8');
-    this.child.stdout?.on('data', (chunk: string) => this.handleStdout(chunk));
+    child.stdout?.setEncoding('utf-8');
+    child.stdout?.on('data', (chunk: string) => this.handleStdout(chunk));
   }
 
   /** Tear down the transport (stdio child or HTTP stream) and reject pending requests. */

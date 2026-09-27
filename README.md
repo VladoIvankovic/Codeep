@@ -550,7 +550,7 @@ Full spec coverage in 2.0.0 — stdio and Streamable HTTP transports,
 tools / resources / prompts / sampling, capability negotiation with
 `roots`, auto-restart on crash, mid-run catalog refresh.
 
-**Four ways to wire MCP servers** (all merge; project > `.mcp.json` > global > ACP wins last):
+**Four ways to wire MCP servers** (all merge; on a name clash ACP wins, then global, then project, then `.mcp.json` — a repository's entry never replaces a server you configured globally; it is left out with a one-line notice):
 
 1. **Project config** — `.codeep/mcp_servers.json` (committed with the repo)
 2. **`.mcp.json`** — cross-tool standard at the workspace root (works with Claude Code, Cursor, Kilo Code — point everyone at the same file)
@@ -572,7 +572,7 @@ Manage interactively from any Codeep client:
 
 ```bash
 /mcp                            # list connected servers + tools + spawn errors
-/mcp browse                     # 12 curated servers (filesystem, github, postgres, …)
+/mcp browse                     # 9 curated servers (filesystem, git, fetch, brave-search, playwright, …)
 /mcp browse <id>                # details + env-var hints for one entry
 /mcp install <id> [extra args]  # wires it into project config + spawns
 /mcp add <name> <command> [args]

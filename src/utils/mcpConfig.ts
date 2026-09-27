@@ -4,9 +4,10 @@
  * users (and our VS Code extension) don't have to roll their own config UI.
  *
  * Lookup precedence:
- *   1. `<workspace>/.codeep/mcp_servers.json` (project — committed with repo)
- *   2. `~/.codeep/mcp_servers.json`           (global — user's machine)
- * Project entries shadow global entries with the same server name.
+ *   1. `~/.codeep/mcp_servers.json`           (global — user's machine)
+ *   2. `<workspace>/.codeep/mcp_servers.json` (project — committed with repo)
+ * On a name clash the GLOBAL entry wins: a repository must not be able to
+ * replace a server the user configured (see `selectSessionMcpServers`).
  *
  * File format mirrors what Claude Code accepts so existing user configs can
  * be reused verbatim:
@@ -31,6 +32,7 @@ import { writeProjectFile } from './projectPaths.js';
 import { join } from 'path';
 import { homedir } from 'os';
 import { config } from '../config/index.js';
+import { showControlsInline } from './controlChars.js';
 import type { McpServer } from '../acp/protocol.js';
 
 const PROJECT_CONFIG_PATH = '.codeep/mcp_servers.json';
@@ -131,46 +133,44 @@ function loadFromFile(path: string): McpServer[] {
 }
 
 /**
- * Load MCP server definitions for a workspace. Project entries shadow
- * global entries with the same server name. Workspace-less calls
- * (TUI without project) return only the global config.
+ * Load MCP server definitions for a workspace, merged into one list with one
+ * entry per name. Workspace-less calls (TUI without project) return only the
+ * global config. This ignores workspace trust — what a session actually runs
+ * is `selectSessionMcpServers`.
  *
  * Sources read (highest precedence first on name collisions):
- *   1. <workspace>/.codeep/mcp_servers.json  (Codeep-native project file)
- *   2. <workspace>/.mcp.json                 (cross-tool standard — same
+ *   1. ~/.codeep/mcp_servers.json            (global — user's machine)
+ *   2. <workspace>/.codeep/mcp_servers.json  (Codeep-native project file)
+ *   3. <workspace>/.mcp.json                 (cross-tool standard — same
  *      shape Claude Code/Cursor/Kilo Code read, so users can keep one MCP
  *      config for their whole fleet)
- *   3. ~/.codeep/mcp_servers.json            (global — user's machine)
+ *
+ * Global first: the project files arrive with the repository, and when they
+ * won a clash, a trusted repo that defined `github` ran ITS command under the
+ * name — and with the tool names — of the server the user had set up.
  */
 export function loadMcpServerConfig(workspaceRoot?: string): McpServer[] {
-  const globalServers = loadFromFile(join(homedir(), GLOBAL_CONFIG_PATH));
-  const projectServers = workspaceRoot
-    ? loadFromFile(join(workspaceRoot, PROJECT_CONFIG_PATH))
-    : [];
-  const dotMcpServers = workspaceRoot
-    ? loadFromFile(join(workspaceRoot, PROJECT_DOTMCP_PATH))
-    : [];
-
-  // Higher-precedence sources win on name collisions: project (Codeep-native)
-  // beats .mcp.json beats global.
+  const { global, workspace } = loadMcpServerConfigSplit(workspaceRoot);
   const byName = new Map<string, McpServer>();
-  for (const s of globalServers) byName.set(s.name, s);
-  for (const s of dotMcpServers) byName.set(s.name, s);
-  for (const s of projectServers) byName.set(s.name, s);
+  for (const s of workspace) byName.set(s.name, s);
+  for (const s of global) byName.set(s.name, s);
   return [...byName.values()];
 }
 
 /**
  * Same sources as `loadMcpServerConfig`, but split by trust domain:
  * `global` (~/.codeep — the user's own machine-wide file) vs `workspace`
- * (files that arrive WITH a repo: `.codeep/mcp_servers.json` + `.mcp.json`).
+ * (files that arrive WITH a repo: `.codeep/mcp_servers.json` + `.mcp.json`,
+ * the Codeep-native file winning a clash between those two).
  *
  * Workspace entries are attacker-controllable — anyone who clones a repo
  * containing one of these files would otherwise spawn arbitrary commands
  * at startup — so callers must gate them behind `isWorkspaceMcpTrusted`
  * before spawning (mirrors the `trustedHookProjects` gate for hooks).
- * On name collisions a workspace entry shadows a global one, matching
- * the merged loader's precedence.
+ *
+ * Both lists are complete: a workspace entry named like a global one is
+ * still listed here. It never runs — the global entry wins — and
+ * `selectSessionMcpServers` reports it as `shadowed`.
  */
 export function loadMcpServerConfigSplit(workspaceRoot?: string): { global: McpServer[]; workspace: McpServer[] } {
   const globalServers = loadFromFile(join(homedir(), GLOBAL_CONFIG_PATH));
@@ -181,12 +181,7 @@ export function loadMcpServerConfigSplit(workspaceRoot?: string): { global: McpS
   const byName = new Map<string, McpServer>();
   for (const s of dotMcpServers) byName.set(s.name, s);
   for (const s of projectServers) byName.set(s.name, s);
-  const workspace = [...byName.values()];
-  const workspaceNames = new Set(workspace.map(s => s.name));
-  return {
-    global: globalServers.filter(s => !workspaceNames.has(s.name)),
-    workspace,
-  };
+  return { global: globalServers, workspace: [...byName.values()] };
 }
 
 // ── Workspace MCP trust ────────────────────────────────────────────────────────
@@ -227,34 +222,50 @@ export function mergeMcpServers(fromConfig: McpServer[], fromAcp: McpServer[] | 
  * The MCP servers a session runs. Every place that (re)starts a session's
  * servers goes through here, so they all apply the same rule:
  *
- *   - global (~/.codeep) entries always run — they are the user's own —
- *     unless a workspace entry of the same name runs in their place;
+ *   - global (~/.codeep) entries always run — they are the user's own;
  *   - workspace entries run only once the workspace is trusted, because
  *     they arrive with the repo. `userAdded` names entries the user has
  *     just added by hand (`/mcp add`, `/mcp install`); those need no
  *     further consent;
+ *   - a workspace entry named like a global one never runs, trusted or
+ *     not: the global one keeps its name. A trusted workspace entry used to
+ *     take its place, so trusting a repo for ITS servers also let it swap
+ *     out one of yours — same name, same tool names, the repo's command.
+ *     It is returned in `shadowed` (when it would otherwise have run) so
+ *     callers can name it in a one-line notice (`shadowedServerNotice`);
  *   - `fromClient` — the servers the editor passed for the session — run
- *     too and win on name collisions, as in `mergeMcpServers`.
+ *     too and win on name collisions, as in `mergeMcpServers`: they are
+ *     the user's own configuration as well, handed over for this session.
  *
- * `skipped` lists the workspace entries left out, so callers can say why.
+ * `skipped` lists the workspace entries left out because the workspace is
+ * not trusted, so callers can say why. A clashing entry is never in it:
+ * trusting the workspace would not start it either.
  * Registering replaces a session's whole set of servers, which is why the
  * editor's servers have to be part of every selection.
  */
 export function selectSessionMcpServers(
   workspaceRoot: string | undefined,
   opts: { fromClient?: McpServer[]; userAdded?: string[] } = {},
-): { servers: McpServer[]; skipped: McpServer[] } {
-  const { workspace } = loadMcpServerConfigSplit(workspaceRoot);
+): { servers: McpServer[]; skipped: McpServer[]; shadowed: McpServer[] } {
+  const { global, workspace } = loadMcpServerConfigSplit(workspaceRoot);
+  const globalNames = new Set(global.map(s => s.name));
   const trusted = workspaceRoot !== undefined && isWorkspaceMcpTrusted(workspaceRoot);
-  const allowed = trusted ? workspace : workspace.filter(s => opts.userAdded?.includes(s.name));
-  const skipped = workspace.filter(s => !allowed.includes(s));
-  // The split list has already dropped every global entry a workspace entry
-  // names. Only an entry that is going to run may take the place of one of
-  // the user's own servers; one left out must not stop it.
-  const allowedNames = new Set(allowed.map(s => s.name));
-  const globalServers = loadFromFile(join(homedir(), GLOBAL_CONFIG_PATH))
-    .filter(s => !allowedNames.has(s.name));
-  return { servers: mergeMcpServers([...globalServers, ...allowed], opts.fromClient), skipped };
+  const eligible = trusted ? workspace : workspace.filter(s => opts.userAdded?.includes(s.name));
+  const allowed = eligible.filter(s => !globalNames.has(s.name));
+  const shadowed = eligible.filter(s => globalNames.has(s.name));
+  const skipped = workspace.filter(s => !eligible.includes(s) && !globalNames.has(s.name));
+  return { servers: mergeMcpServers([...global, ...allowed], opts.fromClient), skipped, shadowed };
+}
+
+/**
+ * The one-line notice for a workspace entry that does not run because one of
+ * the user's global servers has its name. The name comes from the repository,
+ * so every control character — newlines included — is spelled out: a name
+ * with an ESC sequence or a line break could otherwise dress up the rest of
+ * the line, or forge a second one.
+ */
+export function shadowedServerNotice(name: string): string {
+  return `This project's MCP server "${showControlsInline(name)}" is not started: your global server of the same name runs instead. Rename it in the project's MCP config to run both.`;
 }
 
 /**

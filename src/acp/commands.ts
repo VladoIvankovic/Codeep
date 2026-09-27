@@ -1226,7 +1226,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
 
     case 'mcp': {
       const sub = args[0]?.toLowerCase();
-      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfigSplit, selectSessionMcpServers, isWorkspaceMcpTrusted, trustWorkspaceMcp, untrustWorkspaceMcp } = await import('../utils/mcpConfig.js');
+      const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfigSplit, selectSessionMcpServers, shadowedServerNotice, isWorkspaceMcpTrusted, trustWorkspaceMcp, untrustWorkspaceMcp } = await import('../utils/mcpConfig.js');
       const { registerSessionServers } = await import('../utils/mcpRegistry.js');
       const { handleMcpSamplingRequest } = await import('../utils/mcpSamplingBridge.js');
 
@@ -1235,7 +1235,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       // client passed, and the sampling bridge is wired as at session start.
       // `userAdded` is a server the user just added by hand.
       const restartServers = async (userAdded?: string) => {
-        const { servers, skipped } = selectSessionMcpServers(session.workspaceRoot, {
+        const { servers, skipped, shadowed } = selectSessionMcpServers(session.workspaceRoot, {
           fromClient: session.clientMcpServers,
           userAdded: userAdded ? [userAdded] : undefined,
         });
@@ -1243,9 +1243,13 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
           workspaceRoot: session.workspaceRoot,
           onSamplingRequest: handleMcpSamplingRequest,
         });
-        const untrustedNote = skipped.length === 0 ? '' :
-          `\n\n${skipped.length} workspace MCP server${skipped.length === 1 ? '' : 's'} not started — this workspace isn't trusted. Run \`/mcp trust\` to start ${skipped.length === 1 ? 'it' : 'them'}.`;
-        return { servers, registered, errors, untrustedNote };
+        // A workspace entry named like one of the user's global servers never
+        // runs (the global one keeps the name); one line names each.
+        let untrustedNote = shadowed.map(s => `\n\n${shadowedServerNotice(s.name)}`).join('');
+        if (skipped.length > 0) {
+          untrustedNote += `\n\n${skipped.length} workspace MCP server${skipped.length === 1 ? '' : 's'} not started — this workspace isn't trusted. Run \`/mcp trust\` to start ${skipped.length === 1 ? 'it' : 'them'}.`;
+        }
+        return { servers, registered, errors, untrustedNote, shadowed };
       };
 
       if (sub === 'trust') {
@@ -1253,15 +1257,19 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
           return { handled: true, response: '_Workspace MCP servers are already trusted here._' };
         }
         trustWorkspaceMcp(session.workspaceRoot);
-        const { workspace } = loadMcpServerConfigSplit(session.workspaceRoot);
+        const { global, workspace } = loadMcpServerConfigSplit(session.workspaceRoot);
         if (workspace.length === 0) {
           return { handled: true, response: '_Workspace trusted — no workspace MCP servers defined yet._' };
         }
-        onChunk(`_Workspace trusted. Spawning ${workspace.length} MCP server(s)…_\n\n`);
-        const { registered, errors } = await restartServers();
+        // Not counting entries named like a global server: those stay stopped.
+        const globalNames = new Set(global.map(s => s.name));
+        const starting = workspace.filter(s => !globalNames.has(s.name)).length;
+        onChunk(`_Workspace trusted. Spawning ${starting} MCP server(s)…_\n\n`);
+        const { registered, errors, untrustedNote } = await restartServers();
         const lines = [`Trusted workspace MCP servers (${registered.length} tool(s) available).`];
         for (const e of errors) lines.push(`- \`${e.server}\` failed: ${e.error}`);
-        return { handled: true, response: lines.join('\n') };
+        // Names any entry that stays stopped because a global server has its name.
+        return { handled: true, response: lines.join('\n') + untrustedNote };
       }
 
       if (sub === 'untrust') {
@@ -1282,9 +1290,14 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
         // Live re-register so the new server is usable immediately, no
         // session restart needed. registerSessionServers is idempotent —
         // it disposes the old set and brings up the selected one.
-        const { registered, errors, untrustedNote } = await restartServers(name);
+        const { registered, errors, untrustedNote, shadowed } = await restartServers(name);
         const ok = registered.filter(t => t.serverName === name);
         const failed = errors.find(e => e.server === name);
+        // Named like one of the user's global servers: that one runs, so the
+        // tools (or the failure) under this name are not what was just added.
+        if (shadowed.some(s => s.name === name)) {
+          return { handled: true, response: `Saved \`${name}\` to \`.codeep/mcp_servers.json\` but did not start it.${untrustedNote}`, streaming: true };
+        }
         if (failed) return { handled: true, response: `Saved \`${name}\` but spawn failed: \`${failed.error}\`${untrustedNote}`, streaming: true };
         return { handled: true, response: `Added \`${name}\` (${ok.length} tool${ok.length === 1 ? '' : 's'} available).${untrustedNote}`, streaming: true };
       }
@@ -1399,10 +1412,10 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
         const { formatMarketplaceList, MCP_MARKETPLACE } = await import('../utils/mcpMarketplace.js');
         const detail = args[1];
         if (detail) {
-          const { findMarketplaceEntry, formatMarketplaceEntry } = await import('../utils/mcpMarketplace.js');
+          const { findMarketplaceEntry, formatMarketplaceEntry, formatInstallUsage } = await import('../utils/mcpMarketplace.js');
           const entry = findMarketplaceEntry(detail);
           if (!entry) return { handled: true, response: `Marketplace id not found: \`${detail}\`. Run \`/mcp browse\` for the list.` };
-          return { handled: true, response: formatMarketplaceEntry(entry) + `\n\nInstall with \`/mcp install ${entry.id} ${entry.argHints?.map(h => `<${h.placeholder ?? 'arg'}>`).join(' ') ?? ''}\`` };
+          return { handled: true, response: formatMarketplaceEntry(entry) + `\n\nInstall with \`${formatInstallUsage(entry)}\`` };
         }
         return { handled: true, response: formatMarketplaceList() + `\n\nRun \`/mcp browse <id>\` for details or \`/mcp install <id> [args]\` to install. Total: ${MCP_MARKETPLACE.length}.` };
       }
@@ -1410,12 +1423,16 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
       if (sub === 'install') {
         const id = args[1];
         if (!id) return { handled: true, response: 'Usage: `/mcp install <id> [extra args...]` — run `/mcp browse` to see ids.' };
-        const { findMarketplaceEntry } = await import('../utils/mcpMarketplace.js');
+        const { findMarketplaceEntry, missingRequiredArgs } = await import('../utils/mcpMarketplace.js');
         const entry = findMarketplaceEntry(id);
         if (!entry) return { handled: true, response: `Marketplace id not found: \`${id}\`. Run \`/mcp browse\` for the list.` };
 
-        // Merge skeleton args with user-supplied extras.
+        // Merge skeleton args with user-supplied extras — but not before the
+        // required ones are there: an entry saved without them fails on every
+        // start until the user edits the file.
         const extraArgs = args.slice(2);
+        const missing = missingRequiredArgs(entry, extraArgs);
+        if (missing) return { handled: true, response: missing };
         const fullArgs = [...(entry.server.args ?? []), ...extraArgs];
         const server = {
           name: entry.id,
@@ -1429,10 +1446,14 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
         addProjectMcpServer(session.workspaceRoot, server);
 
         onChunk(`_Saved \`${entry.id}\` to project config. Spawning…_\n\n`);
-        const { registered, errors, untrustedNote } = await restartServers(entry.id);
+        const { registered, errors, untrustedNote, shadowed } = await restartServers(entry.id);
         const failed = errors.find(e => e.server === entry.id);
         const lines: string[] = [];
-        if (failed) {
+        if (shadowed.some(s => s.name === entry.id)) {
+          // A global server has this id and runs instead; its tools are not
+          // this install's.
+          lines.push(`Saved \`${entry.id}\` to project config but did not start it.`);
+        } else if (failed) {
           lines.push(`Saved \`${entry.id}\` but spawn failed: \`${failed.error}\``);
         } else {
           const ok = registered.filter(t => t.serverName === entry.id);

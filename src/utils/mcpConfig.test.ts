@@ -22,6 +22,7 @@ import {
   addProjectMcpServer,
   removeProjectMcpServer,
   selectSessionMcpServers,
+  shadowedServerNotice,
   trustWorkspaceMcp,
   untrustWorkspaceMcp,
 } from './mcpConfig';
@@ -92,16 +93,21 @@ describe('loadMcpServerConfig', () => {
     expect(loadMcpServerConfig(workspaceRoot).map(s => s.name).sort()).toEqual(['fs', 'gh']);
   });
 
-  it('project entries shadow global entries with the same name', () => {
+  it('global entries win a name clash with the project file', () => {
+    // This used to pin the opposite: the project entry replaced the global
+    // one. The project file arrives with the repository, so a repo could
+    // swap out a server the user configured — its command, the user's
+    // server's name and tool names. The user's own config now wins.
     writeGlobalConfig(JSON.stringify({
       mcpServers: { fs: { command: 'global-fs', args: [] }, gh: { command: 'global-gh', args: [] } },
     }));
     writeProjectConfig(JSON.stringify({
-      mcpServers: { fs: { command: 'project-fs', args: [] } },
+      mcpServers: { fs: { command: 'project-fs', args: [] }, only: { command: 'project-only', args: [] } },
     }));
     const servers = loadMcpServerConfig(workspaceRoot);
-    expect(servers.find(s => s.name === 'fs')?.command).toBe('project-fs');
+    expect(servers.find(s => s.name === 'fs')?.command).toBe('global-fs');
     expect(servers.find(s => s.name === 'gh')?.command).toBe('global-gh');
+    expect(servers.find(s => s.name === 'only')?.command).toBe('project-only');
   });
 
   it('returns global-only when no workspaceRoot is given (TUI without project)', () => {
@@ -177,8 +183,10 @@ describe('loadMcpServerConfig', () => {
     expect(servers[0].command).toBe('from-codeep');
   });
 
-  it('.mcp.json shadows global config on name collisions', () => {
-    // Precedence chain: project (.codeep) > .mcp.json > global (~/.codeep).
+  it('global config wins over .mcp.json on name collisions', () => {
+    // Precedence chain: global (~/.codeep) > project (.codeep) > .mcp.json.
+    // (It was .mcp.json over global — the same repo-replaces-yours problem
+    // as the project file, through the cross-tool file.)
     writeGlobalConfig(JSON.stringify({
       mcpServers: { fs: { command: 'global-fs', args: [] } },
     }));
@@ -186,7 +194,7 @@ describe('loadMcpServerConfig', () => {
       mcpServers: { fs: { command: 'dotmcp-fs', args: [] } },
     }));
     const servers = loadMcpServerConfig(workspaceRoot);
-    expect(servers.find(s => s.name === 'fs')?.command).toBe('dotmcp-fs');
+    expect(servers.find(s => s.name === 'fs')?.command).toBe('global-fs');
   });
 });
 
@@ -263,22 +271,46 @@ describe('selectSessionMcpServers — a repo entry named like one of the user\'s
   afterEach(() => untrustWorkspaceMcp(workspaceRoot));
 
   it('does not stop the user\'s server while the workspace is untrusted', () => {
-    const { servers, skipped } = selectSessionMcpServers(workspaceRoot);
+    const { servers, skipped, shadowed } = selectSessionMcpServers(workspaceRoot);
     expect(servers.map(s => [s.name, s.command]).sort()).toEqual([['mine', 'my-own-server'], ['other', 'other-mcp']]);
-    expect(skipped.map(s => [s.name, s.command])).toEqual([['mine', 'sh']]);
+    // Not "waiting for trust": trusting the workspace would not start it.
+    expect(skipped).toEqual([]);
+    expect(shadowed).toEqual([]);
   });
 
-  it('takes its place once the workspace is trusted', () => {
+  // The next two pinned the opposite — "takes its place once the workspace is
+  // trusted / when the user added it by hand". Trusting a repo for its own
+  // servers then also let it replace one of yours: same name, same tool
+  // names, the repo's command. The user's global server now keeps the name.
+  it('does not take its place once the workspace is trusted, and reports it as shadowed', () => {
     trustWorkspaceMcp(workspaceRoot);
-    const { servers, skipped } = selectSessionMcpServers(workspaceRoot);
-    expect(servers.map(s => [s.name, s.command]).sort()).toEqual([['mine', 'sh'], ['other', 'other-mcp']]);
+    const { servers, skipped, shadowed } = selectSessionMcpServers(workspaceRoot);
+    expect(servers.map(s => [s.name, s.command]).sort()).toEqual([['mine', 'my-own-server'], ['other', 'other-mcp']]);
     expect(skipped).toEqual([]);
+    expect(shadowed.map(s => [s.name, s.command])).toEqual([['mine', 'sh']]);
   });
 
-  it('takes its place when the user added it by hand', () => {
-    const { servers, skipped } = selectSessionMcpServers(workspaceRoot, { userAdded: ['mine'] });
-    expect(servers.find(s => s.name === 'mine')?.command).toBe('sh');
-    expect(skipped).toEqual([]);
+  it('does not take its place when the user added it by hand either', () => {
+    // The entry lives in the project file, so the next session would read it
+    // as a repo entry anyway; one rule for both keeps the result stable.
+    const { servers, shadowed } = selectSessionMcpServers(workspaceRoot, { userAdded: ['mine'] });
+    expect(servers.find(s => s.name === 'mine')?.command).toBe('my-own-server');
+    expect(shadowed.map(s => s.name)).toEqual(['mine']);
+  });
+});
+
+describe('shadowedServerNotice', () => {
+  it('names the project entry in one line', () => {
+    const notice = shadowedServerNotice('github');
+    expect(notice).toBe('This project\'s MCP server "github" is not started: your global server of the same name runs instead. Rename it in the project\'s MCP config to run both.');
+    expect(notice).not.toContain('\n');
+  });
+
+  it('spells out control characters and line breaks in a repo-chosen name', () => {
+    const notice = shadowedServerNotice('x\nMCP: all servers trusted\x1b[8m');
+    expect(notice).not.toContain('\n');
+    expect(notice).not.toContain('\x1b');
+    expect(notice).toContain('x\\x0aMCP: all servers trusted\\x1b[8m');
   });
 });
 

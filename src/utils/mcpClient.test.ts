@@ -19,7 +19,8 @@ function makeFakeChild() {
   };
   const stdout = new EventEmitter() as EventEmitter & { setEncoding(enc: string): void };
   stdout.setEncoding = () => { /* matches McpClient's call */ };
-  const stderr = new EventEmitter();
+  const stderr = new EventEmitter() as EventEmitter & { setEncoding(enc: string): void };
+  stderr.setEncoding = () => { /* McpClient reads stderr as text */ };
   const child: any = new EventEmitter();
   child.stdin = stdin;
   child.stdout = stdout;
@@ -35,6 +36,13 @@ function makeFakeChild() {
   child._respond = (payload: object) => {
     stdout.emit('data', JSON.stringify(payload) + '\n');
   };
+  // Exit the way a real process does: its stderr reaches end of file, then
+  // 'exit'. (A test that needs 'exit' first emits the events itself.)
+  child._exit = (code: number | null, signal: string | null = null, stderrText = '') => {
+    if (stderrText) stderr.emit('data', stderrText);
+    stderr.emit('end');
+    child.emit('exit', code, signal);
+  };
   return child;
 }
 
@@ -48,7 +56,7 @@ beforeEach(() => {
 });
 
 // Import AFTER the mock is set so McpClient picks up the fake spawn.
-import { McpClient } from './mcpClient';
+import { McpClient, stderrSummary, exitReason, missingCommandReason, STDERR_DRAIN_GRACE_MS } from './mcpClient';
 import type { McpServer } from '../acp/protocol';
 
 const SERVER: McpServer = { name: 'fs', command: 'npx', args: ['filesystem'] };
@@ -244,7 +252,155 @@ describe('McpClient process exit', () => {
     const pending = client.callTool('foo', {});
     await Promise.resolve();
 
-    lastChild.current.emit('exit', 137);
+    lastChild.current._exit(137);
     await expect(pending).rejects.toThrow(/exited \(code 137\)/);
+  });
+});
+
+// What `npx -y <package that is not on npm>` writes to stderr (captured
+// 2026-09-27, log path replaced).
+const NPX_404 = [
+  'npm error code E404',
+  'npm error 404 Not Found - GET https://registry.npmjs.org/@modelcontextprotocol%2fserver-fetch - Not found',
+  'npm error 404',
+  "npm error 404  The requested resource '@modelcontextprotocol/server-fetch@*' could not be found or you do not have permission to access it.",
+  'npm error 404',
+  'npm error 404 Note that you can also install from a',
+  'npm error 404 tarball, folder, http url, or git url.',
+  'npm error A complete log of this run can be found in: /home/you/.npm/_logs/2026-09-27T09_37_54_557Z-debug-0.log',
+  '',
+].join('\n');
+
+describe('stderrSummary', () => {
+  it('keeps the lines of an npx 404 that name the problem, not npm\'s boilerplate', () => {
+    const out = stderrSummary(NPX_404, []);
+    expect(out).toBe(
+      'npm error code E404 · npm error 404 Not Found - GET https://registry.npmjs.org/@modelcontextprotocol%2fserver-fetch - Not found · '
+      + "npm error 404  The requested resource '@modelcontextprotocol/server-fetch@*' could not be found or you do not have permission to access it.",
+    );
+  });
+
+  it('keeps the last three lines, and the end of them when they are long', () => {
+    expect(stderrSummary('one\ntwo\r\nthree\rfour\n', [])).toBe('two · three · four');
+    const out = stderrSummary('x'.repeat(1000) + 'THE END', []);
+    expect(Array.from(out)).toHaveLength(300);
+    expect(out.startsWith('…')).toBe(true);
+    expect(out.endsWith('THE END')).toBe(true);
+  });
+
+  it('masks every env value of 4+ characters, before cutting, so no fragment survives', () => {
+    // The secret straddles the 300-character cut: masked after cutting, its
+    // tail would still be on screen.
+    const secret = 'sk-live-0123456789abcdefghij';
+    const stderr = `connect failed for ${secret}` + 'y'.repeat(290);
+    const out = stderrSummary(stderr, [secret, 'on']);
+    expect(out).toContain('•••');
+    expect(out).not.toContain(secret.slice(-6));
+    // Short values ("on", "1", "true") are not hidden: they are not secrets
+    // and would garble every line they appear in.
+    expect(stderrSummary('connection refused', ['on'])).toBe('connection refused');
+  });
+
+  it('hides the longer of two overlapping secrets whole', () => {
+    expect(stderrSummary('pw=hunter2hunter2', ['hunter2', 'hunter2hunter2'])).toBe('pw=•••');
+  });
+
+  it('spells out control characters and turns backticks into quotes', () => {
+    const out = stderrSummary('bad \x1b[8mhidden\x1b[0m `rm -rf`', []);
+    expect(out).toBe("bad \\x1b[8mhidden\\x1b[0m 'rm -rf'");
+  });
+});
+
+describe('exitReason', () => {
+  it('adds the end of stderr to the exit sentence', () => {
+    expect(exitReason('pg', 1, null, 'Error: DATABASE_URL is not set\n', []))
+      .toBe('MCP server "pg" exited (code 1): Error: DATABASE_URL is not set');
+    expect(exitReason('pg', 0, null, '', [])).toBe('MCP server "pg" exited (code 0)');
+  });
+
+  it('says a server killed by a signal was killed, rather than "code null"', () => {
+    expect(exitReason('pg', null, 'SIGKILL', '', [])).toBe('MCP server "pg" was killed by signal SIGKILL');
+  });
+
+  it('escapes a server name that carries a line break', () => {
+    expect(exitReason('a\nb', 1, null, '', [])).toBe('MCP server "a\\x0ab" exited (code 1)');
+  });
+});
+
+describe('McpClient exit reasons', () => {
+  it('rejects a server that dies at start with the end of its stderr, env values masked', async () => {
+    const client = new McpClient({ name: 'pg', command: 'npx', args: ['pg-mcp'], env: { DATABASE_URL: 'postgres://me:hunter2secret@db/prod' } });
+    const started = client.start();
+    await Promise.resolve();
+    lastChild.current._exit(1, null, 'Error: could not connect to postgres://me:hunter2secret@db/prod\n');
+    const err = await started.then(() => null, (e: Error) => e);
+    expect(err?.message).toBe('MCP server "pg" exited (code 1): Error: could not connect to •••');
+  });
+
+  it('still reports the exit when the config holds a non-string env value', async () => {
+    // The loader passes `null` through; reading it as a secret threw inside
+    // the exit handler, and the start waited out its timeout instead.
+    const client = new McpClient({ ...SERVER, env: { EMPTY: null as unknown as string, TOKEN: 'secret-value-123' } });
+    const outcome = client.start({ initTimeoutMs: 1000 }).then(() => null, (e: Error) => e.message);
+    await Promise.resolve();
+    lastChild.current._exit(1, null, 'bad token secret-value-123\n');
+    expect(await outcome).toBe('MCP server "fs" exited (code 1): bad token •••');
+  });
+
+  it('masks the values of an env list in the ACP [{ name, value }] shape', async () => {
+    const env = [{ name: 'TOKEN', value: 'acp-secret-456' }] as unknown as Record<string, string>;
+    const client = new McpClient({ ...SERVER, env });
+    const outcome = client.start({ initTimeoutMs: 1000 }).then(() => null, (e: Error) => e.message);
+    await Promise.resolve();
+    lastChild.current._exit(1, null, 'bad token acp-secret-456\n');
+    expect(await outcome).toBe('MCP server "fs" exited (code 1): bad token •••');
+  });
+
+  it('waits for stderr that arrives after the exit event', async () => {
+    // Node can deliver 'exit' before the last stderr chunk — here a few
+    // milliseconds later, the way a pipe drains on a busy machine.
+    const client = new McpClient(SERVER);
+    const outcome = client.start().then(() => null, (e: Error) => e.message);
+    await Promise.resolve();
+    const child = lastChild.current;
+    child.emit('exit', 1, null);
+    await new Promise(r => setTimeout(r, 20));
+    child.stderr.emit('data', 'Error: ENOENT: no such file or directory, stat \'/nope\'\n');
+    child.stderr.emit('end');
+    expect(await outcome).toBe('MCP server "fs" exited (code 1): Error: ENOENT: no such file or directory, stat \'/nope\'');
+  });
+
+  it('reports the exit without stderr once the drain grace runs out', async () => {
+    // Something the server started may hold stderr open for good.
+    const client = new McpClient(SERVER);
+    const started = client.start();
+    await Promise.resolve();
+    const t0 = Date.now();
+    lastChild.current.emit('exit', 3, null);
+    await expect(started).rejects.toThrow(/^MCP server "fs" exited \(code 3\)$/);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(STDERR_DRAIN_GRACE_MS - 20);
+  });
+
+  it('says plainly that uvx is missing, and to install uv', async () => {
+    const client = new McpClient({ name: 'git', command: 'uvx', args: ['mcp-server-git'] });
+    const started = client.start();
+    await Promise.resolve();
+    lastChild.current.emit('error', Object.assign(new Error('spawn uvx ENOENT'), { code: 'ENOENT', syscall: 'spawn uvx', path: 'uvx' }));
+    const err = await started.then(() => null, (e: Error) => e);
+    expect(err?.message).toBe(
+      'MCP server "git" could not start: "uvx" was not found on PATH. Install uv, which provides uvx (https://docs.astral.sh/uv/getting-started/installation/), then run /mcp reload.',
+    );
+  });
+});
+
+describe('missingCommandReason', () => {
+  it('points npx at Node.js and anything else at the config', () => {
+    expect(missingCommandReason('fs', 'npx')).toContain('Install Node.js, which provides npx');
+    expect(missingCommandReason('fs', 'C:\\tools\\npx.cmd')).toContain('Install Node.js, which provides npx');
+    expect(missingCommandReason('x', '/opt/bin/my-server')).toContain('"/opt/bin/my-server" was not found on PATH. Install it, or fix the command in the server\'s MCP config');
+  });
+
+  it('keeps backticks out: the reason is shown inside a code span', () => {
+    expect(missingCommandReason('x', 'a`b')).not.toContain('`');
   });
 });

@@ -121,9 +121,13 @@ export async function registerSessionServers(
         dirty.add(kind);
         sessionCatalogDirty.set(sessionId, dirty);
       };
-      client.onGaveUp = (reason: string) => {
+      client.onGaveUp = (reason: string, lastExit?: string) => {
+        // Lead with why it died (its exit reason, with the end of its stderr):
+        // "gave up auto-restart (crashed 4 times in 60s)" alone said how often
+        // but not what to fix.
         const list = sessionErrors.get(sessionId) ?? [];
-        list.push({ server: cfg.name, error: `gave up auto-restart (${reason})` });
+        const error = lastExit ? `${lastExit} — gave up auto-restart (${reason})` : `gave up auto-restart (${reason})`;
+        list.push({ server: cfg.name, error });
         sessionErrors.set(sessionId, list);
       };
       try {

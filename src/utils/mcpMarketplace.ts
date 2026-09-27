@@ -12,6 +12,19 @@
  *   - Prefer official `@modelcontextprotocol/*` packages; well-maintained
  *     third-party servers are fine when they're the de-facto standard for
  *     their niche (e.g. Playwright for browsers, the iOS-simulator servers).
+ *   - Every package here was checked against its registry on 2026-09-27 —
+ *     `npm view <pkg> name deprecated` for the npx entries, PyPI's simple API
+ *     (`Accept: application/vnd.pypi.simple.v1+json`, whose `project-status`
+ *     is the only place PyPI says a project is archived) for the uvx ones —
+ *     and `mcpMarketplace.test.ts` pins the list, so an edit has to be
+ *     checked again. That check removed GitHub, GitLab, Postgres and Slack
+ *     (all four `@modelcontextprotocol/server-*` packages are deprecated on
+ *     npm, "Package no longer supported") and SQLite (`mcp-server-sqlite` is
+ *     archived on PyPI); `/mcp install` wrote the config, npx fetched a dead
+ *     package, and the user was left with a server nobody maintains. Brave
+ *     Search moved to Brave's own package. Fetch stays: macOS dropped
+ *     `@modelcontextprotocol/server-fetch`, which never existed on npm, but
+ *     this entry runs the PyPI `mcp-server-fetch`, which is active.
  */
 
 import type { McpServer } from '../acp/protocol.js';
@@ -47,55 +60,19 @@ export const MCP_MARKETPLACE: MarketplaceEntry[] = [
     url: 'https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem',
   },
   {
-    id: 'github',
-    name: 'GitHub',
-    description: 'Browse repositories, issues, PRs, and commits via the GitHub API.',
-    server: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'] },
-    envNotes: [
-      { name: 'GITHUB_PERSONAL_ACCESS_TOKEN', description: 'Token with the `repo` scope (or `public_repo` if you only need public).', required: true },
-    ],
-    url: 'https://github.com/modelcontextprotocol/servers/tree/main/src/github',
-  },
-  {
-    id: 'gitlab',
-    name: 'GitLab',
-    description: 'Read repos, issues, MRs, and pipelines on GitLab (cloud or self-hosted).',
-    server: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-gitlab'] },
-    envNotes: [
-      { name: 'GITLAB_PERSONAL_ACCESS_TOKEN', description: 'Token with `read_api` scope.', required: true },
-      { name: 'GITLAB_API_URL', description: 'Override for self-hosted GitLab (default: https://gitlab.com/api/v4).' },
-    ],
-    url: 'https://github.com/modelcontextprotocol/servers/tree/main/src/gitlab',
-  },
-  {
     id: 'git',
     name: 'Git (local repo)',
     description: 'Inspect commits, blame, diffs, branches in a local git repository.',
     server: { command: 'uvx', args: ['mcp-server-git'] },
+    // mcp-server-git takes the repository as `--repository <path>`, not as a
+    // bare path: the hint used to say `/path/to/repo`, and `/mcp install git
+    // /path/to/repo` saved a config the server rejects at start ("Got
+    // unexpected extra argument"). Optional — without it the server works in
+    // the roots Codeep offers (the workspace).
     argHints: [
-      { description: 'Path to a git repository (omit to use the current workspace).', placeholder: '/path/to/repo' },
+      { description: 'Pin one repository with `--repository <path>` (omit to use the current workspace).', placeholder: '--repository /path/to/repo' },
     ],
     url: 'https://github.com/modelcontextprotocol/servers/tree/main/src/git',
-  },
-  {
-    id: 'postgres',
-    name: 'PostgreSQL',
-    description: 'Read-only SQL access to a Postgres database — schema introspection + query.',
-    server: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-postgres'] },
-    argHints: [
-      { description: 'Postgres connection URI.', placeholder: 'postgresql://user:pass@localhost/dbname', required: true },
-    ],
-    url: 'https://github.com/modelcontextprotocol/servers/tree/main/src/postgres',
-  },
-  {
-    id: 'sqlite',
-    name: 'SQLite',
-    description: 'Query a SQLite database file with full SQL.',
-    server: { command: 'uvx', args: ['mcp-server-sqlite'] },
-    argHints: [
-      { description: 'Path to the .sqlite/.db file.', placeholder: '/path/to/data.db', required: true },
-    ],
-    url: 'https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite',
   },
   {
     id: 'fetch',
@@ -107,23 +84,16 @@ export const MCP_MARKETPLACE: MarketplaceEntry[] = [
   {
     id: 'brave-search',
     name: 'Brave Search',
-    description: 'Web search via the Brave Search API.',
-    server: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-brave-search'] },
+    description: 'Web, local, image, video and news search via the Brave Search API.',
+    // Brave's own server: `@modelcontextprotocol/server-brave-search` is
+    // deprecated on npm and its docs page is gone. `--transport stdio` is the
+    // default today, but Brave's server has defaulted to HTTP before, and an
+    // HTTP server on stdio never answers `initialize`.
+    server: { command: 'npx', args: ['-y', '@brave/brave-search-mcp-server', '--transport', 'stdio'] },
     envNotes: [
       { name: 'BRAVE_API_KEY', description: 'Get a free key at brave.com/search/api/.', required: true },
     ],
-    url: 'https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search',
-  },
-  {
-    id: 'slack',
-    name: 'Slack',
-    description: 'Read channels, post messages, look up users and threads.',
-    server: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-slack'] },
-    envNotes: [
-      { name: 'SLACK_BOT_TOKEN', description: 'xoxb-… bot token.', required: true },
-      { name: 'SLACK_TEAM_ID', description: 'Numeric workspace id.', required: true },
-    ],
-    url: 'https://github.com/modelcontextprotocol/servers/tree/main/src/slack',
+    url: 'https://github.com/brave/brave-search-mcp-server',
   },
   {
     id: 'memory',
@@ -165,6 +135,37 @@ export const MCP_MARKETPLACE: MarketplaceEntry[] = [
 export function findMarketplaceEntry(id: string): MarketplaceEntry | null {
   const lower = id.toLowerCase();
   return MCP_MARKETPLACE.find(e => e.id === lower) ?? null;
+}
+
+/**
+ * The `/mcp install` line for an entry: required arguments as `<…>`,
+ * optional ones as `[…]`. Every hint used to render as `<…>`, so an
+ * optional one read as something the install could not do without.
+ */
+export function formatInstallUsage(entry: MarketplaceEntry): string {
+  const hints = (entry.argHints ?? []).map(h => {
+    const text = h.placeholder ?? 'arg';
+    return h.required ? `<${text}>` : `[${text}]`;
+  });
+  return ['/mcp install', entry.id, ...hints].join(' ');
+}
+
+/**
+ * Why `/mcp install <id> …extraArgs` must not go ahead, or null when it may.
+ *
+ * An entry whose `argHints` mark an argument `required` cannot start
+ * without it — Filesystem with no directory exits at once — yet both
+ * install paths saved it anyway: the project config kept an entry that
+ * failed on every start until the user found and hand-edited the file.
+ * Both paths (TUI and ACP) ask this BEFORE writing anything. Blank
+ * arguments do not count.
+ */
+export function missingRequiredArgs(entry: MarketplaceEntry, extraArgs: string[]): string | null {
+  const required = (entry.argHints ?? []).filter(h => h.required);
+  const given = extraArgs.filter(a => a.trim() !== '').length;
+  if (given >= required.length) return null;
+  const needs = required.map(h => h.description).join(' ');
+  return `\`${entry.id}\` needs ${required.length === 1 ? 'an argument' : `${required.length} arguments`}: ${needs} Nothing was saved.\n\nUsage: \`${formatInstallUsage(entry)}\``;
 }
 
 /**
