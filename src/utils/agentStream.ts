@@ -8,6 +8,7 @@ import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from './t
 import { parseOpenAIToolCalls, parseAnthropicToolCalls, parseToolCalls } from './toolParsing';
 import { ToolCall } from './tools';
 import type { NativeTurn } from '../api/responses';
+import { anthropicRefusalNotice } from '../api/anthropicContent';
 import { logger } from './logger';
 
 // Debug logging helper - writes to log file when CODEEP_DEBUG=1
@@ -50,6 +51,7 @@ export async function handleStream(
   const decoder = new TextDecoder();
   const chunks: string[] = [];
   let buffer = '';
+  let refusal: string | null = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -71,7 +73,11 @@ export async function handleStream(
           if (protocol === 'openai') {
             content = parsed.choices?.[0]?.delta?.content;
           } else if (parsed.type === 'content_block_delta') {
+            // `thinking_delta` carries `thinking`, not `text`, so only the
+            // reply's own text gets here.
             content = parsed.delta?.text;
+          } else if (parsed.type === 'message_delta') {
+            refusal = anthropicRefusalNotice(parsed.delta?.stop_reason, parsed.delta?.stop_details) ?? refusal;
           }
 
           if (content) {
@@ -83,6 +89,13 @@ export async function handleStream(
         }
       }
     }
+  }
+
+  // An Anthropic decline (HTTP 200, stop_reason "refusal"): the notice is the
+  // reply, so the agent loop ends on it instead of re-sending the request.
+  if (refusal) {
+    onChunk(chunks.length > 0 ? `\n\n${refusal}` : refusal);
+    return refusal;
   }
 
   return chunks.join('');
@@ -201,6 +214,7 @@ export async function handleAnthropicAgentStream(
   let currentToolId = '';
   let currentToolInput = '';
   let usageData: Record<string, unknown> | null = null;
+  let refusal: string | null = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -242,6 +256,12 @@ export async function handleAnthropicAgentStream(
           };
         }
 
+        // The stop reason arrives on message_delta too — a decline is HTTP 200
+        // with stop_reason "refusal" (see anthropicRefusalNotice).
+        if (parsed.type === 'message_delta') {
+          refusal = anthropicRefusalNotice(parsed.delta?.stop_reason, parsed.delta?.stop_details) ?? refusal;
+        }
+
         if (parsed.type === 'content_block_start') {
           const block = parsed.content_block;
           if (block.type === 'text') {
@@ -279,6 +299,14 @@ export async function handleAnthropicAgentStream(
   if (usageData) {
     const usage = extractAnthropicUsage(usageData);
     if (usage) recordTokenUsage(usage, model, providerId);
+  }
+
+  // A refused turn runs no tools — "a refusal can cut a tool_use off
+  // mid-input" (Anthropic) — and its notice, not the partial text, is the
+  // reply. The notice ends a sentence, so runAgent takes it as final.
+  if (refusal) {
+    onChunk(content ? `\n\n${refusal}` : refusal);
+    return { content: refusal, toolCalls: [], usedNativeTools: true };
   }
 
   const toolCalls = parseAnthropicToolCalls(contentBlocks);

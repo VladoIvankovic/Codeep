@@ -623,7 +623,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       { id: 'claude-opus-5-5',           name: 'Claude Opus 5.5',       description: 'Complex agentic coding & deep reasoning — $4/$20, 1M context' },
       { id: 'claude-fable-5',            name: 'Claude Fable 5',        description: 'Superseded by 5.1 — same price, kept for pinned configs' },
       { id: 'claude-opus-5',             name: 'Claude Opus 5',         description: 'Legacy since Opus 5.5 — kept for pinned configs' },
-      { id: 'claude-sonnet-5',           name: 'Claude Sonnet 5',       description: 'Best balance of speed and intelligence' },
+      { id: 'claude-sonnet-5-5',         name: 'Claude Sonnet 5.5',     description: 'Best balance of speed and intelligence — $2/$10, 1M context' },
+      { id: 'claude-sonnet-5',           name: 'Claude Sonnet 5',       description: 'Previous Sonnet — kept for pinned configs' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku',          description: 'Fastest and most affordable' },
     ],
     // Anthropic's models overview now says to "start with Claude Opus 5.5 for
@@ -633,6 +634,11 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // Opus 5 defaulted to high, and /thinking auto sends no effort, so an
     // unpinned user runs one level lower than before. It also thinks more per
     // turn at a given effort — see minResponseTokensFor.
+    // Sonnet 5.5 (released 2026-09-28) is now the Sonnet in the picker, at
+    // Sonnet 5's $2/$10 with the same 1M context and 128K output. Sonnet 5 is
+    // kept with no migration: it is still "Active", retiring no sooner than
+    // 2027-06-30. The default stays Opus 5.5, where the overview still says to
+    // start.
     defaultModel: 'claude-opus-5-5',
     defaultProtocol: 'anthropic',
     envKey: 'ANTHROPIC_API_KEY',
@@ -688,7 +694,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       { id: 'anthropic/claude-opus-5.5',        name: 'Claude Opus 5.5',    description: 'Anthropic — current Opus' },
       { id: 'anthropic/claude-fable-5',         name: 'Claude Fable 5',     description: 'Anthropic — superseded by 5.1' },
       { id: 'anthropic/claude-opus-5',          name: 'Claude Opus 5',      description: 'Anthropic — legacy Opus' },
-      { id: 'anthropic/claude-sonnet-5',        name: 'Claude Sonnet 5',    description: 'Anthropic — balanced' },
+      { id: 'anthropic/claude-sonnet-5.5',      name: 'Claude Sonnet 5.5',  description: 'Anthropic — balanced' },
+      { id: 'anthropic/claude-sonnet-5',        name: 'Claude Sonnet 5',    description: 'Anthropic — previous Sonnet' },
       { id: 'openai/gpt-6-astra',               name: 'GPT-6 Astra',        description: 'OpenAI — frontier' },
       { id: 'openai/gpt-6-sol',                 name: 'GPT-6 Sol',          description: 'OpenAI — GPT-6, balanced' },
       { id: 'openai/gpt-6-luna',                name: 'GPT-6 Luna',         description: 'OpenAI — GPT-6, fast/cheap' },
@@ -1013,8 +1020,11 @@ export function providerNoStreamWithTools(providerId: string): boolean {
 
 /**
  * Models that reject sampling parameters (temperature/top_p/top_k) with a 400.
- * Anthropic removed them on Fable 5 and Opus 4.7+, and Sonnet 5 rejects any
- * non-default value; older Claude models still accept them, so this must be a
+ * Anthropic removed them on Fable 5 and Opus 4.7+, and Sonnet 5 and 5.5 reject
+ * any non-default value ("Setting temperature, top_p, or top_k to a non-default
+ * value returns a 400 error" — Sonnet 5.5 model page; the `claude-sonnet-5`
+ * entry covers `claude-sonnet-5-5` and OpenRouter's `anthropic/claude-sonnet-5.5`
+ * by prefix). Older Claude models still accept them, so this must be a
  * MODEL-level check, not a provider-level one (requiresDefaultTemperature
  * can't express it). Omitting the field is always safe — the API treats
  * omission as default. Kimi K2.x code/thinking models fix temperature
@@ -1064,11 +1074,21 @@ export function getEffectiveMaxTokens(providerId: string, requested: number): nu
  * which spends the same limit as the answer. The task planner's 2048, or a
  * maxTokens lowered in /settings, could go on thinking alone and cut the reply
  * off. 32K is Codeep's own default; the Max tier gets 64K, where Anthropic's
- * advice for max effort on Opus 5 is "starting at 64k tokens". Matched on the
- * canonical id, so `anthropic/claude-opus-5.5` on OpenRouter is covered too.
+ * advice for max effort on Opus 5 is "starting at 64k tokens".
+ *
+ * Claude Sonnet 5.5 gets the same floor. Its thinking is adaptive and ON by
+ * default rather than always on — `between_tools` turns the up-front part off,
+ * and Codeep never sends it — at a default effort of high, and Anthropic's
+ * migration guide says to "revisit max_tokens. It covers thinking plus text".
+ * Sonnet 5 (still offered for pinned configs) is not included.
+ *
+ * Matched on the canonical id and exactly, so `anthropic/claude-opus-5.5` and
+ * `anthropic/claude-sonnet-5.5` on OpenRouter are covered, and `claude-sonnet-5`
+ * is not caught by a prefix.
  */
 export function minResponseTokensFor(model: string, tier: ReasoningTier | undefined): number {
-  if (!idMatches(canonicalModelId(model), 'claude-opus-5-5')) return 0;
+  const id = canonicalModelId(model);
+  if (!idMatches(id, 'claude-opus-5-5') && !idMatches(id, 'claude-sonnet-5-5')) return 0;
   return tier === 'max' ? 65_536 : 32_768;
 }
 
@@ -1286,7 +1306,9 @@ export function agentToolsNote(providerId: string, model: string, wire: OpenAIWi
  *
  * OpenRouter accepts "xhigh" and "max", but only where the model does. Its
  * /api/v1/models `reasoning.supported_efforts` (read 2026-09-23) lists "max"
- * for GPT-5.6 and GPT-6, the Claude 5 family and Opus 4.7/4.8, DeepSeek V4.1
+ * for GPT-5.6 and GPT-6, the Claude 5 family (Sonnet 5.5 included: its
+ * supported_efforts are max/xhigh/high/medium/low, read 2026-09-29; the
+ * `claude-sonnet-5` prefix covers it) and Opus 4.7/4.8, DeepSeek V4.1
  * Flash and V4 Pro 0813, and Kimi K3; "xhigh" is the ceiling for GPT-5.4/5.5,
  * Grok 4.6/4.7 and Qwen 3.8 Max. Everything else keeps the old "high" cap —
  * including the 0423 `deepseek/deepseek-v4-pro` preview (xhigh|high only) and
@@ -1324,7 +1346,9 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
   const id = canonicalModelId(model);
   switch (providerId) {
     case 'anthropic':
-      // Effort is GA on Opus 5, Opus 4.5+, Sonnet 4.6/5, Fable 5 — NOT Haiku or Sonnet 4.5.
+      // Effort is GA on Opus 5/5.5, Opus 4.5+, Sonnet 4.6/5/5.5, Fable 5/5.1 — NOT
+      // Haiku or Sonnet 4.5. Sonnet 5.5 takes low/medium/high/xhigh/max
+      // (default high); `sonnet-5` in the pattern matches `sonnet-5-5`.
       if (idMatches(id, 'claude-haiku-4-5') || idMatches(id, 'claude-sonnet-4-5')) return false;
       return /^claude-(opus-5|opus-4-([5-9]|\d\d)|sonnet-(4-6|5)|fable-5)/.test(id);
     case 'openai':

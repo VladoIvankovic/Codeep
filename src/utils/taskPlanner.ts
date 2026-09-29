@@ -4,6 +4,7 @@
 
 import { config, getApiKey, Message, resolveBaseUrl } from '../config/index';
 import { getProviderAuthHeader, isNoApiKeyProvider, requiresDefaultTemperature, modelRejectsSamplingParams, minResponseTokensFor } from '../config/providers';
+import { anthropicText } from '../api/anthropicContent';
 
 export interface SubTask {
   id: number;
@@ -81,9 +82,10 @@ Break this down into subtasks. Each task = one file or one logical unit. Respond
       { role: 'user', content: systemPrompt }
     ];
 
-    // 2048 is plenty for a JSON plan, but not for a model that thinks on every
-    // request inside the same limit (Opus 5.5 — see minResponseTokensFor). The
-    // planner sends no effort, so the model runs at its own default: 'auto'.
+    // 2048 is plenty for a JSON plan, but not for a model that thinks by
+    // default inside the same limit (Opus 5.5, Sonnet 5.5 — see
+    // minResponseTokensFor). The planner sends no effort, so the model runs at
+    // its own default: 'auto'.
     const maxTokens = Math.max(2048, minResponseTokensFor(model, 'auto'));
     const requestBody = protocol === 'anthropic'
       ? {
@@ -133,8 +135,11 @@ Break this down into subtasks. Each task = one file or one logical unit. Respond
     }
 
     const data = await response.json();
-    const content = protocol === 'anthropic' 
-      ? data.content?.[0]?.text || ''
+    // Anthropic by block type: on a model that thinks first, `content[0]` is a
+    // thinking block, so a plan that came after one read as "" and fell back to
+    // a single task. A decline has no text and falls back the same way.
+    const content = protocol === 'anthropic'
+      ? anthropicText(data.content)
       : data.choices?.[0]?.message?.content || '';
 
     // Extract JSON from response (handle markdown code blocks)

@@ -217,7 +217,7 @@ describe('planTasks runtime', () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        content: [{ text: JSON.stringify({
+        content: [{ type: 'text', text: JSON.stringify({
           tasks: [{ id: 1, description: 'Plan with Claude', dependencies: [] }],
         }) }],
       }),
@@ -249,7 +249,7 @@ describe('planTasks request budget and sampling', () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => (protocol === 'anthropic'
-        ? { content: [{ text: tasks }] }
+        ? { content: [{ type: 'text', text: tasks }] }
         : { choices: [{ message: { content: tasks } }] }),
     } as Response);
   }
@@ -271,6 +271,41 @@ describe('planTasks request budget and sampling', () => {
     answer('anthropic');
     await planTasks('Build the feature', project, { providerId: 'anthropic', model: 'claude-sonnet-5', protocol: 'anthropic' });
     expect(body().max_tokens).toBe(2048);
+  });
+
+  // Sonnet 5.5 thinks by default at effort high, inside the same max_tokens.
+  it('gives Sonnet 5.5 the same room, directly and on OpenRouter, without a temperature', async () => {
+    answer('anthropic');
+    await planTasks('Build the feature', project, { providerId: 'anthropic', model: 'claude-sonnet-5-5', protocol: 'anthropic' });
+    expect(body().max_tokens).toBe(32_768);
+    expect(body()).not.toHaveProperty('temperature');
+
+    answer('openai');
+    await planTasks('Build the feature', project, { providerId: 'openrouter', model: 'anthropic/claude-sonnet-5.5', protocol: 'openai' });
+    expect(body().max_tokens).toBe(32_768);
+    expect(body()).not.toHaveProperty('temperature');
+  });
+
+  // The plan used to be read from content[0], which is the thinking block on a
+  // model that thinks first — so a real plan parsed as "" and fell back.
+  it('reads the plan after a leading thinking block', async () => {
+    const plan = JSON.stringify({ tasks: [
+      { id: 1, description: 'first step', dependencies: [] },
+      { id: 2, description: 'second step', dependencies: [1] },
+    ] });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: [
+          { type: 'thinking', thinking: '', signature: 'sig' },
+          { type: 'text', text: plan },
+        ],
+        stop_reason: 'end_turn',
+      }),
+    } as Response);
+
+    const result = await planTasks('Build the feature', project, { providerId: 'anthropic', model: 'claude-sonnet-5-5', protocol: 'anthropic' });
+    expect(result.tasks.map(t => t.description)).toEqual(['first step', 'second step']);
   });
 
   // The temperature used to be gated on the provider alone, so OpenRouter sent

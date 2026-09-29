@@ -11,6 +11,47 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.7.0] — 2026-09-29
+
+> TL;DR — Claude Sonnet 5.5 arrives (Opus 5.5 stays the default), Claude replies that start with thinking no longer come back empty, and a request Claude declines now says so instead of going quiet.
+
+### Added
+
+- **Claude Sonnet 5.5** (`claude-sonnet-5-5`), Anthropic's new Sonnet: $2/$10
+  like Sonnet 5, 1M context, 128K output, and thinking on by default. Codeep
+  leaves it at least 32K reply tokens (64K at Max), as it does for Opus 5.5,
+  because its thinking shares that limit. Through OpenRouter it is
+  `anthropic/claude-sonnet-5.5`. Sonnet 5 stays in the picker, and a setting
+  pinned to it keeps it. Opus 5.5 stays the Anthropic default.
+
+### Fixed
+
+- **Claude replies that began with thinking could come back empty** wherever
+  Codeep did not stream them: conversation summaries (compaction, `/recall`),
+  session titles, the review hook, the text-tool fallback and the task planner,
+  which then dropped its plan. Codeep read only the first block of the reply,
+  and on Opus 5.5 and Sonnet 5/5.5 that is often the thinking. It now reads
+  every text block.
+- **A request Claude declines now says so**: "Claude declined this request
+  (category: cyber)." It used to be an empty reply, and in agent mode the empty
+  turn was sent again. A declined agent turn runs none of its tool calls.
+  Where Codeep uses a reply itself rather than showing it, a decline counts as
+  no reply: no session title, conversation summary or `/recall` recap is made
+  from it, `/plan` fails instead of keeping it as the plan `/go` would run, a
+  skill stops at that step instead of passing it on (`/stash` would have
+  stashed under it), and an MCP server's sampling request gets an error
+  instead of an empty answer.
+- **`/compact` no longer throws the conversation away when the summary fails.**
+  An empty summary replaced the earlier messages anyway, leaving the compaction
+  marker over nothing. The history now stays as it was, and Codeep says why
+  nothing was compacted.
+- **The context meter sizes OpenRouter models by their own window.**
+  `anthropic/claude-sonnet-5.5`, `anthropic/claude-opus-5.5`, `z-ai/glm-5.3`
+  and the other OpenRouter ids of models Codeep knows were all sized at the
+  128K default, so a long run warned "Context at 80% of 128k window" at about
+  100K tokens of a 1M window. They now get the model's window, or OpenRouter's
+  where it is smaller (GPT-5.5: 1.05M).
+
 ## [3.6.1] — 2026-09-27
 
 > TL;DR — A project can no longer replace one of your own MCP servers, a failed MCP server now says why, and /mcp browse drops the servers that are no longer maintained.

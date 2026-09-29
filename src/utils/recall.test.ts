@@ -6,7 +6,11 @@ vi.mock('../config/index.js', () => ({
   loadSession: vi.fn(),
 }));
 
-import { recallSessions, formatRecall } from './recall';
+// summarizeRecall's chat() (dynamically imported).
+const { mockChat } = vi.hoisted(() => ({ mockChat: vi.fn() }));
+vi.mock('../api/index.js', () => ({ chat: mockChat }));
+
+import { recallSessions, formatRecall, summarizeRecall } from './recall';
 import { listSessionsWithInfo, loadSession } from '../config/index.js';
 
 const today = new Date().toISOString();
@@ -120,5 +124,30 @@ describe('formatRecall', () => {
     expect(out).toContain('Auth work');
     expect(out).toContain('OAuth callback');
     expect(out).toContain('/sessions');
+  });
+});
+
+describe('summarizeRecall', () => {
+  const match = {
+    session: { name: 's1', title: 'Auth work', createdAt: today, messageCount: 2, fileSize: 100 },
+    score: 5, snippet: 'oauth', matchedMessages: 1,
+  };
+  beforeEach(() => {
+    mockChat.mockReset();
+    vi.mocked(loadSession).mockReset().mockReturnValue([
+      { role: 'user', content: 'add oauth' }, { role: 'assistant', content: 'done' },
+    ] as any);
+  });
+
+  it('returns the recap the model writes', async () => {
+    mockChat.mockResolvedValue('  You added OAuth to the login flow.  ');
+    expect(await summarizeRecall('oauth', [match])).toBe('You added OAuth to the login flow.');
+  });
+
+  // A decline is no recap: null, which /recall --summarize already renders as
+  // the match list alone (a pre-output decline's "" did the same).
+  it('returns null when the request is declined', async () => {
+    mockChat.mockResolvedValue('Claude declined this request (category: cyber).');
+    expect(await summarizeRecall('oauth', [match])).toBeNull();
   });
 });

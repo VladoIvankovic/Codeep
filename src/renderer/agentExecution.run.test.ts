@@ -61,6 +61,11 @@ vi.mock('../utils/git', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/git')>()),
   isGitRepository: vi.fn(() => false),
 }));
+// A skill's prompt step asks chat(); the model's reply is scripted per test.
+vi.mock('../api/index', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/index')>()),
+  chat: vi.fn(),
+}));
 vi.mock('../config/index', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../config/index')>()),
   autoSaveSession: vi.fn(() => true),
@@ -69,6 +74,7 @@ vi.mock('../config/index', async (importOriginal) => ({
 
 import { executeAgentTask, runAgentTask, runSkill, type AppExecutionContext, type AgentRunOutcome } from './agentExecution';
 import { runAgent } from '../utils/agent';
+import { chat } from '../api/index';
 import { loadTelegramCredentials } from '../utils/telegramCredentials';
 import { syncSession } from '../utils/codeepCloud';
 import { autoSaveSession, config } from '../config/index';
@@ -444,6 +450,35 @@ describe('a skill whose agent step does not succeed', () => {
     const realHome = (await vi.importActual<typeof import('node:os')>('node:os')).homedir();
     expect(realHome).not.toBe(fakeHome);
     expect(existsSync(join(realHome, '.codeep', 'skills', 'ship-it.json'))).toBe(false);
+  });
+});
+
+describe('a skill whose prompt step is declined', () => {
+  // chat() returns the notice on a decline, after streaming it for the user.
+  // As the step's output it would become the next step's ${_prev} — the
+  // built-in /stash runs `git stash push -m "${_prev}"` with no confirm between.
+  it('stops before the steps after it', async () => {
+    const { existsSync } = await import('node:fs');
+    const marker = join(root, 'named.txt');
+    writeCustomSkill('name-it', [
+      { type: 'prompt', content: 'suggest a name' },
+      { type: 'command', content: `touch ${marker}` },
+    ]);
+
+    const notes: string[] = [];
+    const app = fakeApp();
+    const noting = new Proxy(app, {
+      get: (target, key) => (key === 'notify' ? (note: string) => { notes.push(note); } : target[key as keyof App]),
+    });
+    vi.mocked(chat).mockResolvedValueOnce('Claude declined this request (category: cyber).');
+    await runSkill('name-it', [], makeCtx({ app: noting }));
+    expect(existsSync(marker)).toBe(false);
+    expect(notes).toContain('Skill failed: Claude declined this request (category: cyber).');
+
+    // A reply lets the rest run.
+    vi.mocked(chat).mockResolvedValueOnce('widget-layout');
+    await runSkill('name-it', [], makeCtx());
+    expect(existsSync(marker)).toBe(true);
   });
 });
 

@@ -9,6 +9,7 @@ import { logApiRequest, logApiResponse } from '../utils/logger';
 import { loadProjectIntelligence, generateContextFromIntelligence, ProjectIntelligence } from '../utils/projectIntelligence';
 import { loadProjectRules } from '../utils/agent';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from '../utils/tokenTracker';
+import { anthropicText, anthropicRefusalNotice } from './anthropicContent';
 
 /**
  * OpenRouter returns the authoritative per-call USD in `usage.cost` when
@@ -112,9 +113,13 @@ interface OpenAIResponse {
 }
 
 interface AnthropicResponse {
+  // Typed blocks — `thinking` first on any model that thinks by default.
   content: Array<{
-    text: string;
+    type: string;
+    text?: string;
   }>;
+  stop_reason?: string | null;
+  stop_details?: { category?: string | null } | null;
   delta?: {
     text?: string;
   };
@@ -428,7 +433,7 @@ async function chatOpenAI(
   const stream = Boolean(onChunk);
   const timeout = config.get('apiTimeout');
   const temperature = config.get('temperature');
-  // Never below the model's floor (Opus 5.5 on OpenRouter — see minResponseTokensFor).
+  // Never below the model's floor (Opus 5.5 / Sonnet 5.5 on OpenRouter — see minResponseTokensFor).
   const maxTokens = Math.max(config.get('maxTokens'), minResponseTokensFor(model, config.get('reasoningEffort') as ReasoningTier));
 
   // Get provider-specific URL and auth. resolveBaseUrl applies user
@@ -733,8 +738,8 @@ async function chatAnthropic(
   const stream = Boolean(onChunk);
   const timeout = config.get('apiTimeout');
   const temperature = config.get('temperature');
-  // Never below the model's floor: Opus 5.5's always-on thinking spends the
-  // same limit as the answer (see minResponseTokensFor).
+  // Never below the model's floor: Opus 5.5's and Sonnet 5.5's default-on
+  // thinking spends the same limit as the answer (see minResponseTokensFor).
   const maxTokens = Math.max(config.get('maxTokens'), minResponseTokensFor(model, config.get('reasoningEffort') as ReasoningTier));
   const baseUrl = getProviderBaseUrl(providerId, 'anthropic');
   const authHeader = getProviderAuthHeader(providerId, 'anthropic');
@@ -766,8 +771,10 @@ async function chatAnthropic(
   try {
     // Anthropic prompt caching: wrap system as an array with a
     // `cache_control` marker so the static system prompt (typically large
-    // and stable across a session) is cached. Below 1024 input tokens
-    // Anthropic silently skips caching — no error.
+    // and stable across a session) is cached. Below the model's minimum
+    // cacheable prompt (it varies by model: 512 tokens on Sonnet 5.5, 1,024
+    // on Sonnet 5 — Anthropic's Sonnet 5.5 migration guide) Anthropic
+    // silently skips caching — no error.
     const cachedSystem = useNativeSystem
       ? { system: [{ type: 'text' as const, text: systemPrompt, cache_control: { type: 'ephemeral' as const } }] }
       : {};
@@ -799,8 +806,10 @@ async function chatAnthropic(
       const data = await response.json() as AnthropicResponse;
       const usage = extractAnthropicUsage(data);
       if (usage) recordTokenUsage(usage, model, config.get('provider'));
-      const content = data.content[0]?.text || '';
-      return stripThinkTags(content);
+      const refusal = anthropicRefusalNotice(data.stop_reason, data.stop_details);
+      if (refusal) return refusal;
+      // By type: `content[0]` is a thinking block on a model that thinks first.
+      return stripThinkTags(anthropicText(data.content));
     }
   } catch (error) {
     if (timedOut) {
@@ -835,6 +844,7 @@ async function handleAnthropicStream(
   let cacheCreationTokens = 0;
   let cacheReadTokens = 0;
   let streamModel = '';
+  let refusal: string | null = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -870,6 +880,10 @@ async function handleAnthropicStream(
           if (parsed.type === 'message_delta' && parsed.usage) {
             outputTokens = parsed.usage.output_tokens || 0;
           }
+          // ...and the stop reason, which is how a decline arrives (HTTP 200).
+          if (parsed.type === 'message_delta') {
+            refusal = anthropicRefusalNotice(parsed.delta?.stop_reason, parsed.delta?.stop_details) ?? refusal;
+          }
         } catch {
           // Ignore parse errors
         }
@@ -891,6 +905,13 @@ async function handleAnthropicStream(
       streamModel || 'unknown',
       config.get('provider')
     );
+  }
+
+  // A decline: say so instead of ending on nothing. Any text streamed before
+  // it is not an answer (Anthropic: discard it), so the notice is the reply.
+  if (refusal) {
+    onChunk(chunks.length > 0 ? `\n\n${refusal}` : refusal);
+    return refusal;
   }
 
   // Strip <think> tags from MiniMax responses

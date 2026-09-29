@@ -975,7 +975,7 @@ describe('providers', () => {
 
     // Opus 5.5 thinks on every request and more per turn than Opus 5; the
     // thinking spends the same max_tokens as the answer.
-    it('gives Opus 5.5 a response floor, more at Max, and nobody else one', () => {
+    it('gives Opus 5.5 a response floor, more at Max, and nobody but Sonnet 5.5 one', () => {
       expect(minResponseTokensFor('claude-opus-5-5', 'auto')).toBe(32_768);
       expect(minResponseTokensFor('claude-opus-5-5', undefined)).toBe(32_768);
       expect(minResponseTokensFor('claude-opus-5-5', 'max')).toBe(65_536);
@@ -1021,5 +1021,89 @@ describe('providers', () => {
       expect(resolveReasoningTier('z.ai', 'glm-5.2', 'auto')).toBe('auto');
       expect(resolveReasoningTier('ollama', 'llama3.2', 'max')).toBe('auto');
     });
+  });
+});
+
+// Claude Sonnet 5.5, released 2026-09-28 (platform.claude.com model page,
+// What's new, migration guide). Every value is asserted on its own and through
+// OpenRouter's dotted id, rather than trusting the `claude-sonnet-5` rows to
+// catch 5.5 by prefix.
+describe('Claude Sonnet 5.5', () => {
+  const SONNET = 'claude-sonnet-5-5';
+  const OR_SONNET = 'anthropic/claude-sonnet-5.5';
+
+  it('is the Sonnet in the Anthropic picker, directly above Sonnet 5, which stays unmigrated', () => {
+    const models = PROVIDERS['anthropic'].models;
+    const ids = models.map(m => m.id);
+    expect(ids.indexOf(SONNET)).toBeGreaterThan(-1);
+    expect(ids.indexOf('claude-sonnet-5')).toBe(ids.indexOf(SONNET) + 1);
+    const sonnet55 = models.find(m => m.id === SONNET)!;
+    expect(sonnet55.name).toBe('Claude Sonnet 5.5');
+    expect(sonnet55.description).toMatch(/^Best balance of speed and intelligence/);
+    expect(models.find(m => m.id === 'claude-sonnet-5')!.description).toBe('Previous Sonnet — kept for pinned configs');
+    // Sonnet 5 is still Active (retiring no sooner than 2027-06-30).
+    expect(replacementModelFor('anthropic', 'claude-sonnet-5')).toBeUndefined();
+    expect(replacementModelFor('anthropic', SONNET)).toBeUndefined();
+    // The overview still says to start with Opus 5.5.
+    expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-5-5');
+  });
+
+  it('is in the OpenRouter fallback under the dotted id OpenRouter lists, above Sonnet 5', () => {
+    const models = getProvider('openrouter')!.models;
+    const ids = models.map(m => m.id);
+    expect(ids).not.toContain('anthropic/claude-sonnet-5-5');
+    expect(ids.indexOf('anthropic/claude-sonnet-5')).toBe(ids.indexOf(OR_SONNET) + 1);
+    expect(models.find(m => m.id === OR_SONNET)!.name).toBe('Claude Sonnet 5.5');
+    expect(models.find(m => m.id === 'anthropic/claude-sonnet-5')!.description).toBe('Anthropic — previous Sonnet');
+  });
+
+  // "Setting temperature, top_p, or top_k to a non-default value returns a 400 error."
+  it('gets no sampling params, directly and on OpenRouter', () => {
+    expect(canonicalModelId(OR_SONNET)).toBe(SONNET);
+    expect(modelRejectsSamplingParams(SONNET)).toBe(true);
+    expect(modelRejectsSamplingParams(OR_SONNET)).toBe(true);
+  });
+
+  // Effort low / medium / high / xhigh / max, default high; /thinking auto sends nothing.
+  it('takes every effort tier on Anthropic, and nothing on Auto', () => {
+    expect(modelSupportsReasoningEffort('anthropic', SONNET)).toBe(true);
+    expect(availableReasoningTiers('anthropic', SONNET)).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+    expect(reasoningParamsFor('anthropic', SONNET, 'auto')).toEqual({});
+    for (const tier of ['low', 'medium', 'high', 'max'] as const) {
+      expect(reasoningParamsFor('anthropic', SONNET, tier), tier).toEqual({ output_config: { effort: tier } });
+    }
+  });
+
+  // OpenRouter's /api/v1/models lists supported_efforts max/xhigh/high/medium/low for it.
+  it('goes to "max" at the Max tier on OpenRouter', () => {
+    expect(reasoningParamsFor('openrouter', OR_SONNET, 'max')).toEqual({ reasoning: { effort: 'max' } });
+    expect(reasoningParamsFor('openrouter', OR_SONNET, 'medium')).toEqual({ reasoning: { effort: 'medium' } });
+    expect(availableReasoningTiers('openrouter', OR_SONNET)).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+  });
+
+  it('keeps every listed tier distinct (drift guard)', () => {
+    for (const [pid, model] of [['anthropic', SONNET], ['openrouter', OR_SONNET]]) {
+      const tiers = availableReasoningTiers(pid, model).filter(t => t !== 'auto');
+      const params = tiers.map(t => JSON.stringify(reasoningParamsFor(pid, model, t)));
+      expect(new Set(params).size, `${pid}/${model}`).toBe(tiers.length);
+    }
+  });
+
+  // Thinking is on by default at effort high and spends max_tokens with the answer.
+  it('gets the 32K response floor, 64K at Max, directly and on OpenRouter — and Sonnet 5 does not', () => {
+    expect(minResponseTokensFor(SONNET, 'auto')).toBe(32_768);
+    expect(minResponseTokensFor(SONNET, undefined)).toBe(32_768);
+    expect(minResponseTokensFor(SONNET, 'high')).toBe(32_768);
+    expect(minResponseTokensFor(SONNET, 'max')).toBe(65_536);
+    expect(minResponseTokensFor(OR_SONNET, 'auto')).toBe(32_768);
+    expect(minResponseTokensFor(OR_SONNET, 'max')).toBe(65_536);
+    expect(minResponseTokensFor('claude-sonnet-5', 'max')).toBe(0);
+    expect(minResponseTokensFor('anthropic/claude-sonnet-5', 'auto')).toBe(0);
+    expect(minResponseTokensFor('claude-sonnet-4-6', 'max')).toBe(0);
+  });
+
+  it('has its own context and price rows, not the Sonnet 5 fallback by accident', () => {
+    expect(getModelContextWindow(SONNET)).toBe(1_000_000);
+    expect(getPricingTable().find(m => m.model === SONNET)).toEqual({ model: SONNET, inputPer1M: 2, outputPer1M: 10 });
   });
 });

@@ -29,6 +29,7 @@
 
 import type { SamplingCreateMessageParams, SamplingCreateMessageResult } from './mcpClient.js';
 import type { Message } from '../config/index.js';
+import { isAnthropicRefusalNotice } from '../api/anthropicContent.js';
 
 const MIN_INTERVAL_MS = 1000;
 const MAX_PER_SERVER = 100;
@@ -97,6 +98,12 @@ export async function handleMcpSamplingRequest(
   const { chat } = await import('../api/index.js');
   const { config } = await import('../config/index.js');
   const text = await chat(message, prior);
+  // A decline is not a completion. Returned as text with stopReason
+  // 'endTurn', the server would take "Claude declined this request" for the
+  // model's answer (before the notice it got an empty one). As an error it
+  // reaches the server as "sampling failed: Claude declined …" — what the
+  // macOS app sends too.
+  if (isAnthropicRefusalNotice(text)) throw new Error(text.trim());
 
   return {
     role: 'assistant',

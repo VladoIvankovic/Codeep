@@ -88,6 +88,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'claude-opus-5-5':              1_000_000,
   'claude-opus-5':                1_000_000,
   'claude-sonnet-4-6':            1_000_000,
+  'claude-sonnet-5-5':            1_000_000,
   'claude-sonnet-5':              1_000_000,
   'claude-haiku-4-5-20251001':    200_000,
   // DeepSeek
@@ -140,15 +141,50 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'Qwen/Qwen3.5-397B-A17B':    262_144,
   // The previous ModelScope fallback, no longer served there.
   'Qwen/Qwen3-Coder-480B-A35B-Instruct': 262_144,
+  // OpenRouter ids reach the rows above through the canonical-id fallback in
+  // getModelContextWindow (`anthropic/claude-sonnet-5.5` → `claude-sonnet-5-5`).
+  // An exact row is needed only where OpenRouter serves less than the vendor:
+  // an overstated window holds the 80% warning back past the real limit.
+  // OpenRouter /api/v1/models `context_length`, read 2026-09-29.
+  'openai/gpt-5.5':            1_050_000,
 };
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 
 /**
- * Get context window size for a model (falls back to 128k if unknown)
+ * The rule of `canonicalModelId` in config/providers.ts — lowercase, drop any
+ * `vendor/` prefix, dots to dashes — inlined because tests mock
+ * config/providers wholesale while agent.ts sizes every run through here (a
+ * test pins the two together).
+ */
+export function canonicalContextKey(model: string): string {
+  let id = model.toLowerCase();
+  const slash = id.lastIndexOf('/');
+  if (slash !== -1) id = id.slice(slash + 1);
+  return id.replace(/\./g, '-');
+}
+
+// First row wins where two keys share a canonical id, so a later exact-only
+// row (the OpenRouter one above) never changes what its twin resolves to.
+const CONTEXT_WINDOW_BY_CANONICAL_ID = new Map<string, number>();
+for (const [id, window] of Object.entries(MODEL_CONTEXT_WINDOWS)) {
+  const key = canonicalContextKey(id);
+  if (!CONTEXT_WINDOW_BY_CANONICAL_ID.has(key)) CONTEXT_WINDOW_BY_CANONICAL_ID.set(key, window);
+}
+
+/**
+ * Get context window size for a model (falls back to 128k if unknown).
+ *
+ * The exact id first, then its canonical id against the canonical table keys:
+ * OpenRouter sends `anthropic/claude-opus-5.5`, `z-ai/glm-5.3`, and an exact
+ * lookup alone sized every one of them at the 128K default — "Context at 80%"
+ * warnings at ~100K on a 1M model. Dated snapshots (`…-0813`) are not
+ * matched to their base row; they keep the default.
  */
 export function getModelContextWindow(model: string): number {
-  return MODEL_CONTEXT_WINDOWS[model] ?? DEFAULT_CONTEXT_WINDOW;
+  return MODEL_CONTEXT_WINDOWS[model]
+    ?? CONTEXT_WINDOW_BY_CANONICAL_ID.get(canonicalContextKey(model))
+    ?? DEFAULT_CONTEXT_WINDOW;
 }
 
 // Pricing table — USD per 1M tokens. Same rule as MODEL_CONTEXT_WINDOWS:
@@ -201,6 +237,12 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'claude-opus-5-5':              { inputPer1M: 4.00,  outputPer1M: 20.00 },
   'claude-opus-5':                { inputPer1M: 5.00,  outputPer1M: 25.00 },
   'claude-sonnet-4-6':            { inputPer1M: 3.00,  outputPer1M: 15.00 },
+  // "Claude Sonnet 5.5 has the same prices as Claude Sonnet 5, including prompt
+  // caching" (What's new). Its cache read is $0.20 against $2 input and its
+  // 5-minute write $2.50 — the 0.1× and 1.25× defaults, so unlike Opus 5.5
+  // (the same $0.20, but against $4) it needs no row in the rate tables below.
+  // The $4 one-hour write never applies: Codeep sends no cache `ttl`.
+  'claude-sonnet-5-5':            { inputPer1M: 2.00,  outputPer1M: 10.00 },
   'claude-sonnet-5':              { inputPer1M: 2.00,  outputPer1M: 10.00 },
   'claude-haiku-4-5-20251001':    { inputPer1M: 1.00,  outputPer1M: 5.00 },
   // DeepSeek (cache-miss input pricing)

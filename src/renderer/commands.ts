@@ -1584,7 +1584,7 @@ Format: use headers per category, only include categories where you found issues
       try {
         const result = await compactHistory(messages, { keepRecent, projectContext: ctx.projectContext });
         if (result.replaced === 0) {
-          ctx.app.notify('Nothing to compact');
+          ctx.app.notify(result.skipped ? `Nothing compacted — ${result.skipped}` : 'Nothing to compact');
           break;
         }
         ctx.app.setMessages(result.compacted);

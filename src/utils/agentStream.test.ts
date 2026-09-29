@@ -235,4 +235,57 @@ describe('handleAnthropicAgentStream', () => {
     expect(result.content).toBe('');
     expect(result.toolCalls).toEqual([]);
   });
+
+  // Opus 5.5 / Sonnet 5.5 think first; the thinking block must not leak into the reply.
+  it('ignores a leading thinking block and keeps the text after it', async () => {
+    const onChunk = vi.fn();
+    const lines = [
+      sseData({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }),
+      sseData({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hidden' } }),
+      sseData({ type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig' } }),
+      sseData({ type: 'content_block_stop', index: 0 }),
+      sseData({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }),
+      sseData({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Answer.' } }),
+      sseData({ type: 'content_block_stop', index: 1 }),
+      sseData({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } }),
+    ];
+    const result = await handleAnthropicAgentStream(makeSSEStream(lines), onChunk, 'claude-sonnet-5-5', 'anthropic');
+    expect(result.content).toBe('Answer.');
+    expect(onChunk.mock.calls).toEqual([['Answer.']]);
+  });
+
+  // "A refusal can cut a tool_use off mid-input, so never execute that turn's
+  // tools" (Anthropic). Before, the turn came back empty and runAgent re-sent it.
+  it('turns a decline into its notice and runs none of the turn\'s tools', async () => {
+    mockParseAnthropicToolCalls.mockReturnValue([{ tool: 'write_file', parameters: {} }]);
+    const onChunk = vi.fn();
+    const lines = [
+      sseData({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+      sseData({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Writing it' } }),
+      sseData({ type: 'content_block_stop', index: 0 }),
+      sseData({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'write_file' } }),
+      sseData({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"path":"x' } }),
+      sseData({ type: 'content_block_stop', index: 1 }),
+      sseData({ type: 'message_delta', delta: { stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'general_harms' } }, usage: { output_tokens: 9 } }),
+    ];
+    const result = await handleAnthropicAgentStream(makeSSEStream(lines), onChunk, 'claude-sonnet-5-5', 'anthropic');
+    expect(result.content).toBe('Claude declined this request (category: general_harms).');
+    expect(result.toolCalls).toEqual([]);
+    expect(onChunk).toHaveBeenLastCalledWith('\n\nClaude declined this request (category: general_harms).');
+  });
+});
+
+describe('handleStream — Anthropic decline', () => {
+  it('returns the notice for an Anthropic refusal, and leaves OpenAI streams alone', async () => {
+    const onChunk = vi.fn();
+    const lines = [
+      sseData({ type: 'message_start', message: { usage: { input_tokens: 3 } } }),
+      sseData({ type: 'message_delta', delta: { stop_reason: 'refusal', stop_details: null }, usage: { output_tokens: 0 } }),
+    ];
+    expect(await handleStream(makeSSEStream(lines), 'anthropic', onChunk)).toBe('Claude declined this request.');
+    expect(onChunk).toHaveBeenCalledWith('Claude declined this request.');
+
+    const openai = [sseData({ choices: [{ delta: { content: 'ok' } }] }), 'data: [DONE]'];
+    expect(await handleStream(makeSSEStream(openai), 'openai', vi.fn())).toBe('ok');
+  });
 });

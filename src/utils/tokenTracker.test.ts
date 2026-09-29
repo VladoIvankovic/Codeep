@@ -8,6 +8,7 @@ import {
   getLastUsage,
   getPricingTable,
   getModelContextWindow,
+  canonicalContextKey,
   formatTokenCount,
   formatCostReport,
   resetTokenTracking,
@@ -19,6 +20,7 @@ import {
   cacheWriteRateFor,
   formatCacheReadRates,
 } from './tokenTracker';
+import { canonicalModelId } from '../config/providers';
 
 beforeEach(() => {
   // Each test gets a fresh in-memory record set — the module's `records`
@@ -116,6 +118,51 @@ describe('getModelContextWindow', () => {
 
   it('falls back to 128K for unknown models', () => {
     expect(getModelContextWindow('nonsense-model')).toBe(128_000);
+  });
+
+  // OpenRouter sends `vendor/model`, often dotted. The exact lookup alone sized
+  // every one at the 128K default, so a run on anthropic/claude-sonnet-5.5 warned
+  // "Context at 80% of 128k window" at ~100K of its 1M — where macOS, which
+  // canonicalizes, gives 1M. Figures match OpenRouter's /api/v1/models
+  // context_length (read 2026-09-29), or sit just under it.
+  it('sizes OpenRouter ids by their canonical id', () => {
+    expect(getModelContextWindow('anthropic/claude-sonnet-5.5')).toBe(1_000_000);
+    expect(getModelContextWindow('anthropic/claude-opus-5.5')).toBe(1_000_000);
+    expect(getModelContextWindow('anthropic/claude-fable-5.1')).toBe(1_000_000);
+    expect(getModelContextWindow('openai/gpt-6-astra')).toBe(1_050_000);
+    expect(getModelContextWindow('google/gemini-3.8-flash')).toBe(1_048_576);
+    expect(getModelContextWindow('moonshotai/kimi-k3')).toBe(1_048_576);
+    expect(getModelContextWindow('x-ai/grok-4.7')).toBe(500_000);
+    expect(getModelContextWindow('z-ai/glm-5.3')).toBe(1_000_000);
+    expect(getModelContextWindow('minimax/minimax-m3')).toBe(1_000_000);
+    expect(getModelContextWindow('qwen/qwen3.5-397b-a17b')).toBe(262_144);
+    // Still the exact rows first.
+    expect(getModelContextWindow('glm-5.3')).toBe(1_000_000);
+    expect(getModelContextWindow('MiniMax-M3')).toBe(1_000_000);
+  });
+
+  // OpenRouter serves GPT-5.5 at 1,050,000, not OpenAI's 1.2M: the canonical
+  // match alone would overstate it and hold the warning back past the limit.
+  it("uses OpenRouter's own window where it serves less than the vendor", () => {
+    expect(getModelContextWindow('openai/gpt-5.5')).toBe(1_050_000);
+    expect(getModelContextWindow('gpt-5.5')).toBe(1_200_000);
+  });
+
+  it('leaves dated snapshots and ids with no row at the default', () => {
+    expect(getModelContextWindow('openrouter/auto')).toBe(128_000);
+    expect(getModelContextWindow('deepseek/deepseek-v4-pro-0813')).toBe(128_000);
+    expect(getModelContextWindow('qwen/qwen3.8-max-0902')).toBe(128_000);
+  });
+
+  // The rule is inlined (tests mock config/providers wholesale); it must stay
+  // canonicalModelId's.
+  it('canonicalizes exactly as canonicalModelId does', () => {
+    for (const id of [
+      'anthropic/claude-sonnet-5.5', 'claude-sonnet-5-5', 'Qwen/Qwen3.5-397B-A17B', 'MiniMax-M3',
+      'z-ai/glm-5.3', 'glm-5.3-flashx', 'openrouter/auto', 'a/b/c.d', 'gpt-5.4-mini', 'kimi-k2.7-code',
+    ]) {
+      expect(canonicalContextKey(id)).toBe(canonicalModelId(id));
+    }
   });
 });
 
@@ -836,5 +883,55 @@ describe('cache-read rates from the 2026-09-23 sweep', () => {
     );
     // 100000/1M * $1.40 * 0.25 = 0.035
     expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.035, 8);
+  });
+});
+
+// Claude Sonnet 5.5 (2026-09-28): "the same prices as Claude Sonnet 5,
+// including prompt caching" — $2 / $10, 5-minute write $2.50, cache read $0.20,
+// 1M context. Each asserted against its own row, not Sonnet 5's.
+describe('Claude Sonnet 5.5', () => {
+  it('sizes its context at 1M', () => {
+    expect(getModelContextWindow('claude-sonnet-5-5')).toBe(1_000_000);
+  });
+
+  it('prices it at $2 in / $10 out per MTok', () => {
+    expect(getPricingTable().find(m => m.model === 'claude-sonnet-5-5'))
+      .toEqual({ model: 'claude-sonnet-5-5', inputPer1M: 2, outputPer1M: 10 });
+    recordTokenUsage(
+      { promptTokens: 1_000_000, completionTokens: 1_000_000, totalTokens: 2_000_000 },
+      'claude-sonnet-5-5',
+      'anthropic',
+    );
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(12, 8);
+  });
+
+  // $0.20 / $2 = 0.1 and $2.50 / $2 = 1.25: Anthropic's defaults. Opus 5.5 reads
+  // at the same $0.20, but against $4 — its 0.05 row must not apply here.
+  it('reads the cache at 0.1× ($0.20) and writes it at 1.25× ($2.50)', () => {
+    expect(cacheReadRateFor('claude-sonnet-5-5', 'anthropic')).toBe(0.1);
+    expect(cacheWriteRateFor('claude-sonnet-5-5', 'anthropic')).toBe(1.25);
+    recordTokenUsage(
+      {
+        promptTokens: 1_000_000, completionTokens: 0, totalTokens: 1_000_000,
+        cacheCreationTokens: 500_000, cacheReadTokens: 500_000,
+      },
+      'claude-sonnet-5-5',
+      'anthropic',
+    );
+    // 0.5M written at $2.50 + 0.5M read at $0.20 = 1.25 + 0.10
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(1.35, 8);
+    // Reads save 0.5M * ($2 - $0.20) = 0.90; the write premium costs 0.5M * $0.50 = 0.25.
+    expect(getCacheStats().estimatedSavingsUsd).toBeCloseTo(0.65, 8);
+  });
+
+  // On OpenRouter the table is not consulted: the call's own `usage.cost` is.
+  it('bills OpenRouter\'s anthropic/claude-sonnet-5.5 at the cost OpenRouter reports', () => {
+    recordTokenUsage(
+      { promptTokens: 1_000_000, completionTokens: 1_000_000, totalTokens: 2_000_000 },
+      'anthropic/claude-sonnet-5.5',
+      'openrouter',
+      0.0421,
+    );
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.0421, 8);
   });
 });

@@ -34,6 +34,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { Message } from '../config/index.js';
 import { chat } from '../api/index.js';
+import { isAnthropicRefusalNotice } from '../api/anthropicContent.js';
 import { runAgent, classifyPermissionOutcome, buildDangerousTools } from '../utils/agent.js';
 import { forgetHooksDirectory } from '../utils/toolExecution.js';
 import { shellCommandEnv } from '../utils/shell.js';
@@ -789,7 +790,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
         // compactHistory is the hard ceiling.
         const result = await compactHistory(session.history, { keepRecent, projectContext: projectCtx, abortSignal });
         if (result.replaced === 0) {
-          return { handled: true, response: 'Nothing to compact.', streaming: true };
+          return { handled: true, response: result.skipped ? `Nothing compacted — ${result.skipped}` : 'Nothing to compact.', streaming: true };
         }
         session.history = result.compacted;
         // Persist immediately so the compaction survives a client restart.
@@ -1763,7 +1764,7 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
         onPrompt: async (prompt: string) => {
           stopIfCancelled();
           let response = '';
-          await chat(
+          const reply = await chat(
             prompt,
             session.history,
             (chunk) => { response += chunk; onChunk(chunk); },
@@ -1771,6 +1772,11 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
             projectCtx,
             abortSignal,
           );
+          // The notice has streamed to the client; as this step's output it
+          // would become the next step's ${_prev} (a stash message, a branch
+          // name). Fail the step instead. `reply`, not the streamed chunks,
+          // which can hold partial text before the notice.
+          if (isAnthropicRefusalNotice(reply)) throw new Error(reply.trim());
           return response;
         },
 
@@ -1783,6 +1789,10 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
           const { response: output, failedChecks } = await runCommandAgent(task, session, onChunk, abortSignal, agentRun);
           if (output) onChunk(output);
           if (failedChecks) throw new Error(`Verification failed: ${failedChecks.join(', ')}`);
+          // A run declined before any output ends "successfully" with the
+          // notice as its final response — the same ${_prev} hazard as a
+          // declined prompt step above.
+          if (isAnthropicRefusalNotice(output)) throw new Error(output.trim());
           return output;
         },
 

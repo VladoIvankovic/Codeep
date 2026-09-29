@@ -51,6 +51,15 @@ describe('planMode', () => {
     expect(pending?.plan).toBe('revised plan');
   });
 
+  // A decline is not a plan: stored, `/go` would hand the agent "Claude
+  // declined this request" as the plan the user approved. It fails like any
+  // other chat error, which the callers show as "Plan generation failed: …".
+  it('stores no plan when the request is declined, and fails with the notice', async () => {
+    vi.mocked(chat).mockResolvedValue('Claude declined this request (category: cyber).');
+    await expect(generatePlan('scan the network')).rejects.toThrow('Claude declined this request (category: cyber).');
+    expect(getPendingPlan()).toBeNull();
+  });
+
   it('clearPendingPlan removes the pending plan', async () => {
     vi.mocked(chat).mockResolvedValue('plan');
     await generatePlan('x');

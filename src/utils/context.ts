@@ -7,6 +7,7 @@ import { join, basename } from 'path';
 import { homedir } from 'os';
 import { Message } from '../config/index';
 import { logger } from './logger';
+import { isAnthropicRefusalNotice } from '../api/anthropicContent';
 
 // Context storage directory
 const CONTEXT_DIR = join(homedir(), '.codeep', 'contexts');
@@ -153,7 +154,9 @@ export function getAllContexts(): ConversationContext[] {
  * conversation can continue without losing the most recent context.
  *
  * Returns the same `history` (untouched) if there isn't enough to
- * meaningfully compact.
+ * meaningfully compact, or when the summary comes back empty or declined —
+ * then `skipped` says which, for the caller to show instead of "nothing to
+ * compact".
  */
 export async function compactHistory(
   history: Message[],
@@ -165,7 +168,7 @@ export async function compactHistory(
     /** External abort signal (e.g. user pressed /stop). Combined with the timeout. */
     abortSignal?: AbortSignal;
   } = {}
-): Promise<{ compacted: Message[]; replaced: number; summary: string }> {
+): Promise<{ compacted: Message[]; replaced: number; summary: string; skipped?: string }> {
   const keepRecent = options.keepRecent ?? 4;
   const timeoutMs = options.timeoutMs ?? 60_000;
   // Need at least one full exchange to compact (user + assistant) plus the
@@ -208,6 +211,16 @@ export async function compactHistory(
       options.projectContext ?? undefined,
       timeoutController.signal,
     );
+
+    // No summary, no compaction. Replacing the messages with an empty summary
+    // (or with "Claude declined this request", which chat() returns on a
+    // decline) would throw the earlier conversation away for nothing.
+    if (isAnthropicRefusalNotice(summary)) {
+      return { compacted: history, replaced: 0, summary: '', skipped: summary.trim() };
+    }
+    if (!summary.trim()) {
+      return { compacted: history, replaced: 0, summary: '', skipped: 'the summary came back empty.' };
+    }
 
     const summaryMessage: Message = {
       role: 'system',

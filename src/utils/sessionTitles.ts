@@ -18,6 +18,7 @@
  */
 
 import type { Message } from '../config/index.js';
+import { isAnthropicRefusalNotice } from '../api/anthropicContent.js';
 
 const TITLE_SYSTEM_PROMPT = `You write concise titles for coding sessions. Given a transcript, reply with ONLY a 4-8 word title that captures the main task. No quotes. No trailing period. No preamble.
 
@@ -48,6 +49,9 @@ export async function generateSessionTitle(history: Message[]): Promise<string |
   try {
     const { chat } = await import('../api/index.js');
     const raw = await chat(transcript, [{ role: 'system', content: TITLE_SYSTEM_PROMPT }]);
+    // A decline is no title (it would be "Claude declined this request (…)").
+    // Checked before the cleanup below strips its trailing period.
+    if (isAnthropicRefusalNotice(raw)) return null;
     const cleaned = raw
       .replace(/^["'`]+|["'`]+$/g, '') // strip wrapping quotes
       .replace(/[.\s]+$/, '')          // strip trailing period / whitespace

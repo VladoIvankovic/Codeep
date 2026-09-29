@@ -15,6 +15,7 @@
  */
 
 import { listSessionsWithInfo, loadSession, type SessionInfo } from '../config/index.js';
+import { isAnthropicRefusalNotice } from '../api/anthropicContent.js';
 
 export interface RecallMatch {
   session: SessionInfo;
@@ -137,6 +138,8 @@ export async function summarizeRecall(
   try {
     const { chat } = await import('../api/index.js');
     const summary = await chat(blocks.join('\n\n'), [{ role: 'system', content: system }]);
+    // A decline is no recap; null is how the caller already words a failure.
+    if (isAnthropicRefusalNotice(summary)) return null;
     return summary.trim() || null;
   } catch {
     return null;

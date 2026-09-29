@@ -29,6 +29,7 @@ import { formatToolDefinitions, getOpenAITools, getAnthropicTools, AdditionalToo
 import { readOpenRouterPreferences } from './openrouterPrefs';
 import { checkApiRateLimit } from './ratelimit';
 import { ApiError } from '../api/index';
+import { anthropicText, anthropicRefusalNotice, isAnthropicRefusalNotice } from '../api/anthropicContent';
 import { handleStream, handleOpenAIAgentStream, handleAnthropicAgentStream } from './agentStream';
 import type { AgentChatResponse } from './agentStream';
 import { buildResponsesBody, buildResponsesInput, parseResponsesJSON, parseResponsesSSE, toResponsesTools, type NativeTurn, type ResponsesTurn } from '../api/responses';
@@ -374,7 +375,10 @@ export async function summarizeEarlierHistory(
   try {
     const { chat } = await import('../api/index.js');
     const summary = (await chat(transcript, [{ role: 'system', content: system }])).trim();
-    if (!summary) return '';
+    // A decline is no recap: cached, it would sit in every agent prompt for
+    // this prefix as "established background". Not cached, so the next run
+    // asks again.
+    if (!summary || isAnthropicRefusalNotice(summary)) return '';
     const block = `\n\n## Earlier Conversation (summarized)\nThe earlier part of this session was condensed to fit context. Treat it as established background:\n\n${summary}`;
     earlierSummaryCache.set(key, block);
     return block;
@@ -550,7 +554,8 @@ export async function agentChat(
         providerId, model, baseUrl, headers, tier, signal: controller.signal,
       });
     }
-    // Room for the answer after the thinking (Opus 5.5 thinks on every turn).
+    // Room for the answer after the thinking (Opus 5.5 and Sonnet 5.5 think by
+    // default — see minResponseTokensFor).
     const responseBudget = Math.max(config.get('maxTokens'), 16384, minResponseTokensFor(model, tier));
     if (protocol === 'openai') {
       const openAITools = getOpenAITools(additionalTools, allowedTools);
@@ -629,8 +634,10 @@ export async function agentChat(
       //   2. last tool in `tools` (Anthropic caches everything up to and
       //      including the marker, so this caches the entire tools array)
       // Cache hits cost 0.1× input. Misses ("cache creation") cost 1.25×.
-      // Net win after the 2nd same-shape request. Below 1024 input tokens
-      // Anthropic silently skips caching — no error path to handle.
+      // Net win after the 2nd same-shape request. Below the model's minimum
+      // cacheable prompt (it varies by model: 512 tokens on Sonnet 5.5, 1,024
+      // on Sonnet 5 — Anthropic's Sonnet 5.5 migration guide) Anthropic
+      // silently skips caching — no error path to handle.
       const anthropicTools = getAnthropicTools(additionalTools, allowedTools);
       const cachedTools = anthropicTools.length > 0
         ? [
@@ -698,6 +705,13 @@ export async function agentChat(
       if (onChunk && content) onChunk(content);
       return { content, toolCalls, usedNativeTools: true };
     } else {
+      // A decline (HTTP 200, stop_reason "refusal"): its notice is the reply,
+      // and none of the turn's tools run — see handleAnthropicAgentStream.
+      const refusal = anthropicRefusalNotice(data.stop_reason, data.stop_details);
+      if (refusal) {
+        if (onChunk) onChunk(refusal);
+        return { content: refusal, toolCalls: [], usedNativeTools: true };
+      }
       const contentBlocks = data.content || [];
       let textContent = '';
       for (const block of contentBlocks) {
@@ -930,7 +944,11 @@ export async function agentChatFallback(
           : undefined;
         recordTokenUsage(fallbackUsage, model, providerId, reportedCost);
       }
-      content = protocol === 'openai' ? (data.choices?.[0]?.message?.content || '') : (data.content?.[0]?.text || '');
+      // Anthropic by block type: `content[0]` is a thinking block on a model
+      // that thinks first, and reading it returned "" for a real reply.
+      content = protocol === 'openai'
+        ? (data.choices?.[0]?.message?.content || '')
+        : (anthropicRefusalNotice(data.stop_reason, data.stop_details) ?? anthropicText(data.content));
     }
 
     const toolCalls = parseToolCalls(content);

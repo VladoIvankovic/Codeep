@@ -8,6 +8,7 @@
 
 import { App } from './App';
 import { chat } from '../api/index';
+import { isAnthropicRefusalNotice } from '../api/anthropicContent';
 import { runAgent, AgentResult, PermissionOutcome } from '../utils/agent';
 import { TelegramApproval, outcomeForAnswer, describePermissionOutcome } from '../utils/telegramApproval';
 import { loadTelegramCredentials } from '../utils/telegramCredentials';
@@ -820,6 +821,10 @@ export async function runSkill(
             ctx.app.addStreamChunk(chunk);
           }, undefined, ctx.projectContext, undefined);
           ctx.app.endStreaming();
+          // The notice has streamed for the user to read; as this step's
+          // output it would become the next step's ${_prev} — /stash would
+          // stash under "Claude declined this request". Fail the step.
+          if (isAnthropicRefusalNotice(response)) throw new Error(response.trim());
           const msgs = ctx.app.getMessages();
           const last = msgs[msgs.length - 1];
           return (last?.role === 'assistant' ? last.content : response || '').trim();

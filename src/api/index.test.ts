@@ -314,7 +314,7 @@ describe('chat() — Anthropic protocol', () => {
   });
 
   it('calls /v1/messages with anthropic-version header', async () => {
-    const body = { content: [{ text: 'Hi there' }] };
+    const body = { content: [{ type: 'text', text: 'Hi there' }] };
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(makeResponse(body));
 
     const result = await chat('hello');
@@ -327,7 +327,7 @@ describe('chat() — Anthropic protocol', () => {
   });
 
   it('strips <think> tags from Anthropic response', async () => {
-    const body = { content: [{ text: '<think>reasoning</think>Result' }] };
+    const body = { content: [{ type: 'text', text: '<think>reasoning</think>Result' }] };
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(makeResponse(body));
 
     const result = await chat('hi');
@@ -335,7 +335,7 @@ describe('chat() — Anthropic protocol', () => {
   });
 
   it('records token usage from Anthropic response', async () => {
-    const body = { content: [{ text: 'ok' }] };
+    const body = { content: [{ type: 'text', text: 'ok' }] };
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(makeResponse(body));
     mockExtractAnthropicUsage.mockReturnValueOnce({ promptTokens: 5, completionTokens: 15, totalTokens: 20 });
 
@@ -346,6 +346,54 @@ describe('chat() — Anthropic protocol', () => {
       'claude-3',
       'anthropic'
     );
+  });
+
+  // "A response can begin with thinking blocks, so code that reads
+  // content[0].text breaks" (Migrating to Claude Sonnet 5.5). At the default
+  // display "omitted" the thinking block carries no text at all.
+  it('reads the reply by block type when a thinking block comes first', async () => {
+    const body = {
+      content: [
+        { type: 'thinking', thinking: '', signature: 'sig' },
+        { type: 'text', text: 'First part. ' },
+        { type: 'text', text: 'Second part.' },
+      ],
+      stop_reason: 'end_turn',
+    };
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(makeResponse(body));
+
+    expect(await chat('hi')).toBe('First part. Second part.');
+  });
+
+  // A decline is HTTP 200 with stop_reason "refusal" and no content; it used to
+  // come back as an empty reply.
+  it('says Claude declined, with the category, instead of returning nothing', async () => {
+    const body = { content: [], stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber', explanation: null } };
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(makeResponse(body));
+
+    expect(await chat('hi')).toBe('Claude declined this request (category: cyber).');
+  });
+
+  it('streams the decline notice too, after any partial text', async () => {
+    const events = [
+      { type: 'message_start', message: { model: 'claude-sonnet-5-5', usage: { input_tokens: 10 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Partial' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'message_delta', delta: { stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'bio' } }, usage: { output_tokens: 3 } },
+      { type: 'message_stop' },
+    ];
+    const sse = events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n`).join('\n');
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(new Response(sse, { status: 200 }));
+    const chunks: string[] = [];
+
+    const result = await chat('hi', [], (c) => chunks.push(c));
+
+    expect(chunks).toEqual(['Partial', '\n\nClaude declined this request (category: bio).']);
+    expect(result).toBe('Claude declined this request (category: bio).');
   });
 });
 
@@ -592,7 +640,7 @@ describe('chat() — response floor', () => {
     useConfig({ protocol: 'anthropic', provider: 'anthropic', model: 'claude-opus-5-5' });
     mockGetProviderBaseUrl.mockReturnValue('https://api.anthropic.com');
     mockGetProviderAuthHeader.mockReturnValue('x-api-key');
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(makeResponse({ content: [{ text: 'ok' }] }));
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(makeResponse({ content: [{ type: 'text', text: 'ok' }] }));
     await chat('hello');
     const body = JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
     expect(floor).toHaveBeenCalledWith('claude-opus-5-5', 'high');

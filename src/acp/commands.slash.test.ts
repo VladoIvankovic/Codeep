@@ -390,6 +390,35 @@ describe('skill confirm steps', () => {
   });
 });
 
+describe('skill prompt steps', () => {
+  // /stash: message (prompt) → `git stash push -m "${_prev}"` (command), with no
+  // confirm between. chat() returns the notice on a decline; as the step's
+  // output it would stash the work under "Claude declined this request".
+  it('fail on a decline, so the step after them never runs', async () => {
+    // What chat() streams on a mid-reply decline: the partial text, then the
+    // notice. It returns the notice alone, which is what the step checks.
+    vi.mocked(chat).mockImplementation(async (_message, _history, streamChunk) => {
+      streamChunk?.('wip: port');
+      streamChunk?.('\n\nClaude declined this request (category: cyber).');
+      return 'Claude declined this request (category: cyber).';
+    });
+    const res = await run('/stash', undefined, AUTO);
+    const ran = vi.mocked(spawnSync).mock.calls.map(([cmd]) => String(cmd));
+    expect(ran.filter(cmd => cmd.includes('stash'))).toEqual([]);
+    expect(res.response).toContain('Claude declined this request (category: cyber).');
+  });
+
+  it('hand their reply to the next step otherwise', async () => {
+    vi.mocked(chat).mockImplementation(async (_message, _history, streamChunk) => {
+      streamChunk?.('wip: widget layout');
+      return 'wip: widget layout';
+    });
+    await run('/stash', undefined, AUTO);
+    const ran = vi.mocked(spawnSync).mock.calls.map(([cmd]) => String(cmd));
+    expect(ran.some(cmd => cmd.includes('git stash push -m') && cmd.includes('wip: widget layout'))).toBe(true);
+  });
+});
+
 describe('skill command steps', () => {
   const confirmCommandsBefore = config.get('agentConfirmExecuteCommand');
 
@@ -411,6 +440,33 @@ describe('skill command steps', () => {
       name, description: 'custom skill', steps: [{ type: 'command', content: command }],
     }));
   }
+
+  function writeAgentThenCommitSkill(name: string) {
+    mkdirSync(join(fakeHome, '.codeep', 'skills'), { recursive: true });
+    writeFileSync(join(fakeHome, '.codeep', 'skills', `${name}.json`), JSON.stringify({
+      name, description: 'custom skill', steps: [
+        { type: 'agent', content: 'Fix the lint errors and end with a one-line commit message' },
+        { type: 'command', content: 'git commit -am "${_prev}"' },
+      ],
+    }));
+  }
+
+  it('do not run after an agent step that was declined', async () => {
+    writeAgentThenCommitSkill('lintfix');
+    vi.mocked(runAgent).mockResolvedValueOnce(ok('Claude declined this request (category: cyber).'));
+    const res = await run('/lintfix', undefined, AUTO);
+    const ran = vi.mocked(spawnSync).mock.calls.map(([cmd]) => String(cmd));
+    expect(ran.filter(cmd => cmd.includes('commit'))).toEqual([]);
+    expect(res.response).toContain('Claude declined this request (category: cyber).');
+  });
+
+  it('get the agent step\'s reply otherwise', async () => {
+    writeAgentThenCommitSkill('lintfix');
+    vi.mocked(runAgent).mockResolvedValueOnce(ok('fix: lint errors'));
+    await run('/lintfix', undefined, AUTO);
+    const ran = vi.mocked(spawnSync).mock.calls.map(([cmd]) => String(cmd));
+    expect(ran.some(cmd => cmd.includes('git commit -am') && cmd.includes('fix: lint errors'))).toBe(true);
+  });
 
   it('ask in manual mode before each command runs, with the whole line', async () => {
     const opts = manual();

@@ -361,6 +361,36 @@ describe('compactHistory', () => {
     expect(result.compacted.slice(1)).toEqual(history.slice(-4));
   });
 
+  // chat() returns the notice on a decline. Spliced in, it would replace the
+  // earlier conversation with "Claude declined this request"; the history is
+  // returned as it was, and `skipped` tells the caller why nothing changed.
+  it('keeps the history when the summary is declined', async () => {
+    mockChat.mockResolvedValueOnce('Claude declined this request (category: cyber).');
+    const history = Array.from({ length: 8 }, (_, i) =>
+      i % 2 === 0 ? userMsg(`m${i}`) : asstMsg(`r${i}`),
+    );
+    const result = await compactHistory(history, { keepRecent: 2 });
+    expect(mockChat).toHaveBeenCalledOnce();
+    expect(result.compacted).toBe(history);
+    expect(result.replaced).toBe(0);
+    expect(result.summary).toBe('');
+    expect(result.skipped).toBe('Claude declined this request (category: cyber).');
+  });
+
+  // Older than the notice: an empty summary used to replace the history too,
+  // leaving "[Conversation compacted — N earlier messages summarized below]"
+  // over nothing.
+  it('keeps the history when the summary comes back empty', async () => {
+    mockChat.mockResolvedValueOnce('  \n ');
+    const history = Array.from({ length: 8 }, (_, i) =>
+      i % 2 === 0 ? userMsg(`m${i}`) : asstMsg(`r${i}`),
+    );
+    const result = await compactHistory(history, { keepRecent: 2 });
+    expect(result.compacted).toBe(history);
+    expect(result.replaced).toBe(0);
+    expect(result.skipped).toBe('the summary came back empty.');
+  });
+
   it('honours a custom keepRecent value', async () => {
     mockChat.mockResolvedValueOnce('summary');
     const history = Array.from({ length: 10 }, (_, i) =>

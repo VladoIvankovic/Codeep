@@ -46,6 +46,11 @@ Last full review: **2026-09-23**
   `CostEstimator` and `ContextWindowEstimator` for the old family name.
 - Update CLI context/pricing in `src/utils/tokenTracker.ts`, including the
   cache-read and cache-write rates (model, surface and provider tables).
+  The context table is read by exact id, then by canonical id (macOS
+  `ContextWindowEstimator` canonicalizes too, then matches by substring), so
+  OpenRouter's `vendor/dotted.id` finds the vendor row. Add an exact OpenRouter row only where OpenRouter's
+  `context_length` is smaller than the vendor's (`openai/gpt-5.5`); dated
+  snapshots such as `…-0813` match nothing and keep the 128K default.
 - Add an exact migration for removed stored ids to `RETIRED_MODEL_REPLACEMENTS`
   in `src/config/providers.ts`, and the same entry to macOS
   `AppState.retiredModelReplacements`. Both are one flat lookup that never
@@ -229,7 +234,8 @@ Last full review: **2026-09-23**
   users on Auto (`/thinking auto` in the CLI) now run one level lower. It
   "tends to think more per turn than Claude Opus 5", and the thinking spends
   `max_tokens`, so both clients raise its `max_tokens` to at least 32K, or 64K
-  at the Max tier; no other model gets this floor. 32K is Codeep's own number,
+  at the Max tier; Sonnet 5.5 gets the same floor (below), and no other model
+  does. 32K is Codeep's own number,
   not one Anthropic gives. The CLI does it in `minResponseTokensFor` (agent
   turns, chat and the planner's 2048, OpenRouter's `anthropic/claude-opus-5.5`
   included). macOS does it in `ModelTuning.responseTokenBudget`, on the
@@ -243,6 +249,70 @@ Last full review: **2026-09-23**
   non-final message is a 400 on Anthropic and its text-tool fallback resends the
   same history. Not live-tested; restoring the narration itself needs
   `display: "updates"` (beta) and rendering thinking blocks.
+- **Claude Sonnet 5.5** (`claude-sonnet-5-5`, released 2026-09-28; OpenRouter
+  lists it dotted, `anthropic/claude-sonnet-5.5`) is $2/$10, "the same prices as
+  Claude Sonnet 5, including prompt caching": the 5-minute write is $2.50
+  (1.25×) and a cache read $0.20 (0.1×). Both are the defaults, so it has no
+  row in the rate tables. Opus 5.5 reads at the same $0.20, but against $4 —
+  don't copy its 0.05 row. The $4 one-hour write never applies: Codeep sends no
+  cache `ttl`. 1M context, 128K output; the CLI has no per-model output table,
+  and the `anthropic` provider no output cap. Thinking is adaptive and **on by
+  default**, not always on (`between_tools` is its lowest setting, and Codeep
+  never sends it), at a default effort of **high** over five levels that
+  Anthropic recalibrated from Sonnet 5; `/thinking auto` sends none. A
+  non-default `temperature`/`top_p`/`top_k` is a 400, and the `claude-sonnet-5`
+  entry in the sampling list covers 5.5 by prefix. Because the thinking spends
+  `max_tokens` ("Revisit max_tokens. It covers thinking plus text"), it gets
+  Opus 5.5's 32K/64K floor, matched exactly so Sonnet 5 stays out; on macOS,
+  as for Opus 5.5, only on the Anthropic protocol (OpenRouter goes over the
+  OpenAI client, which sends no cap). Its minimum cacheable prompt is 512
+  tokens (Sonnet 5: 1,024). The Anthropic default stays
+  Opus 5.5, where the models overview still says to start. Sonnet 5 stays in the
+  picker as the previous Sonnet with **no migration**: it is still Active,
+  retiring no sooner than 2027-06-30. Against Sonnet 5, and why each change
+  does or does not reach Codeep:
+  - `thinking: {type: "disabled"}` is a 400. Codeep sends no `thinking` field
+    at all and has no "off" tier.
+  - Forced `tool_choice` (`any`/`tool`) is a 400. Anthropic-format requests
+    send no `tool_choice` (the default is auto); OpenAI-format ones send `auto`.
+  - Thinking blocks are tied to the model and the conversation: replaying one
+    after an edit to earlier history is a 400 for accounts created on or after
+    2026-08-31. Codeep keeps history as plain text and never replays thinking
+    blocks, so compaction and `/rewind` cannot hit it. Replaying them would.
+  - `computer_20251124` is rejected, and so are some advisor-tool pairings.
+    Codeep uses neither tool.
+  - Text between tool calls comes back as progress-update thinking blocks,
+    empty at the default display. Same as Opus 5.5 above; unchanged.
+  - It declines in more categories: `stop_reason: "refusal"`, HTTP 200, with
+    `stop_details.category` `cyber`, `bio`, `frontier_llm`,
+    `reasoning_extraction` or `general_harms`. Every Anthropic-format chat and
+    agent path now says "Claude declined this request (category: …)."
+    (`src/api/anthropicContent.ts`), and a refused agent turn runs none of its
+    tools. It used to be an empty reply, and in agent mode the empty turn read
+    as unfinished and was sent again. The task planner is the exception: a
+    refused plan still falls back to a single task, and the run that follows
+    shows the notice. No fallback or retry. OpenRouter replies (OpenAI format)
+    are not covered.
+
+    The notice is for people. Where Codeep uses a reply as data, a decline is
+    a failed reply, as the "" it used to be was. CLI: chat() returns the notice
+    alone, and those callers check `isAnthropicRefusalNotice`. Compaction keeps
+    the history and says why (an empty summary also used to replace it). The
+    earlier-conversation recap is neither injected nor cached. Session titles
+    and `/recall` recaps are null. `/plan` fails instead of storing it for
+    `/go`. A skill's prompt step fails, so `${_prev}` never carries it into a
+    command. MCP sampling answers with an error. `/me learn` keeps only bullet
+    lines, and headless review shows the notice in its advisory AI section.
+    macOS mirrors this: `AnthropicProtocolClient` streams the notice and ends
+    on `StopReason.refusal`, which the agent treats like `.other`;
+    `ProviderText.complete` throws `CodeepError.refused`, so compaction, the
+    request-time trim, Learn, the commit message, recall and MCP sampling fail
+    as they did before the notice, and `SessionTitler` returns nil.
+
+  Read Anthropic replies **by block type**. A reply can start with a thinking
+  block, so `content[0].text` was empty on Opus 5.5 and Sonnet 5/5.5 whenever
+  the model thought first. The CLI's chat, text-tool-fallback and planner reads
+  now join the `text` blocks; the stream parsers already skipped thinking deltas.
 - **Every Grok text model has a ≥200K tier**, not only 4.5/4.6: 4.7, 4.6, 4.5,
   build-0.1 and 4.3 all double once a prompt reaches 200K tokens. The higher rate
   then applies to **all** tokens in that request, not only those past 200K. Both

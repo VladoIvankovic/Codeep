@@ -26,6 +26,7 @@
 
 import type { Message } from '../config/index.js';
 import { chat } from '../api/index.js';
+import { isAnthropicRefusalNotice } from '../api/anthropicContent.js';
 
 const PLAN_SYSTEM_PROMPT = `You are in PLAN MODE.
 
@@ -99,6 +100,10 @@ export async function generatePlan(
     abortError.name = 'AbortError';
     throw abortError;
   }
+  // Nor is a decline: stored, `/go` would hand the agent "Claude declined
+  // this request" as the plan the user approved. The caller shows the notice
+  // as the failure.
+  if (isAnthropicRefusalNotice(plan)) throw new Error(plan.trim());
   pendingByScope.set(scope, { task, plan, createdAt: Date.now() });
   return plan;
 }
