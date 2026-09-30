@@ -53,7 +53,9 @@ import { handleCommand, type AppCommandContext } from './commands';
 import { runSkill, runAgentTask } from './agentExecution';
 import { undoAllActions, undoLastAction } from '../utils/agent';
 import { setPendingPlan, getPendingPlan, clearPendingPlan } from '../utils/planMode';
-import { config, saveSession, loadSession, getSessionsDir } from '../config/index';
+import { config, saveSession, loadSession, getSessionsDir, setApiKey, clearApiKey } from '../config/index';
+import { PROVIDERS } from '../config/providers';
+import { App } from './App';
 import { registerSessionServers } from '../utils/mcpRegistry';
 import { pushUserProfileResult, pullUserProfileResult, listCloudSessions, pullCloudSession, type SyncResult } from '../utils/codeepCloud';
 import { trustWorkspaceMcp } from '../utils/mcpConfig';
@@ -773,5 +775,72 @@ describe('/rewind to a checkpoint on a model that is no longer offered', () => {
     await handleCommand('rewind', [cp.id], ctx);
     expect(config.get('model')).toBe('gpt-6-astra');
     expect(messages.map(m => m.content).join('\n')).not.toContain('no longer offered');
+  });
+});
+
+// The macOS app picked a provider for every new chat and hard-coded Anthropic
+// when it had none. The CLI has one provider, the saved setting, which is the
+// last one the user chose; a fresh session is a new conversation on it.
+describe('the provider a fresh session starts on', () => {
+  const saved: Record<string, unknown> = {};
+  beforeEach(async () => {
+    for (const k of ['provider', 'model', 'protocol'] as const) saved[k] = config.get(k);
+    // Keys come only from this test: none from the environment, none left
+    // behind by an earlier test in this file.
+    for (const p of Object.values(PROVIDERS)) if (p.envKey) vi.stubEnv(p.envKey, '');
+    vi.stubEnv('ZAI_API_KEY', '');
+    vi.stubEnv('ZHIPUAI_API_KEY', '');
+    for (const id of Object.keys(PROVIDERS)) await clearApiKey(id);
+  });
+  afterEach(async () => {
+    for (const id of Object.keys(PROVIDERS)) await clearApiKey(id);
+    vi.unstubAllEnvs();
+    for (const [k, v] of Object.entries(saved)) config.set(k as 'provider', v as string);
+  });
+
+  it('/new keeps the provider and model the user was on', async () => {
+    config.set('provider', 'openai');
+    config.set('model', 'gpt-6-sol');
+    const { ctx } = makeCtx(projectDir);
+    (ctx.app as unknown as { clearMessages: () => void }).clearMessages = vi.fn();
+
+    await handleCommand('new', [], ctx);
+
+    expect(config.get('provider')).toBe('openai');
+    expect(config.get('model')).toBe('gpt-6-sol');
+  });
+
+  it('/clear keeps them too', () => {
+    config.set('provider', 'openai');
+    config.set('model', 'gpt-6-sol');
+    const app = new App({
+      onSubmit: async () => {},
+      onCommand: () => {},
+      onExit: () => {},
+      getStatus: () => ({ version: '', provider: '', model: '', agentMode: 'off', projectPath: projectDir, hasWriteAccess: true, sessionId: 's', messageCount: 0 }),
+    });
+    app.render = () => {};
+
+    (app as unknown as { handleCommand: (input: string) => void }).handleCommand('/clear');
+
+    expect(config.get('provider')).toBe('openai');
+    expect(config.get('model')).toBe('gpt-6-sol');
+  });
+
+  it('logging out of the current provider moves to one that still has a key', async () => {
+    await setApiKey('test-key-anthropic-0000', 'anthropic');
+    await setApiKey('test-key-google-00000000', 'google');
+    config.set('provider', 'anthropic');
+    const { ctx, notices } = makeCtx(projectDir);
+    let answered: Promise<void> | undefined;
+    (ctx.app as unknown as { showLogoutPicker: unknown }).showLogoutPicker = vi.fn(
+      (_providers: unknown, onPick: (id: string) => Promise<void>) => { answered = onPick('anthropic'); },
+    );
+
+    await handleCommand('logout', [], ctx);
+    await answered;
+
+    expect(config.get('provider')).toBe('google');
+    expect(notices).toContain('Switched to Google AI');
   });
 });

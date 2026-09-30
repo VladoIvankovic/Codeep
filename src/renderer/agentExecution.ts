@@ -507,7 +507,7 @@ export async function executeAgentTask(
 
         const actionType = getActionType(toolName);
 
-        app.updateAgentProgress(0, {
+        app.recordAgentAction({
           type: actionType,
           target,
           result: result.success ? 'success' : 'error',
@@ -516,6 +516,11 @@ export async function executeAgentTask(
       onThinking: (text) => {
         if (text) app.setAgentThinking(text);
       },
+      // Auto-verify's build and tests, which are not tool calls: without these
+      // the screen said the model was being waited on while they ran. The
+      // results mean the model is next (a fix request), or the run is ending.
+      onVerificationStart: () => app.setAgentRunningChecks(),
+      onVerification: () => app.setAgentWaitingForAI(true),
       abortSignal: abortController.signal,
     });
 

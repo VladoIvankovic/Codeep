@@ -27,9 +27,24 @@ export interface TimelineCheck {
   result: string;
 }
 
+/**
+ * What the agent is doing at this moment, for the line under the active stage.
+ * A tool's label belongs only to the time that tool runs: between steps the
+ * model is being waited on (a thinking model can take many minutes), and
+ * during auto-verify the build and tests are running. Showing the finished
+ * tool there read as a tool that had been running for all that time.
+ */
+export type TimelineActivity =
+  | { kind: 'tool'; type: string; target: string }
+  | { kind: 'model' }
+  | { kind: 'checks' };
+
 export interface AgentTimelineModel {
   currentStage: TimelineStageId;
+  /** The target of the tool running now; empty when no tool is running. */
   currentTarget: string;
+  /** Null when there is nothing to say beyond the stage itself. */
+  activity: TimelineActivity | null;
   stages: TimelineStage[];
   files: TimelineFile[];
   checks: TimelineCheck[];
@@ -74,19 +89,32 @@ export function buildAgentTimelineModel(args: {
   actions: TimelineAction[];
   thinking: string;
   waitingForAI: boolean;
+  /** Auto-verify's checks are running (they are not tool calls). */
+  runningChecks?: boolean;
   iteration: number;
   maxIterations: number;
 }): AgentTimelineModel {
   const thinking = parseThinking(args.thinking);
   const lastAction = args.actions[args.actions.length - 1];
-  const explicitStage = !args.waitingForAI ? stageForAction(thinking.type) : null;
+  const runningChecks = args.runningChecks === true;
+  // `thinking` names the tool last started, and it is left in place after the
+  // tool returns; only while no model or check is being waited on is it the
+  // tool running now.
+  const toolRunning = !runningChecks && !args.waitingForAI && thinking.type !== '';
+  const explicitStage = runningChecks ? 'VERIFY'
+    : toolRunning ? stageForAction(thinking.type)
+    : null;
   const lastStage = lastAction ? stageForAction(lastAction.type) : null;
+  // Waiting for the model keeps the stage the run is in: going back to PLAN
+  // before every reply would make the stages jump back and forth.
   const currentStage = explicitStage
     ?? lastStage
     ?? 'PLAN';
-  const currentTarget = explicitStage
-    ? thinking.target
-    : (lastAction?.target || thinking.target);
+  const currentTarget = toolRunning ? thinking.target : '';
+  const activity: TimelineActivity | null = runningChecks ? { kind: 'checks' }
+    : args.waitingForAI ? { kind: 'model' }
+    : toolRunning ? { kind: 'tool', type: thinking.type, target: thinking.target }
+    : null;
 
   const readActions = args.actions.filter(action => READ_TYPES.has(action.type));
   const fileActions = args.actions.filter(
@@ -134,7 +162,7 @@ export function buildAgentTimelineModel(args: {
       summary: 'Run commands and confirm the result',
       detail: commandActions.length > 0
         ? `${commandActions.length} command${commandActions.length === 1 ? '' : 's'} run`
-        : 'Checks pending',
+        : runningChecks ? 'Auto-verify is checking the change' : 'Checks pending',
     },
     {
       id: 'SUMMARY',
@@ -147,6 +175,7 @@ export function buildAgentTimelineModel(args: {
   return {
     currentStage,
     currentTarget,
+    activity,
     stages,
     files: uniqueByTarget(fileActions) as TimelineFile[],
     checks: commandActions.slice(-4).map(action => ({

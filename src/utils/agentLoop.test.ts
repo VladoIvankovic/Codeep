@@ -877,7 +877,58 @@ describe('verification outcome', () => {
   });
 });
 
+describe('what a caller is told while auto-verify runs', () => {
+  it('marks the start of every round of checks, before they run', async () => {
+    const events: string[] = [];
+    h.verifyQueue = [[failing('build', [{ file: 'src/a.ts', severity: 'error', message: 'Type error' }])], [passing('build')]];
+    h.onVerify = () => { events.push('checks run'); };
+    setScript(call => {
+      events.push('model asked');
+      if (lastMessage(call).includes('Verification Errors')) return say('Fixed the type.');
+      return chatCalls().length === 1 ? use(['write_file', { path: 'src/a.ts', content: 'x' }]) : say('Implemented the feature.');
+    });
+
+    const result = await runAgent('x', ctx(), {
+      autoVerify: 'build',
+      maxFixAttempts: 2,
+      maxIterations: 10,
+      onIteration: (_i, message) => { if (message.startsWith('Verification')) events.push(message); },
+      onVerificationStart: (attempt, maxAttempts) => { events.push(`start ${attempt}/${maxAttempts}`); },
+      onVerification: () => { events.push('results'); },
+    });
+
+    expect(result.success).toBe(true);
+    // The fix request is the model call between the two rounds: after the
+    // results, not under the checks.
+    expect(events).toEqual([
+      'model asked', 'model asked',
+      'Verification attempt 1/2', 'start 1/2', 'checks run', 'results',
+      'model asked',
+      'Verification attempt 2/2', 'start 2/2', 'checks run', 'results',
+    ]);
+  });
+});
+
 describe('step limit after a "continue" nudge', () => {
+  it('tells the caller only that a step began: the nudge stays inside the loop', async () => {
+    const told: string[] = [];
+    setScript(() => (chatCalls().length === 1 ? say('Let me look at the files:') : say('The project has no files yet.')));
+
+    await runAgent('x', ctx(), {
+      autoVerify: false,
+      maxIterations: 4,
+      onIteration: (_i, message) => { told.push(`iteration: ${message}`); },
+      onToolCall: (toolCall) => { told.push(`tool: ${toolCall.tool}`); },
+      onThinking: (text) => { told.push(`thinking: ${text}`); },
+    });
+
+    // The "Continue. Execute the tool calls now." prompt went to the model as
+    // the second request; a screen showing the run heard of a second step and
+    // nothing else, so it has no request to start again from.
+    expect(chatCalls()[1].messages.at(-1)?.content).toBe('Continue. Execute the tool calls now.');
+    expect(told).toEqual(['iteration: Iteration 1/4', 'iteration: Iteration 2/4']);
+  });
+
   it('pauses instead of reporting the unfinished fragment as the answer', async () => {
     setScript(() => (chatCalls().length === 1
       ? say('Let me look at the files:')

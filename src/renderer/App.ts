@@ -13,6 +13,7 @@ import {
   buildAgentTimelineModel,
   formatElapsed,
   truncateMiddle,
+  type TimelineActivity,
   type TimelineStageStatus,
 } from './components/AgentTimeline';
 import { parseCommandInput } from './inputParsing';
@@ -152,6 +153,12 @@ export class App {
   private agentActions: Array<{ type: string; target: string; result: string }> = [];
   private agentThinking = '';
   private agentWaitingForAI = false;
+  /** Auto-verify's build/test checks are running. */
+  private agentRunningChecks = false;
+  /** When the model was last asked, or the checks started: the wait shown on
+   *  screen counts from here. Retry notices do not move it; it is the same
+   *  wait for the same answer. */
+  private agentPhaseStartedAt: number | null = null;
   private agentLog: string[] = [];
   /** Process uptime shown in the persistent footer. */
   private appStartedAt = Date.now();
@@ -471,6 +478,8 @@ export class App {
       this.agentActions = [];
       this.agentThinking = '';
       this.agentWaitingForAI = true;
+      this.agentRunningChecks = false;
+      this.agentPhaseStartedAt = Date.now();
       this.agentLog = [];
       this.isLoading = false; // Clear loading state when agent takes over
       this.startSpinner();
@@ -493,6 +502,16 @@ export class App {
     this.scheduleRender();
   }
 
+  /**
+   * Record a finished tool call without touching the step count. Tool results
+   * used to go through updateAgentProgress(0, …), which set the step to 0: a
+   * second tool in the same reply then ran under "step 0/50" and an empty bar.
+   */
+  recordAgentAction(action: { type: string; target: string; result: string }): void {
+    this.agentActions.push(action);
+    this.scheduleRender();
+  }
+
   setAgentMaxIterations(max: number): void {
     this.agentMaxIterations = max;
   }
@@ -506,7 +525,21 @@ export class App {
   }
 
   setAgentWaitingForAI(waiting: boolean): void {
+    // Only a wait that starts now resets the clock: onIteration says "waiting"
+    // again for every retry and context warning of the same request.
+    if (waiting && (!this.agentWaitingForAI || this.agentRunningChecks)) {
+      this.agentPhaseStartedAt = Date.now();
+    }
     this.agentWaitingForAI = waiting;
+    this.agentRunningChecks = false;
+    this.scheduleRender();
+  }
+
+  /** Auto-verify started its checks; they run until the next phase is set. */
+  setAgentRunningChecks(): void {
+    this.agentRunningChecks = true;
+    this.agentWaitingForAI = false;
+    this.agentPhaseStartedAt = Date.now();
     this.scheduleRender();
   }
 
@@ -1858,6 +1891,7 @@ export class App {
       actions: this.agentActions,
       thinking: this.agentThinking,
       waitingForAI: this.agentWaitingForAI,
+      runningChecks: this.agentRunningChecks,
       iteration: this.agentIteration,
       maxIterations: this.agentMaxIterations,
     });
@@ -1876,7 +1910,9 @@ export class App {
 
     this.screen.writeLine(workspaceTop + 2, '');
     this.screen.write(1, workspaceTop + 2, 'AGENT', PRIMARY_COLOR + style.bold);
-    const runLabel = this.agentWaitingForAI ? 'Choosing the next step' : 'Executing a tool';
+    const runLabel = this.agentRunningChecks ? 'Verifying the changes'
+      : this.agentWaitingForAI ? 'Choosing the next step'
+      : 'Executing a tool';
     this.screen.write(9, workspaceTop + 2, runLabel, fg.white);
     const stepLabel = this.agentMaxIterations > 0
       ? `step ${this.agentIteration}/${this.agentMaxIterations}`
@@ -1925,14 +1961,15 @@ export class App {
       y += expandedTimeline ? 3 : 2;
 
       if (stage.status === 'active' && y + 2 <= workspaceBottom) {
-        if (timeline.currentTarget) {
-          const actionType = this.currentActionType();
-          const actionLabel = actionType ? getActionLabel(actionType) : 'Working';
-          this.screen.write(13, y, `${actionLabel}:`, PRIMARY_COLOR);
+        const activity = this.agentActivityLine(timeline.activity);
+        if (activity) {
+          this.screen.write(13, y, activity.head, PRIMARY_COLOR);
           this.screen.write(
-            13 + actionLabel.length + 2,
+            13 + activity.head.length + 1,
             y,
-            formatActionTarget(timeline.currentTarget, Math.max(12, leftWidth - actionLabel.length - 18)),
+            activity.isTool
+              ? formatActionTarget(activity.detail, Math.max(12, leftWidth - activity.head.length - 17))
+              : activity.detail,
             fg.white,
           );
           y++;
@@ -2029,9 +2066,11 @@ export class App {
     if (y <= bottom - 5) {
       this.screen.write(x, y++, 'CHECKS', PRIMARY_COLOR + style.bold);
       if (timeline.checks.length === 0) {
-        const activeCheck = timeline.currentStage === 'VERIFY' && timeline.currentTarget
-          ? formatActionTarget(timeline.currentTarget, contentWidth)
-          : 'Pending';
+        const activeCheck = timeline.activity?.kind === 'checks'
+          ? 'Running checks'
+          : timeline.currentStage === 'VERIFY' && timeline.currentTarget
+            ? formatActionTarget(timeline.currentTarget, contentWidth)
+            : 'Pending';
         this.screen.write(x, y++, activeCheck, timeline.currentStage === 'VERIFY' ? fg.yellow : fg.gray);
       } else {
         for (const check of timeline.checks.slice(-3)) {
@@ -2076,13 +2115,23 @@ export class App {
     return fg.gray;
   }
 
-  private currentActionType(): string {
-    const separator = this.agentThinking.indexOf(':');
-    if (separator < 0) return '';
-    const type = this.agentThinking.slice(0, separator).trim().toLowerCase();
-    return ['read', 'search', 'list', 'fetch', 'write', 'edit', 'delete', 'mkdir', 'command'].includes(type)
-      ? type
-      : '';
+  /**
+   * The line under the active stage: the tool running now ("Listing:
+   * plugins"), or what the run is waiting on and for how long. The label of a
+   * finished tool never goes here — that is what used to show "Listing" for
+   * the 16 minutes a model spent thinking after list_files had returned.
+   */
+  private agentActivityLine(
+    activity: TimelineActivity | null,
+  ): { head: string; detail: string; isTool: boolean } | null {
+    if (!activity) return null;
+    if (activity.kind === 'tool') {
+      if (!activity.target) return null;
+      return { head: `${getActionLabel(activity.type)}:`, detail: activity.target, isTool: true };
+    }
+    const waited = formatElapsed(Date.now() - (this.agentPhaseStartedAt ?? Date.now()));
+    const head = activity.kind === 'checks' ? 'Running checks ·' : 'Waiting for the model ·';
+    return { head, detail: waited, isTool: false };
   }
 
   private currentAgentTask(): string {
@@ -2689,8 +2738,17 @@ export class App {
       { reads: 0, writes: 0, edits: 0, deletes: 0, commands: 0, searches: 0, errors: 0 },
     );
 
+    // Between tools the newest log line is a finished call, not the current
+    // one: say what the run is waiting on instead of highlighting it.
+    const toolRunning = !this.agentWaitingForAI && !this.agentRunningChecks;
+    const waiting = toolRunning
+      ? null
+      : this.agentActivityLine(this.agentRunningChecks ? { kind: 'checks' } : { kind: 'model' });
+
     // Top border: gradient line with gradient title embedded
-    const titleInner = ` ${spinner} AGENT `;
+    const titleInner = waiting
+      ? ` ${spinner} AGENT · ${waiting.head} ${waiting.detail} `
+      : ` ${spinner} AGENT `;
     const titlePadLeft = 2;
     const lineLeft = PRIMARY_COLOR + '─'.repeat(titlePadLeft) + style.reset;
     const titleColored = PRIMARY_COLOR + style.bold + titleInner + style.reset;
@@ -2713,7 +2771,7 @@ export class App {
           const symbol = entry.slice(0, 2);
           const label = entry.slice(2, spaceIdx2);
           const target = entry.slice(spaceIdx2 + 1);
-          const isActive = i === padded.length - 1;
+          const isActive = toolRunning && i === padded.length - 1;
           const symbolColor = isActive ? PRIMARY_COLOR : fg.gray;
           const labelColor = isActive ? fg.white + style.bold : fg.gray;
           const targetColor = isActive ? fg.white : fg.gray;

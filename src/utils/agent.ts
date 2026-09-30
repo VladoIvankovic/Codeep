@@ -314,6 +314,13 @@ export interface AgentOptions {
   onToolResult?: (result: ToolResult, toolCall: ToolCall) => void;
   onIteration?: (iteration: number, message: string) => void;
   onThinking?: (text: string) => void;
+  /**
+   * Auto-verify is about to run the build/typecheck/test checks. They can take
+   * minutes, and nothing else marks them: the onIteration notice before them
+   * reads like any other step, so a caller showing a phase would otherwise say
+   * the model was being waited on. `onVerification` follows with the results.
+   */
+  onVerificationStart?: (attempt: number, maxAttempts: number) => void;
   onVerification?: (results: VerifyResult[]) => void;
   onTaskPlan?: (plan: TaskPlan) => void;
   onTaskUpdate?: (task: SubTask) => void;
@@ -1595,6 +1602,7 @@ export async function runAgent(
           }
 
           opts.onIteration?.(iteration, `Verification attempt ${fixAttempt + 1}/${maxFixAttempts}`);
+          opts.onVerificationStart?.(fixAttempt + 1, maxFixAttempts);
 
           // Run verifications based on selected mode
           const verifyResults = await runAllVerifications(projectContext.root || process.cwd(), {

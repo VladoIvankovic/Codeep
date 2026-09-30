@@ -11,6 +11,29 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.8.1] — 2026-09-30
+
+> TL;DR — While a thinking model works between steps, the agent screen now says it is waiting for the model and for how long, not "Listing" a tool that already finished. Auto-verify's checks show as checks.
+
+### Fixed
+
+- **The agent screen no longer shows a finished tool as the one running.**
+  Between two steps the timeline kept the last tool under the active stage
+  ("Listing: plugins", with the step bar) while the header said "Choosing the
+  next step", for as long as the model took. At max effort that can be a
+  quarter of an hour. It now says "Waiting for the model · 16:02", counted from
+  when the model was asked; a retry does not restart the count. A tool's label
+  shows only while the tool runs. The narrow agent panel says the same in its
+  title and no longer highlights the finished call.
+- **Auto-verify's checks show as checks.** While the build, typecheck or tests
+  ran after a change, the screen said the model was being waited on and named
+  the last edit. VERIFY is now the current stage, with "Running checks" and how
+  long they have taken, until the results are in and the model is asked to fix
+  what they found.
+- **The step count no longer drops to 0 during the second tool of a reply.**
+  Every tool result reset it, so a command that was the second call in one
+  reply ran under "step 0/50" and an empty bar.
+
 ## [3.8.0] — 2026-09-30
 
 > TL;DR — GPT-6.1 Sol arrives as the new OpenAI default: near-Astra quality at $2/$10, with cache reads at half GPT-6 Sol's price. A setting on GPT-6 Sol keeps it.

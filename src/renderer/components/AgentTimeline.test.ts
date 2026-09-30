@@ -32,9 +32,44 @@ describe('buildAgentTimelineModel', () => {
     });
     expect(model.currentStage).toBe('EDIT');
     expect(model.currentTarget).toBe('src/auth.ts');
+    expect(model.activity).toEqual({ kind: 'tool', type: 'edit', target: 'src/auth.ts' });
     expect(model.stages.find(stage => stage.id === 'PLAN')?.status).toBe('done');
     expect(model.stages.find(stage => stage.id === 'READ')?.status).toBe('done');
     expect(model.stages.find(stage => stage.id === 'EDIT')?.status).toBe('active');
+  });
+
+  it('names no tool while the model is being waited on, and keeps the stage', () => {
+    // list_files returned; `thinking` still names it, as the App leaves it.
+    const model = buildAgentTimelineModel({
+      actions: [
+        { type: 'list', target: 'plugins', result: 'success' },
+      ],
+      thinking: 'list: plugins',
+      waitingForAI: true,
+      iteration: 2,
+      maxIterations: 50,
+    });
+    expect(model.activity).toEqual({ kind: 'model' });
+    expect(model.currentTarget).toBe('');
+    expect(model.currentStage).toBe('READ');
+  });
+
+  it('makes VERIFY current while auto-verify runs its checks', () => {
+    const model = buildAgentTimelineModel({
+      actions: [
+        { type: 'edit', target: 'src/auth.ts', result: 'success' },
+      ],
+      thinking: 'edit: src/auth.ts',
+      waitingForAI: false,
+      runningChecks: true,
+      iteration: 2,
+      maxIterations: 50,
+    });
+    expect(model.activity).toEqual({ kind: 'checks' });
+    expect(model.currentStage).toBe('VERIFY');
+    expect(model.stages.find(stage => stage.id === 'VERIFY')?.detail).toBe('Auto-verify is checking the change');
+    expect(model.currentTarget).toBe('');
+    expect(model.stages.find(stage => stage.id === 'EDIT')?.status).toBe('done');
   });
 
   it('deduplicates changed files and keeps the latest result', () => {
