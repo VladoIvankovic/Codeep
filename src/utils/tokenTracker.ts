@@ -73,6 +73,9 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // OpenAI — every 5.6 and GPT-6 page gives a 1,050,000 window with a
   // "Maximum input tokens: 922,000"; this sizes the context meter only, and
   // compaction is character-based, so the window figure is what belongs here.
+  // GPT-6.1 Sol too ("1,050,000 context window", models/gpt-6.1-sol); its own
+  // row, since `gpt-6-1-sol` is not a `gpt-6-sol` id.
+  'gpt-6.1-sol':          1_050_000,
   'gpt-6-sol':            1_050_000,
   'gpt-6-luna':           1_050_000,
   'gpt-6-astra':          1_050_000,
@@ -211,14 +214,20 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // over-estimates.
   'glm-5-turbo':       { inputPer1M: 1.20,  outputPer1M: 4.00 },
   // OpenAI
+  // GPT-6.1 Sol, released 2026-09-30 and the OpenAI default: $2/$10 like GPT-6
+  // Sol, but its cached input is $0.10 — "5% of the uncached input token
+  // rate" (models/gpt-6.1-sol) — so it has a row in MODEL_CACHE_READ_RATE.
+  // Its cache writes are the 1.25x default ($2.50).
+  'gpt-6.1-sol':   { inputPer1M: 2.00,  outputPer1M: 10.00 },
   // GPT-6 Sol and Luna, released 2026-09-22. Cached reads are 0.1x input and
   // cache writes 1.25x — the defaults below — so no rate rows are needed.
-  // Above 272K input a request bills $4/$15 (Sol) or $0.20/$0.75 (Luna); like
+  // Above 272K input a request bills $4/$15 (Sol and 6.1 Sol) or $0.20/$0.75
+  // (Luna) — 2x input and cache, 1.5x output, on every GPT-6 model; like
   // every row here, these hold the standard short-context tier.
   'gpt-6-sol':     { inputPer1M: 2.00,  outputPer1M: 10.00 },
   'gpt-6-luna':    { inputPer1M: 0.10,  outputPer1M: 0.50 },
-  // No longer offered on `openai` (no tool calls on Chat Completions); kept so
-  // restored sessions still price. 2.5x 5.6 Sol at its promotional rate.
+  // Offered again since agent turns moved to the Responses API (2026-09-26).
+  // 2.5x 5.6 Sol at its promotional rate. Above 272K input: $20/$75.
   'gpt-6-astra':   { inputPer1M: 10.00, outputPer1M: 50.00 },
   // Promotional rate "available at least through 2026-11-21" per OpenAI's
   // pricing page. Carried because it is what users are billed now, and no end
@@ -556,6 +565,10 @@ const MODEL_CACHE_READ_RATE: Record<string, number> = {
   // "On Claude Opus 5.5, a cache hit costs 5% of the standard input price
   // ($0.20 USD per million tokens)" — half the 0.1× every other Opus pays.
   'claude-opus-5-5': 0.05,
+  // "Cached input tokens are priced at 5% of the uncached input token rate"
+  // ($0.10 against $2 — models/gpt-6.1-sol). GPT-6 Sol, at the same $2, reads
+  // at 10% ($0.20), the default, so it has no row: don't copy this one there.
+  'gpt-6.1-sol': 0.05,
   // V4 Pro's own ratio: $0.044 hit against $1.32 miss (peak; off-peak halves
   // both, so the ratio holds).
   'deepseek-v4-pro': 0.044 / 1.32,

@@ -12,7 +12,7 @@ import { isAnthropicRefusalNotice } from '../api/anthropicContent';
 import { runAgent, AgentResult, PermissionOutcome } from '../utils/agent';
 import { TelegramApproval, outcomeForAnswer, describePermissionOutcome } from '../utils/telegramApproval';
 import { loadTelegramCredentials } from '../utils/telegramCredentials';
-import { composeRunMessages, sendTelegramNotice, shouldNotify } from '../utils/telegramNotify';
+import { composeRunMessages, noticeAnswer, sendTelegramNotice, shouldNotify } from '../utils/telegramNotify';
 import { takeRunFromPhone } from '../utils/telegramInbox';
 import { isFlatFeeProvider } from '../config/providers';
 import { raceApproval, type RaceParticipant } from '../utils/approvalRace';
@@ -679,7 +679,11 @@ export async function executeAgentTask(
         const messages = composeRunMessages({
           task: runLabel,
           elapsedMs,
-          answer: fromPhone ? result.finalResponse : undefined,
+          answer: noticeAnswer({
+            fromPhone,
+            terminalAnswers: config.get('telegramTerminalAnswers') === true,
+            finalResponse: result.finalResponse,
+          }),
           tokens: costBreakdown.reduce((sum, e) => sum + e.promptTokens + e.completionTokens, 0),
           costUsd: payPerUse.reduce((sum, e) => sum + e.estimatedCost, 0),
         });

@@ -588,3 +588,51 @@ describe('GPT-6 Astra where its agent turns stay on Chat Completions', () => {
     expect(toolsNotice(notices)).toEqual([]);
   });
 });
+
+// ─── GPT-6.1 Sol where its agent turns stay on Chat Completions ─────────────
+
+// The OpenAI default since 2026-09-30. "Use the Responses API for tool
+// calling. Chat Completions is supported without tool calling."
+// (models/gpt-6.1-sol) — Astra's case, and the downside the owner accepted:
+// through a proxy its agent turns use text tools, and Codeep says so once.
+describe('GPT-6.1 Sol where its agent turns stay on Chat Completions', () => {
+  // Wording assumed; agentChat falls back on the 400 itself.
+  const sol61Refusal = () => new Response(JSON.stringify({ error: {
+    message: 'Function calling is not supported with gpt-6.1-sol on Chat Completions. Use the Responses API.', type: 'invalid_request_error',
+  } }), { status: 400 });
+  const chatAnswer = () => new Response(JSON.stringify({ choices: [{ message: { content: 'Done without native tools.', tool_calls: [] } }] }), { status: 200 });
+  const toolsNotice = (notices: string[]) => notices.filter(n => n.includes('cannot call tools over Chat Completions'));
+
+  it('tells a GPT-6.1 Sol run through a proxy once, names gpt-6-sol, and keeps the tier on both requests', async () => {
+    config.delete('openaiWireApi' as never);
+    config.set('model', 'gpt-6.1-sol');
+    process.env.OPENAI_BASE_URL = 'https://litellm.internal/v1';
+    reply = (req) => (req.body.tools ? sol61Refusal() : chatAnswer());
+    const notices: string[] = [];
+
+    const run = await runAgent('Say hello.', ctx(), { autoVerify: false, maxIterations: 3, onIteration: (_i, m) => notices.push(m) });
+
+    expect(run.success).toBe(true);
+    expect(requests.map(r => r.url)).toEqual(['https://litellm.internal/v1/chat/completions', 'https://litellm.internal/v1/chat/completions']);
+    expect(requests[0].body).toHaveProperty('tools');
+    expect(requests[1].body).not.toHaveProperty('tools');
+    // /thinking is high here; "none" would be a 400 on 6.1 Sol.
+    expect(requests.map(r => r.body.reasoning_effort)).toEqual(['high', 'high']);
+    expect(toolsNotice(notices)).toHaveLength(1);
+    expect(toolsNotice(notices)[0]).toMatch(/^⚠ gpt-6\.1-sol cannot call tools over Chat Completions/);
+    expect(toolsNotice(notices)[0]).toContain('pick GPT-6 Sol (gpt-6-sol)');
+  });
+
+  it('says nothing to GPT-6.1 Sol over the Responses API, where it calls tools', async () => {
+    config.delete('openaiWireApi' as never);
+    config.set('model', 'gpt-6.1-sol');
+    reply = () => sse(fixture('text-only.sse'));
+    const notices: string[] = [];
+
+    await runAgent('Say hello.', ctx(), { autoVerify: false, maxIterations: 3, onIteration: (_i, m) => notices.push(m) });
+
+    expect(responsesRequests()).toHaveLength(1);
+    expect(responsesRequests()[0].body.reasoning).toEqual({ effort: 'high' });
+    expect(toolsNotice(notices)).toEqual([]);
+  });
+});

@@ -139,8 +139,8 @@ Last full review: **2026-09-23**
   the default protocol for DeepSeek.
 - **GPT-5.6 Sol runs a promotional $4/$20** "at least through 2026-11-21" (list
   $5/$30). Long-context requests (over 272K input) bill at a higher tier: Sol
-  $8/$30, Astra $20/$75, GPT-6 Sol $4/$15, GPT-6 Luna $0.20/$0.75. The table
-  carries short-context only.
+  $8/$30, Astra $20/$75, GPT-6 Sol and GPT-6.1 Sol $4/$15, GPT-6 Luna
+  $0.20/$0.75. The table carries short-context only.
 - **From GPT-5.6 on, OpenAI bills cache writes at 1.25× input** and reports them
   as `prompt_tokens_details.cache_write_tokens`, inside `prompt_tokens`
   (ordinary input = prompt − cached − written). The CLI reads the field in
@@ -206,7 +206,8 @@ Last full review: **2026-09-23**
   - Astra is back in the `openai` picker, and its `gpt-6-astra` → `gpt-6-sol`
     migration is gone (see the rule above). Configs it already moved stay on
     Sol. OpenRouter's `openai/gpt-6-astra` was never migrated.
-  - The OpenAI default model is `gpt-6-sol` (was `gpt-5.6-sol`). The global
+  - The OpenAI default model became `gpt-6-sol` then (was `gpt-5.6-sol`). It
+    has been `gpt-6.1-sol` since 2026-09-30 (next entry). The global
     fresh-install provider is unchanged.
   - The recordings are the transport's regression tests against reality:
     `src/api/responses.recorded.test.ts` parses them through the real parser,
@@ -214,6 +215,59 @@ Last full review: **2026-09-23**
     agent loop builds from step 1's recorded stream matches the accepted step-2
     request item for item. Re-record with the script when OpenAI changes the
     event stream, and keep the key out of the files (a test checks).
+- **GPT-6.1 Sol** (`gpt-6.1-sol`, released 2026-09-30; the only snapshot, no
+  dated id; OpenRouter `openai/gpt-6.1-sol`) is **the OpenAI default** in both
+  clients since 2026-09-30, by the owner's decision. The GPT-6 guide now
+  features Astra, 6.1 Sol ("Near-Astra performance for complex work at a lower
+  cost") and Luna. GPT-6 Sol is no longer featured, but it is **not
+  deprecated**: the deprecations page has no GPT-6 entry, and the guide says to
+  "review the migration guidance before switching". So GPT-6 Sol stays in the
+  picker as the previous Sol with **no migration**. In the CLI the default
+  applies only when a user switches to OpenAI (`setProvider`). On macOS it also
+  fills a new chat when no OpenAI pick is remembered (`lastUsedModels`), while
+  existing conversations and remembered picks keep GPT-6 Sol. A config that
+  already names `gpt-6-sol` keeps it, including one that got it as the 3.6/3.7
+  default.
+  - $2/$10, like GPT-6 Sol, but **its cache read is 0.05× ($0.10), not 0.1×**
+    ("Cached input tokens are priced at 5% of the uncached input token rate").
+    That is a model row in the CLI's `MODEL_CACHE_READ_RATE` and its own row
+    in macOS `CostEstimator`. GPT-6 Sol reads at $0.20, the 0.1× default, so
+    don't copy the row there. Cache writes are the usual 1.25× ($2.50).
+    Above 272K input the whole request bills at 2× input and cache and 1.5×
+    output ($4/$15), as on every GPT-6 model. The table carries the
+    short-context tier.
+  - 1,050,000 context, 922,000 max input, 128,000 output, knowledge cutoff
+    2026-04-30. OpenRouter's `context_length` is the same, so
+    `openai/gpt-6.1-sol` is sized through the canonical id and needs no exact
+    row.
+  - Efforts `low`, `medium` (default), `high`, `xhigh` and `max`. It has **no
+    `none` and no `minimal`** ("GPT-6 Astra and GPT-6.1 Sol do not support
+    none; use low instead"). No `/thinking` tier sends either. The only
+    `none` Codeep sends is `toolsForceReasoningOff`, for GPT-6 Sol/Luna agent
+    turns on Chat Completions, and 6.1 Sol stays out of it. Without `none` it
+    never takes `temperature`/`top_p`; the `gpt-6` entry in the sampling list
+    already covers it. OpenRouter lists `max` for it too.
+  - **It calls tools only over Responses**, as Astra does: "Use the Responses
+    API for tool calling. Chat Completions is supported without tool
+    calling." At the official URL its agent turns go over Responses because
+    it is in the catalogue (`openAIWireApi` 'auto'). Taken out of the
+    catalogue, they would quietly go to Chat Completions without native
+    tools. `providers.responses.test.ts` pins the default to that route.
+  - **The proxy downside, accepted by the owner.** Through an
+    `OPENAI_BASE_URL` proxy, or with the switch at `chat`, its tools request
+    is refused, and the CLI runs agent turns on the text-tool fallback with
+    the one-time notice (`chatCompletionsCannotCallTools` /
+    `agentToolsNote`). The notice names `gpt-6-sol` as the model that still
+    calls tools there, with reasoning off. On macOS, see Astra above.
+  - **Id shape.** `gpt-6.1-sol` canonicalizes to `gpt-6-1-sol`. The `gpt-6`
+    prefix gates take it in, rightly: the `/thinking` control, Max → `max`,
+    OpenRouter's Max and the sampling list. The exact `gpt-6-sol` gate in
+    `toolsForceReasoningOff` misses it, also rightly; widening that gate to
+    the `gpt-6` prefix would send it `none` and get a 400. The context, price
+    and cache rows are exact.
+  - **Not live-recorded.** The 2026-09-26 recordings cover Astra and GPT-6
+    Sol. 6.1 Sol's Responses behaviour rests on OpenAI's docs until the owner
+    records a 6.1 Sol case with `scripts/record-responses-fixture.mjs`.
 - **OpenAI `reasoning_effort: "max"`** is valid from GPT-5.6 on (changelog
   2026-07-09) and on every GPT-6 model. Our Max tier sends it there; GPT-5.5 and
   earlier still get `xhigh`.
@@ -400,6 +454,8 @@ Last full review: **2026-09-23**
 - Anthropic: <https://platform.claude.com/docs/en/models/overview>
   (the older /docs/en/docs/about-claude/… and docs.anthropic.com addresses redirect here)
 - Anthropic pricing (per-model cache ratios): <https://platform.claude.com/docs/en/about-claude/pricing>
+- OpenAI GPT-6.1 Sol (price, cache, efforts, Responses-only tools):
+  <https://developers.openai.com/api/docs/models/gpt-6.1-sol>
 - OpenAI GPT-6 on Chat Completions (the tool restrictions), and why Responses:
   <https://developers.openai.com/api/docs/guides/latest-model>
   and <https://developers.openai.com/api/docs/guides/reasoning>

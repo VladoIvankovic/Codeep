@@ -30,6 +30,7 @@ vi.mock('./projectIntelligence', () => ({
 vi.mock('./codeepCloud', () => ({ syncProgress: vi.fn(), generateProjectId: vi.fn(() => 'p') }));
 
 import { agentChat, agentChatFallback } from './agentChat';
+import { REASONING_TIERS } from '../config/providers';
 
 const originalFetch = global.fetch;
 let bodies: Record<string, unknown>[] = [];
@@ -93,6 +94,43 @@ describe('GPT-6 Sol/Luna agent turns on Chat Completions', () => {
     useModel('openai', 'gpt-5.6-sol', 'openai', { reasoningEffort: 'max' });
     await agentChat(messages, 'system');
     expect(bodies[0].reasoning_effort).toBe('max');
+  });
+});
+
+describe('GPT-6.1 Sol agent turns on Chat Completions', () => {
+  // "Use the Responses API for tool calling. Chat Completions is supported
+  // without tool calling", and "The none and minimal reasoning efforts are not
+  // supported" (models/gpt-6.1-sol). Through a proxy the tools request is
+  // refused and the text-tool fallback answers — neither may carry "none",
+  // which is a 400 of its own. (The refusal's wording is assumed; the
+  // fallback keys on the 400.)
+  function refuseToolsThenAnswer(): void {
+    global.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      if (body.tools) {
+        return new Response(JSON.stringify({ error: {
+          message: 'Function calling is not supported with gpt-6.1-sol on Chat Completions. Use the Responses API.',
+          type: 'invalid_request_error',
+        } }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'done' } }] }), { status: 200 });
+    }) as typeof fetch;
+  }
+
+  it('never sends GPT-6.1 Sol "none" — the tools request keeps the tier, and so does the fallback', async () => {
+    refuseToolsThenAnswer();
+    for (const tier of REASONING_TIERS) {
+      bodies = [];
+      useModel('openai', 'gpt-6.1-sol', 'openai', { reasoningEffort: tier });
+      await agentChat(messages, 'system');
+      expect(bodies, tier).toHaveLength(2);
+      expect(Array.isArray(bodies[0].tools) && (bodies[0].tools as unknown[]).length, tier).toBeTruthy();
+      expect(bodies[1].tools, tier).toBeUndefined();
+      const expected = tier === 'auto' ? undefined : tier;
+      expect(bodies.map(b => b.reasoning_effort), tier).toEqual([expected, expected]);
+      for (const b of bodies) expect(b, tier).not.toHaveProperty('temperature');
+    }
   });
 });
 

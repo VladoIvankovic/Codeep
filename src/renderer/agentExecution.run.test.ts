@@ -256,6 +256,50 @@ describe('the outcome of a run', () => {
   });
 });
 
+describe('the Telegram message at the end of a terminal run', () => {
+  // Long enough to be worth a notice (NOTIFY_AFTER_MS is one minute): the run
+  // "takes" 61 seconds by moving the clock while it runs.
+  async function sentTexts(terminalAnswers: boolean | undefined): Promise<string[]> {
+    const texts: string[] = [];
+    const before = config.get('telegramTerminalAnswers');
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset);
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: { body?: string }) => {
+      texts.push(JSON.parse(String(init?.body ?? '{}')).text);
+      return new Response('{"ok":true}', { status: 200 });
+    }));
+    vi.mocked(loadTelegramCredentials).mockResolvedValue({ botToken: 'bot', chatID: '42' });
+    vi.mocked(runAgent).mockImplementationOnce(async () => {
+      offset = 61_000;
+      return { success: true, iterations: 1, actions: [], finalResponse: 'The answer: 140 files.' } as Awaited<ReturnType<typeof runAgent>>;
+    });
+    try {
+      if (terminalAnswers === undefined) config.delete('telegramTerminalAnswers');
+      else config.set('telegramTerminalAnswers', terminalAnswers);
+      await executeAgentTask('analyse the project', false, makeCtx());
+    } finally {
+      config.set('telegramTerminalAnswers', before ?? false);
+      vi.mocked(loadTelegramCredentials).mockResolvedValue(null);
+      vi.unstubAllGlobals();
+      clock.mockRestore();
+    }
+    return texts;
+  }
+
+  it('says the run finished, and keeps the answer off the chat by default', async () => {
+    const texts = await sentTexts(undefined);
+    expect(texts.join('\n')).toContain('Codeep finished');
+    expect(texts.join('\n')).not.toContain('The answer: 140 files.');
+  });
+
+  it('carries the answer once "Send terminal answers to Telegram" is on', async () => {
+    const texts = await sentTexts(true);
+    expect(texts[0]).toContain('Codeep finished');
+    expect(texts[0]).toContain('The answer: 140 files.');
+  });
+});
+
 describe('the confirmation for a dangerous tool', () => {
   it('shows the start of a long target, not only its end', async () => {
     config.set('agentConfirmation', 'dangerous');

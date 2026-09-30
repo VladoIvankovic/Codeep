@@ -582,24 +582,36 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // confirmed (scripts/record-responses-fixture.mjs; recordings in
     // utils/__fixtures__/responses/recorded): Astra called tools, Sol at effort
     // high made two calls in parallel, and replayed reasoning was accepted
-    // under store:false. So Astra is offered again, and the default is GPT-6 Sol.
+    // under store:false. So Astra is offered again.
     //
     // Chat Completions remains for an OPENAI_BASE_URL proxy and for the switch
     // forced to 'chat'. There the old rules still hold, keyed to the wire:
     // Sol/Luna agent turns send "none" (toolsForceReasoningOff, which /thinking
-    // reports) and Astra's agent turns fall back to text tools (a one-time
-    // notice says so — agentToolsNote). 5.6 Sol is the GPT that reasons with
-    // tools on either API ("The Chat Completions examples use GPT-5.6 for
-    // compatibility" — function-calling guide).
+    // reports) and Astra's and 6.1 Sol's agent turns fall back to text tools (a
+    // one-time notice says so — agentToolsNote). 5.6 Sol is the GPT that
+    // reasons with tools on either API ("The Chat Completions examples use
+    // GPT-5.6 for compatibility" — function-calling guide).
+    //
+    // GPT-6.1 Sol (2026-09-30) is the default: OpenAI now features Astra,
+    // 6.1 Sol ("Near-Astra performance for complex work at a lower cost") and
+    // Luna, and no longer GPT-6 Sol, at the same $2/$10 with half the cached
+    // input price (models/gpt-6.1-sol). Like Astra it has no "none" effort and
+    // "Use the Responses API for tool calling. Chat Completions is supported
+    // without tool calling." The owner accepted what that costs through a
+    // proxy: agent turns there use text tools, with the notice. GPT-6 Sol is
+    // not deprecated (no GPT-6 entry on the deprecations page), so it stays as
+    // the previous Sol with no migration; a config that names it keeps it, and
+    // the default applies only when a user switches to OpenAI.
     models: [
       { id: 'gpt-6-astra',   name: 'GPT-6 Astra',   description: 'Frontier GPT-6 ($10/$50), 1M context — calls tools over the Responses API only; through a Chat Completions proxy, agent turns use text tools' },
-      { id: 'gpt-6-sol',     name: 'GPT-6 Sol',     description: 'GPT-6 at $2/$10, 1M context — reasons and calls tools together' },
+      { id: 'gpt-6.1-sol',   name: 'GPT-6.1 Sol',   description: 'Near-Astra for less ($2/$10), 1M context — calls tools over the Responses API only; through a Chat Completions proxy, agent turns use text tools' },
+      { id: 'gpt-6-sol',     name: 'GPT-6 Sol',     description: 'Previous Sol ($2/$10), kept for pinned configs — unlike 6.1 Sol, calls tools natively through a Chat Completions proxy' },
       { id: 'gpt-6-luna',    name: 'GPT-6 Luna',    description: 'Cheapest GPT-6 ($0.10/$0.50), 1M context' },
       { id: 'gpt-5.6-sol',   name: 'GPT-5.6 Sol',   description: 'GPT-5.6 flagship ($4/$20) — reasons with tools on Chat Completions too, e.g. through a proxy' },
       { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', description: 'Balanced — GPT-5.5 quality at about half the price' },
       { id: 'gpt-5.6-luna',  name: 'GPT-5.6 Luna',  description: 'Fast and cheap — high-volume workloads' },
     ],
-    defaultModel: 'gpt-6-sol',
+    defaultModel: 'gpt-6.1-sol',
     defaultProtocol: 'openai',
     useMaxCompletionTokens: true,
     requiresDefaultTemperature: true,
@@ -697,7 +709,10 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       { id: 'anthropic/claude-sonnet-5.5',      name: 'Claude Sonnet 5.5',  description: 'Anthropic — balanced' },
       { id: 'anthropic/claude-sonnet-5',        name: 'Claude Sonnet 5',    description: 'Anthropic — previous Sonnet' },
       { id: 'openai/gpt-6-astra',               name: 'GPT-6 Astra',        description: 'OpenAI — frontier' },
-      { id: 'openai/gpt-6-sol',                 name: 'GPT-6 Sol',          description: 'OpenAI — GPT-6, balanced' },
+      // OpenRouter lists 6.1 Sol at $2/$10, 1,050,000 context, efforts
+      // low..max with no "none" (/api/v1/models, read 2026-09-30).
+      { id: 'openai/gpt-6.1-sol',               name: 'GPT-6.1 Sol',        description: 'OpenAI — GPT-6, balanced' },
+      { id: 'openai/gpt-6-sol',                 name: 'GPT-6 Sol',          description: 'OpenAI — previous Sol' },
       { id: 'openai/gpt-6-luna',                name: 'GPT-6 Luna',         description: 'OpenAI — GPT-6, fast/cheap' },
       { id: 'openai/gpt-5.6-sol',               name: 'GPT-5.6 Sol',        description: 'OpenAI — flagship' },
       { id: 'openai/gpt-5.6-luna',              name: 'GPT-5.6 Luna',       description: 'OpenAI — fast/efficient' },
@@ -1030,10 +1045,12 @@ export function providerNoStreamWithTools(providerId: string): boolean {
  * omission as default. Kimi K2.x code/thinking models fix temperature
  * internally and 400 on any custom value, so they're here too. Google removed
  * the deprecated sampling parameters outright in the Gemini 3.7 generation.
- * GPT-6 takes temperature/top_p only at reasoning_effort "none" (Astra never):
- * the direct `openai` provider already omits them for every model through
- * requiresDefaultTemperature, so this entry is for `openai/gpt-6-*` on
- * OpenRouter, the one path where a GPT-6 id could still be sent one.
+ * GPT-6 takes temperature/top_p only at reasoning_effort "none" (Astra and
+ * 6.1 Sol never — they have no "none"): the direct `openai` provider already
+ * omits them for every model through requiresDefaultTemperature, so this
+ * entry is for `openai/gpt-6-*` on OpenRouter, the one path where a GPT-6 id
+ * could still be sent one. `openai/gpt-6.1-sol` canonicalizes to
+ * `gpt-6-1-sol`, which the `gpt-6` prefix takes in.
  */
 const SAMPLING_PARAMS_REJECTED = [
   'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5',
@@ -1256,6 +1273,14 @@ export function responsesMaxOutputTokens(configMaxTokens: number, tier: Reasonin
  * `openai` agent turns go by default — it never applies and /thinking reaches
  * agent turns. `wire` defaults to 'chat': OPENAI_BASE_URL proxies and the
  * switch forced to 'chat' still send tools there.
+ *
+ * GPT-6.1 Sol is deliberately NOT here. It has no "none" ("GPT-6 Astra and
+ * GPT-6.1 Sol do not support none; use low instead" — guides/latest-model),
+ * so forcing it would turn every proxied agent turn into a 400; it cannot
+ * call tools on Chat Completions at any effort (chatCompletionsCannotCallTools).
+ * Only the id's shape keeps it out: `gpt-6.1-sol` canonicalizes to
+ * `gpt-6-1-sol`, which `gpt-6-sol` does not match. Widening this to a `gpt-6`
+ * prefix would take it (and Astra) in.
  */
 export function toolsForceReasoningOff(providerId: string, model: string, wire: OpenAIWire = 'chat'): boolean {
   if (wire !== 'chat') return false;
@@ -1284,21 +1309,31 @@ export function agentTurnReasoningNote(providerId: string, model: string, wire: 
  * request comes back 400 and agentChat drops to the text-tool fallback, which
  * works but used to happen without a word. Direct `openai` only, as for
  * toolsForceReasoningOff; `wire` defaults to 'chat' likewise.
+ *
+ * GPT-6.1 Sol is the same case: "Use the Responses API for tool calling. Chat
+ * Completions is supported without tool calling." (models/gpt-6.1-sol; the
+ * GPT-6 guide: "GPT-6 Astra and GPT-6.1 Sol support Chat Completions, but
+ * tool calling requires Responses"). Matched as `gpt-6-1-sol`, its canonical
+ * id, so OpenRouter's `openai/gpt-6.1-sol` would match too — but OpenRouter
+ * never gets here.
  */
 export function chatCompletionsCannotCallTools(providerId: string, model: string, wire: OpenAIWire = 'chat'): boolean {
   if (wire !== 'chat') return false;
   if (providerId !== 'openai') return false;
-  return idMatches(canonicalModelId(model), 'gpt-6-astra');
+  const id = canonicalModelId(model);
+  return idMatches(id, 'gpt-6-astra') || idMatches(id, 'gpt-6-1-sol');
 }
 
 /**
  * The one-time notice runAgent gives when this model's agent turns cannot call
  * tools natively on the wire they go to, or null. It names how to get native
- * tool calls back, since each way out is a setting the user controls.
+ * tool calls back, since each way out is a setting the user controls. The
+ * last way out names GPT-6 Sol by its id: the notice can be about GPT-6.1 Sol,
+ * and "pick GPT-6 Sol" read next to `gpt-6.1-sol` looks like the same model.
  */
 export function agentToolsNote(providerId: string, model: string, wire: OpenAIWire = 'chat'): string | null {
   if (!chatCompletionsCannotCallTools(providerId, model, wire)) return null;
-  return `${model} cannot call tools over Chat Completions, and its agent turns go there (an OPENAI_BASE_URL proxy, or openaiWireApi / CODEEP_OPENAI_WIRE_API set to "chat"), so they use Codeep's text tool format instead. For native tool calls use the official base URL with the switch on auto, set it to "responses" if your proxy serves /v1/responses, or pick GPT-6 Sol.`;
+  return `${model} cannot call tools over Chat Completions, and its agent turns go there (an OPENAI_BASE_URL proxy, or openaiWireApi / CODEEP_OPENAI_WIRE_API set to "chat"), so they use Codeep's text tool format instead. For native tool calls use the official base URL with the switch on auto, set it to "responses" if your proxy serves /v1/responses, or pick GPT-6 Sol (gpt-6-sol), which calls tools there with reasoning off.`;
 }
 
 /**
@@ -1306,11 +1341,13 @@ export function agentToolsNote(providerId: string, model: string, wire: OpenAIWi
  *
  * OpenRouter accepts "xhigh" and "max", but only where the model does. Its
  * /api/v1/models `reasoning.supported_efforts` (read 2026-09-23) lists "max"
- * for GPT-5.6 and GPT-6, the Claude 5 family (Sonnet 5.5 included: its
- * supported_efforts are max/xhigh/high/medium/low, read 2026-09-29; the
- * `claude-sonnet-5` prefix covers it) and Opus 4.7/4.8, DeepSeek V4.1
- * Flash and V4 Pro 0813, and Kimi K3; "xhigh" is the ceiling for GPT-5.4/5.5,
- * Grok 4.6/4.7 and Qwen 3.8 Max. Everything else keeps the old "high" cap —
+ * for GPT-5.6 and GPT-6 (6.1 Sol included: max/xhigh/high/medium/low, read
+ * 2026-09-30; the `gpt-6` prefix covers `gpt-6-1-sol`), the Claude 5 family
+ * (Sonnet 5.5 included: its supported_efforts are max/xhigh/high/medium/low,
+ * read 2026-09-29; the `claude-sonnet-5` prefix covers it) and Opus 4.7/4.8,
+ * DeepSeek V4.1 Flash and V4 Pro 0813, and Kimi K3; "xhigh" is the ceiling
+ * for GPT-5.4/5.5, Grok 4.6/4.7 and Qwen 3.8 Max. Everything else keeps the
+ * old "high" cap —
  * including the 0423 `deepseek/deepseek-v4-pro` preview (xhigh|high only) and
  * Grok 4.5/4.3, which list no xhigh — because OpenRouter does not document what
  * happens to a level a model does not list.
@@ -1437,7 +1474,9 @@ export function reasoningParamsFor(
     case 'openai': {
       // Chat Completions takes none/minimal/low/medium/high/xhigh/max, but "max"
       // is per model: it arrived with GPT-5.6 (changelog 2026-07-09) and every
-      // GPT-6 page lists it. GPT-5.5 and earlier top out at xhigh.
+      // GPT-6 page lists it. GPT-5.5 and earlier top out at xhigh. No tier
+      // sends "none" or "minimal" — GPT-6 Astra and GPT-6.1 Sol reject both —
+      // only the tools rule above does, and only for GPT-6 Sol/Luna.
       const id = canonicalModelId(model);
       const hasMax = idMatches(id, 'gpt-5-6') || idMatches(id, 'gpt-6');
       return { reasoning_effort: tier === 'max' ? (hasMax ? 'max' : 'xhigh') : tier };
@@ -1488,7 +1527,9 @@ export function reasoningParamsFor(
  * GPT-6 Sol/Luna list their full set: plain chat and agent turns over the
  * Responses API (the default) both take it. Only agent turns on Chat
  * Completions — a proxy, or the switch forced to 'chat' — send "none"
- * regardless (toolsForceReasoningOff), and /thinking says so there.
+ * regardless (toolsForceReasoningOff), and /thinking says so there. GPT-6.1
+ * Sol lists the same set, and none of it is "none": its efforts are low,
+ * medium (default), high, xhigh and max.
  *
  * Kept in lockstep with `reasoningParamsFor` (the providers-test asserts every
  * listed tier yields a DISTINCT param, so this can't silently drift). Mirrors

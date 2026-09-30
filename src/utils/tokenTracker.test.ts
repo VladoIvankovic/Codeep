@@ -935,3 +935,46 @@ describe('Claude Sonnet 5.5', () => {
     expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.0421, 8);
   });
 });
+
+// GPT-6.1 Sol (2026-09-30, models/gpt-6.1-sol): $2 / $10 like GPT-6 Sol, but
+// "Cached input tokens are priced at 5% of the uncached input token rate"
+// ($0.10; GPT-6 Sol's is 10%), cache writes $2.50 (1.25×), and a 1,050,000
+// context. Each asserted against its own row: `gpt-6.1-sol` canonicalizes to
+// `gpt-6-1-sol`, which no `gpt-6-sol` row or prefix reaches.
+describe('GPT-6.1 Sol', () => {
+  it('sizes GPT-6.1 Sol at 1,050,000, by its OpenRouter id too', () => {
+    expect(getModelContextWindow('gpt-6.1-sol')).toBe(1_050_000);
+    expect(getModelContextWindow('openai/gpt-6.1-sol')).toBe(1_050_000);
+  });
+
+  it('prices GPT-6.1 Sol at $2 in / $10 out per MTok', () => {
+    expect(getPricingTable().find(m => m.model === 'gpt-6.1-sol'))
+      .toEqual({ model: 'gpt-6.1-sol', inputPer1M: 2, outputPer1M: 10 });
+    recordTokenUsage(
+      { promptTokens: 1_000_000, completionTokens: 1_000_000, totalTokens: 2_000_000 },
+      'gpt-6.1-sol',
+      'openai',
+    );
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(12, 8);
+  });
+
+  it('reads the GPT-6.1 Sol cache at 0.05× ($0.10) and writes it at 1.25× ($2.50)', () => {
+    expect(cacheReadRateFor('gpt-6.1-sol', 'openai')).toBe(0.05);
+    expect(cacheWriteRateFor('gpt-6.1-sol', 'openai')).toBe(1.25);
+    // The previous Sol keeps its 10%.
+    expect(cacheReadRateFor('gpt-6-sol', 'openai')).toBe(0.1);
+    recordTokenUsage(
+      {
+        promptTokens: 1_000_000, completionTokens: 0, totalTokens: 1_000_000,
+        cacheCreationTokens: 500_000, cacheReadTokens: 500_000,
+      },
+      'gpt-6.1-sol',
+      'openai',
+    );
+    // 0.5M written at $2.50 + 0.5M read at $0.10 = 1.25 + 0.05
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(1.30, 8);
+    // Reads save 0.5M * ($2 - $0.10) = 0.95; the write premium costs 0.5M * $0.50 = 0.25.
+    expect(getCacheStats().estimatedSavingsUsd).toBeCloseTo(0.70, 8);
+    expect(getCacheStats().cacheReadRates).toEqual([0.05]);
+  });
+});

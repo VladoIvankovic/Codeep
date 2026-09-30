@@ -562,7 +562,9 @@ export async function agentChat(
       // Thinking-effort tier → provider-shaped param ({} for 'auto'/unsupported).
       // This request carries tools, which GPT-6 Sol/Luna on Chat Completions
       // accept only at reasoning_effort "none"; told so, reasoningParamsFor
-      // sends that for them whatever the tier.
+      // sends that for them whatever the tier. Astra and 6.1 Sol take no tools
+      // here at any effort (and no "none"): they keep the tier, the 400 comes
+      // back, and the fallback below takes over.
       const openAIReasoning = reasoningParamsFor(providerId, model, tier, { tools: openAITools.length > 0 });
       const maxTok = getEffectiveMaxTokens(providerId, responseBudget);
       const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };

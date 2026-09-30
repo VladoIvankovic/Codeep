@@ -1167,6 +1167,7 @@ Format: use headers per category, only include categories where you found issues
       // nothing arrive, and has no way to tell which half is absent.
       ctx.app.notify([
         `Telegram approval: ${enabled ? 'on' : 'off'}`,
+        `Terminal answers: ${config.get('telegramTerminalAnswers') === true ? 'on' : 'off'}`,
         `Bot token: ${hasToken ? 'saved' : 'missing'}`,
         `Chat ID: ${chatId || 'missing'}`,
       ].join(' · '));

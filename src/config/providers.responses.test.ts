@@ -38,16 +38,29 @@ describe('the shipped switch', () => {
   // and replayed reasoning was accepted under store:false. So an unset switch
   // now sends both GPT-6 models there — and nothing else changes: a proxy and
   // the 'chat' kill switch stay on Chat Completions.
-  it('is auto: GPT-6 Sol and Astra go over Responses with nothing set', () => {
+  it('is auto: GPT-6.1 Sol, GPT-6 Sol and Astra go over Responses with nothing set', () => {
     expect(DEFAULT_OPENAI_WIRE_API).toBe('auto');
     expect(openAIWireSetting(undefined)).toBe('auto');
-    for (const model of ['gpt-6-sol', 'gpt-6-astra']) {
+    for (const model of ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-astra']) {
       expect(openAIWireApi('openai', model, OFFICIAL, openAIWireSetting(undefined)), model).toBe('responses');
       // The default parameter is the shipped default too.
       expect(openAIWireApi('openai', model, OFFICIAL), model).toBe('responses');
       expect(openAIWireApi('openai', model, 'https://litellm.internal/v1', openAIWireSetting(undefined)), model).toBe('chat');
       expect(openAIWireApi('openai', model, OFFICIAL, openAIWireSetting('chat')), model).toBe('chat');
     }
+  });
+
+  // 'auto' sends only catalogue models over Responses, and GPT-6.1 Sol calls
+  // no tools on Chat Completions: the default must be listed, or its agent
+  // turns would quietly lose native tool calls.
+  it('sends the OpenAI default, GPT-6.1 Sol, over Responses at the official URL and a proxy to Chat Completions', () => {
+    const model = PROVIDERS.openai.defaultModel;
+    expect(model).toBe('gpt-6.1-sol');
+    expect(openAIWireApi('openai', model, OFFICIAL)).toBe('responses');
+    expect(openAIWireApi('openai', model, `${OFFICIAL}/`, 'auto')).toBe('responses');
+    expect(openAIWireApi('openai', model, 'https://litellm.internal/v1')).toBe('chat');
+    expect(openAIWireApi('openai', model, 'https://litellm.internal/v1', 'responses')).toBe('responses');
+    expect(openAIWireApi('openai', model, OFFICIAL, 'chat')).toBe('chat');
   });
 
   it('takes the config value, lets CODEEP_OPENAI_WIRE_API override it, and ignores nonsense', () => {
@@ -141,6 +154,32 @@ describe('the thinking tier over Responses', () => {
     // GPTs call them anywhere; OpenRouter may reach Responses upstream.
     for (const [provider, model] of [['openai', 'gpt-6-sol'], ['openai', 'gpt-6-luna'], ['openai', 'gpt-5.6-sol'], ['openrouter', 'openai/gpt-6-astra']]) {
       expect(agentToolsNote(provider, model, 'chat'), `${provider} ${model}`).toBeNull();
+    }
+  });
+
+  // "Use the Responses API for tool calling. Chat Completions is supported
+  // without tool calling." (models/gpt-6.1-sol) — Astra's case, so Astra's notice.
+  it('says GPT-6.1 Sol cannot call tools only where its agent turns go over Chat Completions, and names gpt-6-sol as the way out', () => {
+    expect(chatCompletionsCannotCallTools('openai', 'gpt-6.1-sol', 'chat')).toBe(true);
+    expect(chatCompletionsCannotCallTools('openai', 'gpt-6.1-sol')).toBe(true);
+    const note = agentToolsNote('openai', 'gpt-6.1-sol', 'chat')!;
+    expect(note).toMatch(/^gpt-6\.1-sol cannot call tools over Chat Completions/);
+    expect(note).toContain('text tool format');
+    expect(note).toContain('pick GPT-6 Sol (gpt-6-sol), which calls tools there with reasoning off.');
+    expect(chatCompletionsCannotCallTools('openai', 'gpt-6.1-sol', 'responses')).toBe(false);
+    expect(agentToolsNote('openai', 'gpt-6.1-sol', 'responses')).toBeNull();
+    // OpenRouter may reach Responses upstream; the pinned GPT-6 Sol calls
+    // tools on Chat Completions (with effort "none").
+    expect(chatCompletionsCannotCallTools('openrouter', 'openai/gpt-6.1-sol', 'chat')).toBe(false);
+    expect(chatCompletionsCannotCallTools('openai', 'gpt-6-sol', 'chat')).toBe(false);
+  });
+
+  it('never sends GPT-6.1 Sol "none" with tools, on either wire, at any tier', () => {
+    for (const wire of ['chat', 'responses'] as const) {
+      for (const tier of REASONING_TIERS) {
+        expect(JSON.stringify(reasoningParamsFor('openai', 'gpt-6.1-sol', tier, { tools: true, wire })), `${wire} ${tier}`)
+          .not.toContain('none');
+      }
     }
   });
 

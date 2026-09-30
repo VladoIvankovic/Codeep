@@ -655,6 +655,19 @@ describe('/thinking on GPT-6 Sol with the switch forced to Chat Completions', ()
     await handleCommand('thinking', [], ctx);
     expect([...notices, ...messages.map(m => m.content)].join('\n')).not.toContain('Agent turns');
   });
+
+  // GPT-6.1 Sol has no "none" to force (models/gpt-6.1-sol): its agent turns
+  // keep the tier here, and fall back to text tools instead (agentToolsNote).
+  it('does not claim reasoning off for GPT-6.1 Sol, which has no "none"', async () => {
+    config.set('model', 'gpt-6.1-sol');
+    const { ctx, messages, notices } = makeCtx(projectDir);
+    await handleCommand('thinking', ['max'], ctx);
+    await handleCommand('thinking', [], ctx);
+    const all = [...notices, ...messages.map(m => m.content)].join('\n');
+    expect(all).toContain('sending {"reasoning_effort":"max"}.');
+    expect(all).not.toContain('Agent turns');
+    expect(all).not.toContain('"none"');
+  });
 });
 
 // ─── /thinking when agent turns go over the Responses API ───────────────────

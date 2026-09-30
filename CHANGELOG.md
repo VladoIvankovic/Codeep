@@ -11,6 +11,38 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.8.0] — 2026-09-30
+
+> TL;DR — GPT-6.1 Sol arrives as the new OpenAI default: near-Astra quality at $2/$10, with cache reads at half GPT-6 Sol's price. A setting on GPT-6 Sol keeps it.
+
+### Added
+
+- **GPT-6.1 Sol** (`gpt-6.1-sol`), OpenAI's new Sol: "near-Astra performance"
+  at $2/$10, the same as GPT-6 Sol, with cached input at half the price
+  ($0.10), a 1.05M context and 128K output. Its thinking levels run from low
+  to max; it has no "none", and Codeep never sends it one. Through OpenRouter
+  it is `openai/gpt-6.1-sol`.
+- **A run you start at the terminal can send its answer to Telegram.** Turn
+  on "Send terminal answers to Telegram" in `/settings`, and the "Codeep
+  finished" message carries the agent's reply, as it already did for a task
+  sent from the phone. Off by default: an answer can include a file the agent
+  read or a command line, and the chat is stored on Telegram's servers.
+
+### Changed
+
+- **The OpenAI default model is now GPT-6.1 Sol.** It applies when you switch
+  to OpenAI. A setting already on GPT-6 Sol keeps it, including one that got
+  GPT-6 Sol as the default in 3.6 or 3.7, so pick GPT-6.1 Sol with `/model`
+  if you want it. GPT-6 Sol stays in the picker as the previous Sol.
+- **Through a Chat Completions proxy, GPT-6.1 Sol has no native tool calls.** Like GPT-6
+  Astra, it calls tools only over OpenAI's Responses API, which Codeep uses
+  at OpenAI's own endpoint. With `OPENAI_BASE_URL` set (Azure, LiteLLM and
+  the like) or `CODEEP_OPENAI_WIRE_API=chat`, its agent turns use Codeep's
+  text tool format, and Codeep says so once. A proxy that serves
+  `/v1/responses` gets native tool calls back with
+  `CODEEP_OPENAI_WIRE_API=responses`. GPT-6 Sol still calls tools natively
+  there, with reasoning off, and the notice names it.
+
 ## [3.7.0] — 2026-09-29
 
 > TL;DR — Claude Sonnet 5.5 arrives (Opus 5.5 stays the default), Claude replies that start with thinking no longer come back empty, and a request Claude declines now says so instead of going quiet.

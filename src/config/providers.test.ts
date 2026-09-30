@@ -274,13 +274,14 @@ describe('providers', () => {
     // Agent turns go over the Responses API since the live run of 2026-09-26,
     // where GPT-6 reasons and calls tools together — Astra included, which
     // cannot call tools on Chat Completions at all.
-    it('offers all three GPT-6 models, with GPT-6 Sol the default', () => {
+    it('offers every GPT-6 model, with GPT-6.1 Sol the default', () => {
       const provider = getProvider('openai')!;
       const ids = provider.models.map(m => m.id);
       expect(ids).toContain('gpt-6-astra');
+      expect(ids).toContain('gpt-6.1-sol');
       expect(ids).toContain('gpt-6-sol');
       expect(ids).toContain('gpt-6-luna');
-      expect(provider.defaultModel).toBe('gpt-6-sol');
+      expect(provider.defaultModel).toBe('gpt-6.1-sol');
       // "Reasoning off" was the Chat Completions rule; the picker no longer
       // says it of every agent turn (/thinking says it where it still holds).
       for (const id of ['gpt-6-sol', 'gpt-6-luna']) {
@@ -391,11 +392,88 @@ describe('providers', () => {
     });
   });
 
+  // GPT-6.1 Sol (2026-09-30, models/gpt-6.1-sol): $2/$10, efforts low, medium
+  // (default), high, xhigh and max — "The none and minimal reasoning efforts
+  // are not supported" — and "Use the Responses API for tool calling". The
+  // owner made it the OpenAI default; GPT-6 Sol stays, un-migrated, for the
+  // configs that name it.
+  describe('GPT-6.1 Sol', () => {
+    it('is the OpenAI default, listed above GPT-6 Sol', () => {
+      const provider = getProvider('openai')!;
+      const ids = provider.models.map(m => m.id);
+      expect(provider.defaultModel).toBe('gpt-6.1-sol');
+      expect(ids.indexOf('gpt-6.1-sol')).toBeGreaterThanOrEqual(0);
+      expect(ids.indexOf('gpt-6.1-sol')).toBeLessThan(ids.indexOf('gpt-6-sol'));
+      const sol61 = provider.models.find(m => m.id === 'gpt-6.1-sol')!;
+      expect(sol61.name).toBe('GPT-6.1 Sol');
+      expect(sol61.description).toContain('$2/$10');
+      // Astra's caveat: through a proxy its agent turns use text tools.
+      expect(sol61.description).toMatch(/Responses API only/);
+      expect(provider.models.find(m => m.id === 'gpt-6-sol')!.description).toMatch(/^Previous Sol .*pinned configs/);
+    });
+
+    it('leaves a config pinned to GPT-6 Sol on it, on openai and OpenRouter', () => {
+      expect(replacementModelFor('openai', 'gpt-6-sol')).toBeUndefined();
+      expect(replacementModelFor('openrouter', 'openai/gpt-6-sol')).toBeUndefined();
+      expect(getProvider('openai')!.models.map(m => m.id)).toContain('gpt-6-sol');
+    });
+
+    it('is in the OpenRouter fallback, above the previous Sol', () => {
+      const models = getProvider('openrouter')!.models;
+      const ids = models.map(m => m.id);
+      expect(ids.indexOf('openai/gpt-6.1-sol')).toBeGreaterThanOrEqual(0);
+      expect(ids.indexOf('openai/gpt-6.1-sol')).toBeLessThan(ids.indexOf('openai/gpt-6-sol'));
+      expect(models.find(m => m.id === 'openai/gpt-6.1-sol')!.name).toBe('GPT-6.1 Sol');
+      expect(models.find(m => m.id === 'openai/gpt-6-sol')!.description).toMatch(/previous Sol/);
+    });
+
+    it('offers GPT-6.1 Sol /thinking low..max, with Max sent as "max" on openai and OpenRouter', () => {
+      for (const [pid, model] of [['openai', 'gpt-6.1-sol'], ['openrouter', 'openai/gpt-6.1-sol']]) {
+        expect(modelSupportsReasoningEffort(pid, model), model).toBe(true);
+        expect(availableReasoningTiers(pid, model), model).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+      }
+      expect(reasoningParamsFor('openai', 'gpt-6.1-sol', 'low')).toEqual({ reasoning_effort: 'low' });
+      expect(reasoningParamsFor('openai', 'gpt-6.1-sol', 'max')).toEqual({ reasoning_effort: 'max' });
+      expect(reasoningParamsFor('openai', 'gpt-6.1-sol', 'max', { wire: 'responses' })).toEqual({ reasoning: { effort: 'max' } });
+      expect(reasoningParamsFor('openrouter', 'openai/gpt-6.1-sol', 'max')).toEqual({ reasoning: { effort: 'max' } });
+    });
+
+    // Its id does not match `gpt-6-sol` (canonical `gpt-6-1-sol`), which is
+    // what keeps it out of toolsForceReasoningOff. A "none" here would be a 400
+    // on every proxied agent turn.
+    it('never sends GPT-6.1 Sol "none" or "minimal" — any tier, tools or not, either wire, openai or OpenRouter', () => {
+      for (const [pid, model] of [['openai', 'gpt-6.1-sol'], ['openrouter', 'openai/gpt-6.1-sol']]) {
+        for (const wire of ['chat', 'responses'] as const) {
+          for (const tools of [false, true]) {
+            for (const tier of REASONING_TIERS) {
+              const sent = JSON.stringify(reasoningParamsFor(pid, model, tier, { tools, wire }));
+              expect(sent, `${pid} ${wire} tools=${tools} ${tier}`).not.toMatch(/"none"|"minimal"/);
+            }
+          }
+          expect(toolsForceReasoningOff(pid, model, wire), `${pid} ${wire}`).toBe(false);
+          expect(agentTurnReasoningNote(pid, model, wire), `${pid} ${wire}`).toBeNull();
+        }
+      }
+    });
+
+    it('still forces "none" with tools on Chat Completions for the pinned GPT-6 Sol and Luna only', () => {
+      expect(toolsForceReasoningOff('openai', 'gpt-6-sol', 'chat')).toBe(true);
+      expect(toolsForceReasoningOff('openai', 'gpt-6-luna', 'chat')).toBe(true);
+      expect(toolsForceReasoningOff('openai', 'gpt-6-astra', 'chat')).toBe(false);
+      expect(reasoningParamsFor('openai', 'gpt-6-sol', 'high', { tools: true })).toEqual({ reasoning_effort: 'none' });
+    });
+
+    it('omits sampling params for GPT-6.1 Sol, on OpenRouter too', () => {
+      expect(modelRejectsSamplingParams('gpt-6.1-sol')).toBe(true);
+      expect(modelRejectsSamplingParams('openai/gpt-6.1-sol')).toBe(true);
+    });
+  });
+
   describe('openai provider', () => {
-    it('should include the GPT-5.6 family, with gpt-6-sol as default', () => {
+    it('should include the GPT-5.6 family, with gpt-6.1-sol as default', () => {
       const provider = getProvider('openai');
       expect(provider).not.toBeNull();
-      expect(provider!.defaultModel).toBe('gpt-6-sol');
+      expect(provider!.defaultModel).toBe('gpt-6.1-sol');
       const modelIds = provider!.models.map(m => m.id);
       expect(modelIds).toContain('gpt-5.6-sol');
       expect(modelIds).toContain('gpt-5.6-terra');
@@ -832,11 +910,11 @@ describe('providers', () => {
     it('drift guard — every listed non-auto tier yields a DISTINCT param', () => {
       const cases = [
         ['anthropic', 'claude-opus-5'], ['anthropic', 'claude-opus-5-5'], ['openai', 'gpt-5.5'],
-        ['openai', 'gpt-5.6-sol'], ['openai', 'gpt-6-sol'], ['openai', 'gpt-6-luna'],
+        ['openai', 'gpt-5.6-sol'], ['openai', 'gpt-6.1-sol'], ['openai', 'gpt-6-sol'], ['openai', 'gpt-6-luna'],
         ['google', 'gemini-3.1-pro-preview'], ['z.ai-api', 'glm-5.2'], ['z.ai', 'glm-5.3'],
         ['kimi-api', 'kimi-k3'], ['kimi', 'kimi-for-coding'],
         ['deepseek', 'deepseek-flash'], ['deepseek', 'deepseek-v4-pro'],
-        ['openrouter', 'openai/gpt-5.5'], ['openrouter', 'openai/gpt-6-sol'], ['openrouter', 'x-ai/grok-4.7'],
+        ['openrouter', 'openai/gpt-5.5'], ['openrouter', 'openai/gpt-6.1-sol'], ['openrouter', 'openai/gpt-6-sol'], ['openrouter', 'x-ai/grok-4.7'],
         ['openrouter', 'google/gemini-3.8-flash'],
         ['grok', 'grok-4.3'], ['grok', 'grok-4.5'], ['grok', 'grok-4.6'], ['grok', 'grok-4.7'],
       ];

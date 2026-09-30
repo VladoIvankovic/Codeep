@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
   composeRunMessages,
+  noticeAnswer,
   splitAnswer,
   formatDuration,
   shouldNotify,
@@ -197,4 +198,15 @@ describe('stripMarkdown', () => {
     expect(code).not.toContain('parse_mode');
   });
 });
+});
+
+describe('noticeAnswer', () => {
+  it('gives a run started from the phone its answer, whatever the setting', () => {
+    expect(noticeAnswer({ fromPhone: true, terminalAnswers: false, finalResponse: 'done' })).toBe('done');
+  });
+
+  it('keeps a terminal run\'s answer off the chat unless the user turned that on', () => {
+    expect(noticeAnswer({ fromPhone: false, terminalAnswers: false, finalResponse: 'done' })).toBeUndefined();
+    expect(noticeAnswer({ fromPhone: false, terminalAnswers: true, finalResponse: 'done' })).toBe('done');
+  });
 });

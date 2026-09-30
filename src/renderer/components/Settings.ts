@@ -167,6 +167,17 @@ export const SETTINGS: SettingItem[] = [
     ],
   },
   {
+    key: 'telegramTerminalAnswers',
+    label: 'Send terminal answers to Telegram',
+    getValue: () => config.get('telegramTerminalAnswers') === true,
+    type: 'select',
+    // Booleans, for the same reason as the rows above.
+    options: [
+      { value: true, label: 'ON' },
+      { value: false, label: 'OFF' },
+    ],
+  },
+  {
     key: 'telegramChatId',
     label: 'Telegram chat ID',
     getValue: () => config.get('telegramChatId') || '',

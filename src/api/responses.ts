@@ -1,10 +1,11 @@
 /**
  * OpenAI Responses API transport: request builders and the stream parser.
  *
- * Why it exists: on Chat Completions GPT-6 Astra cannot call tools at all, and
- * GPT-6 Sol/Luna only with reasoning off. On `POST /v1/responses` they reason
- * and call tools together. Agent turns use it when openAIWireApi() says so —
- * by default, for `openai` catalogue models at the official base URL
+ * Why it exists: on Chat Completions GPT-6 Astra and GPT-6.1 Sol cannot call
+ * tools at all, and GPT-6 Sol/Luna only with reasoning off. On
+ * `POST /v1/responses` they reason and call tools together. Agent turns use
+ * it when openAIWireApi() says so — by default, for `openai` catalogue models
+ * at the official base URL
  * (DEFAULT_OPENAI_WIRE_API is 'auto' since the owner's live verification run
  * of 2026-09-26; the recordings in utils/__fixtures__/responses/recorded pin
  * this file against what the API really sent).

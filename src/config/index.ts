@@ -134,6 +134,11 @@ export interface ConfigSchema {
    *  a question the agent already chose to ask; this lets the phone ask one,
    *  which is a keyboard attached to this machine. Off unless asked for. */
   telegramInbox: boolean;
+  /** Also put the agent's answer in the run-finished message for a run started
+   *  at the terminal. Off by default: an answer can carry a file the agent
+   *  read, a command line or a secret inside an error, and the chat syncs to
+   *  Telegram's servers. A run started from the phone always gets its answer. */
+  telegramTerminalAnswers: boolean;
   /** The single chat allowed to answer. Not a secret — it identifies a
    *  conversation, and it is useless without the token. */
   telegramChatId: string;
@@ -357,6 +362,7 @@ function createConfig(): Conf<ConfigSchema> {
     agentConfirmation: 'dangerous',
     telegramApproval: false,
     telegramInbox: false,
+    telegramTerminalAnswers: false,
     telegramChatId: '',
     agentConfirmDeleteFile: true,
     agentConfirmExecuteCommand: true,

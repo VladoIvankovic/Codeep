@@ -27,7 +27,7 @@ vi.mock('./codeepCloud', () => ({ syncProgress: vi.fn(), generateProjectId: vi.f
 
 import { agentChat } from './agentChat';
 import { ApiError } from '../api/index';
-import { PROVIDERS } from '../config/providers';
+import { PROVIDERS, REASONING_TIERS } from '../config/providers';
 import { getLastUsage, resetTokenTracking } from './tokenTracker';
 
 const FIXTURES = join(__dirname, '__fixtures__', 'responses');
@@ -188,6 +188,31 @@ describe('the request on the Responses wire', () => {
     useModel('openai', 'gpt-6-sol', 'openai', { openaiWireApi: 'auto', maxTokens: 4096, reasoningEffort: 'max' });
     await agentChat(messages, 'system', onChunk);
     expect(requests.map(r => r.body.max_output_tokens)).toEqual([32_768, 65_536]);
+  });
+});
+
+// GPT-6.1 Sol, the OpenAI default since 2026-09-30, calls tools only over
+// Responses and has no "none" or "minimal" effort (models/gpt-6.1-sol).
+describe('GPT-6.1 Sol on the Responses wire', () => {
+  it('sends the OpenAI default to /responses with nothing set, tools and all', async () => {
+    useModel('openai', PROVIDERS.openai.defaultModel, 'openai');
+    await agentChat(messages, 'system', onChunk);
+    expect(requests.map(r => r.url)).toEqual(['https://api.openai.com/v1/responses']);
+    expect(requests[0].body.model).toBe('gpt-6.1-sol');
+    expect((requests[0].body.tools as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  it('carries GPT-6.1 Sol\'s tier as reasoning.effort — never "none", never reasoning_effort — at every tier', async () => {
+    for (const tier of REASONING_TIERS) {
+      requests = [];
+      useModel('openai', 'gpt-6.1-sol', 'openai', { reasoningEffort: tier });
+      await agentChat(messages, 'system', onChunk);
+      expect(requests.map(r => r.url), tier).toEqual(['https://api.openai.com/v1/responses']);
+      const body = requests[0].body;
+      expect(body, tier).not.toHaveProperty('reasoning_effort');
+      expect(body, tier).not.toHaveProperty('temperature');
+      expect(body.reasoning, tier).toEqual(tier === 'auto' ? undefined : { effort: tier });
+    }
   });
 });
 

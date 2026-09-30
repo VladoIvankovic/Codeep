@@ -589,11 +589,11 @@ export async function runAgent(
   const providerId = chatRuntime.providerId ?? config.get('provider');
   const useNativeTools = supportsNativeTools(providerId, protocol);
 
-  // GPT-6 Astra through a Chat Completions proxy, or with the switch forced to
-  // 'chat': its tools request comes back 400 and agentChat drops to the text
-  // tool format. That works, but it used to happen without a word — say so,
-  // once. The model the run talks to (a bot may have overridden it); the pure
-  // model check first, so the wire is only worked out for Astra.
+  // GPT-6 Astra or 6.1 Sol through a Chat Completions proxy, or with the switch
+  // forced to 'chat': its tools request comes back 400 and agentChat drops to
+  // the text tool format. That works, but it used to happen without a word —
+  // say so, once. The model the run talks to (a bot may have overridden it);
+  // the pure model check first, so the wire is only worked out for those two.
   {
     const model = String(chatRuntime.model ?? config.get('model'));
     const key = `${providerId}/${model}`;

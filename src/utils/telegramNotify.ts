@@ -153,13 +153,31 @@ export interface RunSummary {
   /** Pay-per-use dollars. Omitted on a flat-fee plan, where any figure is invented. */
   costUsd?: number;
   /**
-   * The agent's own reply, for a run that was started from the phone.
-   *
-   * Omitted for a run started at the terminal, where the answer is already on
-   * the screen the person is sitting at and sending it would put file contents
-   * or a command line into a chat for nothing.
+   * The agent's own reply: always for a run started from the phone, and for a
+   * run started at the terminal only when the user turned that on
+   * (`telegramTerminalAnswers`) — see `noticeAnswer`.
    */
   answer?: string;
+}
+
+/**
+ * Which answer, if any, the run-finished message carries.
+ *
+ * A run started from the phone always gets its answer: the phone asked. A run
+ * started at the terminal gets it only when the user turned
+ * `telegramTerminalAnswers` on. A finished run can end with anything in it — a
+ * file it read, a command it ran, a secret inside an error — and this goes to
+ * a chat that syncs to Telegram's servers, so by default it travels only where
+ * it was asked for, and a terminal run's message says there is a result to
+ * come back to, and no more. Someone who walks away from the terminal and
+ * wants the answer on the phone can say so.
+ */
+export function noticeAnswer(opts: {
+  fromPhone: boolean;
+  terminalAnswers: boolean;
+  finalResponse: string | undefined;
+}): string | undefined {
+  return opts.fromPhone || opts.terminalAnswers ? opts.finalResponse : undefined;
 }
 
 /** The head: what ran, how long it took, what it cost. Never the answer. */
@@ -189,11 +207,7 @@ function composeHead(summary: RunSummary): string {
  * see `splitAnswer`. The head shares the first message, so the reply is not a
  * bare wall of text with no idea which run it belongs to.
  *
- * Carries the agent's answer only when the run was started from the phone. A
- * finished run can end with anything in it — a file it read, a command it ran,
- * a secret inside an error — and this goes to a chat that syncs to Telegram's
- * servers, so it travels only where it was actually asked for. Start a run at
- * the terminal and this says there is a result to come back to, and no more.
+ * Carries the agent's answer only where `noticeAnswer` allows it.
  */
 export function composeRunMessages(summary: RunSummary): string[] {
   const head = composeHead(summary);
