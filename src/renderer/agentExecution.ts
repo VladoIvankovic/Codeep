@@ -23,6 +23,7 @@ import { charWidth } from './ansi';
 import { showControls } from '../utils/controlChars';
 import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
+import { agentConfirmationMode, agentInteractiveMode } from './agentConfirmation';
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
 import { getGitStatus, isGitRepository } from '../utils/git';
 import { getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
@@ -195,7 +196,7 @@ export async function runAgentTask(
     return;
   }
 
-  const interactiveMode = config.get('agentInteractive') !== false;
+  const interactiveMode = agentInteractiveMode();
   if (interactiveMode) {
     const { analyzeForClarification, formatQuestions } = await import('../utils/interactive');
     const interactiveContext = analyzeForClarification(task);
@@ -208,7 +209,7 @@ export async function runAgentTask(
     }
   }
 
-  const confirmationMode = config.get('agentConfirmation') || 'dangerous';
+  const confirmationMode = agentConfirmationMode();
   if (confirmationMode === 'never' || dryRun) {
     execute();
     return;
@@ -303,7 +304,7 @@ export async function executeAgentTask(
     const rawIterations = config.get('agentMaxIterations') || 50;
     app.setAgentMaxIterations(Math.max(5, rawIterations));
 
-    const confirmationMode = config.get('agentConfirmation') || 'dangerous';
+    const confirmationMode = agentConfirmationMode();
     // 'always' asks before every action that changes something: at least what
     // 'dangerous' asks about, plus writes, edits and new directories.
     const asksPerTool = confirmationMode === 'dangerous' || confirmationMode === 'always';

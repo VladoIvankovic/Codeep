@@ -59,6 +59,8 @@ import {
 } from './agentExecution';
 import type { McpServer } from '../acp/protocol';
 import { symlinkedCodeepNotice } from '../utils/projectPaths';
+import { parseLaunchArgs } from './cliArgs';
+import { agentConfirmationMode, pinAgentConfirmation, pinAgentInteractive, isAgentConfirmationPinned } from './agentConfirmation';
 
 // ─── Global state ─────────────────────────────────────────────────────────────
 
@@ -299,7 +301,7 @@ async function handleSubmit(message: string): Promise<void> {
     const dryRun = pendingInteractiveContext.dryRun;
     pendingInteractiveContext = null;
 
-    const confirmationMode = config.get('agentConfirmation') || 'dangerous';
+    const confirmationMode = agentConfirmationMode();
     if (confirmationMode === 'never' || dryRun) {
       executeAgentTask(enhancedTask, dryRun, ctx);
       return;
@@ -466,6 +468,22 @@ async function handleSubmit(message: string): Promise<void> {
   }
 }
 
+/**
+ * Submit `text` as if it had been typed into the input box: in the transcript
+ * as the user's message, with the loading state on, and a failure shown
+ * rather than swallowed. App.submitInput does the same for the input box; the
+ * phone and a launch prompt come through here, so neither is a different,
+ * quieter path into the same run.
+ */
+function submitAsTyped(text: string): void {
+  app.addMessage({ role: 'user', content: text });
+  app.setLoading(true);
+  void handleSubmit(text).catch(err => {
+    app.notify(`Error: ${err.message}`);
+    app.setLoading(false);
+  });
+}
+
 // ─── Command bridge ───────────────────────────────────────────────────────────
 
 async function handleCommand(command: string, args: string[]): Promise<void> {
@@ -602,31 +620,36 @@ function showSessionPickerInline(): void {
 /** The CLI entry point. Exported so tests can drive a command without the
  *  module starting the app on import. */
 export async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+  // Which of these runs is decided in one pure place (cliArgs.ts), so a
+  // prompt that happens to say `review` or start with `-v` stays a prompt.
+  const launch = parseLaunchArgs(process.argv.slice(2));
 
-  // Headless, deterministic code review for CI (no API key, no TUI). Handled
-  // before the global --help/--version checks so `codeep review --help` shows
-  // the review usage rather than the top-level help.
-  if (args[0] === 'review') {
+  // Headless, deterministic code review for CI (no API key, no TUI). The
+  // parser takes it before the global --help/--version checks so
+  // `codeep review --help` shows the review usage rather than the top-level help.
+  if (launch.kind === 'review') {
     const { runHeadlessReview } = await import('../utils/headlessReview.js');
-    process.exit(await runHeadlessReview(args.slice(1)));
+    process.exit(await runHeadlessReview(launch.args));
   }
 
-  if (args[0] === 'hook') {
+  if (launch.kind === 'hook') {
     const { runHookCommand } = await import('../utils/gitHookInstaller.js');
-    process.exit(runHookCommand(args.slice(1)));
+    process.exit(runHookCommand(launch.args));
   }
 
-  if (args.includes('--version') || args.includes('-v')) {
+  if (launch.kind === 'version') {
     console.log(`Codeep v${getCurrentVersion()}`);
     process.exit(0);
   }
-  if (args.includes('--help') || args.includes('-h')) {
+  if (launch.kind === 'help') {
     console.log(`
 Codeep - AI-powered coding assistant TUI
 
 Usage:
   codeep              Start interactive chat
+  codeep -- <prompt>  Start a new session and send <prompt> as its first message
+  codeep -p <prompt>  The same, with the prompt as one argument (also --prompt)
+  codeep --yolo       Start without stopping to ask, for this launch only (see below)
   codeep account        Link CLI to your codeep.dev dashboard
   codeep account sync   Pull personalities + commands + profile (+ keys if cloud key sync is on)
   codeep account push   Push personalities + commands + profile (+ keys if cloud key sync is on)
@@ -638,6 +661,16 @@ Usage:
   codeep --version    Show version
   codeep --help       Show this help
 
+With --yolo (e.g. codeep --yolo -- <prompt>):
+  Agent actions run without asking (Agent Confirmation: Never) and without
+  clarifying questions first (Agent Interactive Mode: Off), the folder is
+  used as the project with read & write access, and a new session starts.
+  Nothing is saved: the next plain \`codeep\` asks as before, and changing
+  either setting in /settings ends --yolo's hold on it. Writes to files that
+  decide what runs later (.git/config, git hooks, MCP server lists) are still
+  confirmed, and a workspace's own MCP servers still ask to be trusted the
+  first time, before the prompt is sent.
+
 Commands (in chat):
   /help      Show all available commands
   /status    Show current status
@@ -648,8 +681,8 @@ Commands (in chat):
   }
 
   // Account / dashboard link flow
-  if (args[0] === 'account') {
-    const sub = args[1];
+  if (launch.kind === 'account') {
+    const sub = launch.args[0];
 
     if (sub === 'sync' || sub === 'pull') {
       const { getSyncToken, setApiKey, loadAllApiKeys: loadKeys, isKeySyncEnabled } = await import('../config/index.js');
@@ -810,11 +843,25 @@ Commands (in chat):
   }
 
   // ACP server mode — started by Zed via Agent Client Protocol
-  if (args[0] === 'acp') {
+  if (launch.kind === 'acp') {
     await loadAllApiKeys();
     const { startAcpServer } = await import('../acp/server.js');
     await startAcpServer();
     return;
+  }
+
+  if (launch.kind === 'error') {
+    console.error(`${launch.message}\nRun codeep --help for usage.`);
+    process.exit(1);
+  }
+
+  // Pinned before anything can read it, and pinned rather than written to the
+  // config: see agentConfirmation.ts for why --yolo must never outlive this
+  // process. Clarifying questions are pinned off with the confirmations: a
+  // run that stops to ask what was meant is stopped all the same.
+  if (launch.yolo) {
+    pinAgentConfirmation('never');
+    pinAgentInteractive(false);
   }
 
   await loadAllApiKeys();
@@ -836,9 +883,22 @@ Commands (in chat):
 
   const isProject = isProjectDirectory(projectPath);
   const hasRead = hasReadPermission(projectPath);
-  const needsPermissionDialog = !hasRead;
+  // --yolo answers the access dialog itself: there is nobody at the terminal
+  // to answer it, and a launcher started from $HOME lands in a folder (~/Work)
+  // that is usually not a repository and would also ask "Set as Project?".
+  const needsPermissionDialog = !hasRead && !launch.yolo;
 
-  if (hasRead) {
+  if (launch.yolo) {
+    // Read & write for this process only. Nothing is saved — no
+    // setProjectPermission, no .codeep/project.json marker — so the next
+    // plain `codeep` here asks exactly as it would have.
+    hasWriteAccess = true;
+    projectContext = getProjectContext(projectPath);
+    if (projectContext) {
+      projectContext.hasWriteAccess = true;
+      setProjectContext(projectContext);
+    }
+  } else if (hasRead) {
     hasWriteAccess = hasWritePermission(projectPath);
     projectContext = getProjectContext(projectPath);
     if (projectContext) {
@@ -877,6 +937,7 @@ Commands (in chat):
     hasWriteAccess: () => hasWriteAccess,
     hasProjectContext: () => projectContext !== null,
     getProjectRoot: () => projectContext?.root || projectPath || process.cwd(),
+    yolo: isAgentConfirmationPinned,
   });
 
   const provider = getCurrentProvider();
@@ -898,6 +959,10 @@ Commands (in chat):
   if (agentMode === 'on' && hasWriteAccess) {
     welcomeLines.push('');
     welcomeLines.push('  ⚠  Agent Mode ON  —  messages auto-execute as agent tasks');
+  }
+  if (launch.yolo) {
+    welcomeLines.push('');
+    welcomeLines.push('  ⚠  YOLO  —  agent actions run without asking, for this launch only');
   }
   welcomeLines.push('');
   const githubId = getGithubId();
@@ -969,16 +1034,11 @@ Commands (in chat):
     telegramInbox = attachTelegramInbox(credentials, {
       isBusy: () => isAgentRunningFlag,
       submit: (text) => {
-        // Through the same door the input box uses, and shown in the transcript
-        // the same way — a run started from the phone must not be invisible to
-        // whoever is sitting at the terminal.
-        app.addMessage({ role: 'user', content: text });
+        // Shown in the transcript like a typed message — a run started from
+        // the phone must not be invisible to whoever is sitting at the terminal.
+        // The notice goes first so a notice the run itself raises wins.
         app.notify('Telegram: running an instruction from your phone');
-        app.setLoading(true);
-        void handleSubmit(text).catch(err => {
-          app.notify(`Error: ${err.message}`);
-          app.setLoading(false);
-        });
+        submitAsTyped(text);
       },
       reply: (text) => { void sendTelegramNotice(credentials, text); },
     });
@@ -992,12 +1052,24 @@ Commands (in chat):
     });
   })();
 
+  // Startup asks one question at a time. App.showConfirm replaces an open
+  // confirm without answering it: the trust question below, raised while
+  // "Set as Project?" is up, would take that question's place, and a launch
+  // prompt's own "Confirm Agent Task", raised while the trust question is up,
+  // would take the trust question's — with neither one's callbacks ever run,
+  // so startup stalls or the prompt is dropped. The trust question waits for
+  // the startup questions (finishStartup settles `startupAnswered`), and a
+  // launch prompt waits for the MCP step.
+  let settleStartupAnswered = () => {};
+  const startupAnswered = new Promise<void>(resolve => { settleStartupAnswered = resolve; });
+  let mcpStartup: Promise<void> = Promise.resolve();
+
   // Spawn MCP servers in the background. They register against the fixed
   // session id `codeep-tui` that runAgentTask passes into runAgent's
   // `mcpSessionId` — so the agent picks up `.codeep/mcp_servers.json`
   // entries (project + global) the same way an ACP client would.
   if (projectPath) {
-    (async () => {
+    mcpStartup = (async () => {
       try {
         const { trustWorkspaceMcp } = await import('../utils/mcpConfig');
         const workspaceServers = await startTuiMcpServers(projectPath, app);
@@ -1010,7 +1082,8 @@ Commands (in chat):
         const preview = workspaceServers.slice(0, 5).map(s =>
           `  ${s.name}: ${s.command ? [s.command, ...(s.args ?? [])].join(' ') : s.url ?? ''}`);
         if (workspaceServers.length > 5) preview.push(`  …and ${workspaceServers.length - 5} more`);
-        app.showConfirm({
+        await startupAnswered;
+        await new Promise<void>(resolve => app.showConfirm({
           title: 'Trust workspace MCP servers?',
           message: [
             `This workspace defines ${workspaceServers.length} MCP server(s) that run as local processes:`,
@@ -1022,12 +1095,14 @@ Commands (in chat):
           cancelLabel: 'Not now',
           onConfirm: () => {
             trustWorkspaceMcp(projectPath);
-            void startTrustedWorkspaceMcp(projectPath, app);
+            // Waited for, so a launch prompt sent next has their tools.
+            void startTrustedWorkspaceMcp(projectPath, app).then(resolve);
           },
           onCancel: () => {
             app.notify('Workspace MCP servers skipped. Run /mcp trust to enable them.');
+            resolve();
           },
-        });
+        }));
       } catch {
         // Loading MCP must never block the TUI.
       }
@@ -1095,6 +1170,24 @@ Commands (in chat):
 
   const showIntroAnimation = process.stdout.rows >= 20;
 
+  // The last step of startup, after whichever gates still ran. A launch
+  // prompt means a new conversation: offering yesterday's session first and
+  // then sending today's prompt into whatever was picked is not what was
+  // asked, and --yolo has nobody at the terminal to pick at all.
+  const finishStartup = () => {
+    settleStartupAnswered();
+    if (launch.prompt === null && !launch.yolo) {
+      showSessionPickerInline();
+      return;
+    }
+    sessionId = startNewSession();
+    // After the MCP step, whose trust question the run's own confirmation
+    // would otherwise replace unanswered (see startupAnswered) — and so the
+    // run starts with the MCP tools registered rather than racing them.
+    const prompt = launch.prompt;
+    if (prompt !== null) void mcpStartup.then(() => submitAsTyped(prompt));
+  };
+
   const showPermissionAndContinue = () => {
     app.showPermission(projectPath, isProject, (permission) => {
       if (permission === 'read') {
@@ -1112,7 +1205,7 @@ Commands (in chat):
       } else {
         app.notify('No project access - chat only mode');
       }
-      showSessionPickerInline();
+      finishStartup();
     });
   };
 
@@ -1130,12 +1223,12 @@ Commands (in chat):
         confirmLabel: 'Yes, set as project',
         cancelLabel: 'No, chat only',
         onConfirm: () => { initializeAsProject(projectPath); app.notify('Folder initialized as project'); showPermissionAndContinue(); },
-        onCancel: () => { app.notify('Chat only mode - no project context'); showSessionPickerInline(); },
+        onCancel: () => { app.notify('Chat only mode - no project context'); finishStartup(); },
       });
     } else if (needsPermissionDialog) {
       showPermissionAndContinue();
     } else {
-      showSessionPickerInline();
+      finishStartup();
     }
   };
 

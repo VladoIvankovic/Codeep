@@ -5,7 +5,7 @@
 
 import { Screen } from './Screen';
 import { Input, LineEditor, KeyEvent } from './Input';
-import { fg, style } from './ansi';
+import { fg, bg, style } from './ansi';
 import { getActionColor, formatActionTarget, getActionLabel } from './components/ActionFormatting';
 import { PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES } from './components/uiConstants';
 import { MASCOT_FRAMES, layoutLogoWithMascot, introMascotFrame } from './components/mascot';
@@ -121,7 +121,15 @@ export interface AppOptions {
   hasProjectContext?: () => boolean;
   /** Project root for `@mention` autocomplete suggestions. Falls back to cwd. */
   getProjectRoot?: () => string;
+  /** True while `codeep --yolo` decides that agent actions run without
+   *  asking, and the status bar says so throughout. A function, because
+   *  choosing Agent Confirmation in /settings ends it mid-session. */
+  yolo?: () => boolean;
 }
+
+/** The status-bar badge for `--yolo`, in the orange the warning toasts use. */
+const YOLO_BADGE = ' YOLO ';
+const YOLO_BADGE_STYLE = bg.color256(208) + fg.black + style.bold;
 
 export class App {
   private screen: Screen;
@@ -2865,11 +2873,21 @@ export class App {
     // Clear the line first
     this.screen.writeLine(y, '');
 
+    // --yolo leads the line in every state below, a toast included: a
+    // notification covering it would hide, for seconds at a time, the one
+    // thing on screen that says nothing is going to ask first. Everything
+    // else starts `left` columns in.
+    let left = 0;
+    if (this.options.yolo?.()) {
+      this.screen.write(0, y, YOLO_BADGE, YOLO_BADGE_STYLE);
+      left = YOLO_BADGE.length;
+    }
+
     if (this.notification) {
       const notifColor = this.notificationIsWarn ? '\x1b[38;5;208m' : PRIMARY_COLOR; // orange for warn
-      const maxLen = width - 2;
+      const maxLen = width - 2 - left;
       const msg = truncateNotification(this.notification, maxLen);
-      this.screen.write(0, y, notifColor + ' ' + msg + style.reset);
+      this.screen.write(left, y, notifColor + ' ' + msg + style.reset);
       return;
     }
 
@@ -2915,7 +2933,7 @@ export class App {
         leftParts.push(`effort ${status.reasoningEffort}`);
       }
       const leftText = leftParts.join(' · ');
-      this.screen.write(1, y, leftText, fg.gray);
+      this.screen.write(left + 1, y, leftText, fg.gray);
 
       // The right edge belongs to the hint: while streaming it reads
       // "Esc to stop", the only on-screen affordance for interrupting a run.
@@ -2924,7 +2942,7 @@ export class App {
       // Same right-edge column as the compact fallback and the scroll badge, so
       // the hint doesn't shift by one when the terminal crosses 110 columns.
       let rightEdge = width;
-      if (rightText && width - rightText.length > leftText.length + 3) {
+      if (rightText && width - rightText.length > left + leftText.length + 3) {
         rightEdge = width - rightText.length;
         this.screen.write(rightEdge, y, rightText, fg.gray);
       }
@@ -2932,7 +2950,7 @@ export class App {
         const impact = formatResourceImpact(estimateResourceImpact(totalTokens));
         const impactText = `energy ${impact.energy} est · water ${impact.water} est`;
         const impactX = rightEdge - impactText.length - 3;
-        if (impactX > leftText.length + 3) {
+        if (impactX > left + leftText.length + 3) {
           this.screen.write(impactX, y, impactText, fg.gray);
         }
       }
@@ -2946,7 +2964,7 @@ export class App {
       ? `${formatTokenCount(stats.totalTokens)} tok`
       : '';
 
-    let leftX = 1;
+    let leftX = left + 1;
     if (modelName) {
       this.screen.write(leftX, y, PRIMARY_COLOR + modelName + style.reset);
       leftX += modelName.length + 2;
