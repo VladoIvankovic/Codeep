@@ -13,7 +13,7 @@ import { resetPalette, setPalette } from './palette';
 const TEAL = '\x1b[38;2;0;128;128m';
 const RED = '\x1b[38;2;240;42;48m';
 
-function makeApp() {
+function makeApp(options: { yolo?: boolean } = {}) {
   const app = new App({
     onSubmit: async () => {},
     onCommand: () => {},
@@ -22,6 +22,7 @@ function makeApp() {
       version: '3.8.1', provider: 'OpenAI', model: 'gpt-5.6-terra', agentMode: 'on',
       projectPath: '/tmp/project', hasWriteAccess: true, sessionId: '', messageCount: 0,
     }),
+    yolo: () => options.yolo ?? false,
   });
   const internals = app as unknown as {
     screen: Record<string, (...args: unknown[]) => unknown>;
@@ -30,6 +31,11 @@ function makeApp() {
   };
   // Detach the Screen's resize listener so these Apps don't pile up on stdout.
   process.stdout.removeListener('resize', internals.screen.resizeHandler as () => void);
+  // addMessage() and a repaint schedule a real render; keep its frame off
+  // the test runner's stdout.
+  for (const method of ['init', 'cleanup', 'render', 'fullRender']) {
+    vi.spyOn(internals.screen, method).mockImplementation(() => {});
+  }
   const transcript = () => internals.getVisibleMessages(40, 80).map(l => l.text).join('\n');
   return { app, internals, transcript };
 }
@@ -40,7 +46,7 @@ afterEach(() => {
 });
 
 describe('App and the palette', () => {
-  it('re-formats the cached transcript in the new colours', () => {
+  it('re-formats the cached transcript in the new colours', async () => {
     const { app, transcript } = makeApp();
     app.addMessage({ role: 'user', content: 'fix the **build**' });
     expect(transcript()).toContain(RED);
@@ -52,11 +58,12 @@ describe('App and the palette', () => {
     // …until the repaint drops it.
     expect(transcript()).toContain(TEAL);
     expect(transcript()).not.toContain(RED);
+    // Let the renders this queued run now, against the stubbed Screen.
+    await new Promise(resolve => setImmediate(resolve));
   });
 
   it('repaints on every palette change while started, and stops listening when stopped', async () => {
     const { app, internals } = makeApp();
-    for (const method of ['init', 'cleanup', 'render']) vi.spyOn(internals.screen, method).mockImplementation(() => {});
     for (const method of ['start', 'stop', 'onKey']) vi.spyOn(internals.input, method).mockImplementation(() => {});
     const repaint = vi.spyOn(app, 'repaintInNewPalette');
 
@@ -84,5 +91,39 @@ describe('App and the palette', () => {
     setPalette({ primary: [0, 128, 128] });
     (app as unknown as { renderStatusBar: (y: number, w: number, s: boolean) => void }).renderStatusBar(0, 80, true);
     expect(styles.join('')).toContain(TEAL + 'gpt-5.6-terra');
+  });
+
+  it('paints the YOLO badge and a warning toast in the current palette, and in 208 orange without a theme', () => {
+    const statusBar = () => {
+      const { app, internals } = makeApp({ yolo: true });
+      const writes: string[] = [];
+      vi.spyOn(internals.screen, 'write').mockImplementation((...args: unknown[]) => {
+        writes.push(String(args[3] ?? '') + String(args[2]));
+      });
+      Object.assign(app, { notification: 'Rate limited, retrying in 4s', notificationIsWarn: true });
+      (app as unknown as { renderStatusBar: (y: number, w: number, s: boolean) => void }).renderStatusBar(0, 80, true);
+      return writes.join('');
+    };
+    expect(statusBar()).toContain('\x1b[48;5;208m\x1b[30m\x1b[1m YOLO ');
+    expect(statusBar()).toContain('\x1b[38;5;208m Rate limited');
+
+    setPalette({ yoloBadge: [223, 142, 29], yoloBadgeText: [0, 0, 0], warningToast: [135, 104, 74] });
+    expect(statusBar()).toContain('\x1b[48;2;223;142;29m\x1b[38;2;0;0;0m\x1b[1m YOLO ');
+    expect(statusBar()).toContain('\x1b[38;2;135;104;74m Rate limited');
+  });
+
+  it('paints the prompt that points at an open picker in the attention colour', () => {
+    const { app, internals } = makeApp();
+    const writes: string[] = [];
+    vi.spyOn(internals.screen, 'write').mockImplementation((...args: unknown[]) => {
+      writes.push(String(args[3] ?? '') + String(args[2]));
+    });
+    const renderInput = () => (app as unknown as { renderInput: (y: number, w: number) => void }).renderInput(0, 80);
+    Object.assign(app, { menuOpen: true, menuItemsAll: [] });
+    renderInput();
+    expect(writes.join('')).toContain('\x1b[33mSelect an option below…');
+    setPalette({ attention: [135, 104, 74] });
+    renderInput();
+    expect(writes.join('')).toContain('\x1b[38;2;135;104;74mSelect an option below…');
   });
 });

@@ -5,10 +5,10 @@
 
 import { Screen } from './Screen';
 import { Input, LineEditor, KeyEvent } from './Input';
-import { fg, bg, style } from './ansi';
+import { fg, style } from './ansi';
 import { getActionColor, formatActionTarget, getActionLabel } from './components/ActionFormatting';
 import { PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES } from './components/uiConstants';
-import { onPaletteChange } from './palette';
+import { onPaletteChange, palette } from './palette';
 import { MASCOT_FRAMES, layoutLogoWithMascot, introMascotFrame } from './components/mascot';
 import { bottomPanelHeight, chatLayout, messageOffsets, scrollOffsetForTarget, scrollWindow, formatTokenCount, statusBarRightHint, activePanel, computeInputDisplay, agentProgressBar, truncateNotification, shouldShowPasteDialog, buildPasteInfo, type LayoutSnapshot } from './layout';
 import {
@@ -128,9 +128,11 @@ export interface AppOptions {
   yolo?: () => boolean;
 }
 
-/** The status-bar badge for `--yolo`, in the orange the warning toasts use. */
+/** The status-bar badge for `--yolo`, in the orange the warning toasts use
+ *  (on an Omarchy theme, its yellow). The style is read when painting, so a
+ *  theme switch recolours it. */
 const YOLO_BADGE = ' YOLO ';
-const YOLO_BADGE_STYLE = bg.color256(208) + fg.black + style.bold;
+const yoloBadgeStyle = () => palette.yoloBadge + palette.yoloBadgeText + style.bold;
 
 export class App {
   private screen: Screen;
@@ -2240,10 +2242,13 @@ export class App {
     const inputValue = this.editor.getValue();
     const cursorPos = this.editor.getCursorPos();
     
+    // While a picker is open the input line points at it, in palette.attention:
+    // ANSI yellow, or on an Omarchy theme its yellow made readable as text.
+
     // Session picker open - show different prompt
     if (this.sessionPickerOpen) {
       this.screen.write(0, y, '> ', fg.gray);
-      this.screen.write(2, y, 'Select a session below or press N for new...', fg.yellow);
+      this.screen.write(2, y, 'Select a session below or press N for new...', palette.attention);
       this.screen.showCursor(false);
       return;
     }
@@ -2251,7 +2256,7 @@ export class App {
     // Permission dialog open
     if (this.permissionOpen) {
       this.screen.write(0, y, '> ', fg.gray);
-      this.screen.write(2, y, 'Select access level below...', fg.yellow);
+      this.screen.write(2, y, 'Select access level below...', palette.attention);
       this.screen.showCursor(false);
       return;
     }
@@ -2259,7 +2264,7 @@ export class App {
     // Paste info open
     if (this.pasteDialog.open) {
       this.screen.write(0, y, '> ', fg.gray);
-      this.screen.write(2, y, 'Confirm paste action below...', fg.yellow);
+      this.screen.write(2, y, 'Confirm paste action below...', palette.attention);
       this.screen.showCursor(false);
       return;
     }
@@ -2270,7 +2275,7 @@ export class App {
       const hint = this.menuItemsAll.length > 10
         ? 'Type to filter, ↑↓ to navigate, Enter to pick…'
         : 'Select an option below…';
-      this.screen.write(2, y, hint, fg.yellow);
+      this.screen.write(2, y, hint, palette.attention);
       this.screen.showCursor(false);
       return;
     }
@@ -2278,7 +2283,7 @@ export class App {
     // Search open
     if (this.searchOpen) {
       this.screen.write(0, y, '> ', fg.gray);
-      this.screen.write(2, y, 'Navigate search results below...', fg.yellow);
+      this.screen.write(2, y, 'Navigate search results below...', palette.attention);
       this.screen.showCursor(false);
       return;
     }
@@ -2286,7 +2291,7 @@ export class App {
     // Export open
     if (this.exportOpen) {
       this.screen.write(0, y, '> ', fg.gray);
-      this.screen.write(2, y, 'Select export format below...', fg.yellow);
+      this.screen.write(2, y, 'Select export format below...', palette.attention);
       this.screen.showCursor(false);
       return;
     }
@@ -2294,7 +2299,7 @@ export class App {
     // Logout open
     if (this.logoutOpen) {
       this.screen.write(0, y, '> ', fg.gray);
-      this.screen.write(2, y, 'Select provider to logout...', fg.yellow);
+      this.screen.write(2, y, 'Select provider to logout...', palette.attention);
       this.screen.showCursor(false);
       return;
     }
@@ -2305,7 +2310,7 @@ export class App {
       const msg = this.loginStep === 'provider' 
         ? 'Select a provider below...' 
         : 'Enter your API key below...';
-      this.screen.write(2, y, msg, fg.yellow);
+      this.screen.write(2, y, msg, palette.attention);
       this.screen.showCursor(false);
       return;
     }
@@ -2901,12 +2906,12 @@ export class App {
     // else starts `left` columns in.
     let left = 0;
     if (this.options.yolo?.()) {
-      this.screen.write(0, y, YOLO_BADGE, YOLO_BADGE_STYLE);
+      this.screen.write(0, y, YOLO_BADGE, yoloBadgeStyle());
       left = YOLO_BADGE.length;
     }
 
     if (this.notification) {
-      const notifColor = this.notificationIsWarn ? '\x1b[38;5;208m' : PRIMARY_COLOR; // orange for warn
+      const notifColor = this.notificationIsWarn ? palette.warningToast : PRIMARY_COLOR; // orange for warn, an Omarchy theme's yellow
       const maxLen = width - 2 - left;
       const msg = truncateNotification(this.notification, maxLen);
       this.screen.write(left, y, notifColor + ' ' + msg + style.reset);

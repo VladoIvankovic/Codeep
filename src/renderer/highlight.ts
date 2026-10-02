@@ -10,8 +10,10 @@ import { palette } from './palette';
  * The colour of each token kind. Getters over the palette, so a code block
  * formatted after an Omarchy theme switch is painted in the new theme's
  * colours; a plain object of strings would have kept One Dark forever.
- * `variable` and `punctuation` are basic ANSI colours, which the terminal
- * already themes by itself.
+ * `variable` is basic ANSI white, which the terminal already themes by
+ * itself. `punctuation` is ANSI bright black until a theme gives it a
+ * colour: on Omarchy that index is `muted`, a decoration colour too faint
+ * for braces and semicolons.
  */
 export const SYNTAX = {
   get keyword()  { return palette.syntaxKeyword; },
@@ -22,7 +24,7 @@ export const SYNTAX = {
   get type()     { return palette.syntaxType; },
   get operator() { return palette.syntaxOperator; },
   variable:    fg.white,
-  punctuation: fg.gray,
+  get punctuation() { return palette.syntaxPunctuation; },
   get codeFrame() { return palette.codeFrame; },
   get codeLang()  { return palette.codeLang; },
 };

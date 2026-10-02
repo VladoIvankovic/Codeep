@@ -1265,8 +1265,7 @@ async function gracefulShutdown() {
   }
 
   // Stop following the theme before the App goes: nothing is left to
-  // recolour, and the watches and the SIGUSR2 handler are the process's to
-  // give back.
+  // recolour.
   omarchyTheme?.stop();
 
   // Now restore terminal after agent has fully stopped

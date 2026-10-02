@@ -3,6 +3,7 @@ import {
   DEFAULT_PALETTE,
   PALETTE_ROLES,
   PRIMARY_COLOR as PALETTE_PRIMARY,
+  TERMINAL_ROLES,
   getPalette,
   onPaletteChange,
   palette,
@@ -60,6 +61,18 @@ describe('the default palette', () => {
   it('has a pinned value for every role', () => {
     // A role added without a line in the table above would go unpinned.
     expect(PALETTE_ROLES).toHaveLength(27);
+    expect(TERMINAL_ROLES).toHaveLength(5);
+  });
+
+  /** The roles that are the terminal's own colours until a theme sets them. */
+  it.each([
+    ['syntaxPunctuation', '\x1b[90m'],
+    ['attention', '\x1b[33m'],
+    ['warningToast', '\x1b[38;5;208m'],
+    ['yoloBadge', '\x1b[48;5;208m'],
+    ['yoloBadgeText', '\x1b[30m'],
+  ] as const)('%s keeps the terminal colour it has always been', (role, escape) => {
+    expect(palette[role]).toBe(escape);
   });
 
   it('exports the brand pair as the same strings, from both modules', () => {
@@ -105,6 +118,32 @@ describe('setPalette', () => {
     expect(getPalette()).toEqual(DEFAULT_PALETTE);
   });
 
+  it('gives a terminal role an RGB value, in the layer it paints, and takes it back', () => {
+    setPalette({ syntaxPunctuation: blue, yoloBadge: blue });
+    expect(palette.syntaxPunctuation).toBe('\x1b[38;2;10;20;200m');
+    // The badge is a fill: a background colour.
+    expect(palette.yoloBadge).toBe('\x1b[48;2;10;20;200m');
+    expect(getPalette().yoloBadge).toEqual(blue);
+    expect(getPalette()).not.toEqual(DEFAULT_PALETTE);
+    resetPalette();
+    expect(palette.syntaxPunctuation).toBe('\x1b[90m');
+    expect(palette.yoloBadge).toBe('\x1b[48;5;208m');
+    expect(getPalette()).toEqual(DEFAULT_PALETTE);
+  });
+
+  it('counts a change to a terminal role alone as a change', () => {
+    const listener = vi.fn();
+    const unsubscribe = onPaletteChange(listener);
+    try {
+      expect(setPalette({ attention: blue })).toBe(true);
+      expect(setPalette({ attention: blue })).toBe(false);
+      expect(setPalette(null)).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('tells listeners only when a colour actually changed', () => {
     const listener = vi.fn();
     const unsubscribe = onPaletteChange(listener);
@@ -140,10 +179,12 @@ describe('colours are read when painting, not when importing', () => {
   // Each of these modules was imported above, under the default palette.
   // A colour baked into a module-level constant would still be red here.
   it('SYNTAX and highlightCode', () => {
-    setPalette({ syntaxKeyword: [1, 1, 1], syntaxRemoved: [2, 2, 2] });
+    setPalette({ syntaxKeyword: [1, 1, 1], syntaxRemoved: [2, 2, 2], syntaxPunctuation: [3, 3, 3] });
     expect(SYNTAX.keyword).toBe('\x1b[38;2;1;1;1m');
     expect(highlightCode('const x', 'ts')).toContain('\x1b[38;2;1;1;1mconst');
     expect(highlightCode('-gone', 'diff')).toContain('\x1b[38;2;2;2;2m-gone');
+    expect(SYNTAX.punctuation).toBe('\x1b[38;2;3;3;3m');
+    expect(highlightCode('f();', 'ts')).toContain('\x1b[38;2;3;3;3m(');
   });
 
   it('the welcome banner', () => {

@@ -10,6 +10,7 @@ import { createBox, centerBox, BoxStyle } from './Box';
 // Codeep red and its bright variant, read live from the palette so an
 // Omarchy theme switch recolours this screen too.
 import { PRIMARY_COLOR, PRIMARY_BRIGHT } from './uiConstants';
+import { palette } from '../palette';
 
 export interface ModalOptions {
   title: string;
@@ -182,8 +183,10 @@ export function renderConfirmModal(
     height: modalHeight,
     style: 'rounded',
     title,
-    borderColor: fg.yellow,
-    titleColor: fg.yellow + style.bold,
+    // ANSI yellow, or an Omarchy theme's yellow made readable as text: the
+    // terminal's own is 2–2.3:1 on Omarchy's light themes.
+    borderColor: palette.attention,
+    titleColor: palette.attention + style.bold,
   });
   
   for (const line of boxLines) {

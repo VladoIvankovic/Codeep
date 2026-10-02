@@ -25,8 +25,8 @@
  */
 import { readFileSync, statSync, watch, type FSWatcher } from 'fs';
 import { homedir } from 'os';
-import { join } from 'path';
-import { setPalette, type PaletteRole, type Rgb } from './palette';
+import { dirname, join } from 'path';
+import { DEFAULT_PALETTE, setPalette, type PaletteOverrides, type PaletteRole, type Rgb } from './palette';
 
 // ─── colors.toml ─────────────────────────────────────────────────────────────
 
@@ -83,6 +83,14 @@ export function mix(a: Rgb, b: Rgb, amount: number): Rgb {
   return [channel(0), channel(1), channel(2)];
 }
 
+/**
+ * Whether two colours are close enough (under 32 apart in sRGB, an eighth
+ * of the range) to be taken for one another side by side.
+ */
+function looksLike(a: Rgb, b: Rgb): boolean {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 32;
+}
+
 /** WCAG relative luminance. */
 function luminance(rgb: Rgb): number {
   const [r, g, b] = rgb.map(c => {
@@ -110,9 +118,9 @@ export function contrastRatio(a: Rgb, b: Rgb): number {
  * so a light theme would otherwise get code it cannot read. Moving toward the
  * foreground keeps the hue's family and works the same on dark and light
  * themes, and a colour that already reads is not moved at all. The least
- * share, found by bisection rather than in fixed steps, so two greys pushed
- * up to the same floor land on the same grey instead of overtaking each
- * other.
+ * share, found by bisection rather than in fixed steps, so a colour lands on
+ * the contrast asked of it rather than a step past — which is also what
+ * places each grey at the contrast greyContrast() picks for it.
  */
 function leastMixToRead(from: Rgb, toward: Rgb, background: Rgb, minContrast: number): number {
   if (contrastRatio(from, background) >= minContrast) return 0;
@@ -127,6 +135,36 @@ function leastMixToRead(from: Rgb, toward: Rgb, background: Rgb, minContrast: nu
   return hi;
 }
 
+/**
+ * The terminal Codeep's greys were picked on: a stock dark one (VS Code's,
+ * #cccccc on #1e1e1e). Each grey's default is measured against it to find
+ * where that grey sits between barely readable and body text.
+ */
+const REFERENCE_BACKGROUND: Rgb = [30, 30, 30];
+const REFERENCE_FOREGROUND: Rgb = [204, 204, 204];
+
+/**
+ * The contrast a grey should have on a theme whose body text is
+ * `bodyContrast`: the same place, between `floor` and the body text, that
+ * `reference` has on the reference terminal — measured in log contrast,
+ * because that is how far apart two greys look.
+ *
+ * A fixed sRGB mix (40% of the way to the foreground, 66%…) was tuned on a
+ * dark terminal, and on a light one the same share reads much fainter: on
+ * catppuccin-latte 40–60% all fall under 3:1, so the floor pushed the label,
+ * the model name and struck-through text onto one grey. Going by contrast
+ * instead keeps both the greys' order and their spacing on every theme, and
+ * a theme like the reference terminal gets back each default's own contrast.
+ * Never past the body text, which a theme with little contrast to spare may
+ * leave below a floor: there the grey is the foreground.
+ */
+export function greyContrast(reference: Rgb, floor: number, bodyContrast: number): number {
+  const referenceBody = contrastRatio(REFERENCE_FOREGROUND, REFERENCE_BACKGROUND);
+  const place = Math.log(contrastRatio(reference, REFERENCE_BACKGROUND) / floor) / Math.log(referenceBody / floor);
+  const share = Math.min(1, Math.max(0, place));
+  return Math.min(bodyContrast, floor * (bodyContrast / floor) ** share);
+}
+
 // ─── Theme → palette ─────────────────────────────────────────────────────────
 
 /**
@@ -134,30 +172,37 @@ function leastMixToRead(from: Rgb, toward: Rgb, background: Rgb, minContrast: nu
  * templates use for Claude Code and Pi (default/themed/claude.json.tpl,
  * pi.json.tpl) so Codeep sits beside them in the same colours:
  *
- *   accent             → the brand colour (Claude's `claude`, Pi's `accent`)
- *   accent + 35% fg    → its bright variant (Claude's `claudeShimmer`)
- *   bg → fg mixes      → the greys, faintest first: 30% (Pi's `border`),
- *                        40, 48 (Pi's `dimText`), 55, 60 (Claude's
- *                        `inactive`), 66 (Pi's `mutedText`), 72, 82%
+ *   accent             → the brand colour (Claude's `claude`, Pi's `accent`),
+ *                        or blue for a theme whose accent is its foreground
+ *   brand + 35% fg     → its bright variant (Claude's `claudeShimmer`)
+ *   bg → fg            → the greys, each at the contrast greyContrast() gives
+ *                        it, code punctuation among them (Pi's
+ *                        `syntaxPunctuation` is its muted text, the hint grey)
  *   magenta, green, orange, blue, yellow, cyan, red, dark_foreground
  *                      → keyword, string, number, function, type, operator,
  *                        removed line, comment
  *   cyan / green / yellow → the welcome path / access level / warning
+ *   yellow             → warning toasts, the confirm modal, the picker
+ *                        prompts, and the YOLO badge (Claude's `warning` and
+ *                        `autoAccept`)
  *
  * The greys are mixes of the theme's own background and foreground rather
  * than fixed values because Codeep's defaults assume a dark terminal: on a
  * light theme a fixed rgb(80,80,80) separator is near-black and the
  * hierarchy inverts. A mix keeps its place between background and
- * foreground in either mode — with the legibility floor catching the light
- * themes where an sRGB mix lands a little faint — which is why `mode` never
- * needs reading.
+ * foreground in either mode, which is why `mode` never needs reading.
+ *
+ * Every colour that is text has a floor it is moved up to if the theme puts
+ * it below: 4.5:1 for what is read as sentences (the warning, the shortcut
+ * hints, blockquotes), 3:1 for code and short tokens, 2.5:1 for the welcome
+ * labels, 1.5:1 for separators that are only decoration.
  *
  * A role whose source key is missing or unparseable is left out, so it keeps
  * its default. The legacy short names Omarchy still accepts for these keys
  * (bg, fg, dark_fg, color0–8, purple) are honoured the way its resolver
  * honours them.
  */
-export function paletteFromOmarchy(values: Record<string, string>): Partial<Record<PaletteRole, Rgb>> {
+export function paletteFromOmarchy(values: Record<string, string>): PaletteOverrides {
   const pick = (...keys: string[]): Rgb | null => {
     for (const key of keys) {
       const rgb = parseHexColor(values[key]);
@@ -178,45 +223,51 @@ export function paletteFromOmarchy(values: Record<string, string>): Partial<Reco
   const orange = pick('orange') ?? yellow;
   const darkForeground = pick('dark_foreground', 'dark_fg', 'color8');
 
-  const out: Partial<Record<PaletteRole, Rgb>> = {};
+  const out: PaletteOverrides = {};
   /** A theme colour as text: moved toward the foreground if it would not read. */
-  const set = (role: PaletteRole, color: Rgb | null) => {
+  const set = (role: keyof PaletteOverrides, color: Rgb | null, minContrast = 3) => {
     if (!color) return;
     out[role] = background && foreground
-      ? mix(color, foreground, leastMixToRead(color, foreground, background, 3))
+      ? mix(color, foreground, leastMixToRead(color, foreground, background, minContrast))
       : color;
   };
   /**
-   * A grey `amount` of the way from background to foreground — or further,
-   * to the least amount that reads at `minContrast`. Taking the larger of the
-   * two keeps the greys in the order Codeep's defaults have them on every
-   * theme: a faint role can be pushed up to a brighter one's level, never
-   * past it.
+   * A grey from background toward foreground, at the contrast greyContrast()
+   * gives a grey whose default is `reference`.
    */
-  const grey = (role: PaletteRole, amount: number, minContrast = 3) => {
+  const grey = (role: keyof PaletteOverrides, reference: Rgb, minContrast: number) => {
     if (!background || !foreground) return;
-    out[role] = mix(background, foreground, Math.max(amount, leastMixToRead(background, foreground, background, minContrast)));
+    const target = greyContrast(reference, minContrast, contrastRatio(foreground, background));
+    out[role] = mix(background, foreground, leastMixToRead(background, foreground, background, target));
   };
 
-  set('primary', accent);
-  set('primaryBright', accent && foreground ? mix(accent, foreground, 0.35) : accent);
+  // Kanagawa's accent IS its foreground. Codeep marks the selected row of
+  // every menu, list and settings screen with its brand colour, so in body
+  // text colour the selection would be told apart only by bold and the ►
+  // marker; the brand pair moves to blue (Claude's `permission`) instead.
+  const brand = accent && foreground && blue && looksLike(accent, foreground) && !looksLike(blue, foreground)
+    ? blue
+    : accent;
+  set('primary', brand);
+  set('primaryBright', brand && foreground ? mix(brand, foreground, 0.35) : brand);
 
-  // Decorative separators and frames may stay faint; text may not.
-  grey('separator', 0.30, 1.5);
-  grey('codeFrame', 0.40, 1.5);
-  grey('label', 0.40, 2.5);
-  grey('assistantLabel', 0.48);
-  grey('modelName', 0.55);
-  grey('strikethrough', 0.60);
-  grey('hint', 0.66);
-  grey('codeLang', 0.66);
-  grey('secondaryText', 0.72);
-  grey('providerName', 0.82);
+  const greyAt = (role: PaletteRole, minContrast: number) => grey(role, DEFAULT_PALETTE[role], minContrast);
+  greyAt('separator', 1.5);
+  greyAt('codeFrame', 1.5);
+  greyAt('label', 2.5);
+  greyAt('assistantLabel', 3);
+  greyAt('modelName', 3);
+  greyAt('strikethrough', 3);
+  greyAt('hint', 4.5);
+  greyAt('codeLang', 3);
+  greyAt('secondaryText', 4.5);
+  greyAt('providerName', 3);
+  grey('syntaxPunctuation', DEFAULT_PALETTE.hint, 3);
 
   set('path', cyan);
   set('success', green);
   set('successDetail', green && background ? mix(green, background, 0.25) : green);
-  set('warning', yellow);
+  set('warning', yellow, 4.5);
   set('inlineCode', orange);
   set('heading', blue);
   set('subheading', magenta);
@@ -229,6 +280,24 @@ export function paletteFromOmarchy(values: Record<string, string>): Partial<Reco
   set('syntaxType', yellow);
   set('syntaxOperator', cyan);
   set('syntaxRemoved', red);
+
+  // The terminal-coloured roles: a toast and a prompt are read like the
+  // welcome warning, so they take its colour, floor and all.
+  if (out.warning) {
+    out.warningToast = out.warning;
+    out.attention = out.warning;
+  }
+  // The badge is a fill, so it takes the theme's yellow as it is, and for
+  // its text whichever of the theme's two colours, black or white reads best
+  // on it. ANSI black, its text by default, is the theme's background: near-
+  // white on a light theme, and matte-black's "yellow" is a dark red.
+  if (yellow) {
+    const candidates: Rgb[] = [[0, 0, 0], [255, 255, 255]];
+    if (background) candidates.unshift(background);
+    if (foreground) candidates.unshift(foreground);
+    out.yoloBadge = yellow;
+    out.yoloBadgeText = candidates.reduce((best, c) => (contrastRatio(c, yellow) > contrastRatio(best, yellow) ? c : best));
+  }
   return out;
 }
 
@@ -244,7 +313,7 @@ export function omarchyStateDir(home: string = homedir()): string {
  * readable colors.toml (not Omarchy, a theme without one, a permissions
  * problem) — null meaning "Codeep's own colours".
  */
-export function loadOmarchyPalette(stateDir: string = omarchyStateDir()): Partial<Record<PaletteRole, Rgb>> | null {
+export function loadOmarchyPalette(stateDir: string = omarchyStateDir()): PaletteOverrides | null {
   let text: string;
   try {
     text = readFileSync(join(stateDir, 'theme', 'colors.toml'), 'utf8');
@@ -281,32 +350,36 @@ export interface OmarchyThemeOptions {
 export interface OmarchyThemeWatch {
   /** Read the theme and the setting again now. */
   reload(): void;
-  /** Close the watches and drop the SIGUSR2 handler. */
+  /** Close the watches. */
   stop(): void;
 }
 
 /** The running watch, for reapplyOmarchyTheme(). One per process. */
 let active: OmarchyThemeWatch | null = null;
 
+/** A watch, and the directory inode it was made on. */
+type DirWatch = { watcher: FSWatcher; dir: string; ino: number };
+
 /**
  * Apply the current Omarchy theme and follow it until stop().
  *
- * Returns null — doing nothing at all, not even installing the signal
- * handler — off Linux or when there is no Omarchy state directory, so every
- * other machine runs exactly as before.
+ * Returns null — doing nothing at all — off Linux or when there is no
+ * Omarchy state directory, so every other machine runs exactly as before.
  *
- * Two ways a change arrives:
- *   - the watch on `current/`, which sees every switch by itself;
- *   - SIGUSR2, the signal Omarchy sends OpenCode for the same purpose
- *     (bin/omarchy-restart-opencode), for anyone who would rather wire a
- *     theme-set hook (`pkill -USR2 -f codeep`) or whose filesystem does not
- *     deliver inotify events. It also means a stray SIGUSR2 reloads the
- *     theme instead of killing the session, which is Node's default.
+ * The watch on `current/` sees every switch by itself. Omarchy also tells
+ * OpenCode with SIGUSR2 (bin/omarchy-restart-opencode), but by its process
+ * name, so Codeep is never sent it — and must not handle it anyway. The
+ * config store's exit hook (when-exit, which conf's atomically installs)
+ * catches SIGUSR2 with SIGTERM, SIGHUP and the rest, runs its cleanup once,
+ * and raises the signal again to end the process. A handler that kept the
+ * process alive would leave that hook spent, and the next SIGTERM or SIGHUP
+ * would then not end the session.
  *
  * Watches are non-persistent and the timer unref'd, so following a theme
  * never keeps the process alive. Every fs call is guarded: the directory can
  * vanish (Omarchy reinstalled, state wiped) and come back, and neither may
- * crash a session.
+ * crash a session. While it is gone, the nearest directory above it that is
+ * still there is watched instead, so its return is seen too.
  */
 export function followOmarchyTheme(options: OmarchyThemeOptions = {}): OmarchyThemeWatch | null {
   const stateDir = options.stateDir ?? omarchyStateDir();
@@ -314,31 +387,44 @@ export function followOmarchyTheme(options: OmarchyThemeOptions = {}): OmarchyTh
 
   const enabled = options.enabled ?? (() => true);
   const debounceMs = options.debounceMs ?? 150;
-  let stateWatch: { watcher: FSWatcher; ino: number } | null = null;
+  // `state` watches current/; `ancestor` the nearest directory above it
+  // while current/ is not there.
+  const watches: Record<'state' | 'ancestor', DirWatch | null> = { state: null, ancestor: null };
   let themeWatcher: FSWatcher | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
 
-  const closeQuietly = (watcher: FSWatcher | null) => {
+  const closeQuietly = (watcher: FSWatcher | null | undefined) => {
     try { watcher?.close(); } catch { /* already gone */ }
+  };
+
+  /**
+   * Keep a live watch on `dir` in `slot`: dropped when `dir` is gone, or was
+   * removed and made again (which leaves the old watch on a dead inode), and
+   * made anew while it is there. A null `dir` drops it.
+   */
+  const keepWatching = (slot: keyof typeof watches, dir: string | null) => {
+    const ino = dir === null ? null : inodeOf(dir);
+    const current = watches[slot];
+    if (current && (current.dir !== dir || current.ino !== ino)) {
+      closeQuietly(current.watcher);
+      watches[slot] = null;
+    }
+    if (!watches[slot] && dir !== null && ino !== null) {
+      const watcher = watchQuietly(dir, schedule, () => {
+        if (watches[slot]?.watcher === watcher) watches[slot] = null;
+      });
+      if (watcher) watches[slot] = { watcher, dir, ino };
+    }
   };
 
   const arm = () => {
     if (stopped) return;
-    // `current/` itself was removed (or removed and made again, which leaves
-    // the old watch on a dead inode): drop that watch and make a new one if
-    // the directory is back.
-    const ino = inodeOf(stateDir);
-    if (stateWatch && stateWatch.ino !== ino) {
-      closeQuietly(stateWatch.watcher);
-      stateWatch = null;
-    }
-    if (!stateWatch && ino !== null) {
-      const watcher = watchQuietly(stateDir, schedule, () => {
-        if (stateWatch?.watcher === watcher) stateWatch = null;
-      });
-      if (watcher) stateWatch = { watcher, ino };
-    }
+    keepWatching('state', stateDir);
+    // `current/` is gone (or could not be watched): watch the nearest
+    // directory above it that is there, where `current/` — or a directory
+    // on the way to it — coming back is a change.
+    keepWatching('ancestor', watches.state ? null : nearestExistingAncestor(stateDir));
     // theme/ is replaced on every switch, so the previous watch is on a
     // deleted directory by now. This one catches an edit to colors.toml in
     // place, which `current/` does not see.
@@ -370,9 +456,6 @@ export function followOmarchyTheme(options: OmarchyThemeOptions = {}): OmarchyTh
     timer.unref?.();
   }
 
-  const onSignal = () => reload();
-  process.on('SIGUSR2', onSignal);
-
   const handle: OmarchyThemeWatch = {
     reload,
     stop: () => {
@@ -380,11 +463,12 @@ export function followOmarchyTheme(options: OmarchyThemeOptions = {}): OmarchyTh
       stopped = true;
       if (timer) clearTimeout(timer);
       timer = null;
-      closeQuietly(stateWatch?.watcher ?? null);
+      closeQuietly(watches.state?.watcher);
+      closeQuietly(watches.ancestor?.watcher);
       closeQuietly(themeWatcher);
-      stateWatch = null;
+      watches.state = null;
+      watches.ancestor = null;
       themeWatcher = null;
-      process.removeListener('SIGUSR2', onSignal);
       if (active === handle) active = null;
     },
   };
@@ -411,6 +495,14 @@ export function reapplyOmarchyTheme(): void {
  */
 export function isOmarchy(platform: NodeJS.Platform = process.platform, stateDir: string = omarchyStateDir()): boolean {
   return platform === 'linux' && inodeOf(stateDir) !== null;
+}
+
+/** The closest directory above `dir` that exists, or null if none does. */
+function nearestExistingAncestor(dir: string): string | null {
+  for (let parent = dirname(dir); ; parent = dirname(parent)) {
+    if (inodeOf(parent) !== null) return parent;
+    if (dirname(parent) === parent) return null;
+  }
 }
 
 function inodeOf(dir: string): number | null {

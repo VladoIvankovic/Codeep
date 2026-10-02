@@ -8,7 +8,9 @@
  * literal, and stays the same red and the same One Dark syntax colours on a
  * light theme, a Gruvbox theme, any theme. This module is where those
  * literals live now, under the role each one plays, so something can swap
- * them (omarchyTheme.ts) and every surface picks the new value up.
+ * them (omarchyTheme.ts) and every surface picks the new value up — along
+ * with the few terminal colours that a terminal theme does not make
+ * readable (TERMINAL_DEFAULTS).
  *
  * Every read happens at RENDER time: `palette.<role>` is a getter, and
  * `PRIMARY_COLOR` / `PRIMARY_BRIGHT` are live ES bindings that setPalette()
@@ -20,7 +22,7 @@
  * existed, so without a theme every escape sequence is byte-identical to what
  * it was (pinned by palette.defaults.test.ts).
  */
-import { fg } from './ansi';
+import { fg, bg } from './ansi';
 
 export type Rgb = readonly [number, number, number];
 
@@ -89,14 +91,52 @@ export const DEFAULT_PALETTE = Object.freeze({
   codeLang: [150, 155, 165],
 } satisfies Record<string, Rgb>);
 
+/**
+ * The roles Codeep paints in the TERMINAL's colours — a basic ANSI index, or
+ * an xterm-256 one — with the escape each one is painted with when nothing
+ * overrides it.
+ *
+ * Most terminal colours are left to the terminal: Omarchy recolours it, so
+ * they follow already. These are the ones that do not follow well enough to
+ * be left there. Bright black (code punctuation) is Omarchy's `muted`, a
+ * decoration colour, below 3:1 on 20 of its 22 themes; yellow is 2–2.3:1 on
+ * its light themes; and index 208, the warning orange, is set by no theme at
+ * all, so it stays #ff8700 everywhere. Only a theme gives these an RGB value; without
+ * one they keep the escape they had, so the bytes do not change.
+ */
+export const TERMINAL_DEFAULTS = Object.freeze({
+  /** Code punctuation: `( ) { } ; , . :`. ANSI bright black. */
+  syntaxPunctuation: fg.gray,
+  /** The confirm modal's border and title, and the input line's "Select …
+   *  below" prompts while a picker is open. ANSI yellow. */
+  attention: fg.yellow,
+  /** Warning toasts on the status bar: errors, retries. xterm 208. */
+  warningToast: fg.color256(208),
+  /** The `--yolo` badge's fill (a BACKGROUND colour), xterm 208… */
+  yoloBadge: bg.color256(208),
+  /** …and its text, ANSI black. */
+  yoloBadgeText: fg.black,
+} satisfies Record<string, string>);
+
 export type PaletteRole = keyof typeof DEFAULT_PALETTE;
+export type TerminalRole = keyof typeof TERMINAL_DEFAULTS;
 export type PaletteColors = Record<PaletteRole, Rgb>;
+/** What a theme hands setPalette(): an RGB value for any role of either kind. */
+export type PaletteOverrides = Partial<Record<PaletteRole | TerminalRole, Rgb>>;
 
 export const PALETTE_ROLES = Object.keys(DEFAULT_PALETTE) as PaletteRole[];
+export const TERMINAL_ROLES = Object.keys(TERMINAL_DEFAULTS) as TerminalRole[];
 
-function escapesFor(colors: PaletteColors): Record<PaletteRole, string> {
-  const out = {} as Record<PaletteRole, string>;
+/** The terminal roles that colour a cell's background rather than its text. */
+const BACKGROUND_ROLES: ReadonlySet<TerminalRole> = new Set(['yoloBadge']);
+
+function escapesFor(colors: PaletteColors, terminal: Partial<Record<TerminalRole, Rgb>>): Record<PaletteRole | TerminalRole, string> {
+  const out = {} as Record<PaletteRole | TerminalRole, string>;
   for (const role of PALETTE_ROLES) out[role] = fg.rgb(...colors[role]);
+  for (const role of TERMINAL_ROLES) {
+    const rgb = terminal[role];
+    out[role] = !rgb ? TERMINAL_DEFAULTS[role] : BACKGROUND_ROLES.has(role) ? bg.rgb(...rgb) : fg.rgb(...rgb);
+  }
   return out;
 }
 
@@ -107,9 +147,11 @@ function isRgb(value: unknown): value is Rgb {
 }
 
 let colors: PaletteColors = { ...DEFAULT_PALETTE };
+/** The terminal roles a theme has given a colour; absent means its escape. */
+let terminalColors: Partial<Record<TerminalRole, Rgb>> = {};
 // The escape strings, built once per palette change rather than once per
 // cell: the render loop reads these thousands of times a frame.
-let escapes = escapesFor(colors);
+let escapes = escapesFor(colors, terminalColors);
 
 /** Brand red, as an escape sequence. A live binding: setPalette() reassigns it. */
 export let PRIMARY_COLOR = escapes.primary;
@@ -120,14 +162,17 @@ export let PRIMARY_BRIGHT = escapes.primaryBright;
  * The current foreground escape for every role, read at the moment it is
  * used: `palette.hint + text + style.reset`.
  */
-export const palette = {} as { readonly [R in PaletteRole]: string };
-for (const role of PALETTE_ROLES) {
+export const palette = {} as { readonly [R in PaletteRole | TerminalRole]: string };
+for (const role of [...PALETTE_ROLES, ...TERMINAL_ROLES]) {
   Object.defineProperty(palette, role, { get: () => escapes[role], enumerable: true });
 }
 
-/** The current colour of every role. */
-export function getPalette(): Readonly<PaletteColors> {
-  return colors;
+/**
+ * The current colour of every role, and of each terminal role a theme has
+ * given one — so with no theme it equals DEFAULT_PALETTE exactly.
+ */
+export function getPalette(): Readonly<PaletteColors & Partial<Record<TerminalRole, Rgb>>> {
+  return { ...colors, ...terminalColors };
 }
 
 const listeners = new Set<() => void>();
@@ -152,17 +197,25 @@ export function onPaletteChange(listener: () => void): () => void {
  * A value that is not three 0–255 integers is ignored, not trusted: the
  * overrides come from a file on disk.
  */
-export function setPalette(overrides: Partial<Record<PaletteRole, Rgb>> | null): boolean {
+export function setPalette(overrides: PaletteOverrides | null): boolean {
   const next: PaletteColors = { ...DEFAULT_PALETTE };
   for (const role of PALETTE_ROLES) {
     const value = overrides?.[role];
     if (isRgb(value)) next[role] = [value[0], value[1], value[2]];
   }
-  const changed = PALETTE_ROLES.some(role => next[role].some((c, i) => c !== colors[role][i]));
+  const nextTerminal: Partial<Record<TerminalRole, Rgb>> = {};
+  for (const role of TERMINAL_ROLES) {
+    const value = overrides?.[role];
+    if (isRgb(value)) nextTerminal[role] = [value[0], value[1], value[2]];
+  }
+  const same = (a: Rgb | undefined, b: Rgb | undefined) => a === b || (!!a && !!b && a.every((c, i) => c === b[i]));
+  const changed = PALETTE_ROLES.some(role => !same(next[role], colors[role]))
+    || TERMINAL_ROLES.some(role => !same(nextTerminal[role], terminalColors[role]));
   if (!changed) return false;
 
   colors = next;
-  escapes = escapesFor(colors);
+  terminalColors = nextTerminal;
+  escapes = escapesFor(colors, terminalColors);
   PRIMARY_COLOR = escapes.primary;
   PRIMARY_BRIGHT = escapes.primaryBright;
   for (const listener of [...listeners]) {
