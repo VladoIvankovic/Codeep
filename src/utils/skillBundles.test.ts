@@ -143,6 +143,104 @@ describe('parseFrontmatter', () => {
   });
 });
 
+// ─── parseFrontmatter: block scalars ────────────────────────────────────────
+describe('parseFrontmatter block scalars', () => {
+  // The shape of Omarchy's skills (default/agents/skills/*/SKILL.md): a long
+  // folded description, then the body.
+  const FOLDED = [
+    '---',
+    'name: tidy-desk',
+    'description: >',
+    '  Tidy the desktop the way this machine expects it. Use when',
+    '  asked to clean up windows, workspaces or the bar.',
+    '  Triggers: tidy, declutter, "clean up".',
+    '---',
+    '',
+    '# Tidy',
+  ].join('\n');
+  const FOLDED_DESCRIPTION =
+    'Tidy the desktop the way this machine expects it. Use when asked to clean up windows, workspaces or the bar. Triggers: tidy, declutter, "clean up".\n';
+
+  it('folds a `>` block into one line that ends in a line break', () => {
+    const out = parseFrontmatter(FOLDED);
+    expect(out.meta.name).toBe('tidy-desk');
+    expect(out.meta.description).toBe(FOLDED_DESCRIPTION);
+    expect(out.body).toBe('# Tidy');
+  });
+
+  it('keeps the line breaks of a `|` block', () => {
+    const out = parseFrontmatter('---\ndescription: |\n  one\n  two\n---\n');
+    expect(out.meta.description).toBe('one\ntwo\n');
+  });
+
+  it('keeps a blank line in a `>` block as a line break', () => {
+    const out = parseFrontmatter('---\ndescription: >\n  one\n  two\n\n  three\n---\n');
+    expect(out.meta.description).toBe('one two\nthree\n');
+  });
+
+  it('does not fold the breaks around a more-indented line', () => {
+    const out = parseFrontmatter('---\ndescription: >\n  one\n    two\n  three\n---\n');
+    expect(out.meta.description).toBe('one\n  two\nthree\n');
+  });
+
+  it('drops the trailing line break with `-`', () => {
+    expect(parseFrontmatter('---\ndescription: >-\n  one\n  two\n---\n').meta.description).toBe('one two');
+    expect(parseFrontmatter('---\ndescription: |-\n  one\n  two\n---\n').meta.description).toBe('one\ntwo');
+  });
+
+  it('keeps every trailing line break with `+`', () => {
+    expect(parseFrontmatter('---\ndescription: >+\n  one\n  two\n\n\nname: x\n---\n').meta.description).toBe('one two\n\n\n');
+    expect(parseFrontmatter('---\ndescription: |+\n  one\n\nname: x\n---\n').meta.description).toBe('one\n\n');
+  });
+
+  it('reads the keys after a block', () => {
+    const out = parseFrontmatter('---\ndescription: >\n  one\n  two\n\nname: x\ntriggers:\n  - a\n  - b\n---\nbody');
+    expect(out.meta.description).toBe('one two\n');
+    expect(out.meta.name).toBe('x');
+    expect(out.meta.triggers).toEqual(['a', 'b']);
+    expect(out.body).toBe('body');
+  });
+
+  it('ends a block at the closing ---', () => {
+    const out = parseFrontmatter('---\nname: x\ndescription: |\n  one\n  two\n---\nbody');
+    expect(out.meta.description).toBe('one\ntwo\n');
+    expect(out.body).toBe('body');
+  });
+
+  it('reads a block from a CRLF file', () => {
+    const out = parseFrontmatter(FOLDED.replace(/\n/g, '\r\n'));
+    expect(out.meta.description).toBe(FOLDED_DESCRIPTION);
+    expect(out.body).toBe('# Tidy');
+  });
+
+  it('takes the indentation from the header when it gives one', () => {
+    const out = parseFrontmatter('---\ndescription: |2\n    deeper\n  flush\n---\n');
+    expect(out.meta.description).toBe('  deeper\nflush\n');
+  });
+
+  it('allows a comment after the header', () => {
+    const out = parseFrontmatter('---\ndescription: >- # one line\n  one\n  two\n---\n');
+    expect(out.meta.description).toBe('one two');
+  });
+
+  it('reads `- item` lines inside a block as text, not as a list', () => {
+    const out = parseFrontmatter('---\ndescription: |\n  - one\n  - two\n---\n');
+    expect(out.meta.description).toBe('- one\n- two\n');
+  });
+
+  it('reads a block with no lines as an empty string', () => {
+    const out = parseFrontmatter('---\ndescription: >\nname: x\n---\n');
+    expect(out.meta.description).toBe('');
+    expect(out.meta.name).toBe('x');
+  });
+
+  it('leaves a quoted `>` as a plain value', () => {
+    const out = parseFrontmatter('---\ndescription: ">"\nname: x\n---\n');
+    expect(out.meta.description).toBe('>');
+    expect(out.meta.name).toBe('x');
+  });
+});
+
 // ─── formatBundlesForSysprompt ──────────────────────────────────────────────
 describe('formatBundlesForSysprompt', () => {
   it('returns an empty string when no bundles are installed', () => {
@@ -168,11 +266,12 @@ describe('formatBundlesForSysprompt', () => {
     expect(out).not.toContain('triggers:');
   });
 
-  it('caps the per-line length at 200 chars', () => {
-    const long = bundle({ description: 'x'.repeat(300) });
+  it('caps the per-line length at 1200 chars', () => {
+    // Room for a description at the Agent Skills limit of 1024, and no more.
+    const long = bundle({ description: 'x'.repeat(1300) });
     const out = formatBundlesForSysprompt([long]);
     const line = out.split('\n').find((l) => l.startsWith('- **'))!;
-    expect(line.length).toBeLessThanOrEqual(201); // 200 + ellipsis
+    expect(line.length).toBe(1201); // 1200 + ellipsis: one long word is cut, not dropped
     expect(line.endsWith('…')).toBe(true);
   });
 

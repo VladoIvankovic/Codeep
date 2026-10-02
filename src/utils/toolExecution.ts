@@ -108,6 +108,10 @@ export function validatePath(path: string, projectRoot: string): { valid: boolea
 //  - `.codeep/hooks/` — scripts Codeep itself runs around every tool call.
 //  - `.codeep/skills/` — a skill's steps are commands Codeep runs when the
 //    skill is used (see skillBundles.ts, which loads project skills).
+//  - `.agents/skills/` — the same, in the directory agent tools share.
+//    Codeep loads `~/.agents/skills` in every session, and that is where a
+//    project rooted at the home directory writes; other agent tools read a
+//    repository's own `.agents/skills` as well.
 //  - `.codeep/agents/` — a sub-agent definition. Its `tools:` is the
 //    allowlist the nested run is checked against and REPLACES the parent's,
 //    so it can hand a delegated run a tool this run was restricted from; its
@@ -169,6 +173,7 @@ const HOOKS_AT_ROOT_REASON =
   'from here by name — writing one can install a hook that runs on your next commit.';
 const CODEEP_HOOK_REASON = 'This file runs on every tool call.';
 const SKILL_REASON = 'This is a skill — its steps are commands Codeep runs whenever the skill is used.';
+const SHARED_SKILL_REASON = 'This is a skill for agent tools — its steps are commands an agent runs whenever the skill is used, and from ~/.agents/skills every Codeep session loads it.';
 const MCP_SERVERS_REASON = 'This file starts MCP servers — every entry is a command Codeep spawns.';
 const AGENT_REASON = 'This file defines a sub-agent — the tools it may use and the model it runs on, every time something delegates to it.';
 const CODEEP_CONFIG_REASON = "This file is Codeep's own configuration for this project.";
@@ -311,6 +316,7 @@ function reasonForSegments(relativePath: string, hooksDir: () => HooksDirectory)
   const last = segments[segments.length - 1];
   if (last === '.mcp.json') return MCP_SERVERS_REASON;
   for (let i = 0; i < segments.length - 1; i++) {
+    if (segments[i] === '.agents' && segments[i + 1] === 'skills') return SHARED_SKILL_REASON;
     if (segments[i] !== '.codeep') continue;
     if (segments[i + 1] === 'hooks') return CODEEP_HOOK_REASON;
     if (segments[i + 1] === 'skills') return SKILL_REASON;
@@ -639,20 +645,38 @@ export async function executeTool(
 
   // invoke_skill — agent-driven skill bundle invocation. Returns the
   // bundle's SKILL.md body so the agent can read its instructions in
-  // the next iteration. Project-scoped bundles win over global.
+  // the next iteration, or with `file` one of the files beside it.
+  // Project-scoped bundles win over global.
   if (rawTool === 'invoke_skill') {
     const name = String((parameters as Record<string, unknown>).name ?? '').trim();
     if (!name) {
       return { success: false, output: '', error: 'invoke_skill requires a `name` argument', tool: rawTool, parameters };
     }
     try {
-      const { findSkillBundle } = await import('./skillBundles');
+      const { findSkillBundle, readSkillFile } = await import('./skillBundles');
       const bundle = findSkillBundle(name, projectRoot);
       if (!bundle) {
         return { success: false, output: '', error: `Skill "${name}" not found. Use the catalog in your system prompt or ask the user to /skills bundles.`, tool: rawTool, parameters };
       }
-      // Prefix the body with a header so the model sees clear framing.
-      const output = `# Skill: ${bundle.name}\n_${bundle.description}_\n\n${bundle.body}`;
+      const file = String((parameters as Record<string, unknown>).file ?? '').trim();
+      if (file) {
+        const read = readSkillFile(bundle, file);
+        if ('error' in read) return { success: false, output: '', error: read.error, tool: rawTool, parameters };
+        return { success: true, output: `# Skill: ${bundle.name} — ${file}\n\n${read.content}`, tool: rawTool, parameters };
+      }
+      // Prefix the body with a header so the model sees clear framing, and
+      // with the bundle's directory: a SKILL.md names its other files
+      // relative to itself, and a global bundle's are outside the project,
+      // where read_file cannot go.
+      const output = [
+        `# Skill: ${bundle.name}`,
+        `_${bundle.description}_`,
+        '',
+        `Skill directory: ${bundle.source}`,
+        `Read a file this skill refers to with invoke_skill and its path in that directory, e.g. {"name": "${bundle.name}", "file": "guide.md"}.`,
+        '',
+        bundle.body,
+      ].join('\n');
       return { success: true, output, tool: rawTool, parameters };
     } catch (err) {
       return { success: false, output: '', error: (err as Error).message, tool: rawTool, parameters };

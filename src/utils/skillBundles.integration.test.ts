@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// Real fs, with readFileSync recorded so a test can prove a file was never read.
+// Real fs, with readFileSync recorded so a test can prove a file was never
+// read, and readdirSync so one can list a directory in an order of its own.
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>();
-  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync), readdirSync: vi.fn(actual.readdirSync) };
 });
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -42,15 +43,22 @@ afterEach(() => {
 });
 
 function writeSkill(opts: {
-  root: 'project' | 'global';
+  /** `agents` is `~/.agents/skills`, the directory agent harnesses share. */
+  root: 'project' | 'global' | 'agents';
   name: string;
   body: string;
 }): void {
-  const base = opts.root === 'project' ? workspaceRoot : fakeHome;
-  const dir = join(base, '.codeep', 'skills', opts.name);
+  const dir = join(skillsDir(opts.root), opts.name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'SKILL.md'), opts.body);
 }
+
+function skillsDir(root: 'project' | 'global' | 'agents'): string {
+  if (root === 'agents') return join(fakeHome, '.agents', 'skills');
+  return join(root === 'project' ? workspaceRoot : fakeHome, '.codeep', 'skills');
+}
+
+const SKILL = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\n---\nBody`;
 
 const FRONT = (body: string) => `---\nname: my-skill\ndescription: Test skill\n---\n${body}`;
 
@@ -160,6 +168,83 @@ Body`;
     writeSkill({ root: 'project', name: 'big', body: huge });
     expect(loadSkillBundles(workspaceRoot)).toEqual([]);
   });
+
+  it('loads global bundles from ~/.agents/skills too', () => {
+    writeSkill({ root: 'agents', name: 'crash', body: SKILL('crash', 'Shared') });
+    const bundles = loadSkillBundles(workspaceRoot);
+    expect(bundles).toHaveLength(1);
+    expect(bundles[0].scope).toBe('global');
+    expect(bundles[0].source).toBe(join(fakeHome, '.agents', 'skills', 'crash'));
+  });
+
+  it('is fine without ~/.agents/skills', () => {
+    writeSkill({ root: 'global', name: 'deploy', body: SKILL('deploy', 'Global') });
+    expect(loadSkillBundles(workspaceRoot).map(b => b.source)).toEqual([join(fakeHome, '.codeep', 'skills', 'deploy')]);
+  });
+
+  it('prefers .codeep/skills, then ~/.codeep/skills, then ~/.agents/skills for the same name', () => {
+    writeSkill({ root: 'agents', name: 'deploy', body: SKILL('deploy', 'Shared deploy') });
+    writeSkill({ root: 'global', name: 'deploy', body: SKILL('deploy', 'Global deploy') });
+    expect(loadSkillBundles(workspaceRoot).map(b => b.description)).toEqual(['Global deploy']);
+
+    writeSkill({ root: 'project', name: 'deploy', body: SKILL('deploy', 'Project deploy') });
+    expect(loadSkillBundles(workspaceRoot).map(b => b.description)).toEqual(['Project deploy']);
+    // No workspace: the project directory is not in the running.
+    expect(loadSkillBundles().map(b => b.description)).toEqual(['Global deploy']);
+  });
+
+  it('keeps the first directory, by name, when two in one place claim the same name', () => {
+    writeSkill({ root: 'agents', name: 'b-copy', body: SKILL('deploy', 'From b-copy') });
+    writeSkill({ root: 'agents', name: 'a-copy', body: SKILL('deploy', 'From a-copy') });
+    // Listed out of order, as Windows may list it. Node sorts a listing on
+    // Linux and macOS already, so a real one there could not show the sort.
+    vi.mocked(readdirSync).mockReturnValueOnce(['b-copy', 'a-copy'] as unknown as ReturnType<typeof readdirSync>);
+    expect(loadSkillBundles(workspaceRoot).map(b => b.description)).toEqual(['From a-copy']);
+    expect(vi.mocked(readdirSync)).toHaveBeenCalledWith(skillsDir('agents'));
+  });
+
+  it('reads a folded or literal description as one line', () => {
+    writeSkill({ root: 'agents', name: 'folded', body: '---\nname: folded\ndescription: >\n  Diagnose a crash.\n  Use on a core dump.\n---\nBody' });
+    writeSkill({ root: 'agents', name: 'literal', body: '---\nname: literal\ndescription: |\n  First.\n  Second.\n---\nBody' });
+    const bundles = loadSkillBundles(workspaceRoot);
+    expect(bundles.find(b => b.name === 'folded')?.description).toBe('Diagnose a crash. Use on a core dump.');
+    expect(bundles.find(b => b.name === 'literal')?.description).toBe('First. Second.');
+  });
+});
+
+describe('linked bundles', () => {
+  // Stands in for $OMARCHY_PATH: neither in the project nor under ~/.agents.
+  let elsewhere: string;
+
+  beforeEach(() => {
+    elsewhere = mkdtempSync(join(tmpdir(), 'codeep-skills-elsewhere-'));
+    mkdirSync(join(elsewhere, 'crash'));
+    writeFileSync(join(elsewhere, 'crash', 'SKILL.md'), SKILL('crash', 'Linked in'));
+  });
+
+  afterEach(() => {
+    rmSync(elsewhere, { recursive: true, force: true });
+  });
+
+  it('loads a global bundle that is a symlink, as Omarchy installs its skills', () => {
+    mkdirSync(skillsDir('agents'), { recursive: true });
+    symlinkSync(join(elsewhere, 'crash'), join(skillsDir('agents'), 'crash'));
+    const bundles = loadSkillBundles(workspaceRoot);
+    expect(bundles.map(b => b.description)).toEqual(['Linked in']);
+    expect(bundles[0].source).toBe(join(fakeHome, '.agents', 'skills', 'crash'));
+  });
+
+  it('loads ~/.agents/skills when it is a symlink itself', () => {
+    mkdirSync(join(fakeHome, '.agents'));
+    symlinkSync(elsewhere, skillsDir('agents'));
+    expect(loadSkillBundles(workspaceRoot).map(b => b.name)).toEqual(['crash']);
+  });
+
+  it('still refuses a project bundle that links outside the project', () => {
+    mkdirSync(skillsDir('project'), { recursive: true });
+    symlinkSync(join(elsewhere, 'crash'), join(skillsDir('project'), 'crash'));
+    expect(loadSkillBundles(workspaceRoot)).toEqual([]);
+  });
 });
 
 describe('findSkillBundle', () => {
@@ -183,6 +268,19 @@ describe('formatBundleList', () => {
     expect(md).toMatch(/SKILL\.md/);
   });
 
+  it('names the directory each global bundle came from, in precedence order', () => {
+    writeSkill({ root: 'agents', name: 'crash', body: SKILL('crash', 'Shared') });
+    writeSkill({ root: 'global', name: 'deploy', body: SKILL('deploy', 'Mine') });
+    const md = formatBundleList(loadSkillBundles(workspaceRoot));
+    expect(md).toContain([
+      '**Global** — `~/.codeep/skills`',
+      '- **deploy** — Mine',
+      '',
+      '**Global** — `~/.agents/skills`',
+      '- **crash** — Shared',
+    ].join('\n'));
+  });
+
   it('groups by scope', () => {
     const project = { name: 'p', description: 'PP', source: '', scope: 'project' as const, allowedTools: [], triggers: [], requiresMcp: [], frontmatterRaw: {}, body: '' };
     const global = { name: 'g', description: 'GG', source: '', scope: 'global' as const, allowedTools: [], triggers: [], requiresMcp: [], frontmatterRaw: {}, body: '' };
@@ -204,6 +302,24 @@ describe('formatBundlesForSysprompt', () => {
     expect(out).toMatch(/invoke_skill/);
     expect(out).toMatch(/\*\*deploy\*\* — Deploy to staging/);
     expect(out).toMatch(/triggers: ship, release/);
+  });
+
+  const bundle = (name: string, description: string) => ({ name, description, source: '', scope: 'global' as const, allowedTools: [], triggers: [], requiresMcp: [], frontmatterRaw: {}, body: '' });
+
+  it('keeps a long description whole, with the part that says when to use it', () => {
+    // Omarchy's run to 590 characters and end on their triggers and what they
+    // exclude, which the catalog's old 200-character lines cut off.
+    const description = `${'Customize the desktop, its bar and its theme. '.repeat(11)}Triggers: waybar, hyprland. Excludes Omarchy source development.`;
+    expect(description.length).toBeGreaterThan(560);
+    const out = formatBundlesForSysprompt(['diagnose-crash', 'omarchy', 'omarchy-app'].map(n => bundle(n, description)));
+    expect(out.split('\n').filter(l => l.endsWith(description))).toHaveLength(3);
+  });
+
+  it('cuts a line past the cap at a word, not inside one', () => {
+    const out = formatBundlesForSysprompt([bundle('long', 'abcdefghij '.repeat(200).trim())]);
+    const line = out.split('\n').find(l => l.startsWith('- **long**'))!;
+    expect(line).toMatch(/ abcdefghij…$/);
+    expect(line.length).toBeLessThanOrEqual(1201);
   });
 });
 
