@@ -6,8 +6,9 @@ import { Screen } from '../Screen';
 import { fg, style } from '../ansi';
 import { KeyEvent } from '../Input';
 
-// Primary color: #f02a30 (Codeep red)
-const PRIMARY_COLOR = fg.rgb(240, 42, 48);
+// Codeep red, read live from the palette so an Omarchy theme switch
+// recolours this panel too.
+import { PRIMARY_COLOR } from './uiConstants';
 
 export interface SearchResult {
   role: string;

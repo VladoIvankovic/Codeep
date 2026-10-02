@@ -19,11 +19,10 @@
 
 import { fg, style, stringWidth } from '../ansi';
 import { SYNTAX, highlightCode } from '../highlight';
-
-// Shared primary colour — same value as the one defined in App.ts. Kept
-// here so the formatter is self-contained; the App re-exports it from
-// the same literal to avoid drift.
-const PRIMARY_COLOR = fg.rgb(240, 42, 48);
+import { palette } from '../palette';
+// The shared brand colour, not a copy of its literal: a copy here would stay
+// red after an Omarchy theme switch recoloured everything around it.
+import { PRIMARY_COLOR } from './uiConstants';
 
 export interface RenderedLine {
   text: string;
@@ -64,7 +63,7 @@ export function applyInlineMarkdown(text: string): { formatted: string; hasForma
       const end = text.indexOf('`', i + 1);
       if (end !== -1) {
         const code = text.slice(i + 1, end);
-        result += fg.rgb(209, 154, 102) + code + '\x1b[0m';
+        result += palette.inlineCode + code + '\x1b[0m';
         hasFormatting = true;
         i = end + 1;
         continue;
@@ -115,7 +114,7 @@ export function applyInlineMarkdown(text: string): { formatted: string; hasForma
       const end = text.indexOf('~~', i + 2);
       if (end !== -1) {
         const inner = text.slice(i + 2, end);
-        result += '\x1b[9m' + fg.rgb(140, 140, 140) + inner + '\x1b[0m';
+        result += '\x1b[9m' + palette.strikethrough + inner + '\x1b[0m';
         hasFormatting = true;
         i = end + 2;
         continue;
@@ -211,7 +210,7 @@ export function formatTextLines(
     if (headingMatch) {
       const level = headingMatch[1].length;
       const headingText = headingMatch[2];
-      const headingColor = level <= 2 ? fg.rgb(97, 175, 239) : fg.rgb(198, 120, 221);
+      const headingColor = level <= 2 ? palette.heading : palette.subheading;
       lines.push({
         text: prefix + headingColor + style.bold + headingText + '\x1b[0m',
         style: prefixStyle,
@@ -242,7 +241,7 @@ export function formatTextLines(
       const body = hasFormatting ? formatted : quoteText;
       // Vertical bar + space, then dim grey body. Skip if the body is
       // empty so an isolated `>` renders cleanly.
-      const barred = PRIMARY_COLOR + '│' + '\x1b[0m' + (body ? ' ' + fg.rgb(160, 160, 160) + body + '\x1b[0m' : '');
+      const barred = PRIMARY_COLOR + '│' + '\x1b[0m' + (body ? ' ' + palette.secondaryText + body + '\x1b[0m' : '');
       lines.push({
         text: prefix + indent + barred,
         style: prefixStyle,
@@ -400,7 +399,7 @@ export function formatMessage(
   if (role === 'user') {
     firstPrefix = PRIMARY_COLOR + '\u258c ' + style.reset;
   } else if (role === 'assistant') {
-    lines.push({ text: PRIMARY_COLOR + '\u254c\u254c' + style.reset + fg.rgb(120, 120, 120) + ' codeep' + style.reset, style: '', raw: true });
+    lines.push({ text: PRIMARY_COLOR + '\u254c\u254c' + style.reset + palette.assistantLabel + ' codeep' + style.reset, style: '', raw: true });
     firstPrefix = ' ';
   } else {
     firstPrefix = PRIMARY_COLOR + '\u25b8 ' + style.reset;

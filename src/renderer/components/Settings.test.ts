@@ -222,6 +222,14 @@ describe('handleSettingsKey — rate-limit side effect', () => {
   });
 });
 
+describe('the Omarchy row', () => {
+  it('is not offered off Omarchy, where it would switch nothing', () => {
+    // This worker's HOME has no ~/.local/state/omarchy; Settings.omarchy.test.ts
+    // covers the row where there is one.
+    expect(SETTINGS.some(s => s.key === 'followOmarchyTheme')).toBe(false);
+  });
+});
+
 describe('select options match the values they read back', () => {
   /**
    * A select whose current value is not among its own options is broken, and

@@ -4,19 +4,27 @@
  */
 
 import { fg } from './ansi';
+import { palette } from './palette';
 
+/**
+ * The colour of each token kind. Getters over the palette, so a code block
+ * formatted after an Omarchy theme switch is painted in the new theme's
+ * colours; a plain object of strings would have kept One Dark forever.
+ * `variable` and `punctuation` are basic ANSI colours, which the terminal
+ * already themes by itself.
+ */
 export const SYNTAX = {
-  keyword:     fg.rgb(198, 120, 221),
-  string:      fg.rgb(152, 195, 121),
-  number:      fg.rgb(209, 154, 102),
-  comment:     fg.rgb(92, 99, 112),
-  function:    fg.rgb(97, 175, 239),
-  type:        fg.rgb(229, 192, 123),
-  operator:    fg.rgb(86, 182, 194),
+  get keyword()  { return palette.syntaxKeyword; },
+  get string()   { return palette.syntaxString; },
+  get number()   { return palette.syntaxNumber; },
+  get comment()  { return palette.syntaxComment; },
+  get function() { return palette.syntaxFunction; },
+  get type()     { return palette.syntaxType; },
+  get operator() { return palette.syntaxOperator; },
   variable:    fg.white,
   punctuation: fg.gray,
-  codeFrame:   fg.rgb(100, 105, 115),
-  codeLang:    fg.rgb(150, 155, 165),
+  get codeFrame() { return palette.codeFrame; },
+  get codeLang()  { return palette.codeLang; },
 };
 
 const KEYWORDS: Record<string, string[]> = {
@@ -48,7 +56,7 @@ export function highlightCode(code: string, lang: string): string {
       if (line.startsWith('+++') || line.startsWith('---')) return SYNTAX.codeLang + line + '\x1b[0m';
       if (line.startsWith('@@')) return SYNTAX.operator + line + '\x1b[0m';
       if (line.startsWith('+')) return SYNTAX.string + line + '\x1b[0m';   // green — additions
-      if (line.startsWith('-')) return fg.rgb(224, 108, 117) + line + '\x1b[0m'; // red — removals
+      if (line.startsWith('-')) return palette.syntaxRemoved + line + '\x1b[0m'; // red — removals
       return line;
     }).join('\n');
   }

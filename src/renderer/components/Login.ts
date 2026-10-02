@@ -9,9 +9,9 @@ import { createBox, centerBox } from './Box';
 import { spawn } from 'child_process';
 import clipboardy from 'clipboardy';
 
-// Primary color: #f02a30 (Codeep red)
-const PRIMARY_COLOR = fg.rgb(240, 42, 48);
-const PRIMARY_BRIGHT = fg.rgb(255, 80, 85);
+// Codeep red and its bright variant, read live from the palette so an
+// Omarchy theme switch recolours this screen too.
+import { PRIMARY_COLOR, PRIMARY_BRIGHT } from './uiConstants';
 
 export interface LoginOptions {
   onSubmit: (apiKey: string) => void;

@@ -40,6 +40,16 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
   `reporting.md`), which `read_file` cannot reach for a skill outside the
   project. Only files inside that directory are read.
 
+- **Codeep follows the Omarchy theme.** On Omarchy, the colours Codeep
+  paints itself — the brand red, the greys of the chat, the code colours —
+  come from the current theme's `colors.toml` and change when the theme
+  does, in a session that is already open, the way Claude Code, OpenCode and
+  Pi do. A theme colour too faint to read as text is darkened or lightened
+  until it reads, so light themes stay legible. **Follow Omarchy theme** in
+  `/settings` (On by default, shown only on Omarchy) turns it off. Codeep
+  only reads Omarchy's state; it writes nothing to your Omarchy config.
+  Elsewhere every colour is exactly what it was.
+
 ### Fixed
 
 - **Startup asks its questions one at a time.** In a folder that is not a
