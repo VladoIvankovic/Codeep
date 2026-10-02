@@ -4,6 +4,7 @@
 
 import { config, type ConfigSchema } from '../../config/index';
 import { updateRateLimits } from '../../utils/ratelimit';
+import { pinAgentConfirmation, pinAgentInteractive } from '../agentConfirmation';
 
 // Primary color: #f02a30 (Codeep red)
 
@@ -38,6 +39,11 @@ export interface SettingItem {
  */
 function writeSetting(setting: SettingItem, value: string | number | boolean): void {
   config.set(setting.key, value as ConfigSchema[typeof setting.key]);
+  // A value chosen here is a decision about this run too, so it ends what
+  // `codeep --yolo` pinned for it (agentConfirmation.ts). Otherwise the row
+  // would say Always while nothing asks until the process exits.
+  if (setting.key === 'agentConfirmation') pinAgentConfirmation(null);
+  if (setting.key === 'agentInteractive') pinAgentInteractive(null);
 }
 
 export const SETTINGS: SettingItem[] = [

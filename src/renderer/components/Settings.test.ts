@@ -17,9 +17,16 @@
  * the value-shape contract asserted here will fail.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { handleSettingsKey, SETTINGS, type SettingsState } from './Settings';
 import { config } from '../../config/index';
+import {
+  agentConfirmationMode,
+  agentInteractiveMode,
+  isAgentConfirmationPinned,
+  pinAgentConfirmation,
+  pinAgentInteractive,
+} from '../agentConfirmation';
 
 const initialState = (overrides: Partial<SettingsState> = {}): SettingsState => ({
   selectedIndex: 0,
@@ -148,6 +155,43 @@ describe('handleSettingsKey — select cycling', () => {
     const r = handleSettingsKey('enter', false, initialState({ selectedIndex: idx }));
     expect(config.get('agentMode')).toBe('manual');
     expect(r.notify).toContain('Manual');
+  });
+});
+
+describe('handleSettingsKey — after `codeep --yolo`', () => {
+  // --yolo pins both for the process. Picking a value in the row is a
+  // decision about this run too: the row must not say Always while nothing
+  // asks until the process exits.
+  beforeEach(() => {
+    config.set('agentConfirmation', 'dangerous');
+    config.set('agentInteractive', false);
+    pinAgentConfirmation('never');
+    pinAgentInteractive(false);
+  });
+
+  afterEach(() => {
+    pinAgentConfirmation(null);
+    pinAgentInteractive(null);
+  });
+
+  it('ends the pin of the setting that was changed, and only that one', () => {
+    // Dangerous → Always.
+    handleSettingsKey('enter', false, initialState({ selectedIndex: indexOf('agentConfirmation') }));
+    expect(config.get('agentConfirmation')).toBe('always');
+    expect(agentConfirmationMode()).toBe('always');
+    expect(isAgentConfirmationPinned()).toBe(false);
+    expect(agentInteractiveMode()).toBe(false);
+
+    // Off → On.
+    handleSettingsKey('right', false, initialState({ selectedIndex: indexOf('agentInteractive') }));
+    expect(agentInteractiveMode()).toBe(true);
+  });
+
+  it('keeps both pins through a change to any other setting', () => {
+    config.set('agentMode', 'on');
+    handleSettingsKey('right', false, initialState({ selectedIndex: indexOf('agentMode') }));
+    expect(agentConfirmationMode()).toBe('never');
+    expect(agentInteractiveMode()).toBe(false);
   });
 });
 
