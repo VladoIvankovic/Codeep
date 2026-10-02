@@ -11,6 +11,55 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [Unreleased]
+
+> TL;DR — `codeep --yolo -- "<prompt>"` starts Codeep for a launcher, with nothing left to answer, and skills in `~/.agents/skills` load, so Omarchy's own skills work in Codeep.
+
+### Added
+
+- **`codeep -- <prompt>`** starts a new session with `<prompt>` as its first
+  message, as if it had been typed (also `-p <prompt>` and `--prompt
+  <prompt>`). Everything after `--` is the prompt, so `codeep -- review` asks
+  the model and does not run `codeep review`. A missing or doubled prompt is
+  an error rather than a guess.
+- **`codeep --yolo`** starts without stopping to ask, for this launch only:
+  agent actions run without confirmation, a vague task gets no clarifying
+  questions, the folder is used as the project with read & write access, and
+  a new session starts. Nothing is saved, so the next plain `codeep` asks as
+  before; changing Agent Confirmation or Agent Interactive Mode in
+  `/settings` ends `--yolo`'s hold on that setting. Writes to files that
+  decide what runs later are still confirmed, and a workspace's own MCP
+  servers still ask to be trusted. The status bar shows **YOLO** while
+  confirmations are off.
+- **Skills in `~/.agents/skills` load**, the directory agent tools share and
+  where Omarchy links its skills. When two skills have the same name, the
+  project's `.codeep/skills` wins, then `~/.codeep/skills`, then
+  `~/.agents/skills`. `/skills bundles` names the directory each came from.
+- **A skill can send the agent to the files beside it.** `invoke_skill` now
+  gives the skill's directory and reads a file from it (a guide such as
+  `reporting.md`), which `read_file` cannot reach for a skill outside the
+  project. Only files inside that directory are read.
+
+### Fixed
+
+- **Startup asks its questions one at a time.** In a folder that is not a
+  repository but has its own MCP servers, the question whether to trust them
+  could replace "Set as Project?", leaving that one unanswered and the
+  startup stopped. It now comes after the startup questions, and a launch
+  prompt is sent after it.
+- **Folded and literal descriptions.** A `SKILL.md` whose `description:` was
+  written as a `>` or `|` block, as Omarchy's are, loaded with ">" as its
+  description.
+- **The agent sees a skill's whole description.** The catalog cut every entry
+  at 200 characters, mid-word, which dropped the part of a long description
+  that says when to use the skill.
+
+### Security
+
+- **Writing to `.agents/skills/` is confirmed in every mode**, as
+  `.codeep/skills/` already was: every Codeep session loads the skills in
+  `~/.agents/skills`.
+
 ## [3.8.1] — 2026-09-30
 
 > TL;DR — While a thinking model works between steps, the agent screen now says it is waiting for the model and for how long, not "Listing" a tool that already finished. Auto-verify's checks show as checks.

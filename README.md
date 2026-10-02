@@ -680,10 +680,16 @@ Beyond the built-in skills and custom slash commands, Codeep now supports
 **structured skill bundles** — directory-based capability packs the agent
 discovers and invokes on its own.
 
-A bundle is a directory `.codeep/skills/<name>/SKILL.md` (project-scoped)
-or `~/.codeep/skills/<name>/SKILL.md` (global). The file is Markdown with
-a YAML frontmatter header — the format is a **superset of Claude Code
-skills**, so existing skills drop in unchanged:
+A bundle is a directory with a `SKILL.md` in one of three places. When two
+have the same name, the first one here wins:
+
+1. `.codeep/skills/<name>/SKILL.md` — project-scoped
+2. `~/.codeep/skills/<name>/SKILL.md` — global, Codeep's own
+3. `~/.agents/skills/<name>/SKILL.md` — global, shared with other agent
+   tools (Omarchy links its skills in here)
+
+The file is Markdown with a YAML frontmatter header — the format is a
+**superset of Claude Code skills**, so existing skills drop in unchanged:
 
 ```markdown
 ---
@@ -702,6 +708,11 @@ version: 0.1.0
 Run the test suite, build, then `npm run deploy:staging`. If the build
 fails, surface the error and stop — don't deploy a broken build.
 ```
+
+A long `description` can also be a folded (`>`) or literal (`|`) block.
+Files a skill refers to, such as a `reporting.md` guide, sit next to its
+`SKILL.md`: `invoke_skill` tells the agent the skill's directory and reads
+them from there.
 
 The agent gets the bundle catalog injected into its system prompt on
 every iteration and can invoke any bundle via the `invoke_skill` tool:
@@ -1212,6 +1223,8 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 | `codeep account sync` | Pull API keys + personalities + commands from codeep.dev → local |
 | `codeep account push` | Push local API keys + personalities + commands → codeep.dev |
 | `codeep review [files…]` | Offline, deterministic code review for CI — markdown or `--json`, `--fail-on <error\|warning\|info\|none>` sets the exit code. No API key needed. |
+| `codeep -- <prompt>` | Start a new session and send `<prompt>` as its first message (also `-p <prompt>` / `--prompt <prompt>`). Everything after `--` is the prompt, so `codeep -- review` asks the model rather than running `codeep review`. Startup's own questions come first: the project and access questions without `--yolo`, and with or without it, trusting a workspace's own MCP servers the first time. |
+| `codeep --yolo` | Start without stopping to ask, for this launch only — for launchers that open Codeep unattended (`codeep --yolo -- "<prompt>"`). Agent actions run without confirmation (Agent Confirmation: Never) and without clarifying questions first (Agent Interactive Mode: Off), the folder is used as the project with read & write access, and a new session starts. Nothing is saved: the next plain `codeep` asks as before, and changing either setting in `/settings` ends `--yolo`'s hold on it. Writes to files that decide what runs later (`.git/config`, git hooks, MCP server lists) are still confirmed, and a workspace's own MCP servers (`.mcp.json`) still ask to be trusted the first time, before the prompt is sent. The status bar shows **YOLO** while confirmations are off. |
 
 ### Authentication
 
