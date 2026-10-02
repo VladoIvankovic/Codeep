@@ -157,6 +157,12 @@ export interface ConfigSchema {
   agentMaxDuration: number; // Max agent duration in minutes (default: 20)
   agentApiTimeout: number; // Base API timeout for agent in ms (default: 90000, dynamically adjusted)
   agentInteractive: boolean; // Show interactive mode (default: true)
+  /** On an Omarchy desktop, paint the TUI's truecolour roles (brand colour,
+   *  greys, code colours) from the current Omarchy theme and follow it when
+   *  it changes — renderer/omarchyTheme.ts. Default true: Omarchy users
+   *  expect every app to switch with the desktop. Off keeps Codeep's own
+   *  colours. Does nothing anywhere else. */
+  followOmarchyTheme: boolean;
   projectPermissions: ProjectPermission[];
   /** @deprecated Legacy PLAINTEXT key store. Kept only so the one-time
    *  migration into secure storage can read it; emptied afterwards. New keys
@@ -381,6 +387,7 @@ function createConfig(): Conf<ConfigSchema> {
     agentMaxDuration: 480,
     agentApiTimeout: 600000,
     agentInteractive: true,
+    followOmarchyTheme: true,
     protocol: 'openai',
     plan: 'lite',
     language: 'en',

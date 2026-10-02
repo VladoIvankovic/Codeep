@@ -5,6 +5,7 @@
 import { config, type ConfigSchema } from '../../config/index';
 import { updateRateLimits } from '../../utils/ratelimit';
 import { pinAgentConfirmation, pinAgentInteractive } from '../agentConfirmation';
+import { isOmarchy, reapplyOmarchyTheme } from '../omarchyTheme';
 
 // Primary color: #f02a30 (Codeep red)
 
@@ -44,7 +45,27 @@ function writeSetting(setting: SettingItem, value: string | number | boolean): v
   // would say Always while nothing asks until the process exits.
   if (setting.key === 'agentConfirmation') pinAgentConfirmation(null);
   if (setting.key === 'agentInteractive') pinAgentInteractive(null);
+  // Switching it shows at once: the palette is re-read and the App repaints
+  // (it listens for palette changes), rather than waiting for the next
+  // theme switch or a restart.
+  if (setting.key === 'followOmarchyTheme') reapplyOmarchyTheme();
 }
+
+/**
+ * The Omarchy row, offered only on an Omarchy desktop — anywhere else it
+ * would be a switch that does nothing. Decided once, when the settings
+ * screen's module loads: Omarchy does not come and go during a session.
+ */
+const OMARCHY_SETTINGS: SettingItem[] = isOmarchy() ? [{
+  key: 'followOmarchyTheme',
+  label: 'Follow Omarchy theme',
+  getValue: () => config.get('followOmarchyTheme') !== false,
+  type: 'select',
+  options: [
+    { value: true, label: 'On' },
+    { value: false, label: "Off (Codeep's own colours)" },
+  ],
+}] : [];
 
 export const SETTINGS: SettingItem[] = [
   {
@@ -354,6 +375,7 @@ export const SETTINGS: SettingItem[] = [
       { value: true, label: 'On (push/sync to codeep.dev)' },
     ],
   },
+  ...OMARCHY_SETTINGS,
 ];
 
 export interface SettingsState {

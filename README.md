@@ -1356,6 +1356,7 @@ With write access enabled:
 | Agent Branch | Off | Create new branch for agent commits |
 | Agent Auto-Verify | Off | `Off`, `Build only`, `Typecheck only`, `Test only`, or `Build + Typecheck + Test` |
 | Agent Max Fix Attempts | 1 | Max attempts to auto-fix errors when Auto-Verify is enabled. More than 1 usually means the agent is stuck — bail and let the user decide. |
+| Follow Omarchy theme | On | On [Omarchy](https://omarchy.org) only (the row is not shown elsewhere): paint Codeep's own colours — the brand red, the greys, the code colours — from the current Omarchy theme, and switch with it while Codeep runs. `Off` keeps Codeep's colours. Codeep only reads `~/.local/state/omarchy/current/theme/colors.toml`; it also reloads on `SIGUSR2`, as OpenCode does. |
 
 ## Usage Examples
 

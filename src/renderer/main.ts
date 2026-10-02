@@ -61,6 +61,7 @@ import type { McpServer } from '../acp/protocol';
 import { symlinkedCodeepNotice } from '../utils/projectPaths';
 import { parseLaunchArgs } from './cliArgs';
 import { agentConfirmationMode, pinAgentConfirmation, pinAgentInteractive, isAgentConfirmationPinned } from './agentConfirmation';
+import { followOmarchyTheme, type OmarchyThemeWatch } from './omarchyTheme';
 
 // ─── Global state ─────────────────────────────────────────────────────────────
 
@@ -202,6 +203,8 @@ export function startTrustedWorkspaceMcp(
 let isAgentRunningFlag = false;
 /** Set once the phone is allowed to send instructions; null when it is not. */
 let telegramInbox: { stop: () => void; drain: () => void } | null = null;
+/** Following the Omarchy desktop theme; null when this is not Omarchy. */
+let omarchyTheme: OmarchyThemeWatch | null = null;
 let agentAbortController: AbortController | null = null;
 let pendingInteractiveContext: PendingInteractiveContext | null = null;
 
@@ -864,6 +867,14 @@ Commands (in chat):
     pinAgentInteractive(false);
   }
 
+  // On Omarchy, paint in the desktop theme's colours and follow it when it
+  // changes (omarchyTheme.ts). Only here, where the TUI starts: acp, review,
+  // hook and account have all returned by now, and a server or a CI run has
+  // no business holding a watch on the desktop's theme. Before the login
+  // screen, so a first run is in the theme from its first frame.
+  omarchyTheme = followOmarchyTheme({ enabled: () => config.get('followOmarchyTheme') !== false });
+  if (omarchyTheme) process.on('exit', () => omarchyTheme?.stop());
+
   await loadAllApiKeys();
   // Re-announce this device to the dashboard. Cheap, fire-and-forget, and it
   // repairs a machine whose one registration at link time happened to fail —
@@ -1252,6 +1263,11 @@ async function gracefulShutdown() {
       setTimeout(() => { clearInterval(check); resolve(); }, 5000);
     });
   }
+
+  // Stop following the theme before the App goes: nothing is left to
+  // recolour, and the watches and the SIGUSR2 handler are the process's to
+  // give back.
+  omarchyTheme?.stop();
 
   // Now restore terminal after agent has fully stopped
   if (app) app.stop();

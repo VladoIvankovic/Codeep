@@ -8,6 +8,7 @@ import { Input, LineEditor, KeyEvent } from './Input';
 import { fg, bg, style } from './ansi';
 import { getActionColor, formatActionTarget, getActionLabel } from './components/ActionFormatting';
 import { PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES } from './components/uiConstants';
+import { onPaletteChange } from './palette';
 import { MASCOT_FRAMES, layoutLogoWithMascot, introMascotFrame } from './components/mascot';
 import { bottomPanelHeight, chatLayout, messageOffsets, scrollOffsetForTarget, scrollWindow, formatTokenCount, statusBarRightHint, activePanel, computeInputDisplay, agentProgressBar, truncateNotification, shouldShowPasteDialog, buildPasteInfo, type LayoutSnapshot } from './layout';
 import {
@@ -150,6 +151,8 @@ export class App {
   
   // Render scheduling
   private pendingRender = false;
+  /** Stops listening for palette changes; set while the App is started. */
+  private unsubscribePalette: (() => void) | null = null;
 
   // Spinner animation state
   private spinnerFrame = 0;
@@ -321,7 +324,24 @@ export class App {
       this.messageCache = new Array(this.messages.length).fill(null);
       this.scheduleRender();
     });
+    this.unsubscribePalette = onPaletteChange(() => this.repaintInNewPalette());
     
+    this.scheduleRender();
+  }
+
+  /**
+   * Redraw everything in the palette that is current now — an Omarchy theme
+   * switch, or "Follow Omarchy theme" switched in /settings.
+   *
+   * Everything the render pass draws reads its colours as it draws, so a
+   * render is most of it. The exception is the transcript: each message is
+   * formatted once and kept, ANSI and all, in messageCache, and a cached
+   * message would keep the old theme's colours for the rest of the session.
+   * The terminal itself needs no clearing — every recoloured cell now
+   * differs from what the diff renderer last wrote, so it is rewritten.
+   */
+  repaintInNewPalette(): void {
+    this.messageCache = new Array(this.messages.length).fill(null);
     this.scheduleRender();
   }
   
@@ -329,6 +349,8 @@ export class App {
    * Stop the application
    */
   stop(): void {
+    this.unsubscribePalette?.();
+    this.unsubscribePalette = null;
     this.stopSpinner();
     if (this.notificationTimeout) clearTimeout(this.notificationTimeout);
     if (this.introInterval) clearInterval(this.introInterval);

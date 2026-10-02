@@ -6,10 +6,17 @@
  * import them without re-declaring (which would let the palette drift
  * between files).
  */
-import { fg } from '../ansi';
 
-/** Brand red — used for the logo, the agent-panel title, and accents. */
-export const PRIMARY_COLOR = fg.rgb(240, 42, 48);
+/**
+ * Brand red — used for the logo, the agent-panel title, and accents — and
+ * its bright variant for selected rows and modal titles.
+ *
+ * They live in ../palette now, which can swap them for an Omarchy theme's
+ * accent while Codeep runs; re-exported here because a hundred-odd call
+ * sites already import them from this module. A re-export is a live binding,
+ * so each read sees the current colour, not the one at import time.
+ */
+export { PRIMARY_COLOR, PRIMARY_BRIGHT } from '../palette';
 
 /** Spinner frames for the agent progress panel (8-step rotation). */
 export const SPINNER_FRAMES = ['▖', '▘', '▝', '▗', '▌', '▀', '▐', '▄'];
