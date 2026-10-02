@@ -609,7 +609,7 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
     title: 'Extensions & MCP (2.0)',
     items: [
       { key: '/mcp', description: 'List connected MCP servers + their tools' },
-      { key: '/mcp browse [id]', description: 'Browse marketplace (12 servers) or show one' },
+      { key: '/mcp browse [id]', description: 'Browse the MCP marketplace, or show one server' },
       { key: '/mcp install <id> [args]', description: 'Install a marketplace server into this project' },
       { key: '/mcp add <name> <cmd>', description: 'Add a custom MCP server (npx, binary, etc.)' },
       { key: '/mcp remove <name>', description: 'Remove a project-scoped MCP server' },
