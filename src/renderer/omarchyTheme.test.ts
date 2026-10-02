@@ -6,6 +6,7 @@ import {
   applyOmarchyTheme,
   contrastRatio,
   followOmarchyTheme,
+  greyContrast,
   isOmarchy,
   loadOmarchyPalette,
   mix,
@@ -16,7 +17,7 @@ import {
   reapplyOmarchyTheme,
   type OmarchyThemeWatch,
 } from './omarchyTheme';
-import { DEFAULT_PALETTE, getPalette, palette, resetPalette, type PaletteRole, type Rgb } from './palette';
+import { DEFAULT_PALETTE, TERMINAL_DEFAULTS, getPalette, palette, resetPalette, type PaletteRole, type Rgb } from './palette';
 
 /** A dark theme whose colours all read on its background, so the mapping is
  *  visible without the legibility nudge in the way. */
@@ -56,10 +57,13 @@ const hex = (h: string): Rgb => parseHexColor(h)!;
 /** The roles that are text someone reads, as opposed to separators and frames. */
 const TEXT_ROLES = (Object.keys(DEFAULT_PALETTE) as PaletteRole[])
   .filter(r => r !== 'separator' && r !== 'codeFrame' && r !== 'label');
+/** The text read as sentences rather than as a word or a token. */
+const SENTENCE_ROLES = ['hint', 'secondaryText', 'warning', 'warningToast', 'attention'] as const;
 /** The greys, in the order they get brighter in the default palette. */
 const GREYS: PaletteRole[] = [
   'separator', 'label', 'assistantLabel', 'modelName', 'strikethrough', 'hint', 'secondaryText', 'providerName',
 ];
+const ALL_ROLES = [...Object.keys(DEFAULT_PALETTE), ...Object.keys(TERMINAL_DEFAULTS)].sort();
 
 afterEach(() => {
   resetPalette();
@@ -126,7 +130,6 @@ describe('parseHexColor', () => {
 describe('paletteFromOmarchy — a dark theme', () => {
   const roles = paletteFromOmarchy(parseColorsToml(DARK));
   const bg = hex('#101010');
-  const fg = hex('#e0e0e0');
 
   it('takes the brand colour from accent, and its bright variant 35% toward the foreground', () => {
     expect(roles.primary).toEqual(hex('#7aa2f7'));
@@ -134,15 +137,19 @@ describe('paletteFromOmarchy — a dark theme', () => {
   });
 
   it('mixes the greys from background toward foreground, faintest first', () => {
-    expect(roles.separator).toEqual(mix(bg, fg, 0.30));
-    expect(roles.label).toEqual(mix(bg, fg, 0.40));
-    expect(roles.assistantLabel).toEqual(mix(bg, fg, 0.48));
-    expect(roles.hint).toEqual(mix(bg, fg, 0.66));
-    expect(roles.providerName).toEqual(mix(bg, fg, 0.82));
-    // On a near-black background with a light grey foreground that lands
+    // On a near-black background with a light grey foreground they land
     // next to Codeep's own greys, which were chosen for exactly that.
-    expect(roles.separator).toEqual([78, 78, 78]);
-    expect(roles.label).toEqual([99, 99, 99]);
+    expect(roles.separator).toEqual([76, 76, 76]);
+    expect(roles.label).toEqual([94, 94, 94]);
+    expect(roles.assistantLabel).toEqual([115, 115, 115]);
+    expect(roles.hint).toEqual([147, 147, 147]);
+    expect(roles.providerName).toEqual([192, 192, 192]);
+  });
+
+  it('paints code punctuation a readable grey instead of bright black', () => {
+    // Pi's syntaxPunctuation is its muted text, the hint grey.
+    expect(roles.syntaxPunctuation).toEqual([153, 153, 153]);
+    expect(contrastRatio(roles.syntaxPunctuation!, bg)).toBeGreaterThanOrEqual(3);
   });
 
   it('paints code the way Omarchy\'s other templates do', () => {
@@ -166,8 +173,34 @@ describe('paletteFromOmarchy — a dark theme', () => {
     expect(roles.subheading).toEqual(hex('#ad8ee6'));
   });
 
+  it('takes the toast, the confirm modal and the picker prompts from yellow', () => {
+    expect(roles.warningToast).toEqual(hex('#e0af68'));
+    expect(roles.attention).toEqual(hex('#e0af68'));
+  });
+
+  it('fills the YOLO badge with yellow, under whichever text reads best on it', () => {
+    expect(roles.yoloBadge).toEqual(hex('#e0af68'));
+    // Black beats the theme's near-black background and its light foreground.
+    expect(roles.yoloBadgeText).toEqual([0, 0, 0]);
+  });
+
   it('defines every role', () => {
-    expect(Object.keys(roles).sort()).toEqual(Object.keys(DEFAULT_PALETTE).sort());
+    expect(Object.keys(roles).sort()).toEqual(ALL_ROLES);
+  });
+});
+
+describe('greyContrast', () => {
+  it('gives a theme like the terminal the greys were picked on each default back', () => {
+    const roles = paletteFromOmarchy({ background: '#1e1e1e', foreground: '#cccccc' });
+    for (const role of GREYS) expect(roles[role], role).toEqual(DEFAULT_PALETTE[role]);
+  });
+
+  it('keeps a grey at its floor or above, and never past the body text', () => {
+    const hint = DEFAULT_PALETTE.hint;
+    expect(greyContrast(hint, 4.5, 6.66)).toBeGreaterThanOrEqual(4.5);
+    expect(greyContrast(hint, 4.5, 6.66)).toBeLessThan(6.66);
+    // A theme without the contrast for the floor gets its foreground.
+    expect(greyContrast(hint, 4.5, 3.2)).toBe(3.2);
   });
 });
 
@@ -180,13 +213,28 @@ describe('paletteFromOmarchy — a light theme', () => {
       expect(contrastRatio(roles[role]!, bg), role).toBeGreaterThanOrEqual(3);
     }
     expect(contrastRatio(roles.label!, bg)).toBeGreaterThanOrEqual(2.5);
+    expect(contrastRatio(roles.syntaxPunctuation!, bg)).toBeGreaterThanOrEqual(3);
   });
 
-  it('keeps the greys in order: each at least as far from the background as the one before', () => {
+  it('holds what is read as a sentence to 4.5:1', () => {
+    for (const role of SENTENCE_ROLES) {
+      expect(contrastRatio(roles[role]!, bg), role).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('keeps the greys in order and apart, rather than pushing several onto one floor', () => {
+    // A fixed mix share reads fainter on a light background, and 40–60% of
+    // the way to catppuccin-latte's foreground all fall under 3:1.
     const contrasts = GREYS.map(role => contrastRatio(roles[role]!, bg));
     for (let i = 1; i < contrasts.length; i++) {
-      expect(contrasts[i], GREYS[i]).toBeGreaterThanOrEqual(contrasts[i - 1]);
+      expect(contrasts[i], GREYS[i]).toBeGreaterThan(contrasts[i - 1] + 0.2);
     }
+  });
+
+  it('puts black, not the near-white background, on the YOLO badge', () => {
+    expect(roles.yoloBadge).toEqual(hex('#df8e1d'));
+    expect(roles.yoloBadgeText).toEqual([0, 0, 0]);
+    expect(contrastRatio(roles.yoloBadgeText!, roles.yoloBadge!)).toBeGreaterThanOrEqual(4.5);
   });
 
   it('darkens the greys rather than reusing the dark-terminal ones', () => {
@@ -202,6 +250,27 @@ describe('paletteFromOmarchy — a light theme', () => {
     expect(contrastRatio(roles.syntaxType!, bg)).toBeGreaterThanOrEqual(3);
     expect(roles.syntaxFunction).toEqual(hex('#1e66f5'));
     expect(roles.syntaxRemoved).toEqual(hex('#d20f39'));
+  });
+});
+
+describe('paletteFromOmarchy — odd themes', () => {
+  it('moves the brand colour to blue when the accent is the foreground (kanagawa)', () => {
+    // Otherwise the selected row of every menu is the colour of the others.
+    const roles = paletteFromOmarchy({ accent: '#dcd7ba', foreground: '#dcd7ba', background: '#1f1f28', blue: '#7e9cd8' });
+    expect(roles.primary).toEqual(hex('#7e9cd8'));
+    expect(roles.primaryBright).toEqual(mix(hex('#7e9cd8'), hex('#dcd7ba'), 0.35));
+  });
+
+  it('keeps an accent that only shares the foreground\'s brightness, as Claude Code does', () => {
+    // tokyo-night: blue against grey-blue, apart by hue if not by contrast.
+    const roles = paletteFromOmarchy({ accent: '#7aa2f7', foreground: '#a9b1d6', background: '#1a1b26', blue: '#2ac3de' });
+    expect(roles.primary).toEqual(hex('#7aa2f7'));
+    expect(roles.primaryBright).toEqual(mix(hex('#7aa2f7'), hex('#a9b1d6'), 0.35));
+  });
+
+  it('writes the YOLO badge in white on a dark "yellow" (matte-black\'s is red)', () => {
+    const roles = paletteFromOmarchy({ background: '#121212', foreground: '#bebebe', yellow: '#b91c1c' });
+    expect(roles.yoloBadgeText).toEqual([255, 255, 255]);
   });
 });
 
@@ -237,7 +306,7 @@ describe('paletteFromOmarchy — incomplete themes', () => {
     expect(roles.syntaxRemoved).toEqual([255, 0, 0]);
     expect(roles.syntaxKeyword).toEqual([170, 0, 255]);
     expect(roles.syntaxComment).toEqual([136, 136, 136]);
-    expect(roles.separator).toEqual(mix([0, 0, 0], [255, 255, 255], 0.3));
+    expect(roles.separator).toEqual(paletteFromOmarchy({ background: '#000000', foreground: '#ffffff' }).separator);
   });
 });
 
@@ -315,11 +384,18 @@ describe('loadOmarchyPalette', () => {
   });
 });
 
+/**
+ * How many listeners each signal the config store's exit hook (when-exit)
+ * also catches has. A handler of Codeep's own that kept the process alive
+ * would leave that hook spent, and SIGTERM and SIGHUP would then no longer
+ * end the session.
+ */
+const SIGNALS = ['SIGUSR2', 'SIGTERM', 'SIGHUP', 'SIGINT'] as const;
+const signalListeners = () => SIGNALS.map(signal => process.listenerCount(signal));
+
 describe('followOmarchyTheme off Linux', () => {
-  it('does nothing, not even install a signal handler', () => {
-    const before = process.listenerCount('SIGUSR2');
+  it('does nothing', () => {
     expect(followOmarchyTheme({ stateDir, platform: 'darwin' })).toBeNull();
-    expect(process.listenerCount('SIGUSR2')).toBe(before);
     expect(palette.primary).toBe(DEFAULT_PRIMARY);
     expect(isOmarchy('darwin', stateDir)).toBe(false);
   });
@@ -330,9 +406,7 @@ describe('followOmarchyTheme off Linux', () => {
 // being replaced differently. The parsing and mapping above run everywhere.
 describe.skipIf(process.platform !== 'linux')('followOmarchyTheme', () => {
   it('does nothing when there is no Omarchy state directory', () => {
-    const before = process.listenerCount('SIGUSR2');
     expect(followOmarchyTheme({ stateDir: join(root, 'absent'), platform: 'linux' })).toBeNull();
-    expect(process.listenerCount('SIGUSR2')).toBe(before);
     expect(isOmarchy('linux', join(root, 'absent'))).toBe(false);
   });
 
@@ -342,13 +416,18 @@ describe.skipIf(process.platform !== 'linux')('followOmarchyTheme', () => {
     expect(palette.primary).toBe(DARK_ACCENT);
   });
 
+  it('handles no signal, so SIGTERM and SIGHUP still end the session', () => {
+    const before = signalListeners();
+    watch = followOmarchyTheme({ stateDir, platform: 'linux', debounceMs: 20 });
+    expect(signalListeners()).toEqual(before);
+  });
+
   it('follows a switch, which replaces the theme directory, and the one after it', async () => {
     watch = followOmarchyTheme({ stateDir, platform: 'linux', debounceMs: 20 });
     switchTheme(LIGHT);
     await waitFor(() => palette.primary === LIGHT_ACCENT);
     expect(palette.syntaxFunction).toBe(LIGHT_ACCENT);
-    // The watch on theme/ was on the directory that was just deleted; this
-    // only arrives if the watches were re-made.
+    // The watch on current/ outlives a switch, so it sees this one too.
     switchTheme(DARK);
     await waitFor(() => palette.primary === DARK_ACCENT);
   });
@@ -359,26 +438,40 @@ describe.skipIf(process.platform !== 'linux')('followOmarchyTheme', () => {
     await waitFor(() => palette.primary === LIGHT_ACCENT);
   });
 
-  it('reloads on SIGUSR2, the signal Omarchy sends OpenCode', () => {
-    // A debounce longer than the test, so only the signal can be what reloads.
-    watch = followOmarchyTheme({ stateDir, platform: 'linux', debounceMs: 60_000 });
-    writeFileSync(join(stateDir, 'theme', 'colors.toml'), LIGHT);
-    expect(palette.primary).toBe(DARK_ACCENT);
-    process.emit('SIGUSR2', 'SIGUSR2');
-    expect(palette.primary).toBe(LIGHT_ACCENT);
+  it('follows an edit in place after a switch, so the theme/ watch was made again on the new directory', async () => {
+    // current/ does not see a file inside theme/ change; only a watch on the
+    // theme/ that the switch moved into place does.
+    watch = followOmarchyTheme({ stateDir, platform: 'linux', debounceMs: 20 });
+    switchTheme(LIGHT);
+    await waitFor(() => palette.primary === LIGHT_ACCENT);
+    writeFileSync(join(stateDir, 'theme', 'colors.toml'), DARK);
+    await waitFor(() => palette.primary === DARK_ACCENT);
   });
 
-  it('survives the state directory disappearing, and picks it up again when it is back', async () => {
+  it('survives the state directory disappearing, and picks it up again by itself when it is back', async () => {
     watch = followOmarchyTheme({ stateDir, platform: 'linux', debounceMs: 20 });
     rmSync(stateDir, { recursive: true, force: true });
     await waitFor(() => palette.primary === DEFAULT_PRIMARY);
 
+    // Seen from the directory above, which is watched while current/ is gone.
     writeTheme(join(stateDir, 'theme'), LIGHT);
-    process.emit('SIGUSR2', 'SIGUSR2');
-    expect(palette.primary).toBe(LIGHT_ACCENT);
-    // Re-armed on the new directory: a switch is seen without another signal.
+    await waitFor(() => palette.primary === LIGHT_ACCENT);
+    // Re-armed on the new directory: the next switch is seen too.
     switchTheme(DARK);
     await waitFor(() => palette.primary === DARK_ACCENT);
+  });
+
+  it('picks it up again when the directories above it went too', async () => {
+    const deep = join(root, 'omarchy', 'current');
+    writeTheme(join(deep, 'theme'), DARK);
+    watch = followOmarchyTheme({ stateDir: deep, platform: 'linux', debounceMs: 20 });
+    rmSync(join(root, 'omarchy'), { recursive: true, force: true });
+    await waitFor(() => palette.primary === DEFAULT_PRIMARY);
+
+    mkdirSync(join(root, 'omarchy'));
+    await new Promise(resolve => setTimeout(resolve, 100));
+    writeTheme(join(deep, 'theme'), LIGHT);
+    await waitFor(() => palette.primary === LIGHT_ACCENT);
   });
 
   it('keeps Codeep\'s own colours while the setting is off, and applies the theme when it is turned on', () => {
@@ -393,12 +486,9 @@ describe.skipIf(process.platform !== 'linux')('followOmarchyTheme', () => {
     expect(getPalette()).toEqual(DEFAULT_PALETTE);
   });
 
-  it('stop() closes the watches and gives SIGUSR2 back', async () => {
-    const before = process.listenerCount('SIGUSR2');
-    const running = followOmarchyTheme({ stateDir, platform: 'linux', debounceMs: 20 })!;
-    expect(process.listenerCount('SIGUSR2')).toBe(before + 1);
-    running.stop();
-    expect(process.listenerCount('SIGUSR2')).toBe(before);
+  it('stop() closes the watches', async () => {
+    watch = followOmarchyTheme({ stateDir, platform: 'linux', debounceMs: 20 })!;
+    watch.stop();
 
     switchTheme(LIGHT);
     await new Promise(resolve => setTimeout(resolve, 200));
