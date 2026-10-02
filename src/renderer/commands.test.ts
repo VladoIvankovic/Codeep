@@ -53,7 +53,8 @@ import { handleCommand, type AppCommandContext } from './commands';
 import { runSkill, runAgentTask } from './agentExecution';
 import { undoAllActions, undoLastAction } from '../utils/agent';
 import { setPendingPlan, getPendingPlan, clearPendingPlan } from '../utils/planMode';
-import { config, saveSession, loadSession, getSessionsDir, setApiKey, clearApiKey } from '../config/index';
+import { config, saveSession, loadSession, getSessionsDir, setApiKey, clearApiKey, saveProfile, deleteProfile } from '../config/index';
+import { agentConfirmationMode, pinAgentConfirmation } from './agentConfirmation';
 import { PROVIDERS } from '../config/providers';
 import { App } from './App';
 import { registerSessionServers } from '../utils/mcpRegistry';
@@ -842,5 +843,41 @@ describe('the provider a fresh session starts on', () => {
 
     expect(config.get('provider')).toBe('google');
     expect(notices).toContain('Switched to Google AI');
+  });
+});
+
+// ─── a profile loaded under --yolo ───────────────────────────────────────────
+
+describe('a profile loaded during a --yolo run', () => {
+  // `codeep --yolo` pins Agent Confirmation to "never" for its process. A
+  // profile saved with "Always" wrote the setting but left the pin, so
+  // /settings said Always while the next delete_file ran without asking.
+  const before = config.get('agentConfirmation');
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'codeep-profile-yolo-'));
+    config.set('agentConfirmation', 'always');
+    saveProfile('careful');
+    config.set('agentConfirmation', 'never');
+    pinAgentConfirmation('never');
+  });
+
+  afterEach(() => {
+    pinAgentConfirmation(null);
+    deleteProfile('careful');
+    config.set('agentConfirmation', before ?? 'dangerous');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['/profile load careful', 'profile', ['load', 'careful']],
+    ['/profile careful', 'profile', ['careful']],
+    ['/model careful', 'model', ['careful']],
+  ])('%s brings its confirmations back for this run', async (_label, command, args) => {
+    const { ctx } = makeCtx(dir);
+    await handleCommand(command, args, ctx);
+    expect(config.get('agentConfirmation')).toBe('always');
+    expect(agentConfirmationMode()).toBe('always');
   });
 });

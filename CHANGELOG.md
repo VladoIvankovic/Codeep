@@ -11,23 +11,25 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
-## [Unreleased]
+## [3.9.0] — 2026-10-03
 
 > TL;DR — `codeep --yolo -- "<prompt>"` starts Codeep for a launcher with nothing left to answer, Omarchy's skills in `~/.agents/skills` load, and Codeep's colours follow the Omarchy theme.
 
 ### Added
 
 - **`codeep -- <prompt>`** starts a new session with `<prompt>` as its first
-  message, as if it had been typed (also `-p <prompt>` and `--prompt
-  <prompt>`). Everything after `--` is the prompt, so `codeep -- review` asks
-  the model and does not run `codeep review`. A missing or doubled prompt is
-  an error rather than a guess.
+  message (also `-p <prompt>` and `--prompt <prompt>`). Everything after `--`
+  is the prompt, so `codeep -- review` asks the model and does not run
+  `codeep review`, and a leading `/` is not run as a slash command either:
+  `codeep -- /commit` sends "/commit" to the model. A missing or doubled
+  prompt is an error rather than a guess.
 - **`codeep --yolo`** starts without stopping to ask, for this launch only:
   agent actions run without confirmation, a vague task gets no clarifying
   questions, the folder is used as the project with read & write access, and
   a new session starts. Nothing is saved, so the next plain `codeep` asks as
   before; changing Agent Confirmation or Agent Interactive Mode in
-  `/settings` ends `--yolo`'s hold on that setting. Writes to files that
+  `/settings` ends `--yolo`'s hold on that setting, and so does loading a
+  saved profile for Agent Confirmation. Writes to files that
   decide what runs later are still confirmed, and a workspace's own MCP
   servers still ask to be trusted. The status bar shows **YOLO** while
   confirmations are off.

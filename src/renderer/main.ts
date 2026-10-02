@@ -476,7 +476,9 @@ async function handleSubmit(message: string): Promise<void> {
  * as the user's message, with the loading state on, and a failure shown
  * rather than swallowed. App.submitInput does the same for the input box; the
  * phone and a launch prompt come through here, so neither is a different,
- * quieter path into the same run.
+ * quieter path into the same run. It is a message, not a command line: unlike
+ * the input box, a leading "/" is not run as a slash command, which suits an
+ * unattended launch — `codeep -- /commit` asks the model, it does not commit.
  */
 function submitAsTyped(text: string): void {
   app.addMessage({ role: 'user', content: text });

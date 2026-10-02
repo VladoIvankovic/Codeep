@@ -35,6 +35,7 @@ import {
   agentOpenAIWire,
 } from '../config/index';
 import { setTelegramToken, clearTelegramToken, hasTelegramToken } from '../utils/telegramCredentials';
+import { pinAgentConfirmation } from './agentConfirmation';
 import { getProjectContext } from '../utils/project';
 import { getCurrentVersion } from '../utils/update';
 import { getProviderList, getProvider, modelSupportsReasoningEffort, reasoningParamsFor, availableReasoningTiers, resolveReasoningTier, agentTurnReasoningNote, replacementModelFor, REASONING_TIERS, type ReasoningTier, type OpenAIWire } from '../config/providers';
@@ -46,6 +47,18 @@ import { buildSearchSnippets, parseKeepRecent, joinSessionName, parseTaskAddArgs
 import { resolveCommand } from './commands/registry';
 import { telemetryCommand } from '../commands/core/telemetry';
 import { keysyncCommand } from '../commands/core/keysync';
+
+/**
+ * A profile loaded here is a decision about this run too, like a value chosen
+ * in /settings: it ends what `codeep --yolo` pinned for Agent Confirmation
+ * (agentConfirmation.ts). Otherwise a profile saved with "Always" would show
+ * Always in /settings while nothing asked until the process exits. Profiles
+ * carry no Agent Interactive Mode, so that pin stays.
+ */
+function applyProfileForThisRun(profile: Parameters<typeof applyProfile>[0]): void {
+  applyProfile(profile);
+  pinAgentConfirmation(null);
+}
 
 // ─── Extended context for command handlers ────────────────────────────────────
 
@@ -128,7 +141,7 @@ export async function handleCommand(
       if (args[0] && args[0] !== 'pull') {
         const profileMatch = loadProfile(args[0]);
         if (profileMatch) {
-          applyProfile(profileMatch);
+          applyProfileForThisRun(profileMatch);
           ctx.app.notify(`${profileMatch.name}: ${profileMatch.provider} / ${profileMatch.model}`);
           break;
         }
@@ -2187,7 +2200,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         if (!name) { ctx.app.notify('Usage: /profile load <name>'); break; }
         const profile = loadProfile(name);
         if (!profile) { ctx.app.notify(`Profile not found: ${name}`); break; }
-        applyProfile(profile);
+        applyProfileForThisRun(profile);
         ctx.app.notify(`Profile loaded: ${profile.name} (${profile.provider} / ${profile.model})`);
         break;
       }
@@ -2203,7 +2216,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       // /profile <name> — shorthand for load
       const profile = loadProfile(subCmd);
       if (profile) {
-        applyProfile(profile);
+        applyProfileForThisRun(profile);
         ctx.app.notify(`Profile loaded: ${profile.name} (${profile.provider} / ${profile.model})`);
       } else {
         ctx.app.notify(`Unknown profile subcommand: ${subCmd}. Use save / load / delete / list`);

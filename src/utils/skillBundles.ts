@@ -376,15 +376,28 @@ export function formatBundlesForSysprompt(bundles: SkillBundle[]): string {
   ];
   let used = lines.join('\n').length;
   let skipped = 0;
-  for (const b of bundles) {
+  // The budget goes to the skills that win a name clash first — the project's,
+  // then ~/.codeep/skills, then the shared ~/.agents/skills — and only the
+  // listing keeps the order it was given. Spent in that order alone, a few
+  // shared skills with long descriptions crowded a project's own skill out of
+  // the catalog, so the agent never learned it existed.
+  const shared = join(homedir(), '.agents', 'skills') + sep;
+  const rank = (b: SkillBundle) => (b.scope === 'project' ? 0 : b.source.startsWith(shared) ? 2 : 1);
+  const byPrecedence = bundles.map((b, i) => ({ b, i })).sort((x, y) => rank(x.b) - rank(y.b) || x.i - y.i);
+  const kept = new Map<number, string>();
+  for (const { b, i } of byPrecedence) {
     const triggerHint = b.triggers.length > 0 ? ` _(triggers: ${b.triggers.slice(0, 3).join(', ')})_` : '';
     const line = `- **${b.name}** — ${b.description}${triggerHint}`;
     // At a word boundary, so the model is not handed half a word as a hint
     // — unless the "word" is so long that the line would lose it whole.
     const truncated = line.length > CAP_PER_LINE ? line.slice(0, CAP_PER_LINE).replace(/\s+\S{0,40}$/, '') + '…' : line;
     if (used + truncated.length + 1 > CAP_TOTAL) { skipped++; continue; }
-    lines.push(truncated);
+    kept.set(i, truncated);
     used += truncated.length + 1;
+  }
+  for (let i = 0; i < bundles.length; i++) {
+    const line = kept.get(i);
+    if (line !== undefined) lines.push(line);
   }
   if (skipped > 0) lines.push(`_(${skipped} more skills omitted to stay under the catalog budget — use \`/skills bundles\` to see all.)_`);
   return lines.join('\n');

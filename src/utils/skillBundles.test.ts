@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { homedir } from 'os';
+import { join } from 'path';
 import {
   parseFrontmatter,
   stripQuotes,
@@ -282,6 +284,33 @@ describe('formatBundlesForSysprompt', () => {
     );
     const out = formatBundlesForSysprompt(many);
     expect(out).toMatch(/more skills omitted/);
+  });
+
+  it('spends the budget on the project\'s skills before the shared ones, and lists them in the order given', () => {
+    // Six shared skills with Omarchy-length descriptions, then the project's
+    // own: spent alphabetically, the shared ones used the whole budget and
+    // the project's skill was the one omitted.
+    const shared = join(homedir(), '.agents', 'skills');
+    const long = 'Use this skill whenever the user asks about it. '.repeat(11);
+    const sharedSkills = ['ghostty', 'hyprland', 'mako', 'omarchy', 'walker', 'waybar'].map((name) =>
+      bundle({ name, scope: 'global', source: join(shared, name), description: long }),
+    );
+    const own = bundle({ name: 'zz-release', scope: 'project', description: long });
+    const out = formatBundlesForSysprompt([...sharedSkills, own]);
+
+    expect(out).toContain('**zz-release**');
+    expect(out).toMatch(/more skills omitted/);
+    const listed = out.split('\n').filter((l) => l.startsWith('- **')).map((l) => l.slice(4, l.indexOf('**', 4)));
+    expect(listed[listed.length - 1]).toBe('zz-release'); // still in the order it was given
+  });
+
+  it('ranks ~/.codeep/skills above the shared ~/.agents/skills', () => {
+    const long = 'Use this skill whenever the user asks about it. '.repeat(11);
+    const sharedSkills = ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7'].map((name) =>
+      bundle({ name, scope: 'global', source: join(homedir(), '.agents', 'skills', name), description: long }),
+    );
+    const mine = bundle({ name: 'zz-mine', scope: 'global', source: join(homedir(), '.codeep', 'skills', 'zz-mine'), description: long });
+    expect(formatBundlesForSysprompt([...sharedSkills, mine])).toContain('**zz-mine**');
   });
 });
 
