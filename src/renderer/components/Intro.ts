@@ -5,6 +5,7 @@
 import { Screen } from '../Screen';
 import { style } from '../ansi';
 import { PRIMARY_COLOR, LOGO_LINES as LOGO } from './uiConstants';
+import { MASCOT_FRAMES, layoutLogoWithMascot, introMascotFrame, type LogoLayout } from './mascot';
 
 const TAGLINE = 'Deep into Code.';
 export const GLITCH_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%&*<>?/;:[]=';
@@ -15,11 +16,11 @@ export const GLITCH_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%&*<>?/;:[]=
 export async function showIntro(screen: Screen, duration: number = 1500): Promise<void> {
   const { width, height } = screen.getSize();
   
-  // Calculate center position
-  const logoWidth = LOGO[0].length;
+  // Mascot + logo centred as one block (logo alone on narrow terminals)
+  const layout = layoutLogoWithMascot(width);
+  const startX = layout.logoX;
+  const startY = Math.floor((height - layout.height) / 2) - 1 + layout.logoDy;
   const logoHeight = LOGO.length;
-  const startX = Math.floor((width - logoWidth) / 2);
-  const startY = Math.floor((height - logoHeight) / 2) - 1;
   
   screen.showCursor(false);
   
@@ -27,6 +28,7 @@ export async function showIntro(screen: Screen, duration: number = 1500): Promis
   const noiseFrames = 10;
   for (let frame = 0; frame < noiseFrames; frame++) {
     screen.clear();
+    drawMascot(screen, layout, startY, MASCOT_FRAMES.idle);
     
     for (let i = 0; i < LOGO.length; i++) {
       const noiseLine = generateNoiseLine(LOGO[i]);
@@ -45,6 +47,7 @@ export async function showIntro(screen: Screen, duration: number = 1500): Promis
     const progress = (Date.now() - startTime) / decryptDuration;
     
     screen.clear();
+    drawMascot(screen, layout, startY, introMascotFrame(Date.now() - startTime, decryptDuration));
     
     for (let i = 0; i < LOGO.length; i++) {
       const decryptedLine = getDecryptedLine(LOGO[i], progress);
@@ -63,6 +66,7 @@ export async function showIntro(screen: Screen, duration: number = 1500): Promis
   
   // Phase 3: Final state
   screen.clear();
+  drawMascot(screen, layout, startY, MASCOT_FRAMES.idle);
   
   for (let i = 0; i < LOGO.length; i++) {
     screen.write(startX, startY + i, LOGO[i], PRIMARY_COLOR + style.bold);
@@ -116,6 +120,17 @@ export function getDecryptedLine(original: string, progress: number): string {
 }
 
 /**
+ * Draw the mascot beside the logo (whose top line is `logoY`), if it fits.
+ * Never goes through the noise/decrypt effect.
+ */
+function drawMascot(screen: Screen, layout: LogoLayout, logoY: number, frame: readonly string[]): void {
+  if (layout.mascotX === null) return;
+  for (let i = 0; i < frame.length; i++) {
+    screen.write(layout.mascotX, logoY - layout.logoDy + i, frame[i], PRIMARY_COLOR + style.bold);
+  }
+}
+
+/**
  * Simple sleep helper
  */
 function sleep(ms: number): Promise<void> {
@@ -128,12 +143,13 @@ function sleep(ms: number): Promise<void> {
 export function showLogoStatic(screen: Screen): void {
   const { width, height } = screen.getSize();
   
-  const logoWidth = LOGO[0].length;
+  const layout = layoutLogoWithMascot(width);
+  const startX = layout.logoX;
+  const startY = Math.floor((height - layout.height) / 2) - 1 + layout.logoDy;
   const logoHeight = LOGO.length;
-  const startX = Math.floor((width - logoWidth) / 2);
-  const startY = Math.floor((height - logoHeight) / 2) - 1;
   
   screen.clear();
+  drawMascot(screen, layout, startY, MASCOT_FRAMES.idle);
   
   for (let i = 0; i < LOGO.length; i++) {
     screen.write(startX, startY + i, LOGO[i], PRIMARY_COLOR + style.bold);

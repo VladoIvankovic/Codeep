@@ -8,6 +8,7 @@ import { Input, LineEditor, KeyEvent } from './Input';
 import { fg, style } from './ansi';
 import { getActionColor, formatActionTarget, getActionLabel } from './components/ActionFormatting';
 import { PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES } from './components/uiConstants';
+import { MASCOT_FRAMES, layoutLogoWithMascot, introMascotFrame } from './components/mascot';
 import { bottomPanelHeight, chatLayout, messageOffsets, scrollOffsetForTarget, scrollWindow, formatTokenCount, statusBarRightHint, activePanel, computeInputDisplay, agentProgressBar, truncateNotification, shouldShowPasteDialog, buildPasteInfo, type LayoutSnapshot } from './layout';
 import {
   buildAgentTimelineModel,
@@ -282,6 +283,8 @@ export class App {
   
   // Glitch characters for intro animation
   private static readonly GLITCH_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%&*<>?/;:[]=';
+  // Length of the intro's decrypt phase (the mascot's glances are timed against it)
+  private static readonly INTRO_DECRYPT_MS = 1500;
   
   // The `/` autocomplete list, derived from COMMAND_DESCRIPTIONS so it IS
   // the registry — a command can no longer ship without a description (a
@@ -840,8 +843,11 @@ export class App {
         
         // Phase 2: Decryption animation (1500ms)
         this.introPhase = 'decrypt';
+        // Drop the noise phase's random progress: the render this tick just
+        // scheduled runs after this switch and would show it as decrypt time
+        this.introProgress = 0;
         const startTime = Date.now();
-        const duration = 1500;
+        const duration = App.INTRO_DECRYPT_MS;
         
         this.introInterval = setInterval(() => {
           const elapsed = Date.now() - startTime;
@@ -3128,22 +3134,30 @@ export class App {
     const logoText = this.getDecryptedLogo();
     const logoLines = logoText.split('\n');
     
-    // Center logo vertically
-    const startY = Math.max(0, Math.floor((height - logoLines.length - 2) / 2));
+    // Mascot + logo centred as one block (logo alone on narrow terminals)
+    const layout = layoutLogoWithMascot(width);
+    const startY = Math.max(0, Math.floor((height - layout.height - 2) / 2));
     
-    // Center logo horizontally
-    const logoWidth = LOGO_LINES[0].length;
-    const startX = Math.max(0, Math.floor((width - logoWidth) / 2));
+    // The mascot skips the decrypt effect: drawn plainly from the first
+    // frame, glancing around while the logo decrypts
+    if (layout.mascotX !== null) {
+      const mascot = this.introPhase === 'decrypt'
+        ? introMascotFrame(this.introProgress * App.INTRO_DECRYPT_MS, App.INTRO_DECRYPT_MS)
+        : MASCOT_FRAMES.idle;
+      for (let i = 0; i < mascot.length; i++) {
+        this.screen.write(layout.mascotX, startY + i, mascot[i], PRIMARY_COLOR + style.bold);
+      }
+    }
     
     for (let i = 0; i < logoLines.length; i++) {
-      this.screen.write(startX, startY + i, logoLines[i], PRIMARY_COLOR + style.bold);
+      this.screen.write(layout.logoX, startY + layout.logoDy + i, logoLines[i], PRIMARY_COLOR + style.bold);
     }
     
     // Tagline (only show when done)
     if (this.introPhase === 'done') {
       const tagline = 'Deep into Code.';
       const taglineX = Math.floor((width - tagline.length) / 2);
-      this.screen.write(taglineX, startY + logoLines.length + 1, tagline, PRIMARY_COLOR);
+      this.screen.write(taglineX, startY + layout.height + 1, tagline, PRIMARY_COLOR);
     }
     
     this.screen.fullRender();
