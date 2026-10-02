@@ -468,6 +468,69 @@ describe('hooks + MCP integration', () => {
   });
 });
 
+describe('invoke_skill — the files beside SKILL.md', () => {
+  // Installed the way Omarchy installs its skills: `~/.agents/skills/<name>`
+  // is a link to a directory outside both the home and the project, and the
+  // SKILL.md sends the agent to a guide next to it.
+  const savedHome = process.env.HOME;
+  let home: string;
+  let elsewhere: string;
+  let bundleDir: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'codeep-skill-home-'));
+    elsewhere = mkdtempSync(join(tmpdir(), 'codeep-skill-elsewhere-'));
+    process.env.HOME = home;
+    bundleDir = join(elsewhere, 'crash');
+    mkdirSync(bundleDir);
+    writeFileSync(join(bundleDir, 'SKILL.md'), '---\nname: crash\ndescription: Diagnose a crash\n---\nRead [reporting.md](reporting.md) before filing.');
+    writeFileSync(join(bundleDir, 'reporting.md'), 'File it upstream.');
+    mkdirSync(join(home, '.agents', 'skills'), { recursive: true });
+    symlinkSync(bundleDir, join(home, '.agents', 'skills', 'crash'));
+  });
+
+  afterEach(() => {
+    process.env.HOME = savedHome;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(elsewhere, { recursive: true, force: true });
+  });
+
+  const invoke = (parameters: Record<string, unknown>) =>
+    executeTool(makeCall('invoke_skill', { name: 'crash', ...parameters }), tmpRoot);
+
+  it('says where the skill is, since its SKILL.md names files relative to itself', async () => {
+    const result = await invoke({});
+    expect(result.success).toBe(true);
+    expect(result.output).toContain(`Skill directory: ${join(home, '.agents', 'skills', 'crash')}`);
+    expect(result.output).toContain('"file": "guide.md"');
+    expect(result.output).toContain('Read [reporting.md](reporting.md) before filing.');
+  });
+
+  it('reads a file beside SKILL.md, which read_file cannot reach from the project', async () => {
+    expect((await invoke({ file: 'reporting.md' })).output).toContain('File it upstream.');
+    const outside = await executeTool(makeCall('read_file', { path: join(home, '.agents', 'skills', 'crash', 'reporting.md') }), tmpRoot);
+    expect(outside.success).toBe(false);
+  });
+
+  it('reads nothing outside the skill\'s directory', async () => {
+    writeFileSync(join(elsewhere, 'secret.md'), 'not the skill\'s');
+    symlinkSync(join(elsewhere, 'secret.md'), join(bundleDir, 'linked.md'));
+    for (const file of ['../secret.md', 'sub/../../secret.md', join(elsewhere, 'secret.md'), 'linked.md']) {
+      const result = await invoke({ file });
+      expect(result.success, file).toBe(false);
+      expect(result.output, file).toBe('');
+    }
+  });
+
+  it('reads only regular files, and not past SKILL.md\'s own size cap', async () => {
+    mkdirSync(join(bundleDir, 'assets'));
+    writeFileSync(join(bundleDir, 'huge.md'), 'x'.repeat(256 * 1024 + 1));
+    expect((await invoke({ file: 'assets' })).error).toMatch(/not a file/);
+    expect((await invoke({ file: 'huge.md' })).error).toMatch(/larger than 256 KB/);
+    expect((await invoke({ file: 'missing.md' })).error).toMatch(/not found/);
+  });
+});
+
 describe('trustBearingWrite — the files that decide what runs later', () => {
   const reasonFor = (tool: string, path: unknown) =>
     trustBearingWrite(makeCall(tool, { path }), tmpRoot)?.reason ?? null;
@@ -514,6 +577,11 @@ describe('trustBearingWrite — the files that decide what runs later', () => {
     expect(reasonFor('write_file', '.codeep/config.json')).toMatch(/Codeep's own configuration/);
     // A skill's steps are commands Codeep runs when the skill is used.
     expect(reasonFor('write_file', '.codeep/skills/deploy/SKILL.md')).toMatch(/steps are commands/);
+    // The directory agent tools share: every Codeep session loads
+    // `~/.agents/skills`, which is this path in a project rooted at home.
+    expect(reasonFor('write_file', '.agents/skills/omarchy/SKILL.md')).toMatch(/every Codeep session loads it/);
+    expect(reasonFor('create_directory', '.agents/skills')).toMatch(/every Codeep session loads it/);
+    expect(reasonFor('write_file', '.agents/notes.md')).toBeNull();
     // A sub-agent definition: its `tools:` REPLACES the parent's allowlist for
     // the delegated run and its `model:` picks the provider that run's context
     // is sent to, both the next time anything delegates to that name. That is

@@ -664,6 +664,7 @@ export async function runAgent(
           type: 'object',
           properties: {
             name: { type: 'string', description: 'Skill name from the catalog (e.g. "deploy").' },
+            file: { type: 'string', description: 'Optional. A file in the skill\'s directory that its SKILL.md refers to (e.g. "reporting.md"), returned instead of SKILL.md.' },
           },
           required: ['name'],
         },
