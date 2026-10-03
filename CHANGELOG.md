@@ -11,6 +11,21 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.9.2] — 2026-10-03
+
+> TL;DR — `codeep --help` and the README now say what `--yolo` leaves unchecked: a shell command runs without asking and can write the files the file tools still ask about.
+
+### Fixed
+
+- **`--yolo`'s help no longer overstates what still asks.** `codeep --help`,
+  the README and the 3.9.0 notes said writes to files that decide what runs
+  later (`.git/config`, git hooks, MCP server lists) are still confirmed under
+  `--yolo`. That holds for the agent's file tools only. A shell command is not
+  checked that way, and under `--yolo` it runs without asking, so it can write
+  those same files. The help now says so. It also no longer says "nothing is
+  saved": the folder access and the confirmation settings are not, but the
+  conversation is saved as a session, as usual.
+
 ## [3.9.1] — 2026-10-03
 
 > TL;DR — Fixes found on Omarchy: a one-word answer is no longer pushed to "continue", text and Enter typed together send, y/n answer safe questions at once, the header shows granted access, setup follows theme and size.

@@ -586,11 +586,14 @@ With --yolo (e.g. codeep --yolo -- <prompt>):
   Agent actions run without asking (Agent Confirmation: Never) and without
   clarifying questions first (Agent Interactive Mode: Off), the folder is
   used as the project with read & write access, and a new session starts.
-  Nothing is saved: the next plain \`codeep\` asks as before, and changing
-  either setting in /settings ends --yolo's hold on it. Writes to files that
-  decide what runs later (.git/config, git hooks, MCP server lists) are still
-  confirmed, and a workspace's own MCP servers still ask to be trusted the
-  first time, before the prompt is sent.
+  Neither the access nor these settings are saved: the next plain \`codeep\`
+  asks as before (the conversation is saved as a session, as usual), and
+  changing either setting in /settings ends --yolo's hold on it. Writes the
+  agent makes with its file tools to files that decide what runs later
+  (.git/config, git hooks, MCP server lists) are still confirmed, but a
+  shell command is not checked that way: it runs without asking and can
+  write those same files. A workspace's own MCP servers still ask to be
+  trusted the first time, before the prompt is sent.
 
 Commands (in chat):
   /help      Show all available commands
