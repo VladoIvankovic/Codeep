@@ -120,6 +120,72 @@ describe('handleSettingsKey — number editing', () => {
   });
 });
 
+// A paste, or text typed faster than the terminal is read, comes as one
+// event with isPaste set. Fields took one character at a time, so it was
+// dropped — and "value" + Enter in one read then saved the old value.
+describe('handleSettingsKey — text that arrives in one read', () => {
+  beforeEach(() => {
+    config.set('customBaseUrl', '');
+    config.set('temperature', 1);
+  });
+
+  it('goes into a text field whole, and Enter saves it', () => {
+    const idx = indexOf('customBaseUrl');
+    let state = handleSettingsKey('enter', false, initialState({ selectedIndex: idx })).newState;
+    expect(state.editValue).toBe('');
+    state = handleSettingsKey('http://localhost:8080/v1', false, state, true).newState;
+    expect(state.editValue).toBe('http://localhost:8080/v1');
+    state = handleSettingsKey('enter', false, state).newState;
+    expect(state.editing).toBe(false);
+    expect(config.get('customBaseUrl')).toBe('http://localhost:8080/v1');
+  });
+
+  it('is added to what was typed before it', () => {
+    const idx = indexOf('customBaseUrl');
+    const state = initialState({ selectedIndex: idx, editing: true, editValue: 'http://' });
+    expect(handleSettingsKey('host:1234', false, state, true).newState.editValue).toBe('http://host:1234');
+  });
+
+  it('is text even when it spells a key name', () => {
+    const idx = indexOf('customBaseUrl');
+    const state = initialState({ selectedIndex: idx, editing: true, editValue: 'x' });
+    for (const word of ['enter', 'escape', 'backspace']) {
+      const r = handleSettingsKey(word, false, state, true);
+      expect(r.newState.editing).toBe(true);
+      expect(r.newState.editValue).toBe('x' + word);
+      expect(r.close).toBe(false);
+    }
+    expect(config.get('customBaseUrl')).toBe('');
+  });
+
+  it('keeps a field on one line', () => {
+    const idx = indexOf('customBaseUrl');
+    const state = initialState({ selectedIndex: idx, editing: true, editValue: '' });
+    expect(handleSettingsKey('http://a\n:1\tb', false, state, true).newState.editValue).toBe('http://a:1b');
+  });
+
+  it('puts only what typing would into a number field', () => {
+    const idx = indexOf('temperature');
+    let state = initialState({ selectedIndex: idx, editing: true, editValue: '' });
+    state = handleSettingsKey('0.75', false, state, true).newState;
+    expect(state.editValue).toBe('0.75');
+    expect(handleSettingsKey('x1.5', false, initialState({ selectedIndex: idx, editing: true, editValue: '' }), true).newState.editValue).toBe('1.5');
+    handleSettingsKey('enter', false, state);
+    expect(config.get('temperature')).toBe(0.75);
+  });
+
+  it('does nothing when no field is being edited', () => {
+    const idx = indexOf('agentMode');
+    config.set('agentMode', 'on');
+    for (const word of ['enter', 'right', 'down', 'escape']) {
+      const r = handleSettingsKey(word, false, initialState({ selectedIndex: idx }), true);
+      expect(r.close).toBe(false);
+      expect(r.newState).toEqual(initialState({ selectedIndex: idx }));
+    }
+    expect(config.get('agentMode')).toBe('on');
+  });
+});
+
 describe('handleSettingsKey — select cycling', () => {
   beforeEach(() => {
     config.set('agentMode', 'on');

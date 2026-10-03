@@ -5,6 +5,12 @@
 
 import { cursor, screen, style, visibleLength, charWidth } from './ansi';
 
+/** C0 and C1 control characters (escape sequences are parsed before this). */
+function isControlChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code < 0x20 || (code >= 0x7f && code < 0xa0);
+}
+
 export interface Cell {
   char: string;
   style: string;
@@ -98,6 +104,11 @@ export class Screen {
       } else if (char === '\n') {
         // Newline - would need to handle multi-line writes
         break;
+      } else if (isControlChar(char)) {
+        // A control character draws nothing. Given a cell, it left whatever
+        // glyph the terminal had there on screen (a \r in the input showed
+        // the placeholder's "m" after the text), so it gets none.
+        continue;
       } else {
         const w = charWidth(char);
         if (col >= 0 && col < this.width) {

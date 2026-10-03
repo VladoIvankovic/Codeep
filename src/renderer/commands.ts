@@ -1377,6 +1377,22 @@ Format: use headers per category, only include categories where you found issues
               diffLines.push(`  ↳ ${hunkCount} hunk(s) — use /apply --only ${change.path}:0,1 to select`);
             }
           }
+          // One key applies the changes you asked for and see listed. Not a
+          // change to a file that decides what runs later (.git/config, a
+          // hook, an MCP server list, a skill), nor one outside the project:
+          // those wait for Enter, as the agent's own writes to them do. The
+          // hunk picker shows the reason beside the file; null: one key.
+          const { trustBearingWrite } = await import('../utils/toolExecution');
+          const needsEnter = (path: string): string | null => {
+            const fullPath = pathModule.isAbsolute(path)
+              ? path
+              : pathModule.join(ctx.projectPath, path);
+            const rel = pathModule.relative(ctx.projectPath, fullPath);
+            if (rel === '..' || rel.startsWith('..' + pathModule.sep) || pathModule.isAbsolute(rel)) return 'outside the project';
+            return trustBearingWrite({ tool: 'write_file', parameters: { path } }, ctx.projectPath)
+              ? 'decides what runs later'
+              : null;
+          };
           // Interactive mode: open the hunk picker (`git add -p` style).
           if (interactive) {
             type HunkPickerItem = import('./App').HunkPickerItem;
@@ -1392,7 +1408,7 @@ Format: use headers per category, only include categories where you found issues
                   if (l.type === 'remove') return `-${l.content}`;
                   return ` ${l.content}`;
                 });
-                items.push({ path: fd.path, hunkIndex: hi, header, lines });
+                items.push({ path: fd.path, hunkIndex: hi, header, lines, needsEnter: needsEnter(fd.path) ?? undefined });
               }
             }
             if (items.length === 0) {
@@ -1437,8 +1453,10 @@ Format: use headers per category, only include categories where you found issues
           const summary = selective && hunkSpecs.size > 0
             ? `Selective apply (${hunkSpecs.size} file(s) with chosen hunks)`
             : `Found ${changes.length} file(s) to apply`;
+          const quickAnswer = changes.every((change) => needsEnter(change.path) === null);
           ctx.app.showConfirm({
             title: '📝 Apply Changes',
+            quickAnswer,
             message: [
               summary,
               '',

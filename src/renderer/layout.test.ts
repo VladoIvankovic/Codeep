@@ -395,12 +395,12 @@ describe('shouldShowPasteDialog', () => {
     expect(shouldShowPasteDialog('')).toBe(false);
   });
 
-  it('returns false for just under the char threshold', () => {
-    expect(shouldShowPasteDialog('a'.repeat(PASTE_DIALOG_THRESHOLD.chars - 1))).toBe(false);
+  it('returns false for a multi-line paste just under the char threshold', () => {
+    expect(shouldShowPasteDialog('a\n' + 'a'.repeat(PASTE_DIALOG_THRESHOLD.chars - 3))).toBe(false);
   });
 
-  it('returns true at exactly the char threshold (100 chars)', () => {
-    expect(shouldShowPasteDialog('a'.repeat(PASTE_DIALOG_THRESHOLD.chars))).toBe(true);
+  it('returns true for a multi-line paste at exactly the char threshold (100 chars)', () => {
+    expect(shouldShowPasteDialog('a\n' + 'a'.repeat(PASTE_DIALOG_THRESHOLD.chars - 2))).toBe(true);
   });
 
   it('returns false for exactly 3 lines (threshold is >3)', () => {
@@ -411,8 +411,11 @@ describe('shouldShowPasteDialog', () => {
     expect(shouldShowPasteDialog('a\nb\nc\nd')).toBe(true);
   });
 
-  it('returns true for a long single-line paste', () => {
-    expect(shouldShowPasteDialog('a'.repeat(500))).toBe(true);
+  // The input shows a single line whole (it scrolls), and the next Enter
+  // must send it rather than answer a dialog.
+  it('returns false for a single line of any length', () => {
+    expect(shouldShowPasteDialog('a'.repeat(PASTE_DIALOG_THRESHOLD.chars))).toBe(false);
+    expect(shouldShowPasteDialog('a'.repeat(5000))).toBe(false);
   });
 });
 

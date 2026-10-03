@@ -29,6 +29,7 @@ import {
   handleInlinePermissionKey,
   handleInlineSessionPickerKey,
   handleInlineConfirmKey,
+  confirmFooter,
   handleLoginKey,
 } from './handlers';
 import clipboardy from 'clipboardy';
@@ -90,6 +91,14 @@ export interface ConfirmOptions {
   confirmLabel?: string;
   cancelLabel?: string;
   extraOption?: { label: string; onSelect: () => void };
+  /**
+   * y and n answer at once, with no Enter, and the hint says "y/n quick".
+   * Only for a question that neither approves an agent action nor grants
+   * trust ("Set as Project?", "Apply Changes"). Left out, y and n only move
+   * the selection and Enter answers: an agent's tool call, a dangerous task,
+   * workspace MCP servers, a skill's confirm step.
+   */
+  quickAnswer?: boolean;
   onConfirm: () => void;
   onCancel?: () => void;
 }
@@ -134,6 +143,18 @@ export interface AppOptions {
 const YOLO_BADGE = ' YOLO ';
 const yoloBadgeStyle = () => palette.yoloBadge + palette.yoloBadgeText + style.bold;
 
+/**
+ * How long the keyboard must be quiet, once a question (a confirmation,
+ * Folder Access, the session list) is up, before a key answers it. A key that
+ * arrives sooner was meant for something else: the Enter after a quick "y" —
+ * or in the same read, "y\r" — once the "y" has already answered the question
+ * before and this one replaced it, or text being typed into the input as the
+ * question appeared. Each such key starts the wait again, so someone still
+ * typing never answers a question they have not looked at; taken as an
+ * answer, a key picks whatever is highlighted without anyone having seen it.
+ */
+export const QUESTION_ARM_MS = 300;
+
 export class App {
   private screen: Screen;
   private input: Input;
@@ -151,6 +172,10 @@ export class App {
   private notificationIsWarn = false;
   private notificationTimeout: NodeJS.Timeout | null = null;
   
+  /** When the open question appeared, or last swallowed a key (Date.now());
+   *  see QUESTION_ARM_MS. */
+  private questionShownAt = 0;
+
   // Render scheduling
   private pendingRender = false;
   /** Stops listening for palette changes; set while the App is started. */
@@ -374,6 +399,19 @@ export class App {
     } else {
       this.unseenWhileScrolled++;
     }
+    this.scheduleRender();
+  }
+
+  /**
+   * Rewrite the welcome block, in place, when what it says has changed — the
+   * startup questions answered, or /grant. A transcript without one (a loaded
+   * session replaced it) is left alone.
+   */
+  updateWelcome(content: string): void {
+    const index = this.messages.findIndex(m => m.role === 'welcome');
+    if (index === -1 || this.messages[index].content === content) return;
+    this.messages[index] = { ...this.messages[index], content };
+    this.messageCache[index] = null;
     this.scheduleRender();
   }
 
@@ -617,8 +655,11 @@ export class App {
   /**
    * Handle paste detection - call this when large text is pasted
    */
-  handlePaste(text: string): void {
-    // Only show paste info for significant pastes (>100 chars or >3 lines)
+  handlePaste(pasted: string): void {
+    // Line breaks as the editor keeps them. A \r left in the input takes a
+    // cell without drawing in it, so the letter that was there stays on screen.
+    const text = pasted.replace(/\r\n?/g, '\n');
+    // Only a block of lines gets the paste dialog (shouldShowPasteDialog)
     if (!shouldShowPasteDialog(text)) {
       // Small paste - just add to input directly
       this.editor.insert(text);
@@ -636,6 +677,16 @@ export class App {
    * Handle paste info key events
    */
   private handlePasteInfoKey(event: KeyEvent): void {
+    // Text pasted while the dialog is open belongs to the paste: the rest of
+    // one whose end marker was late (Input hands over what it has), or more
+    // of the same. Taken as keys, a remainder of "y", "n" or "s" would act
+    // on the dialog, and anything else would be lost.
+    if (event.isPaste) {
+      const fullText = (this.pasteDialog.info?.fullText ?? '') + event.key.replace(/\r\n?/g, '\n');
+      this.pasteDialog = { open: true, info: buildPasteInfo(fullText) };
+      this.scheduleRender();
+      return;
+    }
     // Delegates to components/PasteDialog.ts — the pure handler returns the
     // next state plus an action; App performs the side effects itself
     // (editor insert / message submit / notification).
@@ -744,6 +795,7 @@ export class App {
     this.confirmSelection = 'no'; // Default to No for safety
     this.screen.invalidate();
     this.confirmOpen = true;
+    this.questionShownAt = Date.now();
     this.scheduleRender();
   }
 
@@ -789,6 +841,7 @@ export class App {
     this.permissionIndex = 0;
     this.permissionCallback = callback;
     this.permissionOpen = true;
+    this.questionShownAt = Date.now();
     this.scheduleRender();
   }
   
@@ -811,6 +864,7 @@ export class App {
     // clearing only on close left the artifact on screen the whole time.
     this.screen.invalidate();
     this.sessionPickerOpen = true;
+    this.questionShownAt = Date.now();
     this.scheduleRender();
   }
   
@@ -1038,7 +1092,7 @@ export class App {
    */
   private handleChatKey(event: KeyEvent): void {
     // Dispatch to whichever inline panel currently owns focus.
-    switch (activePanel({
+    const panel = activePanel({
       pasteInfoOpen: this.pasteDialog.open,
       permissionOpen: this.permissionOpen,
       sessionPickerOpen: this.sessionPickerOpen,
@@ -1053,7 +1107,15 @@ export class App {
       menuOpen: this.menuOpen,
       showAutocomplete: this.autocomplete.open,
       hunkPickerOpen: this.hunkPicker.open,
-    })) {
+    });
+    // A key that arrives as a question appears is not its answer, nor is one
+    // that follows it without a pause: the wait starts again with every key.
+    if ((panel === 'permission' || panel === 'sessionPicker' || panel === 'confirm')
+      && Date.now() - this.questionShownAt < QUESTION_ARM_MS) {
+      this.questionShownAt = Date.now();
+      return;
+    }
+    switch (panel) {
       case 'pasteInfo':      this.handlePasteInfoKey(event); return;
       case 'permission':     this.handleInlinePermissionKey(event); return;
       case 'sessionPicker':  this.handleInlineSessionPickerKey(event); return;
@@ -1243,6 +1305,14 @@ export class App {
         }
         return;
       }
+      // Text that arrived in one read — typed fast, sent with its Enter, or
+      // pasted — goes into the reply too, not only single keys. Dropped, a
+      // "text" + Enter burst sent whatever was typed before it.
+      if (event.isPaste && event.key.length > 1) {
+        this.editor.insert(event.key.replace(/\r\n?/g, '\n'));
+        this.scheduleRender();
+        return;
+      }
       // Allow regular typing while busy
       if (this.editor.handleKey(event)) {
         this.scheduleRender();
@@ -1366,7 +1436,7 @@ export class App {
    * Handle inline settings keys
    */
   private handleInlineSettingsKey(event: KeyEvent): void {
-    const result = handleSettingsKey(event.key, event.ctrl, this.settingsState);
+    const result = handleSettingsKey(event.key, event.ctrl, this.settingsState, event.isPaste === true);
     this.settingsState = result.newState;
     
     if (result.close) {
@@ -1579,6 +1649,8 @@ export class App {
    *   a             accept this + all remaining, finish
    *   q / Esc       finish without accepting this hunk
    *   ↑ / ↓         navigate (preview only — no decision)
+   * A hunk to a file that decides what runs later, or outside the project,
+   * needs an Enter after y/Enter/→ (and after a, when it is among the rest).
    */
   private handleHunkPickerKey(event: KeyEvent): void {
     // Delegates to components/HunkPicker.ts — the pure handler returns the
@@ -2228,7 +2300,7 @@ export class App {
     y++;
 
     // Footer
-    this.screen.writeLine(y, '←/→ select • y/n quick • Enter confirm • Esc cancel', fg.gray);
+    this.screen.writeLine(y, confirmFooter(this.confirmOptions), fg.gray);
   }
 
     private renderInlineHunkPicker(startY: number, width: number): void {

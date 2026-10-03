@@ -950,6 +950,31 @@ describe('step limit after a "continue" nudge', () => {
     expect(result.interrupted).toBeUndefined();
     expect(result.finalResponse).toBe('The project has no files yet.');
   });
+
+  // "Reply with the single word: ready" got "ready", was told to "Execute the
+  // tool calls now", and the answer shown became the model's confused reply
+  // to that ("There are no pending tool calls…").
+  for (const answer of ['ready', '42', 'src/utils/agent.ts', 'No changes needed', 'The answer is 42']) {
+    it(`takes a short answer as the answer: ${JSON.stringify(answer)}`, async () => {
+      setScript(() => (chatCalls().length === 1 ? say(answer) : say('There are no pending tool calls.')));
+
+      const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations: 4 });
+
+      expect(chatCalls()).toHaveLength(1);
+      expect(result.success).toBe(true);
+      expect(result.finalResponse).toBe(answer);
+    });
+  }
+
+  it('still nudges a model that announces the work and stops, with no colon', async () => {
+    setScript(() => (chatCalls().length === 1 ? say("I'll create everything now") : say('Created the files.')));
+
+    const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations: 4 });
+
+    expect(chatCalls()).toHaveLength(2);
+    expect(chatCalls()[1].messages.at(-1)?.content).toBe('Continue. Execute the tool calls now.');
+    expect(result.finalResponse).toBe('Created the files.');
+  });
 });
 
 describe('stopping a running command', () => {

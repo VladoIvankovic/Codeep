@@ -78,7 +78,8 @@ import { chat } from '../api/index';
 import { loadTelegramCredentials } from '../utils/telegramCredentials';
 import { syncSession } from '../utils/codeepCloud';
 import { autoSaveSession, config } from '../config/index';
-import type { App } from './App';
+import type { App, ConfirmOptions } from './App';
+import { handleInlineConfirmKey, confirmFooter } from './handlers';
 import type { TrustBearingWrite } from '../utils/toolExecution';
 import type { ProjectContext } from '../utils/project';
 
@@ -598,5 +599,94 @@ describe('a skill step that runs git in a repository with a hostile config', () 
     expect(said).toContain('`git status` was not run');
     expect(said).toContain('remote.origin.uploadpack');
     expect(said).toContain('git config --unset');
+  });
+});
+
+// One key answers only a question that approves no agent action and grants
+// no trust. Each dialog this file builds, fed the key "y" the way the App
+// feeds it, either answers or only moves the selection; its hint says which.
+describe('which of the run\'s questions one key answers', () => {
+  /** What "y" does to a confirmation built with these options. */
+  function pressY(options: ConfirmOptions): 'answers' | 'selects' {
+    let answered = false;
+    handleInlineConfirmKey({ key: 'y', ctrl: false, alt: false, shift: false, raw: 'y' }, {
+      options,
+      selection: 'no',
+      setSelection: () => {},
+      close: () => { answered = true; },
+      render: () => {},
+    });
+    const quick = confirmFooter(options).includes('y/n quick');
+    expect(quick, `the hint of "${options.title}"`).toBe(answered);
+    return answered ? 'answers' : 'selects';
+  }
+
+  /** The dialogs `run` puts up, each declined so the run goes no further. */
+  async function dialogsOf(run: (ctx: AppExecutionContext) => Promise<unknown>): Promise<ConfirmOptions[]> {
+    const dialogs: ConfirmOptions[] = [];
+    const ctx = makeCtx();
+    (ctx.app as unknown as { showConfirm: unknown }).showConfirm = (o: ConfirmOptions) => {
+      dialogs.push(o);
+      o.onCancel?.();
+    };
+    await run(ctx);
+    return dialogs;
+  }
+
+  let interactiveBefore: unknown;
+  beforeEach(() => {
+    interactiveBefore = config.get('agentInteractive');
+    config.set('agentInteractive', false);
+  });
+  afterEach(() => {
+    config.set('agentInteractive', interactiveBefore as boolean);
+  });
+
+  it('"Confirm Agent Task" starts a task on one key, but not one that reads as dangerous', async () => {
+    config.set('agentConfirmation', 'always');
+    const plain = await dialogsOf(ctx => runAgentTask('fix the typo in the README', false, ctx, () => null, () => {}));
+    expect(plain.map(d => d.title)).toEqual(['⚠️  Confirm Agent Task']);
+    expect(pressY(plain[0])).toBe('answers');
+
+    // 'always' shows this dialog instead of "Potentially Dangerous Task".
+    const risky = await dialogsOf(ctx => runAgentTask('delete the old logs', false, ctx, () => null, () => {}));
+    expect(risky.map(d => d.title)).toEqual(['⚠️  Confirm Agent Task']);
+    expect(pressY(risky[0])).toBe('selects');
+  });
+
+  it('"Potentially Dangerous Task" waits for Enter', async () => {
+    config.set('agentConfirmation', 'dangerous');
+    const dialogs = await dialogsOf(ctx => runAgentTask('remove the build folder', false, ctx, () => null, () => {}));
+    expect(dialogs.map(d => d.title)).toEqual(['⚠️  Potentially Dangerous Task']);
+    expect(pressY(dialogs[0])).toBe('selects');
+  });
+
+  it('"Allow this action?" waits for Enter, for a command and for a file that decides what runs later', async () => {
+    const cases: Array<['always' | 'dangerous' | 'never', { tool: string; parameters: Record<string, unknown> }]> = [
+      ['dangerous', { tool: 'execute_command', parameters: { command: 'rm', args: ['-rf', 'build'] } }],
+      ['always', { tool: 'write_file', parameters: { path: 'src/app.ts', content: 'x' } }],
+      ['never', { tool: 'write_file', parameters: { path: '.git/config', content: '[core]' } }],
+      ['never', { tool: 'write_file', parameters: { path: '.agents/skills/deploy/SKILL.md', content: '#' } }],
+    ];
+    for (const [mode, toolCall] of cases) {
+      config.set('agentConfirmation', mode);
+      vi.mocked(runAgent).mockImplementation(async (_task, _context, opts) => {
+        await opts?.onRequestPermission?.(toolCall);
+        return { success: true, iterations: 1, actions: [], finalResponse: 'done' };
+      });
+      const dialogs = await dialogsOf(ctx => executeAgentTask('go', false, ctx));
+      expect(dialogs.map(d => d.title), JSON.stringify(toolCall)).toEqual(['⚠️  Confirm Action']);
+      expect(pressY(dialogs[0]), JSON.stringify(toolCall)).toBe('selects');
+    }
+  });
+
+  it('a skill\'s confirm step waits for Enter', async () => {
+    writeCustomSkill('ship-it', [
+      { type: 'confirm', content: 'Push to main?' },
+      { type: 'command', content: 'echo pushed' },
+    ]);
+    const dialogs = await dialogsOf(ctx => runSkill('ship-it', [], ctx));
+    expect(dialogs.map(d => d.title)).toEqual(['Confirm']);
+    expect(pressY(dialogs[0])).toBe('selects');
   });
 });

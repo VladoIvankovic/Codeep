@@ -486,7 +486,12 @@ describe('personalityOverride', () => {
   // the tests asserted it, but nothing checked runAgent honoured it. An `as
   // never` cast hid that the option did not exist, so a CI fix would have run
   // with no boundary while every test still passed.
-  beforeEach(() => { vi.clearAllMocks(); });
+  // clearAllMocks leaves replies queued with mockResolvedValueOnce in place.
+  // A run that stops before using its last reply ("a files-granted override
+  // can still write" ends after the read) left it for the next test, whose
+  // run then began with "done" — absorbed only while the agent nudged every
+  // short reply. Each test starts with an empty queue.
+  beforeEach(() => { vi.clearAllMocks(); mockAgentChat.mockReset(); });
 
   it('refuses a tool the override did not grant', async () => {
     // Behaviour, not shape: make the model ask for something outside the
@@ -557,6 +562,7 @@ describe('audit record wiring', () => {
   // the rest of the file relies on is not left altered.
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockAgentChat.mockReset();
     const realFs = await vi.importActual<typeof import('fs')>('fs');
     vi.mocked(existsSync).mockImplementation(realFs.existsSync);
     vi.mocked(readFileSync).mockImplementation(realFs.readFileSync as never);
@@ -635,6 +641,7 @@ describe('audit record wiring', () => {
 describe('onExecuteCommand callback', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockAgentChat.mockReset();
   });
 
   it('invokes onExecuteCommand with correct args and maps result to ToolResult shape', async () => {

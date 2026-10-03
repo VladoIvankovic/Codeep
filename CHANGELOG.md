@@ -11,6 +11,81 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.9.1] — 2026-10-03
+
+> TL;DR — Fixes found on Omarchy: a one-word answer is no longer pushed to "continue", text and Enter typed together send, y/n answer safe questions at once, the header shows granted access, setup follows theme and size.
+
+### Fixed
+
+- **A short answer stays the answer.** Asked to "reply with the single word:
+  ready", the agent said "ready", was told to carry on with tool calls it
+  never meant to make, and its confused reply replaced the answer. Any reply
+  under 120 characters without a full stop was taken as unfinished. Now an
+  answer of one to three words, a number, a name, a path or a command is
+  left alone. A model that announces the work and stops is still told to go
+  on when its line ends in ":" or "…", or is a short announcement ending on
+  a plain word ("I'll create everything now"); one ending on a file name
+  ("I'll fix App.ts") now reads as an answer.
+- **Text and Enter that arrive together are sent.** With `tmux send-keys
+  "text" Enter`, a fast typist or a paste ending in a newline, the Enter
+  went into the input as an invisible character, nothing was sent, and the
+  input showed a stray letter after the text ("/skills bundlesm"). Each key
+  in such a burst now counts on its own, also in a reply typed while the
+  agent works, which used to lose the text. Several arrow keys or scroll steps
+  in one burst all count too, and a long paste that the terminal delivers in
+  pieces is kept whole; everything after the first piece used to be lost.
+  If it stalls part-way for up to a few seconds, over a slow link, its line
+  breaks still stay text instead of sending part of it.
+- **Ctrl+C and Ctrl+D get you out of a stalled paste.** While Codeep waited
+  for the rest of a paste that had stalled, they were taken as more of the
+  paste, so there was no way out. Pressed on their own, they now end the
+  paste and work as usual.
+- **Ctrl+C and Ctrl+D leave the first-run setup.** On the "Welcome to
+  Codeep" list and the API key screen they did nothing; only Esc on the list
+  got out.
+- **/settings fields take pasted text.** A pasted value, or one typed faster
+  than the terminal is read, was dropped, and an Enter that came with it
+  saved the old value. It now goes in whole (a number field keeps only its
+  digits and points), and that Enter saves it.
+- **The Enter after a long one-line paste sends it.** A paste of 100
+  characters or more opened the "Paste Detected" dialog, so the first Enter
+  only added it to the input. A single line now goes straight into the
+  input; a paste of several lines still asks first, and its line breaks stay
+  text rather than sending it.
+- **y and n answer at once where that is safe**, as the "y/n quick" hint
+  says: "Set as Project?", "Apply Changes" and "Confirm Agent Task". Before,
+  they only moved the selection. Approving the agent's action ("Allow this
+  action?"), a "Potentially Dangerous Task", trusting a workspace's MCP
+  servers and a skill's confirm step still take Enter: there y and n only
+  select, and the hint says so. So do "Apply Changes" when a file decides
+  what runs later (a git hook, `.git/config`, an MCP or skill file) or lies
+  outside the project, and "Confirm Agent Task" when the task reads as
+  dangerous. A question takes no key until the keyboard has been quiet for
+  a moment, so an Enter right after "y", or a sentence you are still typing
+  when it appears, does not answer it.
+- **`/apply -i` asks for Enter before changing a file that decides what runs
+  later.** In the hunk picker, y or a accepted a hunk to a git hook,
+  `.git/config`, an MCP or skill file, or a file outside the project. Now y,
+  → or Enter selects such a hunk and a second Enter accepts it, as the hint
+  and the file line say; "a" asks for that Enter too. Other hunks still take
+  one key.
+- **The welcome block shows the access you granted.** After "Set as Project?
+  → Yes" and "Folder Access → Read & Write" it still said "Chat only · no
+  project context". It now says "Waiting for folder access" while the
+  question is open, then shows the answer, and follows `/grant`.
+- **The first-run setup redraws on a theme switch and a resize.** The
+  "Welcome to Codeep" provider list and the API key screen kept the old
+  Omarchy theme's colours, and went blank after the terminal was resized,
+  until a key was pressed.
+- **The first-run setup fits a short terminal.** At 30 rows the provider
+  list covered "Welcome to Codeep" and the key hints. It now scrolls with
+  the selection and shows how many providers are above and below; the API
+  key screen drops its blank rows before it covers its title.
+- **Enter retries after "API key too short".** On the second try Enter did
+  nothing and Esc ended setup. Now Enter takes the new key and Esc goes back
+  to the provider list, as on the first try. A key that could not be saved
+  now says why.
+
 ## [3.9.0] — 2026-10-03
 
 > TL;DR — `codeep --yolo -- "<prompt>"` starts Codeep for a launcher with nothing left to answer, Omarchy's skills in `~/.agents/skills` load, and Codeep's colours follow the Omarchy theme.

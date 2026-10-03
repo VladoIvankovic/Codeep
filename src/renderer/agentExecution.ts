@@ -90,6 +90,7 @@ export function requestToolConfirmation(
     'unknown';
   const safeTarget = showControls(target);
   const shortTarget = safeTarget.length > 50 ? '...' + safeTarget.slice(-47) : safeTarget;
+  // No quickAnswer: approving an agent's action takes Enter.
   app.showConfirm({
     title: '⚠️  Confirm Action',
     message: [
@@ -219,6 +220,11 @@ export async function runAgentTask(
     const shortTask = task.length > 60 ? task.slice(0, 57) + '...' : task;
     app.showConfirm({
       title: '⚠️  Confirm Agent Task',
+      // One key starts a task you just typed: 'always' still asks, with
+      // Enter, before each change the run makes. Not one that reads as
+      // dangerous — 'always' shows it here instead of "Potentially
+      // Dangerous Task", and that one waits for Enter.
+      quickAnswer: !isDangerousTask(task),
       message: [
         'The agent will execute the following task:',
         '',
@@ -236,8 +242,7 @@ export async function runAgentTask(
   }
 
   // 'dangerous' mode — confirm only for risky keywords
-  const dangerousKeywords = ['delete', 'remove', 'drop', 'reset', 'force', 'overwrite', 'replace all', 'rm ', 'clear'];
-  if (dangerousKeywords.some(k => task.toLowerCase().includes(k))) {
+  if (isDangerousTask(task)) {
     const shortTask = task.length > 60 ? task.slice(0, 57) + '...' : task;
     app.showConfirm({
       title: '⚠️  Potentially Dangerous Task',
@@ -251,6 +256,7 @@ export async function runAgentTask(
       ],
       confirmLabel: 'Proceed',
       cancelLabel: 'Cancel',
+      // No quickAnswer: a task flagged dangerous starts on Enter.
       onConfirm: execute,
       onCancel: () => { app.notify('Agent task cancelled'); notStarted(); },
     });
@@ -258,6 +264,14 @@ export async function runAgentTask(
   }
 
   execute();
+}
+
+/** Words that make a task "Potentially Dangerous": confirmed with Enter. */
+const DANGEROUS_TASK_KEYWORDS = ['delete', 'remove', 'drop', 'reset', 'force', 'overwrite', 'replace all', 'rm ', 'clear'];
+
+export function isDangerousTask(task: string): boolean {
+  const lower = task.toLowerCase();
+  return DANGEROUS_TASK_KEYWORDS.some(k => lower.includes(k));
 }
 
 export async function executeAgentTask(
@@ -364,6 +378,9 @@ export async function executeAgentTask(
             ],
             confirmLabel: 'Allow',
             cancelLabel: 'Deny',
+            // No quickAnswer: y and n only select here, and Enter answers —
+            // typed-ahead text must not approve, or deny for the rest of the
+            // run, a call nobody has read.
             // No "Always Allow" for one of those files: the agent answers
             // about this file only and would not remember it anyway.
             extraOption: trustBearing ? undefined : { label: 'Always Allow', onSelect: () => resolve('allow_always') },
@@ -867,6 +884,8 @@ export async function runSkill(
 
       onConfirm: (message: string) => {
         return new Promise<boolean>((resolve) => {
+          // No quickAnswer: the step guards the skill's next command, often
+          // one with the model's text in it (skills.ts, approvesCommand).
           ctx.app.showConfirm({
             title: 'Confirm',
             message: [message],

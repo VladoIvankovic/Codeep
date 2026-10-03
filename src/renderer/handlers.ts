@@ -305,18 +305,20 @@ export function handleInlineConfirmKey(event: KeyEvent, ctx: ConfirmHandlerConte
     return;
   }
 
-  if (event.key === 'y') {
-    ctx.setSelection('yes');
+  // y and n pick Yes or No. On a question that opted in (quickAnswer, and
+  // the footer then says "y/n quick") the key also answers; on one that
+  // approves an agent action or grants trust it only selects, and Enter
+  // answers. A pasted "y" is text that landed here, not a choice.
+  if ((event.key === 'y' || event.key === 'n') && !event.isPaste) {
+    const answer = event.key === 'y' ? 'yes' : 'no';
+    ctx.setSelection(answer);
+    if (ctx.options.quickAnswer) ctx.close(answer);
     ctx.render();
     return;
   }
 
-  if (event.key === 'n') {
-    ctx.setSelection('no');
-    ctx.render();
-    return;
-  }
-
+  // Not promised by the footer, and the one answer that outlives this prompt
+  // ("Always Allow"): a selection, confirmed with Enter.
   if (event.key === 'a' && hasExtra) {
     ctx.setSelection('extra');
     ctx.render();
@@ -327,6 +329,17 @@ export function handleInlineConfirmKey(event: KeyEvent, ctx: ConfirmHandlerConte
     ctx.close(ctx.selection);
     ctx.render();
   }
+}
+
+/**
+ * The key hint under a confirmation. "y/n quick" only where one key answers
+ * (ConfirmOptions.quickAnswer); everywhere else y and n select, and the hint
+ * must not promise more.
+ */
+export function confirmFooter(options: Pick<ConfirmOptions, 'quickAnswer'>): string {
+  return options.quickAnswer
+    ? '←/→ select • y/n quick • Enter confirm • Esc cancel'
+    : '←/→ or y/n select • Enter confirm • Esc cancel';
 }
 
 // ─── Login ───────────────────────────────────────────────────────────────────

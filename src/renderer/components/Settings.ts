@@ -385,8 +385,18 @@ export interface SettingsState {
 }
 
 /**
- * Format value for display
+ * What typing `text` into the field would put there: a number takes digits
+ * and points, a text field any character but control ones. A field is one
+ * line, so the line breaks of a multi-line paste go too (a paste is never
+ * sent by a newline in it).
  */
+function typedText(setting: SettingItem, text: string): string {
+  const keep = setting.type === 'number'
+    ? (ch: string) => /^[0-9.]$/.test(ch)
+    : (ch: string) => !/[\x00-\x1f\x7f]/.test(ch);
+  return Array.from(text).filter(keep).join('');
+}
+
 /**
  * Handle settings key
  * Returns: { handled: boolean, close: boolean, notify?: string }
@@ -394,9 +404,25 @@ export interface SettingsState {
 export function handleSettingsKey(
   key: string,
   ctrl: boolean,
-  state: SettingsState
+  state: SettingsState,
+  /** KeyEvent.isPaste: `key` is text that came in one read, not a key name. */
+  isPaste = false,
 ): { handled: boolean; close: boolean; notify?: string; newState: SettingsState } {
   const newState = { ...state };
+
+  // A paste, or keys typed faster than the terminal is read, arrives as one
+  // text event. It is text even when it spells a key name ("enter",
+  // "escape", "left"), so it is handled before any of them: while a field
+  // is being edited it goes in whole, the way typing it would; otherwise it
+  // is ignored. Fields used to take one character at a time only, so a
+  // pasted URL was dropped, and "value" + Enter in one read saved the old
+  // value. That Enter is its own event and still saves, like typing.
+  if (isPaste) {
+    if (state.editing) {
+      newState.editValue = state.editValue + typedText(SETTINGS[state.selectedIndex], key);
+    }
+    return { handled: true, close: false, newState };
+  }
   
   // Escape
   if (key === 'escape') {

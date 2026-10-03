@@ -56,7 +56,9 @@ import { setPendingPlan, getPendingPlan, clearPendingPlan } from '../utils/planM
 import { config, saveSession, loadSession, getSessionsDir, setApiKey, clearApiKey, saveProfile, deleteProfile } from '../config/index';
 import { agentConfirmationMode, pinAgentConfirmation } from './agentConfirmation';
 import { PROVIDERS } from '../config/providers';
-import { App } from './App';
+import { App, type ConfirmOptions } from './App';
+import { handleInlineConfirmKey, confirmFooter } from './handlers';
+import { handleHunkPickerKey, type HunkPickerOptions, type HunkPickerState } from './components/HunkPicker';
 import { registerSessionServers } from '../utils/mcpRegistry';
 import { pushUserProfileResult, pullUserProfileResult, listCloudSessions, pullCloudSession, type SyncResult } from '../utils/codeepCloud';
 import { trustWorkspaceMcp } from '../utils/mcpConfig';
@@ -131,6 +133,124 @@ describe('/learn rule', () => {
     await handleCommand('learn', ['rule', 'always', 'use', 'tabs'], ctx);
     await vi.waitFor(() => expect(notices).toContain('Custom rule added'));
     expect(loadProjectPreferences(projectDir).customRules).toEqual(['always use tabs']);
+  });
+});
+
+// ─── /apply ──────────────────────────────────────────────────────────────────
+
+// "Apply Changes" answers on one key: you asked for the changes and they are
+// listed above the question. Not when one of them is a file that decides what
+// runs later, or lies outside the project — those wait for Enter, as the
+// agent's own writes to them do.
+describe('/apply and the one-key answer', () => {
+  /** What "y" does to a confirmation built with these options. */
+  function pressY(options: ConfirmOptions): 'answers' | 'selects' {
+    let answered = false;
+    handleInlineConfirmKey({ key: 'y', ctrl: false, alt: false, shift: false, raw: 'y' }, {
+      options,
+      selection: 'no',
+      setSelection: () => {},
+      close: () => { answered = true; },
+      render: () => {},
+    });
+    expect(confirmFooter(options).includes('y/n quick')).toBe(answered);
+    return answered ? 'answers' : 'selects';
+  }
+
+  async function applyDialog(...paths: string[]): Promise<ConfirmOptions> {
+    const { ctx } = makeCtx(projectDir);
+    const reply = paths.map(p => '```ts\n// File: ' + p + '\nexport const a = 1;\n```').join('\n');
+    (ctx.app as unknown as { getMessages: () => unknown }).getMessages = () => [{ role: 'assistant', content: reply }];
+    await handleCommand('apply', [], ctx);
+    const showConfirm = vi.mocked(ctx.app.showConfirm);
+    await vi.waitFor(() => expect(showConfirm).toHaveBeenCalledTimes(1));
+    const options = showConfirm.mock.calls[0][0];
+    expect(options.title).toBe('📝 Apply Changes');
+    return options;
+  }
+
+  it('applies on one key changes inside the project', async () => {
+    expect(pressY(await applyDialog('src/a.ts', 'README.md'))).toBe('answers');
+  });
+
+  it('waits for Enter when a change is to a file that decides what runs later', async () => {
+    for (const path of ['.mcp.json', '.codeep/hooks/pre_tool_call.sh', '.git/hooks/pre-commit', '.agents/skills/x/SKILL.md']) {
+      expect(pressY(await applyDialog('src/a.ts', path)), path).toBe('selects');
+    }
+  });
+
+  it('waits for Enter when a change is outside the project', async () => {
+    expect(pressY(await applyDialog('../elsewhere.ts'))).toBe('selects');
+  });
+});
+
+// /apply -i (the hunk picker) wrote on a single y or a, also to a file that
+// decides what runs later or one outside the project. Those hunks take an
+// Enter after the key now, the rule /apply's own dialog follows.
+describe('/apply -i and the one-key answer', () => {
+  async function picker(...paths: string[]) {
+    return pickerIn(projectDir, ...paths);
+  }
+
+  async function pickerIn(project: string, ...paths: string[]) {
+    const { ctx } = makeCtx(project);
+    const showHunkPicker = vi.fn();
+    (ctx.app as unknown as Record<string, unknown>).showHunkPicker = showHunkPicker;
+    const reply = paths.map(p => '```ts\n// File: ' + p + '\nexport const a = 1;\n```').join('\n');
+    (ctx.app as unknown as { getMessages: () => unknown }).getMessages = () => [{ role: 'assistant', content: reply }];
+    await handleCommand('apply', ['-i'], ctx);
+    await vi.waitFor(() => expect(showHunkPicker).toHaveBeenCalledTimes(1));
+    const options = showHunkPicker.mock.calls[0][0] as HunkPickerOptions;
+    let state: HunkPickerState = { open: true, options, index: 0, accepted: [] };
+    const press = (k: string) => { state = handleHunkPickerKey(state, { key: k }); return state; };
+    return { options, press, written: (p: string) => existsSync(join(project, p)) };
+  }
+
+  it('writes a change inside the project on one y', async () => {
+    const { options, press, written } = await picker('src/a.ts');
+    expect(options.items[0].needsEnter).toBeUndefined();
+    press('y');
+    await vi.waitFor(() => expect(written('src/a.ts')).toBe(true));
+  });
+
+  it('waits for Enter before writing a file that decides what runs later', async () => {
+    for (const path of ['.mcp.json', '.codeep/hooks/pre_tool_call.sh', '.git/hooks/pre-commit', '.agents/skills/x/SKILL.md', '.codeep/config.json']) {
+      const { options, press, written } = await picker(path);
+      expect(options.items[0].needsEnter, path).toBe('decides what runs later');
+      expect(press('y').open, path).toBe(true);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(written(path), path).toBe(false);
+      press('enter');
+      await vi.waitFor(() => expect(written(path), path).toBe(true));
+    }
+  });
+
+  it('waits for Enter after "a" when one of the rest needs it', async () => {
+    const { press, written } = await picker('src/a.ts', '.git/hooks/pre-commit');
+    expect(press('a').open).toBe(true);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(written('src/a.ts')).toBe(false);
+    expect(written('.git/hooks/pre-commit')).toBe(false);
+    press('enter');
+    await vi.waitFor(() => expect(written('.git/hooks/pre-commit')).toBe(true));
+    expect(written('src/a.ts')).toBe(true);
+  });
+
+  it('marks a change outside the project as needing Enter', async () => {
+    // The project sits in a folder of this test's own, so a regression that
+    // writes "../elsewhere.ts" writes it there, not into the shared tmpdir.
+    const outer = mkdtempSync(join(tmpdir(), 'codeep-apply-outer-'));
+    try {
+      const project = join(outer, 'proj');
+      mkdirSync(project);
+      const { options, press, written } = await pickerIn(project, '../elsewhere.ts');
+      expect(options.items[0].needsEnter).toBe('outside the project');
+      expect(press('y').open).toBe(true);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(written('../elsewhere.ts')).toBe(false);
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
+    }
   });
 });
 

@@ -127,3 +127,47 @@ describe('App and the palette', () => {
     expect(writes.join('')).toContain('\x1b[38;2;135;104;74mSelect an option below…');
   });
 });
+
+// The startup questions are drawn by the App's own render pass, so they are
+// repainted with the chat on a theme switch and on a resize — unlike the
+// first-run provider picker before it (loginFlow.ts), which runs before the
+// App and had to be wired up itself.
+describe('an open question and the palette or the terminal size changing', () => {
+  it('is repainted in the new colours, and after a resize', async () => {
+    const writes: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => { writes.push(String(chunk)); return true; });
+    const app = new App({
+      onSubmit: async () => {},
+      onCommand: () => {},
+      onExit: () => {},
+      getStatus: () => ({
+        version: '3.9.1', provider: 'Z.AI', model: 'glm-5.3', agentMode: 'off',
+        projectPath: '/tmp/project', hasWriteAccess: false, sessionId: '', messageCount: 0,
+      }),
+    });
+    const internals = app as unknown as { input: Record<string, (...args: unknown[]) => unknown> };
+    for (const method of ['start', 'stop']) vi.spyOn(internals.input, method).mockImplementation(() => {});
+    const settle = () => new Promise(resolve => setImmediate(resolve));
+    // The diff renderer addresses every cell; the text is what is left
+    // without the escapes.
+    const text = () => writes.join('').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+    try {
+      app.start();
+      app.showPermission('/tmp/project', false, () => {});
+      await settle();
+      expect(text()).toContain('Folder Access');
+
+      writes.length = 0;
+      setPalette({ primary: [0, 128, 128] });
+      await settle();
+      expect(writes.join('')).toContain(TEAL + '\x1b[1mF');
+
+      writes.length = 0;
+      process.stdout.emit('resize');
+      await settle();
+      expect(text()).toContain('Folder Access');
+    } finally {
+      app.stop();
+    }
+  });
+});

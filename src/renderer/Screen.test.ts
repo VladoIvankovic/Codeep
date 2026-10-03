@@ -202,3 +202,32 @@ describe('invalidate — blank cells', () => {
     }
   });
 });
+
+describe('control characters', () => {
+  // The input showed "/skills bundlesm": a carriage return typed into it was
+  // written as a cell of width 0, the terminal drew nothing there, and the
+  // placeholder's letter in that column ("Message or /command") stayed on
+  // screen.
+  it('never takes a cell, so the glyph that was there is cleared', () => {
+    const s = new Screen();
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write')
+      .mockImplementation((chunk: unknown) => { writes.push(String(chunk)); return true; });
+    try {
+      s.write(0, 0, 'Message');
+      s.render();
+      writes.length = 0;
+
+      s.clear();
+      s.write(0, 0, 'Mess\r');
+      s.render();
+      const frame = writes.join('');
+      expect(frame).not.toContain('\r');
+      // Column 5 (the "a" of "Message") is repainted blank.
+      expect(frame).toMatch(/\x1b\[1;5H(?:\x1b\[[0-9;]*m)* /);
+    } finally {
+      spy.mockRestore();
+      s.cleanup();
+    }
+  });
+});

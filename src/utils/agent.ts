@@ -82,6 +82,7 @@ import { gatherSmartContext, formatSmartContext, extractTargetFile } from './sma
 import { planTasks, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
 import { getTaskContextPrompt } from './taskContext';
 import { getLastUsage, getModelContextWindow } from './tokenTracker';
+import { looksUnfinished } from './unfinishedReply';
 
 // ─── Notices given once per process ───────────────────────────────────────────
 
@@ -1419,17 +1420,10 @@ export async function runAgent(
           .replace(/```(?:json|tool_call)?\s*\{[\s\S]*?\}\s*```/g, '') // Only strip tool-call-like code blocks
           .trim();
         
-        // Detect incomplete response using language-agnostic structural signals only.
-        // Keyword lists are brittle (language-dependent) — rely on punctuation/length instead.
-        const trimmed = finalResponse.trimEnd();
-        // A response ending with ':' means the model was about to list steps or execute tools
-        const endsWithColon = trimmed.endsWith(':');
-        // A very short response (< 120 chars) with no sentence-ending punctuation is likely
-        // a mid-thought fragment, not a real conclusion
-        const lastChar = trimmed.slice(-1);
-        const hasProperEnding = ['.', '!', '?', '"', '\'', '`', ')'].includes(lastChar);
-        const isShortFragment = trimmed.length < 120 && !hasProperEnding;
-        const hasIncompleteWork = (endsWithColon || isShortFragment)
+        // Did the model announce work and stop without calling a tool? Only
+        // structural, language-agnostic signals — see unfinishedReply.ts, which
+        // also says why a short answer ("ready", "42", a path) is never nudged.
+        const hasIncompleteWork = looksUnfinished(finalResponse)
           && incompleteWorkRetries < maxIncompleteWorkRetries;
 
         if (hasIncompleteWork) {

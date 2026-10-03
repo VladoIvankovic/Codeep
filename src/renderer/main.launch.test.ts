@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync, existsSync, realpathSync, writeFileSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { analyzeForClarification } from '../utils/interactive';
+import { handleInlineConfirmKey, confirmFooter } from './handlers';
+import type { ConfirmOptions } from './App';
 
 // `codeep --yolo` and the launch prompt, run the way the binary runs them:
 // main() reads process.argv and goes through the whole startup. The App is a
@@ -310,6 +312,140 @@ describe('the answer to clarifying questions', () => {
     } finally {
       config.config.set('agentConfirmation', before);
     }
+  });
+});
+
+// One key answers only a question that approves no agent action and grants
+// no trust. Each question main.ts asks, fed the key "y" the way the App feeds
+// it, either answers or only moves the selection; its hint says which.
+describe('which of the startup and follow-up questions one key answers', () => {
+  /** What "y" does to a confirmation built with these options. */
+  function pressY(options: ConfirmOptions): 'answers' | 'selects' {
+    let answered = false;
+    handleInlineConfirmKey({ key: 'y', ctrl: false, alt: false, shift: false, raw: 'y' }, {
+      options,
+      selection: 'no',
+      setSelection: () => {},
+      close: () => { answered = true; },
+      render: () => {},
+    });
+    expect(confirmFooter(options).includes('y/n quick'), `the hint of "${options.title}"`).toBe(answered);
+    return answered ? 'answers' : 'selects';
+  }
+  const dialog = (index: number) => called('showConfirm')[index].args[0] as ConfirmOptions;
+
+  it('"Set as Project?" answers on one key', async () => {
+    await launch();
+    expect(titles()).toEqual(['Set as Project?']);
+    expect(pressY(dialog(0))).toBe('answers');
+  });
+
+  it('"Trust workspace MCP servers?" waits for Enter', async () => {
+    const { config: stored } = await import('../config/index');
+    writeFileSync(join(folder, '.mcp.json'), JSON.stringify({ mcpServers: { tools: { command: 'tools-cmd' } } }));
+    stored.set('projectPermissions', [
+      { path: folder, readPermission: true, writePermission: true, grantedAt: new Date().toISOString() },
+    ]);
+    await launch();
+    await vi.waitFor(() => expect(titles()).toEqual(['Trust workspace MCP servers?']));
+    expect(pressY(dialog(0))).toBe('selects');
+    dialog(0).onCancel?.();
+  });
+
+  // The task as enhanced with the answers to clarifying questions, which
+  // main.ts confirms itself.
+  async function followUpDialog(mode: 'always' | 'dangerous', task: string): Promise<ConfirmOptions> {
+    ui.onRun = (t, _dryRun, _ctx, _getPending, setPending) => {
+      (setPending as (v: unknown) => void)({
+        originalTask: t, context: analyzeForClarification(t as string), dryRun: false,
+      });
+    };
+    const { config, pins } = await launch('--yolo');
+    pins.pinAgentConfirmation(null);
+    const before = config.config.get('agentConfirmation');
+    config.config.set('agentConfirmation', mode);
+    try {
+      const submit = ui.options?.onSubmit as (text: string) => Promise<void>;
+      await submit(task);
+      await submit('proceed');
+      expect(titles()).toHaveLength(1);
+      return dialog(0);
+    } finally {
+      config.config.set('agentConfirmation', before);
+    }
+  }
+
+  it('"Confirm Agent Task" starts a task on one key, but not one that reads as dangerous', async () => {
+    const plain = await followUpDialog('always', 'refactor my waybar config');
+    expect(plain.title).toBe('⚠️  Confirm Agent Task');
+    expect(pressY(plain)).toBe('answers');
+
+    ui.calls = [];
+    const risky = await followUpDialog('always', 'remove my waybar config');
+    expect(risky.title).toBe('⚠️  Confirm Agent Task');
+    expect(pressY(risky)).toBe('selects');
+  });
+
+  it('"Potentially Dangerous Task" waits for Enter', async () => {
+    const risky = await followUpDialog('dangerous', 'remove my waybar config');
+    expect(risky.title).toBe('⚠️  Potentially Dangerous Task');
+    expect(pressY(risky)).toBe('selects');
+  });
+});
+
+// The welcome block is written before the startup questions are answered.
+// On the Omarchy box it still said "Chat only · no project context" after
+// "Set as Project? → Yes" and "Folder Access → Read & Write".
+describe('the welcome block', () => {
+  /** The welcome as it reads now: the first one added, or its latest update. */
+  const welcome = () => {
+    const updates = called('updateWelcome');
+    if (updates.length > 0) return updates[updates.length - 1].args[0] as string;
+    const added = called('addMessage').map(c => c.args[0] as { role: string; content: string })
+      .find(m => m.role === 'welcome');
+    return added?.content ?? '';
+  };
+
+  it('shows the access granted at startup once it is granted', async () => {
+    await launch();
+    // Asked, not yet answered: it does not claim a mode it cannot know.
+    expect(welcome()).not.toContain('Chat only');
+    expect(welcome()).not.toContain('Access');
+
+    (called('showConfirm')[0].args[0] as { onConfirm: () => void }).onConfirm();
+    (called('showPermission')[0].args[2] as (level: string) => void)('write');
+
+    expect(welcome()).toContain(`Project  ${folder}`);
+    expect(welcome()).toContain('Access   Read & Write');
+    expect(welcome()).not.toContain('Chat only');
+  });
+
+  it('shows read-only access, and chat only when that was the answer', async () => {
+    await launch();
+    (called('showConfirm')[0].args[0] as { onConfirm: () => void }).onConfirm();
+    (called('showPermission')[0].args[2] as (level: string) => void)('read');
+    expect(welcome()).toContain('Access   Read Only');
+
+    ui.calls = [];
+    await launch();
+    (called('showConfirm')[0].args[0] as { onCancel: () => void }).onCancel();
+    expect(welcome()).toContain('Mode     Chat only');
+  });
+
+  it('follows /grant', async () => {
+    await launch();
+    (called('showConfirm')[0].args[0] as { onConfirm: () => void }).onConfirm();
+    (called('showPermission')[0].args[2] as (level: string) => void)('read');
+    expect(welcome()).toContain('Access   Read Only');
+
+    await (ui.options?.onCommand as (command: string, args: string[]) => Promise<void>)('grant', []);
+    expect(welcome()).toContain('Access   Read & Write');
+  });
+
+  it('shows read & write from the start under --yolo, which asks nothing', async () => {
+    await launch('--yolo');
+    expect(welcome()).toContain('Access   Read & Write');
+    expect(welcome()).not.toContain('Chat only');
   });
 });
 

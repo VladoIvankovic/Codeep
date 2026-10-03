@@ -5,6 +5,7 @@ import {
   handleInlinePermissionKey,
   handleInlineSessionPickerKey,
   handleInlineConfirmKey,
+  confirmFooter,
   type SessionItem,
 } from './handlers';
 import type { KeyEvent } from './Input';
@@ -213,13 +214,14 @@ describe('handleInlineSessionPickerKey', () => {
 });
 
 describe('handleInlineConfirmKey', () => {
-  function ctx(selection: 'yes' | 'no' | 'extra' = 'yes', hasExtra = false) {
+  function ctx(selection: 'yes' | 'no' | 'extra' = 'yes', hasExtra = false, quickAnswer?: boolean) {
     return mockCtx({
       options: {
         title: 't',
         message: ['m'],
         onConfirm: () => {},
         extraOption: hasExtra ? { label: 'Apply to all', onSelect: () => {} } : undefined,
+        quickAnswer,
       },
       selection,
       setSelection: vi.fn(),
@@ -233,22 +235,49 @@ describe('handleInlineConfirmKey', () => {
     expect(c.close).toHaveBeenCalledWith('no');
   });
 
-  it('"y" selects yes', () => {
-    const c = ctx('no');
+  // On a question that opted in, the footer says "y/n quick • Enter
+  // confirm": y and n answer at once. "y" on "Set as Project?" used to move
+  // the selection and wait for Enter.
+  it('"y" answers yes at once where the question allows it', () => {
+    const c = ctx('no', false, true);
     handleInlineConfirmKey(key({ key: 'y' }), c);
     expect(c.setSelection).toHaveBeenCalledWith('yes');
+    expect(c.close).toHaveBeenCalledWith('yes');
   });
 
-  it('"n" selects no', () => {
-    const c = ctx('yes');
+  it('"n" answers no at once where the question allows it', () => {
+    const c = ctx('yes', false, true);
     handleInlineConfirmKey(key({ key: 'n' }), c);
     expect(c.setSelection).toHaveBeenCalledWith('no');
+    expect(c.close).toHaveBeenCalledWith('no');
   });
 
-  it('"a" selects extra only when an extra option is present', () => {
-    const withExtra = ctx('yes', true);
+  // Everywhere else — an agent's tool call, a dangerous task, workspace MCP
+  // servers — they only select, as before 3.9.1, and Enter answers.
+  it('"y" and "n" only select on a question that did not opt in', () => {
+    const c = ctx('no');
+    handleInlineConfirmKey(key({ key: 'y' }), c);
+    expect(c.setSelection).toHaveBeenLastCalledWith('yes');
+    handleInlineConfirmKey(key({ key: 'n' }), c);
+    expect(c.setSelection).toHaveBeenLastCalledWith('no');
+    expect(c.close).not.toHaveBeenCalled();
+  });
+
+  it('"y" or "n" in a paste is not an answer', () => {
+    const c = ctx('no', false, true);
+    handleInlineConfirmKey(key({ key: 'yes', isPaste: true }), c);
+    handleInlineConfirmKey(key({ key: 'y', isPaste: true }), c);
+    expect(c.close).not.toHaveBeenCalled();
+  });
+
+  // Not promised by the footer, and the one answer that lasts beyond this
+  // prompt: still a selection that Enter confirms, even where y/n answer.
+  it('"a" selects extra only when an extra option is present, without answering', () => {
+    const withExtra = ctx('yes', true, true);
     handleInlineConfirmKey(key({ key: 'a' }), withExtra);
     expect(withExtra.setSelection).toHaveBeenCalledWith('extra');
+
+    expect(withExtra.close).not.toHaveBeenCalled();
 
     const withoutExtra = ctx('yes', false);
     handleInlineConfirmKey(key({ key: 'a' }), withoutExtra);
@@ -287,5 +316,15 @@ describe('handleInlineConfirmKey', () => {
     const c = ctx('yes');
     handleInlineConfirmKey(key({ key: 'enter' }), c);
     expect(c.close).toHaveBeenCalledWith('yes');
+  });
+});
+
+describe('confirmFooter', () => {
+  it('promises "y/n quick" only where one key answers', () => {
+    expect(confirmFooter({ quickAnswer: true })).toBe('←/→ select • y/n quick • Enter confirm • Esc cancel');
+    for (const options of [{}, { quickAnswer: false }]) {
+      expect(confirmFooter(options)).toBe('←/→ or y/n select • Enter confirm • Esc cancel');
+      expect(confirmFooter(options)).not.toContain('quick');
+    }
   });
 });

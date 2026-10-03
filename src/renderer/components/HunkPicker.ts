@@ -7,6 +7,11 @@
 // wiring. The picker walks the user through items one at a time; for each
 // they accept (`y`/Enter/→) or skip (`n`/←). `a` accepts all remaining,
 // `q`/Esc quits. `onComplete` fires exactly once with the accepted set.
+//
+// A hunk marked `needsEnter` (a file that decides what runs later, or one
+// outside the project) is never accepted on one key: `y`/→ select it and
+// Enter confirms, and `a` over remaining hunks that include one asks for
+// Enter too. The same rule as /apply's one-key answer (quickAnswer).
 
 import type { Screen } from '../Screen';
 import { fg, style } from '../ansi';
@@ -22,6 +27,12 @@ export interface HunkPickerItem {
   header: string;
   /** Pre-formatted diff lines to display. */
   lines: string[];
+  /**
+   * Why accepting this hunk takes an Enter after the key, e.g. "decides
+   * what runs later" (.git/*, hooks, MCP server lists, skills, agents,
+   * .codeep/config.json) or "outside the project". Unset: one key accepts.
+   */
+  needsEnter?: string;
 }
 
 export interface HunkPickerOptions {
@@ -35,6 +46,12 @@ export interface HunkPickerState {
   options: HunkPickerOptions | null;
   index: number;
   accepted: Array<{ path: string; hunkIndex: number }>;
+  /**
+   * An acceptance waiting for Enter: 'one' — this hunk (y/→ on a
+   * needsEnter hunk); 'all' — every remaining hunk (a, when one of them
+   * needsEnter). Enter confirms it; any other key cancels it, and only that.
+   */
+  pending?: 'one' | 'all' | null;
 }
 
 export function createHunkPickerState(): HunkPickerState {
@@ -56,10 +73,35 @@ export function handleHunkPickerKey(
   state: HunkPickerState,
   event: HunkPickerKeyEvent,
 ): HunkPickerState {
-  const opts = state.options;
-  if (!opts || !state.open) {
+  if (!state.options || !state.open) {
     return { ...state, open: false };
   }
+
+  // An acceptance waiting for Enter: Enter confirms it; any other key
+  // withdraws it and does nothing more, so a key typed ahead can't also act.
+  if (state.pending) {
+    const cleared: HunkPickerState = { ...state, pending: null };
+    if (event.key !== 'enter') return cleared;
+    return applyKey(cleared, state.pending === 'all' ? 'a' : 'enter');
+  }
+
+  // A hunk that needs Enter is only selected by y/→/Enter, never accepted.
+  const current = state.options.items[state.index];
+  if (current?.needsEnter && (event.key === 'y' || event.key === 'right' || event.key === 'enter')) {
+    return { ...state, pending: 'one' };
+  }
+  // So is "all remaining" when one of them needs it.
+  if (event.key === 'a' && state.options.items.slice(state.index).some((item) => item.needsEnter)) {
+    return { ...state, pending: 'all' };
+  }
+
+  return applyKey(state, event.key);
+}
+
+/** What a key does, once any Enter it needs has been given. */
+function applyKey(state: HunkPickerState, key: string): HunkPickerState {
+  const opts = state.options;
+  if (!opts) return { ...state, open: false };
 
   const finish = (): HunkPickerState => {
     const accepted = state.accepted;
@@ -104,7 +146,7 @@ export function handleHunkPickerKey(
     return next;
   };
 
-  switch (event.key) {
+  switch (key) {
     case 'y':
     case 'enter':
     case 'right':
@@ -170,7 +212,7 @@ export function renderHunkPicker(
   }
 
   // File path + hunk header
-  screen.writeLine(y++, `File: ${item.path}`, fg.cyan);
+  screen.writeLine(y++, `File: ${item.path}${item.needsEnter ? `  (${item.needsEnter})` : ''}`, fg.cyan);
   screen.writeLine(y++, `Hunk: ${item.header}`, fg.gray);
 
   // Diff lines (capped to available vertical space; show up to 12)
@@ -196,10 +238,28 @@ export function renderHunkPicker(
   }
 
   y++;
-  // Key legend
-  screen.writeLine(
-    y,
-    'y/Enter accept • n skip • a accept all • q/Esc quit • ↑/↓ navigate',
-    fg.gray,
-  );
+  // Key legend: what the keys do here, including the Enter a hunk needs.
+  screen.writeLine(y, hunkPickerLegend(state), state.pending ? PRIMARY_COLOR + style.bold : fg.gray);
+}
+
+/**
+ * The key hint under the picker. Where one key would accept a hunk that
+ * needs Enter (see HunkPickerItem.needsEnter), it says Enter is needed; while
+ * an acceptance waits for that Enter, it says what Enter will do.
+ */
+export function hunkPickerLegend(state: HunkPickerState): string {
+  const items = state.options?.items ?? [];
+  if (state.pending === 'all') {
+    const count = items.length - state.index;
+    return `Enter accepts all ${count} remaining hunk${count === 1 ? '' : 's'} • any other key cancels`;
+  }
+  if (state.pending === 'one') {
+    return 'Enter accepts this hunk • any other key cancels';
+  }
+  const current = items[state.index];
+  const accept = current?.needsEnter ? 'y/Enter, then Enter, accept' : 'y/Enter accept';
+  const all = items.slice(state.index).some((item) => item.needsEnter)
+    ? 'a, then Enter, accept all'
+    : 'a accept all';
+  return `${accept} • n skip • ${all} • q/Esc quit • ↑/↓ navigate`;
 }

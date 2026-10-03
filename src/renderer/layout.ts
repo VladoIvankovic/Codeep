@@ -256,10 +256,19 @@ export interface PasteInfo {
 /** Threshold above which a paste is considered "large" and shows a dialog. */
 export const PASTE_DIALOG_THRESHOLD = { chars: 100, lines: 3 };
 
-/** True when the paste is large enough to warrant the confirm dialog. */
+/**
+ * True when the paste is large enough to warrant the confirm dialog.
+ *
+ * Only for text the input line cannot show: it shows one line, so a block of
+ * lines is previewed first. A single line goes straight into the input, where
+ * it scrolls like typed text, and the next Enter sends it. It used to open the
+ * dialog from 100 characters on, so after pasting a long prompt the first
+ * Enter only answered "Add to input" — an Enter that seemed to do nothing.
+ */
 export function shouldShowPasteDialog(text: string): boolean {
   const chars = text.length;
   const lines = text.split('\n').length;
+  if (lines === 1) return false;
   return chars >= PASTE_DIALOG_THRESHOLD.chars || lines > PASTE_DIALOG_THRESHOLD.lines;
 }
 

@@ -7,10 +7,8 @@
  */
 
 import { App, Message } from './App';
-import { Screen } from './Screen';
-import { Input, KeyEvent } from './Input';
 import { StatusInfo } from './components/Status';
-import { LoginScreen, renderProviderSelect } from './components/Login';
+import { runLoginFlow } from './loginFlow';
 import { chat, setProjectContext } from '../api/index';
 import { getZaiVisionConfig, getMinimaxMcpConfig, callZaiVisionApi, callMinimaxApi } from '../utils/mcpIntegration';
 import {
@@ -55,6 +53,7 @@ import { sendTelegramNotice } from '../utils/telegramNotify';
 import {
   executeAgentTask,
   runAgentTask,
+  isDangerousTask,
   PendingInteractiveContext,
 } from './agentExecution';
 import type { McpServer } from '../acp/protocol';
@@ -62,6 +61,7 @@ import { symlinkedCodeepNotice } from '../utils/projectPaths';
 import { parseLaunchArgs } from './cliArgs';
 import { agentConfirmationMode, pinAgentConfirmation, pinAgentInteractive, isAgentConfirmationPinned } from './agentConfirmation';
 import { followOmarchyTheme, type OmarchyThemeWatch } from './omarchyTheme';
+import { welcomeContent } from './welcome';
 
 // ─── Global state ─────────────────────────────────────────────────────────────
 
@@ -76,6 +76,8 @@ let gitBranchCache: { path: string; branch?: string; refusal?: string } | null =
 const gitRefusalReported = new Set<string>();
 let projectContext: ProjectContext | null = null;
 let hasWriteAccess = false;
+/** Rewrites the welcome block from the current access; set once the App is up. */
+let refreshWelcome: () => void = () => {};
 let sessionId = getCurrentSessionId();
 let app: App;
 /** Human-readable session name derived from the first user message */
@@ -240,8 +242,9 @@ function makeCtx(): AppCommandContext {
     setProjectContext: (ctx) => {
       projectContext = ctx;
       if (ctx) setProjectContext(ctx);
+      refreshWelcome();
     },
-    setHasWriteAccess: (v) => { hasWriteAccess = v; },
+    setHasWriteAccess: (v) => { hasWriteAccess = v; refreshWelcome(); },
   };
 }
 
@@ -314,6 +317,8 @@ async function handleSubmit(message: string): Promise<void> {
       app.showConfirm({
         title: '⚠️  Confirm Agent Task',
         message: ['Run agent with enhanced task?', '', `  "${shortTask}"`],
+        // As in runAgentTask: one key, unless the task reads as dangerous.
+        quickAnswer: !isDangerousTask(enhancedTask),
         confirmLabel: 'Run Agent',
         cancelLabel: 'Cancel',
         onConfirm: () => executeAgentTask(enhancedTask, dryRun, ctx),
@@ -321,14 +326,14 @@ async function handleSubmit(message: string): Promise<void> {
       });
       return;
     }
-    const dangerousKeywords = ['delete', 'remove', 'drop', 'reset', 'force', 'overwrite', 'replace all', 'rm ', 'clear'];
-    if (dangerousKeywords.some(k => enhancedTask.toLowerCase().includes(k))) {
+    if (isDangerousTask(enhancedTask)) {
       const shortTask = enhancedTask.length > 60 ? enhancedTask.slice(0, 57) + '...' : enhancedTask;
       app.showConfirm({
         title: '⚠️  Potentially Dangerous Task',
         message: ['This task contains potentially dangerous operations:', '', `  "${shortTask}"`],
         confirmLabel: 'Proceed',
         cancelLabel: 'Cancel',
+        // No quickAnswer: a task flagged dangerous starts on Enter.
         onConfirm: () => executeAgentTask(enhancedTask, dryRun, ctx),
         onCancel: () => app.notify('Agent task cancelled'),
       });
@@ -498,96 +503,7 @@ async function handleCommand(command: string, args: string[]): Promise<void> {
 // ─── Login flow (full-screen, pre-app) ───────────────────────────────────────
 
 async function showLoginFlow(): Promise<string | null> {
-  return new Promise((resolve) => {
-    const screen = new Screen();
-    const input = new Input();
-    const providers = getProviderList();
-
-    let currentStep: 'provider' | 'apikey' = 'provider';
-    let selectedProviderIndex = 0;
-    let selectedProvider = providers[0];
-    let loginScreen: LoginScreen | null = null;
-    let loginError = '';
-
-    screen.init();
-    input.start();
-
-    const cleanup = () => { input.stop(); screen.cleanup(); };
-
-    const renderCurrentStep = () => {
-      if (currentStep === 'provider') {
-        renderProviderSelect(screen, providers, selectedProviderIndex);
-      } else if (loginScreen) {
-        loginScreen.render();
-      }
-    };
-
-    input.onKey((event: KeyEvent) => {
-      if (currentStep === 'provider') {
-        if (event.key === 'up') {
-          selectedProviderIndex = Math.max(0, selectedProviderIndex - 1);
-          renderCurrentStep();
-        } else if (event.key === 'down') {
-          selectedProviderIndex = Math.min(providers.length - 1, selectedProviderIndex + 1);
-          renderCurrentStep();
-        } else if (event.key === 'enter') {
-          selectedProvider = providers[selectedProviderIndex];
-          setProvider(selectedProvider.id);
-          // Providers that don't need a key (Ollama, Custom OpenAI-compatible)
-          // skip the API-key prompt entirely. Configure their endpoint in
-          // /settings (Ollama URL / Custom Base URL) once inside the app.
-          if (selectedProvider.noApiKey) {
-            cleanup();
-            resolve('ollama'); // non-null sentinel so the caller proceeds
-            return;
-          }
-          currentStep = 'apikey';
-          loginScreen = new LoginScreen(screen, input, {
-            providerName: selectedProvider.name,
-            error: loginError,
-            subscribeUrl: selectedProvider.subscribeUrl,
-            onSubmit: async (key) => {
-              if (key.length < 10) {
-                loginError = 'API key too short';
-                loginScreen = new LoginScreen(screen, input, {
-                  providerName: selectedProvider.name,
-                  error: loginError,
-                  subscribeUrl: selectedProvider.subscribeUrl,
-                  onSubmit: () => {},
-                  onCancel: () => { cleanup(); resolve(null); },
-                });
-                renderCurrentStep();
-                return;
-              }
-              try {
-                await setApiKey(key);
-              } catch {
-                loginError = 'Could not save the API key (secure storage unavailable). Please try again.';
-                renderCurrentStep();
-                return;
-              }
-              cleanup();
-              resolve(key);
-            },
-            onCancel: () => {
-              currentStep = 'provider';
-              loginScreen = null;
-              loginError = '';
-              renderCurrentStep();
-            },
-          });
-          renderCurrentStep();
-        } else if (event.key === 'escape') {
-          cleanup();
-          resolve(null);
-        }
-      } else if (loginScreen) {
-        loginScreen.handleKey(event);
-      }
-    });
-
-    renderCurrentStep();
-  });
+  return runLoginFlow({ providers: getProviderList(), setProvider, setApiKey });
 }
 
 // ─── Session picker ───────────────────────────────────────────────────────────
@@ -958,35 +874,14 @@ Commands (in chat):
   const providerInfo = providers.find(p => p.id === provider.id);
   const version = getCurrentVersion();
   const model = config.get('model');
-  const agentMode = config.get('agentMode') || 'off';
 
-  const welcomeLines: string[] = [`Codeep v${version}  ·  ${providerInfo?.name}  ·  ${model}`, ''];
-  if (projectContext) {
-    welcomeLines.push(`  Project  ${projectPath}`);
-    welcomeLines.push(hasWriteAccess
-      ? '  Access   Read & Write  ·  Agent enabled'
-      : '  Access   Read Only  ·  /grant to enable Agent');
-  } else {
-    welcomeLines.push('  Mode     Chat only  ·  no project context');
-  }
-  if (agentMode === 'on' && hasWriteAccess) {
-    welcomeLines.push('');
-    welcomeLines.push('  ⚠  Agent Mode ON  —  messages auto-execute as agent tasks');
-  }
-  if (launch.yolo) {
-    welcomeLines.push('');
-    welcomeLines.push('  ⚠  YOLO  —  agent actions run without asking, for this launch only');
-  }
-  welcomeLines.push('');
-  const githubId = getGithubId();
-  welcomeLines.push(githubId
-    ? `  Account  codeep.dev linked`
-    : `  Account  not linked  ·  run: codeep account`);
-  // Warn before first use if this workspace defines project-scoped custom
-  // slash commands. They run as user prompts — a hostile or unfamiliar repo
-  // could ship `.codeep/commands/refactor.md` whose body silently sends
-  // something the user didn't intend. The banner is informed-consent;
-  // `/commands` shows the full bodies.
+  // Workspace notices, under the access lines. Warn before first use if this
+  // workspace defines project-scoped custom slash commands. They run as user
+  // prompts — a hostile or unfamiliar repo could ship
+  // `.codeep/commands/refactor.md` whose body silently sends something the
+  // user didn't intend. The banner is informed-consent; `/commands` shows the
+  // full bodies.
+  const notices: string[][] = [];
   if (projectPath) {
     try {
       const { loadCustomCommands } = await import('../utils/customCommands');
@@ -994,9 +889,10 @@ Commands (in chat):
       if (projectCustom.length > 0) {
         const list = projectCustom.slice(0, 6).map(c => `/${c.name}`).join(', ');
         const more = projectCustom.length > 6 ? ` (+${projectCustom.length - 6} more)` : '';
-        welcomeLines.push('');
-        welcomeLines.push(`  ⚠  This workspace defines ${projectCustom.length} custom slash command${projectCustom.length === 1 ? '' : 's'}: ${list}${more}`);
-        welcomeLines.push('     Type /commands to review before invoking');
+        notices.push([
+          `  ⚠  This workspace defines ${projectCustom.length} custom slash command${projectCustom.length === 1 ? '' : 's'}: ${list}${more}`,
+          '     Type /commands to review before invoking',
+        ]);
       }
     } catch {
       // Loading must never block the welcome banner.
@@ -1009,8 +905,7 @@ Commands (in chat):
       const { summarizeHooks } = await import('../utils/hooks');
       const summary = summarizeHooks(projectPath);
       if (summary) {
-        welcomeLines.push('');
-        welcomeLines.push(`  ⚠  ${summary} — shell hooks run automatically. Type /hooks to inspect.`);
+        notices.push([`  ⚠  ${summary} — shell hooks run automatically. Type /hooks to inspect.`]);
       }
     } catch {
       // Don't block on hook discovery failure.
@@ -1022,17 +917,33 @@ Commands (in chat):
       const { summarizeBundles } = await import('../utils/skillBundles');
       const summary = summarizeBundles(projectPath);
       if (summary) {
-        welcomeLines.push('');
-        welcomeLines.push(`  ℹ  This workspace ships ${summary}. Type /skills bundles to inspect.`);
+        notices.push([`  ℹ  This workspace ships ${summary}. Type /skills bundles to inspect.`]);
       }
     } catch {
       // Don't block on skill discovery failure.
     }
   }
 
-  welcomeLines.push('');
-  welcomeLines.push('  /help  ·  Ctrl+L clear  ·  Esc cancel');
-  app.addMessage({ role: 'welcome', content: welcomeLines.join('\n') });
+  // Folder Access is asked below, after the intro: until it is answered the
+  // welcome says so instead of claiming a mode it cannot know yet.
+  let accessPending = needsPermissionDialog;
+  const currentWelcome = () => welcomeContent({
+    version,
+    providerName: providerInfo?.name,
+    model,
+    projectPath,
+    hasProjectContext: projectContext !== null,
+    hasWriteAccess,
+    accessPending,
+    agentMode: config.get('agentMode') || 'off',
+    yolo: launch.yolo,
+    accountLinked: !!getGithubId(),
+    notices,
+  });
+  app.addMessage({ role: 'welcome', content: currentWelcome() });
+  // Written again whenever what it describes changes: the startup questions
+  // answered, or /grant.
+  refreshWelcome = () => app.updateWelcome(currentWelcome());
 
   app.start();
 
@@ -1106,6 +1017,7 @@ Commands (in chat):
           ],
           confirmLabel: 'Trust & start',
           cancelLabel: 'Not now',
+          // No quickAnswer: trusting the repo's servers takes Enter.
           onConfirm: () => {
             trustWorkspaceMcp(projectPath);
             // Waited for, so a launch prompt sent next has their tools.
@@ -1188,6 +1100,8 @@ Commands (in chat):
   // then sending today's prompt into whatever was picked is not what was
   // asked, and --yolo has nobody at the terminal to pick at all.
   const finishStartup = () => {
+    accessPending = false;
+    refreshWelcome();
     settleStartupAnswered();
     if (launch.prompt === null && !launch.yolo) {
       showSessionPickerInline();
@@ -1235,6 +1149,9 @@ Commands (in chat):
         ],
         confirmLabel: 'Yes, set as project',
         cancelLabel: 'No, chat only',
+        // About this folder only: it approves no agent action and trusts
+        // nothing in the repo. Folder Access, which grants access, follows.
+        quickAnswer: true,
         onConfirm: () => { initializeAsProject(projectPath); app.notify('Folder initialized as project'); showPermissionAndContinue(); },
         onCancel: () => { app.notify('Chat only mode - no project context'); finishStartup(); },
       });

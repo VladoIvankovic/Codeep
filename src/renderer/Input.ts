@@ -18,6 +18,22 @@ export type KeyHandler = (event: KeyEvent) => void;
 export class Input {
   private handlers: KeyHandler[] = [];
   private dataHandler: ((data: string) => void) | null = null;
+  /**
+   * Inside a bracketed paste whose end marker has not arrived yet: what came
+   * since the paste started, or since the last hand-over. Null when none.
+   */
+  private pasteBuffer: string | null = null;
+  private pasteTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * The open paste is orphaned: its end marker was late, and what came first
+   * has been handed over. The rest is still the paste — collected, its line
+   * breaks kept as text — until the marker arrives or the terminal has been
+   * quiet for ORPHANED_PASTE_WAIT_MS.
+   */
+  private pasteOrphaned = false;
+  /** The line break that ended the part handed over; it goes in front of
+   *  the rest, or is dropped as the paste's trailing one if nothing follows. */
+  private pasteHeldBreak = false;
   
   /**
    * Start listening for input
@@ -36,10 +52,7 @@ export class Input {
     // \x1b[?2004h - enable bracketed paste mode (wraps pastes in \x1b[200~ ... \x1b[201~)
     process.stdout.write('\x1b[?1000h\x1b[?1006h\x1b[?2004h');
     
-    this.dataHandler = (data: string) => {
-      const event = this.parseKey(data);
-      this.emit(event);
-    };
+    this.dataHandler = (data: string) => this.feed(data);
     process.stdin.on('data', this.dataHandler);
   }
   
@@ -52,6 +65,11 @@ export class Input {
       process.stdin.removeListener('data', this.dataHandler);
       this.dataHandler = null;
     }
+    // A paste still waiting for its end marker goes with the listener.
+    this.clearPasteTimer();
+    this.pasteBuffer = null;
+    this.pasteOrphaned = false;
+    this.pasteHeldBreak = false;
     
     // Disable mouse tracking and bracketed paste mode
     process.stdout.write('\x1b[?2004l\x1b[?1006l\x1b[?1000l');
@@ -83,11 +101,300 @@ export class Input {
       handler(event);
     }
   }
-  
+
   /**
-   * Parse raw input into KeyEvent
+   * One read from the terminal: a key, a paste, or several keys at once.
+   *
+   * A chunk is whatever arrived since the last read, so `tmux send-keys
+   * "text" Enter`, a fast typist or a paste ending in a newline deliver text
+   * and Enter together. Taken as one key, "text\r" went into the input with
+   * the carriage return in it — a zero-width cell that left the placeholder's
+   * old letter on screen ("/skills bundlesm") — and nothing was sent. Each key
+   * in a chunk is its own event now (parseKeys).
+   *
+   * A bracketed paste (\x1b[200~ … \x1b[201~) is collected until its end
+   * marker, which a long paste can deliver several reads later. If the marker
+   * is late, what arrived is handed over after PASTE_END_WAIT_MS, so it is not
+   * stuck out of sight, and the paste is orphaned: what follows is still
+   * collected as pasted text, line breaks and all, so a paste that pauses
+   * part-way can never send part of itself. It ends at the end marker, at a
+   * read that is only Ctrl+C or Ctrl+D (then taken as that key), or after
+   * ORPHANED_PASTE_WAIT_MS with no input at all.
    */
-  private parseKey(data: string): KeyEvent {
+  feed(data: string): void {
+    // Ctrl+C or Ctrl+D on its own, while an orphaned paste is still being
+    // collected, is the user trying to get out — not more of the paste.
+    // Taken as text, every press also restarted the wait, so there was no
+    // way out. It ends the paste (what came is handed over) and is that key.
+    // Inside a paste whose end marker is still coming, bytes stay text.
+    if (this.pasteOrphaned && this.pasteBuffer !== null && ONLY_CTRL_C_OR_D.test(data)) {
+      this.clearPasteTimer();
+      this.finishPaste(this.pasteBuffer);
+      for (const event of parseKeys(data)) this.emit(event);
+      return;
+    }
+    let rest = data;
+    while (rest.length > 0) {
+      if (this.pasteBuffer !== null) {
+        // Searched together: the end marker itself can be split between reads.
+        const pasted = this.pasteBuffer + rest;
+        const end = pasted.indexOf(PASTE_END);
+        if (end === -1) {
+          this.pasteBuffer = pasted;
+          this.armPasteTimer();
+          return;
+        }
+        this.clearPasteTimer();
+        this.finishPaste(pasted.slice(0, end));
+        rest = pasted.slice(end + PASTE_END.length);
+        continue;
+      }
+      const start = rest.indexOf(PASTE_START);
+      if (start === -1) {
+        for (const event of parseKeys(rest)) this.emit(event);
+        return;
+      }
+      for (const event of parseKeys(rest.slice(0, start))) this.emit(event);
+      this.pasteBuffer = '';
+      this.pasteOrphaned = false;
+      this.pasteHeldBreak = false;
+      rest = rest.slice(start + PASTE_START.length);
+      if (rest.length === 0) this.armPasteTimer();
+    }
+  }
+
+  /** The paste is over: hand over the rest of it and leave paste mode. */
+  private finishPaste(raw: string): void {
+    this.pasteBuffer = null;
+    this.pasteOrphaned = false;
+    this.handOverPaste(raw, true);
+  }
+
+  /**
+   * Emit pasted text. One trailing line break is dropped at the end of the
+   * paste (see pasteEvent); in a part handed over early it is held back
+   * instead, and put in front of the next part, so the lines stay apart.
+   */
+  private handOverPaste(raw: string, last: boolean): void {
+    // A start marker inside a paste is no text: one whose end marker was
+    // lost, followed by the next paste.
+    let text = normalizeLineBreaks(raw.split(PASTE_START).join(''));
+    if (this.pasteHeldBreak && text.length > 0) text = '\n' + text;
+    this.pasteHeldBreak = false;
+    if (text.endsWith('\n')) {
+      text = text.slice(0, -1);
+      this.pasteHeldBreak = !last;
+    }
+    if (text.length > 0) this.emit({ ...blankEvent(raw), key: text, isPaste: true });
+  }
+
+  private armPasteTimer(): void {
+    this.clearPasteTimer();
+    this.pasteTimer = setTimeout(() => {
+      this.pasteTimer = null;
+      if (this.pasteBuffer === null) return;
+      const text = this.pasteBuffer;
+      if (this.pasteOrphaned) {
+        // Quiet for long enough: the end marker is not coming.
+        this.finishPaste(text);
+        return;
+      }
+      // Late: show what came, and keep the rest of the paste a paste.
+      this.pasteBuffer = '';
+      this.pasteOrphaned = true;
+      this.handOverPaste(text, false);
+      this.armPasteTimer();
+    }, this.pasteOrphaned ? ORPHANED_PASTE_WAIT_MS : PASTE_END_WAIT_MS);
+  }
+
+  private clearPasteTimer(): void {
+    if (this.pasteTimer) clearTimeout(this.pasteTimer);
+    this.pasteTimer = null;
+  }
+}
+
+/** Bracketed paste markers (mode 2004, switched on in Input.start). */
+const PASTE_START = '\x1b[200~';
+const PASTE_END = '\x1b[201~';
+
+/** A read of nothing but Ctrl+C / Ctrl+D presses (two can arrive in one read on a slow link). */
+const ONLY_CTRL_C_OR_D = /^[\x03\x04]+$/;
+
+/**
+ * How long a bracketed paste waits for its end marker before what came is
+ * handed over. Terminals send it, but input must not vanish into an open
+ * paste for good if one never arrives.
+ */
+export const PASTE_END_WAIT_MS = 500;
+
+/**
+ * How long an orphaned paste (see Input.feed) waits, with no input at all,
+ * for the rest of itself and its end marker before input is keys again. Long
+ * enough for a paste over a slow ssh or mosh link to stall and resume.
+ */
+export const ORPHANED_PASTE_WAIT_MS = 5000;
+
+/** Line breaks as the editor keeps them: a terminal sends Enter as \r. */
+function normalizeLineBreaks(text: string): string {
+  return text.replace(/\r\n?/g, '\n');
+}
+
+function blankEvent(raw: string): KeyEvent {
+  return { key: '', ctrl: false, alt: false, shift: false, raw, isPaste: false };
+}
+
+function enterEvent(raw: string): KeyEvent {
+  return { ...blankEvent(raw), key: 'enter' };
+}
+
+/**
+ * Text that arrived in one read. One character is a keypress, as it always
+ * was; more is a paste event, which App inserts whole (LineEditor.handleKey
+ * takes only one UTF-16 unit, so an emoji arrives this way too).
+ */
+function textEvent(text: string): KeyEvent {
+  if (text.length === 1) return parseSingleKey(text);
+  return { ...blankEvent(text), key: text, isPaste: true };
+}
+
+/**
+ * A pasted block. Its line breaks stay text — a paste is never sent by the
+ * newline in it, which is what bracketed paste is for — and one trailing line
+ * break is dropped: copying a whole line brings its newline along, and kept,
+ * it would leave the input on an empty second line.
+ */
+function pasteEvent(raw: string): KeyEvent | null {
+  const text = normalizeLineBreaks(raw).replace(/\n$/, '');
+  if (text.length === 0) return null;
+  return { ...blankEvent(raw), key: text, isPaste: true };
+}
+
+/** Control characters other than tab and the two line breaks. */
+const CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f\x1b\x7f]/;
+
+/**
+ * Split one read (with no bracketed paste in it) into key events.
+ *
+ * Plain text and line breaks only:
+ *  - nothing but line breaks: one Enter per break (\r\n is one);
+ *  - one line followed by one line break: the text, then Enter — typed or
+ *    sent ahead of the Enter key, so it is sent like typing would send it;
+ *  - line breaks inside the text: a multi-line paste from a terminal without
+ *    bracketed paste, kept as text and not sent (see pasteEvent);
+ *  - otherwise: the text.
+ * Anything with escape sequences or control keys in it is cut into its keys.
+ */
+export function parseKeys(data: string): KeyEvent[] {
+  if (data.length === 0) return [];
+  if (!CONTROL.test(data)) {
+    if (/^(?:\r\n|\r|\n)+$/.test(data)) {
+      return (data.match(/\r\n|\r|\n/g) ?? []).map(enterEvent);
+    }
+    const line = /^([^\r\n]+)(\r\n|\r|\n)$/.exec(data);
+    if (line) return [textEvent(line[1]), enterEvent(line[2])];
+    if (/[\r\n]/.test(data)) {
+      const event = pasteEvent(data);
+      return event ? [event] : [];
+    }
+    if (data === '\t') return [parseSingleKey(data)];
+    return [textEvent(data)];
+  }
+  return splitKeys(data).map(token => (CONTROL.test(token) || token === '\t' || /^[\r\n]/.test(token)
+    ? parseSingleKey(token)
+    : textEvent(token)));
+}
+
+/**
+ * Cut a chunk into tokens: escape sequences, single control characters,
+ * line breaks, and runs of plain text.
+ */
+function splitKeys(data: string): string[] {
+  const tokens: string[] = [];
+  let text = '';
+  const flush = () => { if (text) { tokens.push(text); text = ''; } };
+  let i = 0;
+  while (i < data.length) {
+    const ch = data[i];
+    if (ch === '\x1b') {
+      flush();
+      const next = data[i + 1];
+      // Alt/Option + arrow from terminals that send ESC + CSI/SS3 (iTerm2 with
+      // Option as Esc+, urxvt, older tmux): one key, as 3.9.0 read it. Split,
+      // the leading ESC was a bare Escape — it stopped the agent, cancelled a
+      // stream, or denied an open "Allow this action?" for the rest of the run.
+      if (next === '\x1b' && (data[i + 2] === '[' || data[i + 2] === 'O')) {
+        let end: number;
+        if (data[i + 2] === 'O') {
+          end = Math.min(data.length, i + 4);
+        } else {
+          let j = i + 3;
+          while (j < data.length && !(data.charCodeAt(j) >= 0x40 && data.charCodeAt(j) <= 0x7e)) j++;
+          end = Math.min(data.length, j + 1);
+        }
+        tokens.push(data.slice(i, end));
+        i = end;
+        continue;
+      }
+      if (next === '[') {
+        // CSI: parameters, then one final byte in @–~.
+        let j = i + 2;
+        while (j < data.length && !(data.charCodeAt(j) >= 0x40 && data.charCodeAt(j) <= 0x7e)) j++;
+        if (j >= data.length) { tokens.push(data.slice(i)); break; }
+        let end = j + 1;
+        // A legacy (X10) mouse report carries three raw bytes after "\x1b[M".
+        if (j === i + 2 && data[j] === 'M') end = Math.min(data.length, j + 4);
+        const token = data.slice(i, end);
+        // A stray paste marker (its partner went in another read) is no key.
+        if (token !== PASTE_START && token !== PASTE_END) tokens.push(token);
+        i = end;
+        continue;
+      }
+      if (next === 'O' && i + 2 < data.length) {
+        tokens.push(data.slice(i, i + 3));
+        i += 3;
+        continue;
+      }
+      if (next !== undefined && next !== '\x1b') {
+        // Alt+key: ESC and the character (a whole surrogate pair for an emoji).
+        const width = (data.codePointAt(i + 1) ?? 0) > 0xffff ? 2 : 1;
+        tokens.push(data.slice(i, i + 1 + width));
+        i += 1 + width;
+        continue;
+      }
+      tokens.push(ch);
+      i++;
+      continue;
+    }
+    if (ch === '\r' || ch === '\n') {
+      flush();
+      if (ch === '\r' && data[i + 1] === '\n') {
+        tokens.push('\r\n');
+        i += 2;
+      } else {
+        tokens.push(ch);
+        i++;
+      }
+      continue;
+    }
+    if (CONTROL.test(ch) || ch === '\t') {
+      flush();
+      tokens.push(ch);
+      i++;
+      continue;
+    }
+    text += ch;
+    i++;
+  }
+  flush();
+  return tokens;
+}
+
+/**
+ * Parse one key — a single character, control code or escape sequence — into
+ * a KeyEvent. This was the whole parser when a read was taken as one key;
+ * parseKeys now hands it one key at a time, and pastes never reach it.
+ */
+function parseSingleKey(data: string): KeyEvent {
     const event: KeyEvent = {
       key: '',
       ctrl: false,
@@ -126,26 +433,12 @@ export class Input {
       return event;
     }
     
-    // Bracketed paste mode: terminal wraps Cmd+V paste in \x1b[200~ ... \x1b[201~
-    if (data.includes('\x1b[200~') || data.includes('\x1b[201~')) {
-      const pasteContent = data.replace(/\x1b\[200~/g, '').replace(/\x1b\[201~/g, '');
-      if (pasteContent.length > 0) {
-        event.key = pasteContent;
-        event.isPaste = true;
-        return event;
-      }
-    }
-    
-    // Detect paste: multiple printable characters at once (not escape sequences)
-    if (data.length > 1 && !data.startsWith('\x1b')) {
-      // Check if it's all printable characters (paste event)
-      const isPrintable = /^[\x20-\x7E\n\r\t]+$/.test(data) || 
-                         data.split('').every(c => c.charCodeAt(0) >= 32 || c === '\n' || c === '\r' || c === '\t');
-      if (isPrintable) {
-        event.key = data;
-        event.isPaste = true;
-        return event;
-      }
+    // Legacy (X10) mouse report, from a terminal without SGR mouse mode:
+    // "\x1b[M" and three bytes — button, column, row — each offset by 32.
+    if (data.startsWith('\x1b[M') && data.length === 6) {
+      const button = data.charCodeAt(3) - 32;
+      event.key = button === 64 ? 'scrollup' : button === 65 ? 'scrolldown' : 'mouse';
+      return event;
     }
     
     // Ctrl+C
@@ -318,7 +611,6 @@ export class Input {
     event.key = data;
     
     return event;
-  }
 }
 
 /**
