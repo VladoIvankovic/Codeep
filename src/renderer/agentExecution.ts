@@ -27,6 +27,7 @@ import { agentConfirmationMode, agentInteractiveMode } from './agentConfirmation
 import { reportStats, syncSession, generateProjectId } from '../utils/codeepCloud';
 import { getGitStatus, isGitRepository } from '../utils/git';
 import { getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
+import { recordPromptInLedger } from '../utils/usageLedger';
 import { createFileDiff, createEditDiff, formatDiffForDisplay } from '../utils/diffPreview';
 
 export function getActionType(toolName: string): string {
@@ -431,6 +432,12 @@ export async function executeAgentTask(
       return answer ?? 'reject_once';
     };
 
+    // The task goes to the model now: one prompt for the usage ledger, for
+    // every run however it was started — typed in Agent Mode, the answer to
+    // clarifying questions, /agent, /go, a custom command, a skill's agent
+    // step. What the run asks the model on its own ("Continue.", a fix after
+    // a failed check) is part of this prompt, not another one.
+    recordPromptInLedger(sessionId, 'tui');
     const result: AgentResult = await runAgent(enrichedTask, context, {
       dryRun,
       onRequestPermission,

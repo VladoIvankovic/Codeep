@@ -847,4 +847,41 @@ describe("the harness's environment", () => {
       rmSync(probe, { recursive: true, force: true });
     }
   });
+
+  it('runs every test without an exported XDG_STATE_HOME', () => {
+    // Omarchy's Agents panel record goes under XDG_STATE_HOME when it is set
+    // (renderer/omarchyAgents.ts). The throwaway HOME does not cover it, so a
+    // developer who exports it would have the suite writing into their real
+    // panel unless the setup file removes it — shown, as above, by a child
+    // run that starts with it exported.
+    const probe = mkdtempSync(join(tmpdir(), 'codeep-setup-probe-'));
+    const report = join(probe, 'state.txt');
+    try {
+      writeFileSync(join(probe, 'probe.test.ts'), [
+        "import { it } from 'vitest';",
+        "import { writeFileSync } from 'node:fs';",
+        "it('writes down the state directory it sees', () => {",
+        "  writeFileSync(process.env.PROBE_OUT!, process.env.XDG_STATE_HOME ?? '<unset>');",
+        '});',
+      ].join('\n'));
+      writeFileSync(
+        join(probe, 'vitest.config.ts'),
+        `export default { test: { include: ['probe.test.ts'], setupFiles: [${JSON.stringify(join(process.cwd(), 'vitest.setup.ts'))}] } };\n`,
+      );
+
+      const env: NodeJS.ProcessEnv = { ...process.env, PROBE_OUT: report, XDG_STATE_HOME: join(probe, 'real-state') };
+      delete env.CODEEP_CONFIG_DIR;
+      for (const name of Object.keys(env)) if (name.startsWith('VITEST')) delete env[name];
+
+      execFileSync(
+        process.execPath,
+        [join(process.cwd(), 'node_modules/vitest/vitest.mjs'), 'run', '--root', probe, '--config', join(probe, 'vitest.config.ts')],
+        { env, stdio: 'ignore', timeout: 120_000 },
+      );
+
+      expect(readFileSync(report, 'utf-8')).toBe('<unset>');
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+  });
 });

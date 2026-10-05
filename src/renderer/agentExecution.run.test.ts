@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -78,6 +79,7 @@ import { chat } from '../api/index';
 import { loadTelegramCredentials } from '../utils/telegramCredentials';
 import { syncSession } from '../utils/codeepCloud';
 import { autoSaveSession, config } from '../config/index';
+import { recordTokenUsage } from '../utils/tokenTracker';
 import type { App, ConfirmOptions } from './App';
 import { handleInlineConfirmKey, confirmFooter } from './handlers';
 import type { TrustBearingWrite } from '../utils/toolExecution';
@@ -208,6 +210,66 @@ describe('executeAgentTask session identity', () => {
     await executeAgentTask('task', false, makeCtx());
 
     expect(autoSaveSession).toHaveBeenCalledWith(messages, root, 'global-current');
+  });
+});
+
+describe('the usage ledger', () => {
+  // ~/.codeep is the scratch home here, and the ledger is under it.
+  const ledgerDir = join(fakeHome, '.codeep', 'usage');
+  const ledgerLines = (): Array<Record<string, unknown>> => (existsSync(ledgerDir) ? readdirSync(ledgerDir) : [])
+    .filter(name => name.endsWith('.jsonl'))
+    .flatMap(name => readFileSync(join(ledgerDir, name), 'utf8').split('\n').filter(Boolean))
+    .map(line => JSON.parse(line) as Record<string, unknown>);
+  const prompts = () => ledgerLines().filter(line => line.k === 'p');
+  /** A session id as the ledger keeps it. */
+  const hashOf = (sessionId: string) => createHash('sha256').update(sessionId).digest('hex').slice(0, 16);
+  const done = { success: true, iterations: 1, actions: [], finalResponse: 'done' };
+
+  beforeEach(() => {
+    rmSync(ledgerDir, { recursive: true, force: true });
+  });
+
+  it('counts a run as one prompt, under its conversation, however many model calls it makes', async () => {
+    vi.mocked(runAgent).mockImplementation(async () => {
+      // The run asks the model on its own as it goes: the task, a "Continue."
+      // nudge, a fix after a failed check. One prompt between them.
+      for (let i = 0; i < 3; i++) recordTokenUsage({ promptTokens: 10, completionTokens: 5, totalTokens: 15 }, 'glm-5.3', 'z.ai');
+      return { ...done, iterations: 3 };
+    });
+
+    await executeAgentTask('task', false, makeCtx({ sessionId: 'loaded-session' }));
+
+    expect(prompts()).toEqual([{ t: expect.any(Number), k: 'p', s: hashOf('loaded-session'), src: 'tui' }]);
+    expect(ledgerLines().filter(line => line.k === 'u')).toHaveLength(3);
+  });
+
+  it('counts a run under the global current session when the context has none', async () => {
+    vi.mocked(runAgent).mockResolvedValue(done);
+    await executeAgentTask('task', false, makeCtx());
+    expect(prompts().map(line => line.s)).toEqual([hashOf('global-current')]);
+  });
+
+  it('counts each run, a second one included', async () => {
+    vi.mocked(runAgent).mockResolvedValue(done);
+    await executeAgentTask('first', false, makeCtx({ sessionId: 's' }));
+    await executeAgentTask('second', false, makeCtx({ sessionId: 's' }));
+    expect(prompts()).toHaveLength(2);
+  });
+
+  it('counts nothing for a run that never reaches the model', async () => {
+    vi.mocked(runAgent).mockResolvedValue(done);
+    // No project; another run going; the confirmation declined.
+    await executeAgentTask('task', false, makeCtx({ projectContext: null }));
+    const busy = makeCtx();
+    busy.setAgentRunning(true);
+    await executeAgentTask('task', false, busy);
+    config.set('agentConfirmation', 'always');
+    const declined = makeCtx();
+    (declined.app as unknown as { showConfirm: unknown }).showConfirm = (o: { onCancel: () => void }) => o.onCancel();
+    await runAgentTask('task', false, declined, () => null, () => {});
+
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(prompts()).toEqual([]);
   });
 });
 

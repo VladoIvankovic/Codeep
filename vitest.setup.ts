@@ -125,6 +125,14 @@ ownTempDirs.push(testHome);
 process.env.HOME = testHome;
 process.env.USERPROFILE = testHome;
 
+// The throwaway HOME does not cover a state directory exported on its own:
+// Omarchy's Agents panel record goes to $XDG_STATE_HOME/omarchy/agents/usage
+// when that is set (renderer/omarchyAgents.ts), and a developer on a desktop
+// that sets it would have the suite writing into their real panel. Unset, it
+// falls back to ~/.local/state — under the HOME above. Tests that exercise the
+// variable set it themselves.
+delete process.env.XDG_STATE_HOME;
+
 // Several suites run real git against fixture repositories, and some of them
 // reach a code path that wants credentials (`git credential fill`, a remote
 // that does not exist). GIT_TERMINAL_PROMPT=0 only stops git asking the

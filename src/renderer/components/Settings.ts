@@ -6,6 +6,7 @@ import { config, type ConfigSchema } from '../../config/index';
 import { updateRateLimits } from '../../utils/ratelimit';
 import { pinAgentConfirmation, pinAgentInteractive } from '../agentConfirmation';
 import { isOmarchy, reapplyOmarchyTheme } from '../omarchyTheme';
+import { applyOmarchyAgentsPanel } from '../omarchyAgents';
 
 // Primary color: #f02a30 (Codeep red)
 
@@ -49,11 +50,14 @@ function writeSetting(setting: SettingItem, value: string | number | boolean): v
   // (it listens for palette changes), rather than waiting for the next
   // theme switch or a restart.
   if (setting.key === 'followOmarchyTheme') reapplyOmarchyTheme();
+  // Likewise the panel: Off takes Codeep's record out now, and On puts it
+  // back now rather than after the next model call.
+  if (setting.key === 'omarchyAgentsPanel') applyOmarchyAgentsPanel(value === true);
 }
 
 /**
- * The Omarchy row, offered only on an Omarchy desktop — anywhere else it
- * would be a switch that does nothing. Decided once, when the settings
+ * The Omarchy rows, offered only on an Omarchy desktop — anywhere else they
+ * would be switches that do nothing. Decided once, when the settings
  * screen's module loads: Omarchy does not come and go during a session.
  */
 const OMARCHY_SETTINGS: SettingItem[] = isOmarchy() ? [{
@@ -64,6 +68,15 @@ const OMARCHY_SETTINGS: SettingItem[] = isOmarchy() ? [{
   options: [
     { value: true, label: 'On' },
     { value: false, label: "Off (Codeep's own colours)" },
+  ],
+}, {
+  key: 'omarchyAgentsPanel',
+  label: "Show in Omarchy's Agents panel",
+  getValue: () => config.get('omarchyAgentsPanel') !== false,
+  type: 'select',
+  options: [
+    { value: true, label: 'On' },
+    { value: false, label: 'Off' },
   ],
 }] : [];
 

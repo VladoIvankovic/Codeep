@@ -1313,6 +1313,7 @@ With write access enabled:
 | Project sessions | `.codeep/sessions/` |
 | Global logs | `~/.codeep/logs/` |
 | Project logs | `.codeep/logs/` |
+| Usage ledger | `~/.codeep/usage/` |
 
 ### Environment Variables
 
@@ -1357,6 +1358,46 @@ With write access enabled:
 | Agent Auto-Verify | Off | `Off`, `Build only`, `Typecheck only`, `Test only`, or `Build + Typecheck + Test` |
 | Agent Max Fix Attempts | 1 | Max attempts to auto-fix errors when Auto-Verify is enabled. More than 1 usually means the agent is stuck — bail and let the user decide. |
 | Follow Omarchy theme | On | On [Omarchy](https://omarchy.org) only (the row is not shown elsewhere): paint Codeep's own colours — the brand red, the greys, the code colours — from the current Omarchy theme, and switch with it while Codeep runs. `Off` keeps Codeep's colours. Codeep only reads `~/.local/state/omarchy/current/theme/colors.toml`, and watches it for the next switch. |
+| Show in Omarchy's Agents panel | On | On [Omarchy](https://omarchy.org) only (the row is not shown elsewhere): list Codeep in the bar's Agents panel, from a record of its usage counts — see [Omarchy's Agents panel](#omarchys-agents-panel). `Off` removes the record. |
+
+### Omarchy's Agents panel
+
+On [Omarchy](https://omarchy.org), Codeep shows up in the bar's Agents panel
+beside the agents Omarchy tracks itself. It writes one record,
+`~/.local/state/omarchy/agents/usage/codeep.json` (under `$XDG_STATE_HOME`
+when that is set), and the panel picks it up at its next refresh: Codeep is
+listed with its plan — the provider it used last — and its models count toward
+the panel's "Mostly …" line. The record holds all-time counts (prompts,
+sessions, active days, each model's tokens), the model names, the dates Codeep
+was used on and the provider's name; never prompt text or file paths. Today's
+and this week's figures stay at zero, because Codeep updates the record only
+while it runs and would leave yesterday's numbers standing on a day it does
+not.
+
+The record is written a couple of seconds after Codeep is first used, then at
+most once a minute while it keeps working, with a last update after its last
+prompt or model call. An update still waiting when Codeep quits is written on
+the way out — but not when the terminal is closed on it or it is killed
+(SIGHUP, SIGTERM); its next prompt brings the record up to date instead.
+
+**Show in Omarchy's Agents panel** in `/settings` is On by default, and `Off`
+removes the record at once; switched off in `config.json` instead, the record
+goes at Codeep's next update. Omarchy's own switch hides Codeep too.
+`omarchy bar set` replaces the whole `providers` object, so list in it any
+other agent you have switched off as well:
+
+```bash
+omarchy bar set omarchy.agents providers '{ "codeep": { "enabled": false } }' --json
+```
+
+After uninstalling Codeep, delete that `codeep.json` by hand to take Codeep
+out of the panel.
+
+The numbers come from Codeep's usage ledger in `~/.codeep/usage/`, kept on
+every platform: one line per model call `/cost` counts (time, provider, model,
+token counts) and one per prompt (time, a hash of the session id), with no
+prompt text, file contents or session names. Codeep sends it nowhere. It
+starts counting with 3.10.0; nothing earlier is in it.
 
 ## Usage Examples
 

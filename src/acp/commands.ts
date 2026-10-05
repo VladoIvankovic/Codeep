@@ -36,6 +36,7 @@ import { Message } from '../config/index.js';
 import { chat } from '../api/index.js';
 import { isAnthropicRefusalNotice } from '../api/anthropicContent.js';
 import { runAgent, classifyPermissionOutcome, buildDangerousTools } from '../utils/agent.js';
+import { recordPromptInLedger } from '../utils/usageLedger.js';
 import { forgetHooksDirectory } from '../utils/toolExecution.js';
 import { shellCommandEnv } from '../utils/shell.js';
 import type { McpServer } from './protocol.js';
@@ -1642,6 +1643,10 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
             ({ response } = await runCommandAgent(expandedPrompt, session, onChunk, abortSignal, agentRun));
             if (response) onChunk(response);
           } else {
+            // The command's prompt goes to the model now, as a chat message:
+            // one for the usage ledger. In agent mode runCommandAgent counts
+            // it, and the terminal counts a custom command either way.
+            recordPromptInLedger(session.sessionId, 'acp');
             await chat(
               expandedPrompt,
               session.history,
@@ -1836,6 +1841,12 @@ async function runCommandAgent(
   abortSignal: AbortSignal | undefined,
   agentRun: AcpAgentRunOptions | undefined,
 ): Promise<{ response: string; failedChecks?: string[] }> {
+  // The task goes to the model now: one prompt for the usage ledger, as the
+  // terminal counts the same commands (/go, a custom command, a skill's
+  // agent step) in executeAgentTask. A command that only asks the model for
+  // something along the way — /plan, /diff, /review, a skill's prompt step —
+  // is not one.
+  recordPromptInLedger(session.sessionId, 'acp');
   const { buildProjectContext, toAgentChatHistory } = await import('./session.js');
   const result = await runAgent(task, buildProjectContext(session.workspaceRoot), {
     abortSignal,

@@ -61,6 +61,8 @@ import { symlinkedCodeepNotice } from '../utils/projectPaths';
 import { parseLaunchArgs } from './cliArgs';
 import { agentConfirmationMode, pinAgentConfirmation, pinAgentInteractive, isAgentConfirmationPinned } from './agentConfirmation';
 import { followOmarchyTheme, type OmarchyThemeWatch } from './omarchyTheme';
+import { keepOmarchyAgentRecord } from './omarchyAgents';
+import { recordPromptInLedger } from '../utils/usageLedger';
 import { welcomeContent } from './welcome';
 
 // ─── Global state ─────────────────────────────────────────────────────────────
@@ -446,6 +448,10 @@ async function handleSubmit(message: string): Promise<void> {
     }
     const fileContext = formatAddedFilesContext();
     const enrichedMessage = fileContext ? fileContext + webExpanded : webExpanded;
+    // The message goes to the model now: one prompt for the usage ledger. A
+    // message for Agent Mode went to runAgentTask above instead, and counts
+    // in executeAgentTask once its run starts.
+    recordPromptInLedger(sessionId, 'tui');
     await chat(enrichedMessage, history, (chunk) => app.addStreamChunk(chunk), undefined, projectContext, undefined);
     app.endStreaming();
     autoSaveSession(app.getMessages(), projectPath, sessionId);
@@ -544,6 +550,12 @@ export async function main(): Promise<void> {
   // Which of these runs is decided in one pure place (cliArgs.ts), so a
   // prompt that happens to say `review` or start with `-v` stays a prompt.
   const launch = parseLaunchArgs(process.argv.slice(2));
+
+  // On Omarchy, keep Codeep's record in the bar's Agents panel current
+  // (omarchyAgents.ts). Before any mode returns: the TUI, acp and
+  // `review --ai` all spend tokens, and each refreshes the record from the
+  // usage ledger it adds to. Anywhere else this does nothing.
+  keepOmarchyAgentRecord({ enabled: () => config.get('omarchyAgentsPanel') !== false });
 
   // Headless, deterministic code review for CI (no API key, no TUI). The
   // parser takes it before the global --help/--version checks so

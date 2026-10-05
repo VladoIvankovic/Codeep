@@ -7,10 +7,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readdirSync, readFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { StdioTransport } from './transport';
 import { startAcpServer, executeAcpCommand } from './server';
 import { runAgentSession, type AgentSessionOptions } from './session';
@@ -73,6 +74,18 @@ vi.mock('../utils/project.js', async (importOriginal) => {
 vi.mock('../utils/git.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../utils/git.js')>();
   return { ...actual, isGitRepository: vi.fn(() => false) };
+});
+// An image in a prompt goes to Z.AI's vision model, never the agent. A key
+// for it unless a test says there is none; the model's answer is canned.
+const vision = vi.hoisted(() => ({ configured: true }));
+vi.mock('../utils/mcpIntegration.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/mcpIntegration.js')>();
+  return {
+    ...actual,
+    getZaiVisionConfig: vi.fn(() => (vision.configured ? { baseUrl: 'https://vision.invalid', apiKey: 'vision-key' } : null)),
+    getMinimaxMcpConfig: vi.fn(() => null),
+    callZaiVisionApi: vi.fn(async () => 'a cat asleep on a keyboard'),
+  };
 });
 
 type Frame = {
@@ -207,6 +220,81 @@ describe('advertised slash commands', () => {
       description: 'AI review of git changes (--staged), or static analysis (--static / files)',
       input: { hint: '[--staged | --static | file…]' },
     });
+  });
+});
+
+// ─── The usage ledger ───────────────────────────────────────────────────────
+
+describe('the usage ledger', () => {
+  const ledgerDir = () => join(homedir(), '.codeep', 'usage');
+  const prompts = (): Array<Record<string, unknown>> => (existsSync(ledgerDir()) ? readdirSync(ledgerDir()) : [])
+    .filter((name) => name.endsWith('.jsonl'))
+    .flatMap((name) => readFileSync(join(ledgerDir(), name), 'utf8').split('\n').filter(Boolean))
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((line) => line.k === 'p');
+  /** A session id as the ledger keeps it. */
+  const hashOf = (sessionId: string) => createHash('sha256').update(sessionId).digest('hex').slice(0, 16);
+
+  beforeEach(() => {
+    rmSync(ledgerDir(), { recursive: true, force: true });
+  });
+
+  it('counts a prompt once, under the ACP session it came in on', async () => {
+    const sessionId = await newSession();
+    await client.waitForResponse(prompt(sessionId, 'hello'));
+    expect(prompts()).toEqual([{ t: expect.any(Number), k: 'p', s: hashOf(sessionId), src: 'acp' }]);
+
+    await client.waitForResponse(prompt(sessionId, 'and again'));
+    expect(prompts().map((line) => line.s)).toEqual([hashOf(sessionId), hashOf(sessionId)]);
+  });
+
+  it('keeps a loaded session\'s name out of the ledger', async () => {
+    // session/load registers the saved session's name as the id prompts use.
+    await newSession();
+    const loadId = nextId++;
+    client.send_({ id: loadId, method: 'session/load', params: { sessionId: 'old-S0', cwd: ws } });
+    await client.waitForResponse(loadId);
+    await client.waitForResponse(prompt('old-S0', 'follow-up'));
+    expect(prompts().map((line) => line.s)).toEqual([hashOf('old-S0')]);
+    const ledger = readdirSync(ledgerDir()).map((name) => readFileSync(join(ledgerDir(), name), 'utf8')).join('\n');
+    expect(ledger).not.toContain('old-S0');
+  });
+
+  it('counts a prompt with an image once, though it goes to the vision model and not the agent', async () => {
+    const sessionId = await newSession();
+    const id = nextId++;
+    client.send_({ id, method: 'session/prompt', params: { sessionId, prompt: [
+      { type: 'text', text: 'what is in this screenshot?' },
+      { type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' },
+    ] } });
+    await vi.waitFor(() => expect(client.updates('agent_message_chunk').some(
+      (f) => f.params?.update?.content?.text === 'a cat asleep on a keyboard')).toBe(true));
+    expect(runAgentSession).not.toHaveBeenCalled();
+    expect(prompts()).toEqual([{ t: expect.any(Number), k: 'p', s: hashOf(sessionId), src: 'acp' }]);
+  });
+
+  it('counts no image prompt that has no vision model to go to', async () => {
+    vision.configured = false;
+    try {
+      const sessionId = await newSession();
+      const id = nextId++;
+      client.send_({ id, method: 'session/prompt', params: { sessionId, prompt: [
+        { type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' },
+      ] } });
+      await vi.waitFor(() => expect(client.updates('agent_message_chunk').some(
+        (f) => String(f.params?.update?.content?.text).includes('requires a Z.AI or MiniMax API key'))).toBe(true));
+      expect(prompts()).toEqual([]);
+    } finally {
+      vision.configured = true;
+    }
+  });
+
+  it('counts no slash command, which is answered before anything reaches the agent', async () => {
+    vi.mocked(handleCommand).mockResolvedValue({ handled: true, response: 'Available commands' });
+    const sessionId = await newSession();
+    await client.waitForResponse(prompt(sessionId, '/help'));
+    expect(runAgentSession).not.toHaveBeenCalled();
+    expect(prompts()).toEqual([]);
   });
 });
 

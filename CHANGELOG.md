@@ -11,6 +11,37 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.10.0] — 2026-10-05
+
+> TL;DR — On Omarchy, Codeep now appears in the Agents panel with its plan, and its models count toward the panel's "Mostly …" line. A new local usage ledger in `~/.codeep/usage` keeps no prompt text or paths.
+
+### Added
+
+- **Codeep in Omarchy's Agents panel.** On Omarchy, Codeep writes its own
+  record where the bar's Agents panel reads every agent's usage
+  (`~/.local/state/omarchy/agents/usage/codeep.json`, or under
+  `$XDG_STATE_HOME` when that is set). The panel lists Codeep with its plan
+  — the provider it used last — and Codeep's models count toward the
+  panel's "Mostly …" line. The record holds all-time counts (prompts,
+  sessions, active days and tokens by model), the model names, the dates
+  Codeep was used on and the provider's name, with no prompt text and no
+  file paths. Today's and this week's numbers are not written: Codeep can
+  update the record only while it runs, so on a day it does not run they
+  would still show the last day it did. It is written a couple of seconds
+  after Codeep is first used, then at most once a minute while Codeep
+  keeps working. **Show in Omarchy's Agents panel** in `/settings` (On by
+  default, shown only on Omarchy) turns it off, and Off removes the
+  record. Omarchy's own `providers.codeep.enabled = false` hides it as
+  well.
+- **A local usage ledger.** Every model call `/cost` counts adds a line to
+  `~/.codeep/usage/<year>-<month>.jsonl` with the time, the provider, the
+  model and its token counts, and every prompt you send — a chat message or
+  an agent task, typed or started by a command such as `/go`, in the
+  terminal or from an editor — a line with the time and a hash of its
+  session id. No prompt text, no file contents, no paths, no session names,
+  and Codeep sends it nowhere. The Omarchy record is worked out from it.
+  Counting starts with this release.
+
 ## [3.9.2] — 2026-10-03
 
 > TL;DR — `codeep --help` and the README now say what `--yolo` leaves unchecked: a shell command runs without asking and can write the files the file tools still ask about.

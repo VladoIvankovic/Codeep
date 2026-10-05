@@ -5,6 +5,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isFlatFeeProvider } from '../config/providers';
 import { formatResourceImpactReport } from './resourceImpact';
+import { recordUsageInLedger } from './usageLedger';
 
 export interface TokenUsage {
   promptTokens: number;
@@ -406,6 +407,10 @@ export function recordTokenUsage(
     provider,
     actualCostUsd,
   });
+  // And to the usage ledger on disk (usageLedger.ts), which outlives this
+  // process: every model call, from every surface, passes through here. It
+  // never throws, so a full disk costs the ledger a line and not the request.
+  recordUsageInLedger(usage, model, provider);
 }
 
 /**

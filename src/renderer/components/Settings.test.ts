@@ -294,6 +294,10 @@ describe('the Omarchy row', () => {
     // covers the row where there is one.
     expect(SETTINGS.some(s => s.key === 'followOmarchyTheme')).toBe(false);
   });
+
+  it('nor is the Agents panel row, which would have no panel to show Codeep in', () => {
+    expect(SETTINGS.some(s => s.key === 'omarchyAgentsPanel')).toBe(false);
+  });
 });
 
 describe('select options match the values they read back', () => {

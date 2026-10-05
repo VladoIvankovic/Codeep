@@ -193,6 +193,17 @@ describe('exit paths', () => {
   });
 });
 
+describe('the Omarchy Agents panel record', () => {
+  it('is kept current from the top of main(), under its setting, before any mode returns', () => {
+    // `review --ai` and acp spend tokens too, and both leave main() before
+    // the TUI starts: a watch started any later would never see theirs.
+    const body = sliceFrom('export async function main(');
+    const keep = body.indexOf("keepOmarchyAgentRecord({ enabled: () => config.get('omarchyAgentsPanel') !== false });");
+    expect(keep).toBeGreaterThan(body.indexOf('const launch = parseLaunchArgs('));
+    expect(keep).toBeLessThan(body.indexOf("if (launch.kind === 'review')"));
+  });
+});
+
 describe('deriveSessionName', () => {
   it('returns an empty string for blank input', () => {
     expect(deriveSessionName('')).toBe('');

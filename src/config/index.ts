@@ -163,6 +163,12 @@ export interface ConfigSchema {
    *  expect every app to switch with the desktop. Off keeps Codeep's own
    *  colours. Does nothing anywhere else. */
   followOmarchyTheme: boolean;
+  /** On an Omarchy desktop, list Codeep in the bar's Agents panel by writing
+   *  its record (counts and model names, from the usage ledger) where the
+   *  panel reads every agent's — renderer/omarchyAgents.ts. Default true,
+   *  like the theme: on Omarchy the panel is where agents are. Off removes
+   *  the record. Does nothing anywhere else. */
+  omarchyAgentsPanel: boolean;
   projectPermissions: ProjectPermission[];
   /** @deprecated Legacy PLAINTEXT key store. Kept only so the one-time
    *  migration into secure storage can read it; emptied afterwards. New keys
@@ -388,6 +394,7 @@ function createConfig(): Conf<ConfigSchema> {
     agentApiTimeout: 600000,
     agentInteractive: true,
     followOmarchyTheme: true,
+    omarchyAgentsPanel: true,
     protocol: 'openai',
     plan: 'lite',
     language: 'en',

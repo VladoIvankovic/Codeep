@@ -49,6 +49,7 @@ import { PROVIDERS } from '../config/providers.js';
 import { getCurrentVersion } from '../utils/update.js';
 import { reportStats, syncSession, generateProjectId, pullPersonalities } from '../utils/codeepCloud.js';
 import { getCostBreakdown, getRecordCount, createTokenScope, runWithTokenScope, type TokenScope } from '../utils/tokenTracker.js';
+import { recordPromptInLedger } from '../utils/usageLedger.js';
 import { isGitRepository } from '../utils/git.js';
 import { getProjectContext } from '../utils/project.js';
 import { findPersonality, isPersonalityAvailable, loadAllPersonalities, type Personality } from '../utils/personalities.js';
@@ -1451,6 +1452,9 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
         sessionId: params.sessionId,
         update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '_Analyzing image…_\n\n' } },
       });
+      // The prompt goes to a model now, a vision one, and never reaches the
+      // agent below: one for the usage ledger here instead.
+      recordPromptInLedger(params.sessionId, 'acp');
       try {
         const visionPrompt = prompt || 'Describe this image in detail.';
         let description: string;
@@ -1705,6 +1709,10 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
 
         // Captured now: the user may move to another conversation before this ends.
         const recordTurn = beginTurn(session);
+        // The prompt goes to the model now: one for the usage ledger. A slash
+        // command was answered above and never gets this far (one that runs
+        // the agent counts in runCommandAgent), nor does an image prompt.
+        recordPromptInLedger(params.sessionId, 'acp');
         runAgentSession({
           prompt: enrichedPrompt,
           workspaceRoot: session.workspaceRoot,

@@ -6,7 +6,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, chmodSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, chmodSync, readdirSync, readFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -766,6 +767,45 @@ const verificationFailed = (): AgentResult => ({
   failedChecks: ['npm run build'],
 });
 const aborted: AgentResult = { success: false, iterations: 1, actions: [], finalResponse: 'Agent was stopped by user', aborted: true };
+
+describe('the usage ledger', () => {
+  // ~/.codeep is the scratch home here, emptied after every test.
+  const ledgerDir = join(fakeHome, '.codeep', 'usage');
+  const prompts = (): Array<Record<string, unknown>> => (existsSync(ledgerDir) ? readdirSync(ledgerDir) : [])
+    .filter(name => name.endsWith('.jsonl'))
+    .flatMap(name => readFileSync(join(ledgerDir, name), 'utf8').split('\n').filter(Boolean))
+    .map(line => JSON.parse(line) as Record<string, unknown>)
+    .filter(line => line.k === 'p');
+  const promptLine = { t: expect.any(Number), k: 'p', s: createHash('sha256').update('acp-1').digest('hex').slice(0, 16), src: 'acp' };
+
+  it('counts /go once, as the terminal does, and the /plan before it not at all', async () => {
+    await planPending();
+    expect(prompts()).toEqual([]);
+    await run('/go', undefined, PERMISSIONS);
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(prompts()).toEqual([promptLine]);
+  });
+
+  it('counts a custom command once, in agent mode and in chat mode', async () => {
+    writeCustomCommand();
+    config.set('agentMode', 'on');
+    await run('/hello world', undefined, PERMISSIONS);
+    expect(prompts()).toEqual([promptLine]);
+    config.set('agentMode', 'off');
+    await run('/hello again');
+    expect(vi.mocked(chat)).toHaveBeenCalledTimes(1);
+    expect(prompts()).toEqual([promptLine, promptLine]);
+  });
+
+  it('counts a skill\'s agent step, and not a skill\'s prompt step', async () => {
+    await run('/refactor', undefined, PERMISSIONS);
+    expect(prompts()).toEqual([promptLine]);
+    vi.mocked(chat).mockResolvedValue('wip: widget layout');
+    await run('/stash', undefined, AUTO);
+    expect(vi.mocked(chat)).toHaveBeenCalled();
+    expect(prompts()).toEqual([promptLine]);
+  });
+});
 
 describe('/go when the run does not finish', () => {
   it('reports the error and keeps the plan', async () => {

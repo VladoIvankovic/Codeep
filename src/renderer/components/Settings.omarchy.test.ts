@@ -71,6 +71,14 @@ describe.skipIf(process.platform !== 'linux')('Follow Omarchy theme', () => {
     expect(palette.primary).toBe(TOKYO_ACCENT);
   });
 
+  it('comes with the Agents panel row, On by default', () => {
+    // What that row does is Settings.agentsPanel.test.ts's, which runs on
+    // every platform.
+    const panel = SETTINGS.findIndex(s => s.key === 'omarchyAgentsPanel');
+    expect(panel).toBe(row() + 1);
+    expect(SETTINGS[panel].getValue()).toBe(true);
+  });
+
   it('offers its own current value, in one type', () => {
     const setting = SETTINGS[row()];
     const values = (setting.options ?? []).map(o => o.value);
