@@ -637,7 +637,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       { id: 'claude-opus-5',             name: 'Claude Opus 5',         description: 'Legacy since Opus 5.5 — kept for pinned configs' },
       { id: 'claude-sonnet-5-5',         name: 'Claude Sonnet 5.5',     description: 'Best balance of speed and intelligence — $2/$10, 1M context' },
       { id: 'claude-sonnet-5',           name: 'Claude Sonnet 5',       description: 'Previous Sonnet — kept for pinned configs' },
-      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku',          description: 'Fastest and most affordable' },
+      { id: 'claude-haiku-5-5',          name: 'Claude Haiku 5.5',      description: 'Fastest, for high-volume work — $0.10/$0.50 (prompts over 100K tokens $0.50/$2.50), 1M context' },
+      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5',      description: 'Previous Haiku — kept for pinned configs' },
     ],
     // Anthropic's models overview now says to "start with Claude Opus 5.5 for
     // most workloads", and it is 20% cheaper than Opus 5 (now "Active
@@ -651,6 +652,10 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // kept with no migration: it is still "Active", retiring no sooner than
     // 2027-06-30. The default stays Opus 5.5, where the overview still says to
     // start.
+    // Haiku 5.5 (released 2026-10-07) is the Haiku in the picker: 1M context,
+    // 128K output, and, unlike the other Claude models here, priced by prompt
+    // length — see its row in tokenTracker.ts. Haiku 4.5 is kept with no migration: it is still
+    // "Active" (see the retirement note in docs/MODEL_MAINTENANCE.md).
     defaultModel: 'claude-opus-5-5',
     defaultProtocol: 'anthropic',
     envKey: 'ANTHROPIC_API_KEY',
@@ -708,6 +713,10 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       { id: 'anthropic/claude-opus-5',          name: 'Claude Opus 5',      description: 'Anthropic — legacy Opus' },
       { id: 'anthropic/claude-sonnet-5.5',      name: 'Claude Sonnet 5.5',  description: 'Anthropic — balanced' },
       { id: 'anthropic/claude-sonnet-5',        name: 'Claude Sonnet 5',    description: 'Anthropic — previous Sonnet' },
+      // OpenRouter lists Haiku 5.5 at 1,000,000 context, efforts low..max (default
+      // medium) and, beside the $0.10/$0.50 rate, an override from 100,000
+      // prompt tokens up (/api/v1/models, read 2026-10-09).
+      { id: 'anthropic/claude-haiku-5.5',       name: 'Claude Haiku 5.5',   description: 'Anthropic — fast and cheap' },
       { id: 'openai/gpt-6-astra',               name: 'GPT-6 Astra',        description: 'OpenAI — frontier' },
       // OpenRouter lists 6.1 Sol at $2/$10, 1,050,000 context, efforts
       // low..max with no "none" (/api/v1/models, read 2026-09-30).
@@ -1039,7 +1048,10 @@ export function providerNoStreamWithTools(providerId: string): boolean {
  * any non-default value ("Setting temperature, top_p, or top_k to a non-default
  * value returns a 400 error" — Sonnet 5.5 model page; the `claude-sonnet-5`
  * entry covers `claude-sonnet-5-5` and OpenRouter's `anthropic/claude-sonnet-5.5`
- * by prefix). Older Claude models still accept them, so this must be a
+ * by prefix). Haiku 5.5 takes only temperature 1 and top_p 0.99 and 400s on any
+ * top_k (its migration guide; the `claude-haiku-5` entry covers it and
+ * `anthropic/claude-haiku-5.5` by prefix). Older Claude models, Haiku 4.5
+ * included, still accept them, so this must be a
  * MODEL-level check, not a provider-level one (requiresDefaultTemperature
  * can't express it). Omitting the field is always safe — the API treats
  * omission as default. Kimi K2.x code/thinking models fix temperature
@@ -1053,7 +1065,7 @@ export function providerNoStreamWithTools(providerId: string): boolean {
  * `gpt-6-1-sol`, which the `gpt-6` prefix takes in.
  */
 const SAMPLING_PARAMS_REJECTED = [
-  'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5',
+  'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5', 'claude-haiku-5',
   'kimi-k3', 'kimi-k2.7-code', 'kimi-for-coding', 'k3',
   'gemini-3.7-flash', 'gemini-3.8-flash',
   'gpt-6',
@@ -1099,13 +1111,19 @@ export function getEffectiveMaxTokens(providerId: string, requested: number): nu
  * migration guide says to "revisit max_tokens. It covers thinking plus text".
  * Sonnet 5 (still offered for pinned configs) is not included.
  *
- * Matched on the canonical id and exactly, so `anthropic/claude-opus-5.5` and
- * `anthropic/claude-sonnet-5.5` on OpenRouter are covered, and `claude-sonnet-5`
- * is not caught by a prefix.
+ * Claude Haiku 5.5 too: adaptive thinking is on by default, at a default effort
+ * of medium, and "thinking tokens count toward max_tokens, so a small limit can
+ * stop after a thinking block and before any text" (What's new in Claude
+ * Haiku 5.5). Haiku 4.5 does not think unless asked, so it stays out.
+ *
+ * Matched on the canonical id and exactly, so `anthropic/claude-opus-5.5`,
+ * `anthropic/claude-sonnet-5.5` and `anthropic/claude-haiku-5.5` on OpenRouter
+ * are covered, and `claude-sonnet-5` is not caught by a prefix.
  */
 export function minResponseTokensFor(model: string, tier: ReasoningTier | undefined): number {
   const id = canonicalModelId(model);
-  if (!idMatches(id, 'claude-opus-5-5') && !idMatches(id, 'claude-sonnet-5-5')) return 0;
+  const floored = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
+  if (!floored.some(family => idMatches(id, family))) return 0;
   return tier === 'max' ? 65_536 : 32_768;
 }
 
@@ -1344,7 +1362,9 @@ export function agentToolsNote(providerId: string, model: string, wire: OpenAIWi
  * for GPT-5.6 and GPT-6 (6.1 Sol included: max/xhigh/high/medium/low, read
  * 2026-09-30; the `gpt-6` prefix covers `gpt-6-1-sol`), the Claude 5 family
  * (Sonnet 5.5 included: its supported_efforts are max/xhigh/high/medium/low,
- * read 2026-09-29; the `claude-sonnet-5` prefix covers it) and Opus 4.7/4.8,
+ * read 2026-09-29; the `claude-sonnet-5` prefix covers it; Haiku 5.5 lists the
+ * same five, read 2026-10-09, and `claude-haiku-5` covers it while Haiku 4.5
+ * stays at "high") and Opus 4.7/4.8,
  * DeepSeek V4.1 Flash and V4 Pro 0813, and Kimi K3; "xhigh" is the ceiling
  * for GPT-5.4/5.5, Grok 4.6/4.7 and Qwen 3.8 Max. Everything else keeps the
  * old "high" cap —
@@ -1354,7 +1374,7 @@ export function agentToolsNote(providerId: string, model: string, wire: OpenAIWi
  */
 function openRouterMaxEffort(model: string): 'max' | 'xhigh' | 'high' {
   const id = canonicalModelId(model);
-  const max = ['gpt-5-6', 'gpt-6', 'claude-opus-5', 'claude-fable-5', 'claude-sonnet-5',
+  const max = ['gpt-5-6', 'gpt-6', 'claude-opus-5', 'claude-fable-5', 'claude-sonnet-5', 'claude-haiku-5',
     'claude-opus-4-7', 'claude-opus-4-8', 'deepseek-v4-1-flash', 'deepseek-v4-pro-0813', 'kimi-k3'];
   if (max.some(prefix => idMatches(id, prefix))) return 'max';
   const xhigh = ['gpt-5-5', 'gpt-5-4', 'grok-4-6', 'grok-4-7', 'qwen3-8-max'];
@@ -1383,11 +1403,15 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
   const id = canonicalModelId(model);
   switch (providerId) {
     case 'anthropic':
-      // Effort is GA on Opus 5/5.5, Opus 4.5+, Sonnet 4.6/5/5.5, Fable 5/5.1 — NOT
-      // Haiku or Sonnet 4.5. Sonnet 5.5 takes low/medium/high/xhigh/max
-      // (default high); `sonnet-5` in the pattern matches `sonnet-5-5`.
+      // Effort is GA on Opus 5/5.5, Opus 4.5+, Sonnet 4.6/5/5.5, Fable 5/5.1 and
+      // Haiku 5.5 — NOT Haiku 4.5 or Sonnet 4.5. Sonnet 5.5 takes
+      // low/medium/high/xhigh/max (default high); `sonnet-5` in the pattern
+      // matches `sonnet-5-5`. Haiku 5.5 takes the same five (default medium).
+      // `haiku-5` has to be spelled out: the pattern is an allowlist, and
+      // without it `claude-haiku-5-5` matches none of its families — /thinking
+      // would be hidden and no effort ever sent.
       if (idMatches(id, 'claude-haiku-4-5') || idMatches(id, 'claude-sonnet-4-5')) return false;
-      return /^claude-(opus-5|opus-4-([5-9]|\d\d)|sonnet-(4-6|5)|fable-5)/.test(id);
+      return /^claude-(opus-5|opus-4-([5-9]|\d\d)|sonnet-(4-6|5)|fable-5|haiku-5)/.test(id);
     case 'openai':
       // GPT-5.x and GPT-6.x are reasoning models — reasoning_effort across both
       // families (incl. mini). Written as two prefixes rather than `gpt-`

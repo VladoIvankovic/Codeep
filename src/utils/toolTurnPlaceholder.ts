@@ -11,7 +11,16 @@
  * for the answer: a 26-step run that wrote twenty files ended on "Using
  * write_file.", and its auto-review on "Using read_file.". Bracketed, it is
  * never a natural answer, and a reply made only of it can be caught.
+ *
+ * The same pattern has a second effect. A model that has been shown dozens of
+ * these turns sometimes writes one of its own where it means to call tools —
+ * GLM-5.3 at max effort, on Z.AI, in about one run in twelve — and does it
+ * again after being asked for the call or a summary. Nothing in such a reply
+ * can be run, and asking again with the same turns in view gets the same
+ * reply; withoutToolTurnPlaceholders is the history without them.
  */
+
+import type { Message } from '../config/index';
 
 /** A turn with neither text nor a tool call. */
 export const NO_REPLY = '(no reply)';
@@ -49,4 +58,31 @@ export function withoutPlaceholderLines(reply: string): string {
     .filter(line => !isToolTurnPlaceholder(line))
     .join('\n')
     .trim();
+}
+
+/**
+ * The history as a model that has started to write the placeholder should see
+ * it: without the turns that only called tools, or only echoed one. The user
+ * messages either side of each — the tool results, the nudge — are joined by a
+ * blank line, so the roles still alternate and no message is empty, which
+ * Anthropic's Messages API refuses. The calls themselves are not lost: the
+ * placeholder named only the tools, and every result says which tool it came
+ * from.
+ *
+ * A copy; the loop keeps its own history as it is. Messages it leaves alone
+ * are the same objects, so a tag one carries (the Responses API's, which this
+ * is not meant for) stays on it.
+ */
+export function withoutToolTurnPlaceholders(messages: readonly Message[]): Message[] {
+  const kept: Message[] = [];
+  for (const message of messages) {
+    if (message.role === 'assistant' && isToolTurnPlaceholder(message.content)) continue;
+    const previous = kept[kept.length - 1];
+    if (message.role === 'user' && previous?.role === 'user') {
+      kept[kept.length - 1] = { role: 'user', content: `${previous.content}\n\n${message.content}` };
+      continue;
+    }
+    kept.push(message);
+  }
+  return kept;
 }

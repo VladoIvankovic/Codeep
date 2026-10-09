@@ -260,6 +260,7 @@ describe('/mcp restarts only the servers a session may run', () => {
 
 const PERMISSIONS: AcpAgentRunOptions = {
   onRequestPermission: async () => 'reject_once',
+  permissionMemory: { alwaysAllowed: new Set(), alwaysRejected: new Set(), alwaysRejectedPaths: new Set() },
   extraDangerousTools: ['write_file', 'edit_file'],
   onExecuteCommand: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
   fs: { readTextFile: async () => 'buffer', writeTextFile: async () => {} },
@@ -278,6 +279,8 @@ function expectRunLikeAPrompt(callIndex = 0) {
   expect(opts.onExecuteCommand).toBe(PERMISSIONS.onExecuteCommand);
   expect(opts.fs).toBe(PERMISSIONS.fs);
   expect(opts.mcpSessionId).toBe('acp-1');
+  // "Allow always" given to a plain prompt holds here too, and the other way round.
+  expect(opts.permissionMemory).toBe(PERMISSIONS.permissionMemory);
   expect(opts.chatHistory).toEqual([
     { role: 'user', content: 'earlier question' },
     { role: 'assistant', content: 'earlier answer' },
@@ -359,6 +362,27 @@ const manual = (overrides: Partial<AcpAgentRunOptions> = {}): AcpAgentRunOptions
   onRequestPermission: vi.fn(async () => 'allow_once' as const),
   confirm: vi.fn(async () => true),
   ...overrides,
+});
+
+describe('a skill\'s shell lines in manual mode', () => {
+  beforeEach(() => {
+    vi.mocked(chat).mockImplementation(async (_message, _history, streamChunk) => {
+      streamChunk?.('feat: add widget');
+      return 'feat: add widget';
+    });
+  });
+
+  it('say what "always" means for them: the rest of the skill, not this line and not the session', async () => {
+    // Answering it allows every remaining line of the skill (commandsAllowed),
+    // and nothing outside it — so the button must not read "Always Allow
+    // <this whole line> (this session)", which is what the agent's own
+    // commands get.
+    const ask = vi.fn(async (_call: unknown, _known?: unknown, _opts?: unknown) => 'allow_always' as const);
+    await run('/commit', undefined, manual({ onRequestPermission: ask }));
+
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(ask.mock.calls[0][2]).toEqual({ alwaysLabel: "Allow all of this skill's commands" });
+  });
 });
 
 describe('skill confirm steps', () => {

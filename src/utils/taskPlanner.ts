@@ -83,7 +83,7 @@ Break this down into subtasks. Each task = one file or one logical unit. Respond
     ];
 
     // 2048 is plenty for a JSON plan, but not for a model that thinks by
-    // default inside the same limit (Opus 5.5, Sonnet 5.5 — see
+    // default inside the same limit (Opus 5.5, Sonnet 5.5, Haiku 5.5 — see
     // minResponseTokensFor). The planner sends no effort, so the model runs at
     // its own default: 'auto'.
     const maxTokens = Math.max(2048, minResponseTokensFor(model, 'auto'));

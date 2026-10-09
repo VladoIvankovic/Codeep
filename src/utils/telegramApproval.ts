@@ -164,7 +164,7 @@ export function outcomeForAnswer(answer: TelegramAnswer): 'allow_once' | 'reject
 export function describePermissionOutcome(outcome: string): string {
   switch (outcome) {
     case 'allow_once': return 'allowed';
-    case 'allow_always': return 'allowed, and always from now on';
+    case 'allow_always': return 'allowed, and always for this session';
     case 'reject_once': return 'skipped';
     case 'reject_always': return 'denied';
     default: return 'decided';

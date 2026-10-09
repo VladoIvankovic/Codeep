@@ -53,6 +53,24 @@ describe('runAgentSession — earlier turns', () => {
   });
 });
 
+describe('runAgentSession — what "Allow always" remembers', () => {
+  it('hands the agent the memory it was given, so an answer outlives the prompt', async () => {
+    const permissionMemory = { alwaysAllowed: new Set<string>(), alwaysRejected: new Set<string>(), alwaysRejectedPaths: new Set<string>() };
+    await runAgentSession({
+      prompt: 'x', workspaceRoot: '/var/empty/codeep-history-test', conversationId: 'acp-8',
+      abortSignal: new AbortController().signal, onChunk: () => {}, permissionMemory,
+    });
+
+    expect(vi.mocked(runAgent).mock.calls[0][2]!.permissionMemory).toBe(permissionMemory);
+  });
+
+  it('gives it none when it has none: the answer then lasts the run', async () => {
+    await start();
+
+    expect(vi.mocked(runAgent).mock.calls[0][2]!.permissionMemory).toBeUndefined();
+  });
+});
+
 describe('toAgentChatHistory', () => {
   it('keeps only role and content of user and assistant messages', () => {
     const withExtra = [{ ...HISTORY[1], extra: 'x' } as Message, HISTORY[0], HISTORY[2]];

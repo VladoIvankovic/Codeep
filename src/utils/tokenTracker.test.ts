@@ -19,6 +19,7 @@ import {
   cacheReadRateFor,
   cacheWriteRateFor,
   formatCacheReadRates,
+  formatTokenThreshold,
 } from './tokenTracker';
 import { canonicalModelId } from '../config/providers';
 
@@ -976,5 +977,223 @@ describe('GPT-6.1 Sol', () => {
     // Reads save 0.5M * ($2 - $0.10) = 0.95; the write premium costs 0.5M * $0.50 = 0.25.
     expect(getCacheStats().estimatedSavingsUsd).toBeCloseTo(0.70, 8);
     expect(getCacheStats().cacheReadRates).toEqual([0.05]);
+  });
+});
+
+// Claude Haiku 5.5 (2026-10-07): the one Claude model here priced by prompt length. A
+// request whose prompt is OVER 100,000 tokens pays $0.50 in / $2.50 out for the
+// whole request; up to 100,000 it is $0.10 / $0.50. "A request's prompt length
+// counts all of its input tokens, including cache reads and cache writes. Each
+// request is priced on its own: a request over the threshold pays the higher
+// prices even when part of its prompt is a cache hit." The cache multiples are
+// the usual ones in both tiers: read $0.01 / $0.05, 5-minute write $0.125 /
+// $0.625 (platform.claude.com pricing, read 2026-10-09).
+describe('Claude Haiku 5.5 (priced by prompt length)', () => {
+  const HAIKU = 'claude-haiku-5-5';
+  const cost = () => getCostBreakdown()[0].estimatedCost;
+  const record = (
+    promptTokens: number,
+    completionTokens: number,
+    cache: { read?: number; write?: number } = {},
+    model = HAIKU,
+    provider = 'anthropic',
+    reportedUsd?: number,
+  ) => recordTokenUsage(
+    {
+      promptTokens,
+      completionTokens,
+      totalTokens: promptTokens + completionTokens,
+      cacheReadTokens: cache.read,
+      cacheCreationTokens: cache.write,
+    },
+    model,
+    provider,
+    reportedUsd,
+  );
+
+  it('sizes its context at 1M, by its OpenRouter id too, where Haiku 4.5 keeps 200K', () => {
+    expect(getModelContextWindow(HAIKU)).toBe(1_000_000);
+    expect(getModelContextWindow('anthropic/claude-haiku-5.5')).toBe(1_000_000);
+    expect(getModelContextWindow('claude-haiku-4-5-20251001')).toBe(200_000);
+  });
+
+  it('carries the tier in the pricing table, and only on the model that has one', () => {
+    const rows = getPricingTable();
+    expect(rows.find(m => m.model === HAIKU)).toEqual({
+      model: HAIKU, inputPer1M: 0.1, outputPer1M: 0.5,
+      longPrompt: { overTokens: 100_000, inputPer1M: 0.5, outputPer1M: 2.5 },
+    });
+    // Every other row is what it was before the tier existed: no key at all.
+    expect(rows.filter(m => 'longPrompt' in m).map(m => m.model)).toEqual([HAIKU]);
+    // A caller cannot edit the table through a row it was handed.
+    rows.find(m => m.model === HAIKU)!.longPrompt!.inputPer1M = 999;
+    expect(getPricingTable().find(m => m.model === HAIKU)!.longPrompt!.inputPer1M).toBe(0.5);
+  });
+
+  it('prices a prompt of exactly 100,000 tokens at the lower tier and 100,001 at the higher', () => {
+    record(100_000, 10_000);
+    // 100,000 * $0.10/M + 10,000 * $0.50/M = 0.010 + 0.005
+    expect(cost()).toBeCloseTo(0.015, 8);
+    resetTokenTracking();
+    record(100_001, 10_000);
+    // 100,001 * $0.50/M + 10,000 * $2.50/M = 0.0500005 + 0.025
+    expect(cost()).toBeCloseTo(0.0750005, 8);
+    resetTokenTracking();
+    record(99_999, 10_000);
+    expect(cost()).toBeCloseTo(0.0149999, 8);
+  });
+
+  it('bills EVERY token of a long request at the higher rate, not only those past the line', () => {
+    record(150_000, 20_000);
+    // 150,000 * $0.50/M + 20,000 * $2.50/M = 0.075 + 0.05. Marginal pricing
+    // would give 0.01 + 0.025 + 0.01.
+    expect(cost()).toBeCloseTo(0.125, 8);
+    expect(getSessionStats().estimatedCost).toBeCloseTo(0.125, 8);
+  });
+
+  // The threshold is measured on the prompt as Anthropic counts it: input_tokens
+  // plus cache creation plus cache reads. extractAnthropicUsage already hands over
+  // that sum as promptTokens.
+  it('counts cache reads toward the prompt length: a long prompt with a cache hit is still long', () => {
+    // 10,000 uncached + 100,000 read = 110,000: over the line.
+    record(110_000, 0, { read: 100_000 });
+    // 10,000 * $0.50/M + 100,000 * $0.05/M = 0.005 + 0.005. Judged on the 10,000
+    // uncached tokens alone it would be 0.001 + 0.001.
+    expect(cost()).toBeCloseTo(0.01, 8);
+  });
+
+  it('counts cache writes toward the prompt length too', () => {
+    // 20,000 uncached + 100,000 written = 120,000: over the line.
+    record(120_000, 0, { write: 100_000 });
+    // 20,000 * $0.50/M + 100,000 * $0.625/M = 0.01 + 0.0625
+    expect(cost()).toBeCloseTo(0.0725, 8);
+  });
+
+  it('reads the prompt length off what Anthropic reports, cache fields included', () => {
+    const usage = extractAnthropicUsage({
+      usage: { input_tokens: 10_000, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 100_000 },
+    })!;
+    recordTokenUsage(usage, HAIKU, 'anthropic');
+    expect(getLastUsage()!.promptTokens).toBe(110_000);
+    expect(cost()).toBeCloseTo(0.01, 8);
+  });
+
+  it('keeps the cache multiples of the usual 0.1× read and 1.25× write in both tiers', () => {
+    // No row in the rate tables: they are the defaults for Anthropic.
+    expect(cacheReadRateFor(HAIKU, 'anthropic')).toBe(0.1);
+    expect(cacheWriteRateFor(HAIKU, 'anthropic')).toBe(1.25);
+    // Lower tier, a prompt of exactly 100,000: $0.01 read and $0.125 write.
+    record(100_000, 0, { read: 50_000, write: 50_000 });
+    expect(cost()).toBeCloseTo(50_000 * 0.01 / 1e6 + 50_000 * 0.125 / 1e6, 8);
+    resetTokenTracking();
+    // Higher tier: $0.05 read and $0.625 write.
+    record(200_000, 0, { read: 100_000, write: 100_000 });
+    expect(cost()).toBeCloseTo(100_000 * 0.05 / 1e6 + 100_000 * 0.625 / 1e6, 8);
+    expect(cost()).toBeCloseTo(0.0675, 8);
+  });
+
+  it('prices each request on its own, never on the sum of a session', () => {
+    record(60_000, 1_000);    // 0.006 + 0.0005
+    record(160_000, 1_000);   // 0.08 + 0.0025
+    const [entry] = getCostBreakdown();
+    // The two together are 220,000 tokens, but neither request is: only the
+    // second pays the higher rate.
+    expect(entry.estimatedCost).toBeCloseTo(0.089, 8);
+    expect(entry.longPromptRequests).toBe(1);
+    expect(getSessionStats().estimatedCost).toBeCloseTo(0.089, 8);
+  });
+
+  it('prices the same model per request across a delta too', () => {
+    record(160_000, 1_000);
+    const mark = getRecordCount();
+    record(60_000, 1_000);
+    expect(getCostBreakdown(mark)[0].estimatedCost).toBeCloseTo(0.0065, 8);
+    expect(getCostBreakdown(mark)[0].longPromptRequests).toBeUndefined();
+  });
+
+  it('lets a cost the provider reported win over the table, tier or not', () => {
+    // OpenRouter's usage.cost for an anthropic/claude-haiku-5.5 call.
+    record(150_000, 1_000, {}, 'anthropic/claude-haiku-5.5', 'openrouter', 0.0123);
+    expect(cost()).toBeCloseTo(0.0123, 8);
+    resetTokenTracking();
+    // Even on the model the table prices: the reported figure is what was billed.
+    record(150_000, 1_000, {}, HAIKU, 'anthropic', 0.0456);
+    const [entry] = getCostBreakdown();
+    expect(entry.estimatedCost).toBeCloseTo(0.0456, 8);
+    // It was not priced here, so it is not counted as priced at the higher rate.
+    expect(entry.longPromptRequests).toBeUndefined();
+  });
+
+  it('leaves a model with a single rate exactly as it was, whatever the prompt length', () => {
+    record(150_000, 10_000, {}, 'claude-sonnet-5-5');
+    const [entry] = getCostBreakdown();
+    // 150,000 * $2/M + 10,000 * $10/M
+    expect(entry.estimatedCost).toBeCloseTo(0.4, 8);
+    expect('longPromptRequests' in entry).toBe(false);
+    resetTokenTracking();
+    record(150_000, 10_000, {}, 'claude-haiku-4-5-20251001');
+    // Haiku 4.5 is flat: 150,000 * $1/M + 10,000 * $5/M
+    expect(cost()).toBeCloseTo(0.2, 8);
+  });
+
+  it('nets cache savings at the rate of the tier each request was in', () => {
+    // Over the line: reads save 100,000 * $0.50/M * (1 - 0.1).
+    record(110_000, 0, { read: 100_000 });
+    expect(getCacheStats().estimatedSavingsUsd).toBeCloseTo(0.045, 8);
+    resetTokenTracking();
+    // Under it: 50,000 * $0.10/M * 0.9.
+    record(50_000, 0, { read: 50_000 });
+    expect(getCacheStats().estimatedSavingsUsd).toBeCloseTo(0.0045, 8);
+    resetTokenTracking();
+    // Over the line with a write: the reads save 0.045, the write premium costs
+    // 100,000 * $0.50/M * 0.25 = 0.0125.
+    record(200_000, 0, { read: 100_000, write: 100_000 });
+    expect(getCacheStats().estimatedSavingsUsd).toBeCloseTo(0.0325, 8);
+  });
+
+  it('formats a token threshold the way people say it', () => {
+    expect(formatTokenThreshold(100_000)).toBe('100K');
+    expect(formatTokenThreshold(272_000)).toBe('272K');
+    expect(formatTokenThreshold(1_000_000)).toBe('1M');
+    expect(formatTokenThreshold(1_500)).toBe('1500');
+    expect(formatTokenThreshold(999)).toBe('999');
+  });
+
+  describe('/cost', () => {
+    it('totals a session of one short and one long request, and says why the long one costs more', () => {
+      record(60_000, 1_000);
+      record(160_000, 1_000);
+      const report = formatCostReport();
+      expect(report).toContain('**Estimated cost:** $0.0890');
+      expect(report).toMatch(/`anthropic` \/ `claude-haiku-5-5` \|.*\| \$0\.0890 \|/);
+      expect(report).toContain(
+        '_Note: 1 request on `claude-haiku-5-5` had a prompt over 100K tokens, so it was priced at that model\'s long-prompt rate for every token — $0.50 in / $2.50 out per 1M._',
+      );
+    });
+
+    it('counts the long requests, and words the plural', () => {
+      record(150_000, 0);
+      record(200_000, 0);
+      record(10_000, 0);
+      expect(formatCostReport()).toContain(
+        '_Note: 2 requests on `claude-haiku-5-5` had a prompt over 100K tokens, so they were priced at',
+      );
+    });
+
+    it('says nothing when no request was over the line, or when the cost was the provider\'s own', () => {
+      record(100_000, 5_000);
+      expect(formatCostReport()).toContain('**Estimated cost:** $0.0125');
+      expect(formatCostReport()).not.toMatch(/long-prompt/);
+      resetTokenTracking();
+      record(150_000, 1_000, {}, 'anthropic/claude-haiku-5.5', 'openrouter', 0.0123);
+      expect(formatCostReport()).not.toMatch(/long-prompt/);
+    });
+
+    it('does not put a dollar rate in a plan\'s report', () => {
+      record(150_000, 1_000, {}, HAIKU, 'z.ai');
+      const report = formatCostReport();
+      expect(report).toContain('**Estimated cost:** included in plan');
+      expect(report).not.toMatch(/long-prompt/);
+    });
   });
 });

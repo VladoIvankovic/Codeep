@@ -37,6 +37,7 @@ import { chat } from '../api/index.js';
 import { isAnthropicRefusalNotice } from '../api/anthropicContent.js';
 import { runAgent, classifyPermissionOutcome, buildDangerousTools } from '../utils/agent.js';
 import { recordPromptInLedger } from '../utils/usageLedger.js';
+import type { PermissionStore } from '../utils/permissionScope.js';
 import { forgetHooksDirectory } from '../utils/toolExecution.js';
 import { shellCommandEnv } from '../utils/shell.js';
 import type { McpServer } from './protocol.js';
@@ -60,6 +61,10 @@ export interface AcpSession {
   /** Bumped whenever the thread moves to another conversation (/session
    *  new, /session load, /rewind), so a turn still running can tell. */
   conversation?: number;
+  /** What "Allow always" was answered to, by Codeep session id: a new
+   *  conversation starts with nothing allowed, and the answers go with the
+   *  ACP session when it ends. */
+  permissionStore?: PermissionStore;
 }
 
 /**
@@ -70,7 +75,7 @@ export interface AcpSession {
  */
 export type AcpAgentRunOptions = Pick<
   AgentSessionOptions,
-  'onRequestPermission' | 'extraDangerousTools' | 'onExecuteCommand' | 'fs'
+  'onRequestPermission' | 'permissionMemory' | 'extraDangerousTools' | 'onExecuteCommand' | 'fs'
 > & {
   /** Ask the user a yes/no question. Unset: the mode runs without asking. */
   confirm?: (message: string) => Promise<boolean>;
@@ -1718,10 +1723,12 @@ Anything else the agent should know — edge cases, gotchas, things to double-ch
             const refused = await checkSkillCommand(shellCmd, session.workspaceRoot);
             if (refused) throw new Error(`\`${shellCmd}\` was refused: ${refused}`);
             if (!commandsAllowed && buildDangerousTools(agentRun.extraDangerousTools).has('execute_command')) {
+              // "Allow always" here allows the rest of this skill's lines, not
+              // this line and not the session: the button says so.
               const outcome = await agentRun.onRequestPermission({
                 tool: 'execute_command',
                 parameters: { command: shellCmd, args: [] },
-              });
+              }, undefined, { alwaysLabel: "Allow all of this skill's commands" });
               const decision = classifyPermissionOutcome(outcome);
               if (decision === 'allow-always') commandsAllowed = true;
               else if (decision !== 'allow-once') {
@@ -1862,6 +1869,8 @@ async function runCommandAgent(
     fs: agentRun?.fs,
     // Servers are registered under the ACP session id.
     mcpSessionId: session.sessionId,
+    // The memory a plain prompt gets: "Allow always" holds across both.
+    permissionMemory: agentRun?.permissionMemory,
     chatHistory: toAgentChatHistory(session.history),
   });
   if (result.aborted) {

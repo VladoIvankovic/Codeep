@@ -433,7 +433,7 @@ async function chatOpenAI(
   const stream = Boolean(onChunk);
   const timeout = config.get('apiTimeout');
   const temperature = config.get('temperature');
-  // Never below the model's floor (Opus 5.5 / Sonnet 5.5 on OpenRouter — see minResponseTokensFor).
+  // Never below the model's floor (Opus 5.5 / Sonnet 5.5 / Haiku 5.5 on OpenRouter — see minResponseTokensFor).
   const maxTokens = Math.max(config.get('maxTokens'), minResponseTokensFor(model, config.get('reasoningEffort') as ReasoningTier));
 
   // Get provider-specific URL and auth. resolveBaseUrl applies user
@@ -738,7 +738,7 @@ async function chatAnthropic(
   const stream = Boolean(onChunk);
   const timeout = config.get('apiTimeout');
   const temperature = config.get('temperature');
-  // Never below the model's floor: Opus 5.5's and Sonnet 5.5's default-on
+  // Never below the model's floor: Opus 5.5's, Sonnet 5.5's and Haiku 5.5's default-on
   // thinking spends the same limit as the answer (see minResponseTokensFor).
   const maxTokens = Math.max(config.get('maxTokens'), minResponseTokensFor(model, config.get('reasoningEffort') as ReasoningTier));
   const baseUrl = getProviderBaseUrl(providerId, 'anthropic');

@@ -84,6 +84,7 @@ import type { App, ConfirmOptions } from './App';
 import { handleInlineConfirmKey, confirmFooter } from './handlers';
 import type { TrustBearingWrite } from '../utils/toolExecution';
 import type { ProjectContext } from '../utils/project';
+import { forgetSessionPermissions } from '../utils/permissionScope';
 
 let root: string;
 let messages: Array<{ role: string; content: string }>;
@@ -568,6 +569,64 @@ describe('the confirmation for a file that decides what runs later', () => {
     // Every other confirmation keeps it.
     const command = await ask('dangerous', { tool: 'execute_command', parameters: { command: 'ls', args: [] } });
     expect(command.dialogs[0].hadAlwaysAllow).toBe(true);
+  });
+});
+
+describe('the "Always Allow" button', () => {
+  beforeEach(() => forgetSessionPermissions());
+  afterEach(() => forgetSessionPermissions());
+
+  type Memory = { alwaysAllowed: Set<string>; alwaysRejected: Set<string>; alwaysRejectedPaths?: Set<string> } | undefined;
+  const PHP = { tool: 'execute_command', parameters: { command: 'php', args: ['artisan', 'migrate'] } };
+
+  /** One run per session id (undefined: the global one), each putting up the
+   *  dialog for `toolCall`; the labels it showed and the memory each run got. */
+  async function runs(sessionIds: Array<string | undefined>, toolCall: { tool: string; parameters: Record<string, unknown> } = PHP) {
+    config.set('agentConfirmation', 'dangerous');
+    const labels: Array<string | undefined> = [];
+    const memories: Memory[] = [];
+    const app = makeCtx().app;
+    (app as unknown as { showConfirm: unknown }).showConfirm = (o: { extraOption?: { label: string }; onConfirm: () => void }) => {
+      labels.push(o.extraOption?.label);
+      o.onConfirm();
+    };
+    vi.mocked(runAgent).mockImplementation(async (_task, _context, opts) => {
+      memories.push(opts?.permissionMemory as Memory);
+      await opts?.onRequestPermission?.(toolCall);
+      return { success: true, iterations: 1, actions: [], finalResponse: 'done' };
+    });
+    for (const sessionId of sessionIds) await executeAgentTask('go', false, makeCtx({ app, sessionId }));
+    return { labels, memories };
+  }
+
+  it('names the program of a command and says it lasts the session', async () => {
+    expect((await runs(['s1'])).labels).toEqual(['Always Allow php (this session)']);
+  });
+
+  it('names the tool for any other', async () => {
+    const write = await runs(['s1'], { tool: 'write_file', parameters: { path: 'a.txt', content: 'x' } });
+    expect(write.labels).toEqual(['Always Allow write_file (this session)']);
+  });
+
+  it('gives every run of a chat session the same allowed answers, and no other session\'s', async () => {
+    const { memories } = await runs(['s1', 's1', 's2']);
+
+    expect(memories[0]!.alwaysAllowed).toBe(memories[1]!.alwaysAllowed);
+    expect(memories[2]!.alwaysAllowed).not.toBe(memories[0]!.alwaysAllowed);
+  });
+
+  it('uses the global session when the run has none', async () => {
+    const { memories } = await runs([undefined, undefined]);
+
+    expect(memories[1]!.alwaysAllowed).toBe(memories[0]!.alwaysAllowed);
+  });
+
+  it('starts every run with no refusals, which end with the run', async () => {
+    const { memories } = await runs(['s1', 's1']);
+
+    expect(memories[0]!.alwaysRejected.size).toBe(0);
+    expect(memories[1]!.alwaysRejected).not.toBe(memories[0]!.alwaysRejected);
+    expect(memories[1]!.alwaysRejectedPaths).not.toBe(memories[0]!.alwaysRejectedPaths);
   });
 });
 

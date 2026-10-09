@@ -7,6 +7,15 @@ import { getProjectContext, ProjectContext } from '../utils/project.js';
 import { ToolCall } from '../utils/tools.js';
 import type { FsCallbacks, TrustBearingWrite } from '../utils/toolExecution.js';
 import type { Message } from '../config/index.js';
+import type { PermissionMemory } from '../utils/permissionScope.js';
+
+/** What a caller of the permission callback can add to its question beyond
+ *  the call itself. runAgent passes none of it. */
+export interface PermissionAsk {
+  /** Says what the "always" option means when it is not the agent's usual
+   *  answer — a skill's shell line, where it allows the rest of the skill. */
+  alwaysLabel?: string;
+}
 
 export interface AgentSessionOptions {
   prompt: string;
@@ -27,7 +36,10 @@ export interface AgentSessionOptions {
    * exist while runAgent passed it on every call, so the one caller that
    * needs it had to cast its way back to the truth.
    */
-  onRequestPermission?: (toolCall: ToolCall, trustBearing?: TrustBearingWrite | null) => Promise<PermissionOutcome>;
+  onRequestPermission?: (toolCall: ToolCall, trustBearing?: TrustBearingWrite | null, ask?: PermissionAsk) => Promise<PermissionOutcome>;
+  /** What "Allow always" has been answered to in this conversation: handed on
+   *  to every prompt and command of it, so the answer outlives the run. */
+  permissionMemory?: PermissionMemory;
   /** Tools to force into the per-run dangerous set (ACP manual mode). */
   extraDangerousTools?: string[];
   onExecuteCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
@@ -244,6 +256,7 @@ export async function runAgentSession(opts: AgentSessionOptions): Promise<void> 
     // `conversationId` is the ACP session id, which is what
     // registerSessionServers keyed by in server.ts handleSessionNew.
     mcpSessionId: opts.conversationId,
+    permissionMemory: opts.permissionMemory,
     chatHistory: opts.chatHistory ? toAgentChatHistory(opts.chatHistory) : undefined,
   });
 

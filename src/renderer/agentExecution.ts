@@ -21,6 +21,7 @@ import { trustBearingWrite, forgetHooksDirectory, type TrustBearingWrite } from 
 import { shellCommandEnv } from '../utils/shell';
 import { charWidth } from './ansi';
 import { showControls } from '../utils/controlChars';
+import { alwaysAllowLabel, sessionPermissionMemory } from '../utils/permissionScope';
 import { ProjectContext } from '../utils/project';
 import { config, autoSaveSession, getCurrentSessionId } from '../config/index';
 import { agentConfirmationMode, agentInteractiveMode } from './agentConfirmation';
@@ -383,8 +384,10 @@ export async function executeAgentTask(
             // typed-ahead text must not approve, or deny for the rest of the
             // run, a call nobody has read.
             // No "Always Allow" for one of those files: the agent answers
-            // about this file only and would not remember it anyway.
-            extraOption: trustBearing ? undefined : { label: 'Always Allow', onSelect: () => resolve('allow_always') },
+            // about this file only and would not remember it anyway. For
+            // anything else it says what it covers — the program of a
+            // command, else the tool — and for how long: the chat session.
+            extraOption: trustBearing ? undefined : { label: alwaysAllowLabel(toolCall), onSelect: () => resolve('allow_always') },
             onConfirm: () => resolve('allow_once'),
             // The one "no" there is, and it answers reject_always. For one of
             // those files the agent remembers that against the FILE rather
@@ -441,6 +444,9 @@ export async function executeAgentTask(
     const result: AgentResult = await runAgent(enrichedTask, context, {
       dryRun,
       onRequestPermission,
+      // What "Always Allow" was answered to stays answered for this chat
+      // session; a refusal ends with the run (permissionScope.ts).
+      permissionMemory: sessionPermissionMemory(sessionId),
       extraDangerousTools: confirmationMode === 'always' ? ['write_file', 'edit_file', 'delete_file', 'execute_command', 'create_directory'] : undefined,
       chatHistory: app.getChatHistory(),
       // Route MCP-prefixed tool calls through the shared TUI session id.

@@ -7,6 +7,7 @@ import {
   nextOffset,
   outcomeForAnswer,
   describeApiError,
+  describePermissionOutcome,
 } from './telegramApproval';
 
 describe('isFromOwner', () => {
@@ -234,5 +235,13 @@ describe('describeApiError', () => {
 
   it('still says something when there is no description', () => {
     expect(describeApiError(502, null)).toContain('502');
+  });
+});
+
+describe('describePermissionOutcome', () => {
+  it('says how long an Always Allow answered at the keyboard lasts', () => {
+    expect(describePermissionOutcome('allow_always')).toBe('allowed, and always for this session');
+    expect(describePermissionOutcome('allow_once')).toBe('allowed');
+    expect(describePermissionOutcome('reject_always')).toBe('denied');
   });
 });

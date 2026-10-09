@@ -11,6 +11,91 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.10.2] — 2026-10-09
+
+> TL;DR — Claude Haiku 5.5 arrives at $0.10/$0.50 (five times that past 100K prompt tokens), far fewer runs end "without a summary", and Always Allow now lasts the whole chat.
+
+### Added
+
+- **Claude Haiku 5.5** (`claude-haiku-5-5`), Anthropic's new fast model for
+  high-volume work: 1M context, 128K output, and thinking on by default at
+  medium effort. `/thinking` offers low to max for it, and Auto leaves it at
+  medium. Codeep leaves it at least 32K reply tokens (64K at Max), as for
+  Opus 5.5 and Sonnet 5.5, because its thinking shares that limit, and sends it
+  no `temperature`, `top_p` or `top_k`, which it rejects. Through OpenRouter it
+  is `anthropic/claude-haiku-5.5`. Claude Haiku 4.5 stays in the picker, now
+  named "Claude Haiku 4.5", and a setting pinned to it keeps it; Opus 5.5 stays
+  the Anthropic default. The same text counts as about 30% more tokens than on
+  Haiku 4.5, so the token counts you see rise by about that much; at a tenth of
+  Haiku 4.5's rates up to 100K prompt tokens, and half of them above, the bill
+  still falls.
+- **A price that depends on the prompt.** Unlike the other Claude models
+  Codeep offers, Haiku 5.5 is priced by prompt length: $0.10 in / $0.50 out per
+  million tokens for a prompt of up to 100,000 tokens, and $0.50 / $2.50 for one
+  over it — for every token of that request, with cache reads and writes counted
+  in the prompt's length. `/cost` and `/stats` price each request on its own, so
+  a long session of short prompts stays at the low rate. `/cost` says when a
+  request was billed at the high rate, `/stats` lists both rates in its pricing
+  table, and the cache savings use the rate each request paid. A cost that
+  OpenRouter reports itself is used as it comes.
+
+### Fixed
+
+- **"Always Allow" is kept for the chat, and says what it covers.** It was
+  forgotten when the run ended, so the next prompt asked about `php` again,
+  and it covered the whole tool: answering it to one `php artisan migrate` let
+  every other command through until the run ended. It now lasts until a new
+  chat is started, another session is loaded or Codeep ends, and for a command
+  it covers the program only: the button reads "Always Allow php (this
+  session)", `php` runs with any arguments, and `npm` still asks. Any other
+  tool is allowed by its name, as before. A Deny still lasts one run, so one
+  misclick does not turn a tool off for the whole session; a write to a file
+  that decides what runs later is still asked about every time; and a dry run
+  keeps nothing it was told "always". Renaming a chat takes its answers along.
+  In an editor over ACP the option reads the same and holds for the
+  conversation: `/session new`, or loading another session, starts with nothing
+  allowed, and a skill's shell line offers "Allow all of this skill's
+  commands", which is what that answer does.
+- **Far fewer runs end on "The model ended the run without writing a
+  summary".** Some models, GLM-5.3 at max effort on Z.AI among them, answer
+  where they mean to call a tool with `[tool call: read_file]` — the line Codeep
+  keeps for each of their earlier turns that only called tools, so there is
+  nothing in it to run. In a test run on Z.AI it was about one reply in four
+  that made no call, and asked for the call or a summary, the model sometimes
+  wrote the line again until the two requests were spent. Codeep now asks again
+  without those turns in what it sends (the tool results stay, joined into one
+  message), so the model has nothing to copy, and goes on that way for the rest
+  of the run; the OpenAI Responses API, which replays the messages as they were,
+  is left as it is. The nudge no longer calls the reply a "placeholder", the
+  second one is shorter and firmer, and the two are counted from the last tool
+  call, not from the start of the run: three recovered replies spread over a
+  long one used them up, and the third ended it. A model that still answers
+  with neither a call nor a summary after two such requests in a row ends the
+  run as before.
+- **Stopping `codeep acp` stops the MCP servers it started.** A SIGTERM,
+  SIGINT or SIGHUP ended it with every MCP server it had started still
+  running: the handler meant to stop them never attached, because the library
+  behind the settings file had already claimed those signals. It now stops
+  them, then exits with 143, 130 or 129 as a shell would show. SIGHUP is new
+  to it. The settings library still cleans up its temporary files first.
+- **A signal sent to the `codeep` command reaches the program it started.** The
+  command npm installs only starts the real process, so a `kill`, a service
+  stopping it or an editor ending `codeep acp` with a signal ended the command
+  and left the real process running; and if the real process was ended by a
+  signal, the command exited 0. It now passes SIGINT, SIGTERM and SIGHUP on,
+  waits for the real process to finish, and ends with its exit code or the
+  signal that ended it. Where stdin is a terminal, Ctrl+C is not passed on
+  again — the terminal already sent it to both — so a `kill -INT` aimed at the
+  command alone is not passed on there; with stdin elsewhere (an editor, a
+  service, `> out.log`) it is.
+- **A provider named like an object member no longer finds a key that was never
+  stored.** Where the system keychain is not available, API keys are kept in a
+  plain-text map in the config file, and a provider called `constructor`,
+  `toString` or `__proto__` was answered with a function or an object, handed
+  back as its key. Only keys that were stored are found now, a key can be stored
+  under any provider name, and storing one cannot change what every object
+  inherits.
+
 ## [3.10.1] — 2026-10-09
 
 > TL;DR — A new machine gets its API keys with `codeep account sync --keys`, `account push` skips keys from environment variables, the welcome block follows the session, and agent runs no longer end on "Using write_file."

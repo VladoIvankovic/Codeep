@@ -46,6 +46,7 @@ import { expandFileAndFolderMentions, expandGitMentions } from '../utils/mention
 import { expandWebMentions } from '../utils/webFetch';
 import { handleCommand as dispatchCommand, AppCommandContext } from './commands';
 import { logAppError } from '../utils/logger';
+import { forgetSessionPermissions } from '../utils/permissionScope';
 import { loadTelegramInboxCredentials } from '../utils/telegramCredentials';
 import { attachTelegramInbox } from '../utils/telegramInbox';
 import { sharedUpdates } from '../utils/telegramUpdates';
@@ -542,7 +543,7 @@ function showSessionPickerInline(): void {
         }
       }
     },
-    (sessionName) => { deleteSession(sessionName, projectPath); },
+    (sessionName) => { deleteSession(sessionName, projectPath); forgetSessionPermissions(sessionName); },
   );
 }
 

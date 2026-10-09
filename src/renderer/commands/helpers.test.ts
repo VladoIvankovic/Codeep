@@ -589,6 +589,28 @@ describe('formatStatsReport', () => {
     expect(out).toContain('| x | $3.142 | $6.283 |');
   });
 
+  // Claude Haiku 5.5 is priced by prompt length: the table quotes both rates,
+  // or it would show only the one most requests pay.
+  it('adds a row for the long-prompt rate of a model that has one, and for no other', () => {
+    const out = formatStatsReport({
+      totals: emptyTotals,
+      breakdown: [],
+      cache: emptyCache,
+      pricing: [
+        { model: 'tiered', inputPer1M: 0.1, outputPer1M: 0.5, longPrompt: { overTokens: 100_000, inputPer1M: 0.5, outputPer1M: 2.5 } },
+        { model: 'flat', inputPer1M: 2, outputPer1M: 10 },
+      ],
+      currentProvider: 'anthropic',
+      fmt: idFmt,
+    });
+    const rows = out.split('\n').filter((l) => l.startsWith('| ') && l !== '| Model | Input | Output |');
+    expect(rows).toEqual([
+      '| tiered | $0.100 | $0.500 |',
+      '| tiered · prompt over 100K tokens | $0.500 | $2.500 |',
+      '| flat | $2.000 | $10.000 |',
+    ]);
+  });
+
   it('handles an empty pricing table', () => {
     const out = formatStatsReport({
       totals: emptyTotals,

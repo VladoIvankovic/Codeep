@@ -554,8 +554,8 @@ export async function agentChat(
         providerId, model, baseUrl, headers, tier, signal: controller.signal,
       });
     }
-    // Room for the answer after the thinking (Opus 5.5 and Sonnet 5.5 think by
-    // default — see minResponseTokensFor).
+    // Room for the answer after the thinking (Opus 5.5, Sonnet 5.5 and Haiku 5.5
+    // think by default — see minResponseTokensFor).
     const responseBudget = Math.max(config.get('maxTokens'), 16384, minResponseTokensFor(model, tier));
     if (protocol === 'openai') {
       const openAITools = getOpenAITools(additionalTools, allowedTools);

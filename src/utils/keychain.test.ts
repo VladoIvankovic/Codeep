@@ -220,3 +220,132 @@ describe('migrateApiKeysToKeychain', () => {
     expect((config.get('apiKeys') as Record<string, string>).openai).toBe('sk-fail');
   });
 });
+
+// The plaintext fallback is a plain object keyed by provider id, and a plain
+// object answers for more names than it holds: `constructor`, `toString` and
+// `__proto__` come back as members of Object.prototype. Provider ids are not
+// all ours — a synced entry from codeep.dev or a typed `/login <name>` can be
+// any string — so a lookup must see only what was stored.
+describe('plaintext fallback — provider names that Object.prototype also has', () => {
+  const PROTOTYPE_NAMES = ['constructor', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf', '__proto__'];
+
+  // Like conf: the value goes to "disk" as JSON, and every get parses a fresh
+  // copy — which is also how an own `__proto__` entry arrives from a real file.
+  function makeDiskLikeConfig(initialJson = '{"apiKeys":{}}') {
+    let disk = initialJson;
+    return {
+      get: (key: string) => (JSON.parse(disk) as Record<string, unknown>)[key],
+      set: (key: string, value: unknown) => {
+        const all = JSON.parse(disk) as Record<string, unknown>;
+        all[key] = value;
+        disk = JSON.stringify(all);
+      },
+      disk: () => disk,
+    };
+  }
+
+  function expectPrototypeUntouched() {
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype);
+    expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(Object.prototype.constructor).toBe(Object);
+    expect(typeof Object.prototype.toString).toBe('function');
+    expect(String({})).toBe('[object Object]');
+  }
+
+  describe.each([
+    ['the keychain is available', () => undefined],
+    ['the keychain is unavailable', () => mockEntryFactory.overrides.set('__codeep_test__', {
+      setPassword: () => { throw new Error('no keychain'); },
+    })],
+  ])('when %s', (_label, arrange) => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      arrange();
+    });
+
+    it.each(PROTOTYPE_NAMES)('finds no key for %s when none was stored', async (name) => {
+      const storage = createSecureStorage(makeDiskLikeConfig());
+      expect(await storage.getApiKey(name)).toBeNull();
+      expect(await storage.hasApiKey(name)).toBe(false);
+    });
+
+    it.each(PROTOTYPE_NAMES)('stores a key under %s and reads back exactly that', async (name) => {
+      const config = makeDiskLikeConfig();
+      const storage = createSecureStorage(config);
+      // The keychain probe decides where it lands; force the plaintext map.
+      mockEntryFactory.overrides.set(`api-key-${name}`, {
+        setPassword: () => { throw new Error('write failed'); },
+      });
+      await storage.setApiKey(name, 'sk-stored');
+      expect(await storage.getApiKey(name)).toBe('sk-stored');
+      expect(await storage.hasApiKey(name)).toBe(true);
+      // And nothing leaked to the names that were not stored.
+      for (const other of PROTOTYPE_NAMES.filter(n => n !== name)) {
+        expect(await storage.getApiKey(other), other).toBeNull();
+      }
+      expectPrototypeUntouched();
+    });
+  });
+
+  it('cannot be made to swap a map\'s prototype by a value that is an object', async () => {
+    mockEntryFactory.overrides.set('__codeep_test__', {
+      setPassword: () => { throw new Error('no keychain'); },
+    });
+    const config = makeDiskLikeConfig();
+    const storage = createSecureStorage(config);
+    // Assigning an object to keys['__proto__'] replaces the prototype of keys,
+    // so `polluted` would be readable off every key map afterwards.
+    await storage.setApiKey('__proto__', { polluted: true } as unknown as string);
+    const keys = config.get('apiKeys') as Record<string, unknown>;
+    expect(Object.getPrototypeOf(keys)).toBe(Object.prototype);
+    expect(keys.polluted).toBeUndefined();
+    // The object is stored as a value, not a key: no string, so no key.
+    expect(await storage.getApiKey('__proto__')).toBeNull();
+    expect(await storage.getApiKey('polluted')).toBeNull();
+    expectPrototypeUntouched();
+  });
+
+  it('still returns an entry that really is named like a prototype member', async () => {
+    const config = makeDiskLikeConfig('{"apiKeys":{"constructor":"sk-ctor","toString":"sk-ts","openai":"sk-oa"}}');
+    const storage = createSecureStorage(config);
+    expect(await storage.getApiKey('constructor')).toBe('sk-ctor');
+    expect(await storage.getApiKey('toString')).toBe('sk-ts');
+    expect(await storage.getApiKey('openai')).toBe('sk-oa');
+    // An own `__proto__` entry arrives from JSON.parse as exactly that.
+    const withProto = createSecureStorage(makeDiskLikeConfig('{"apiKeys":{"__proto__":"sk-proto"}}'));
+    expect(await withProto.getApiKey('__proto__')).toBe('sk-proto');
+    expect(await withProto.hasApiKey('__proto__')).toBe(true);
+  });
+
+  // The typeof check alone turns away every Object.prototype member, which is a
+  // function or an object. What only the own-property check stops is a STRING
+  // the map inherits — the map's prototype carrying a member named like a
+  // provider, as a polluted Object.prototype would.
+  it('does not take a key the map merely inherits, a string included', async () => {
+    const inherited = Object.create({ openai: 'sk-from-the-prototype' }) as Record<string, string>;
+    inherited.anthropic = 'sk-own';
+    const storage = createSecureStorage({ get: () => inherited, set: () => {} });
+    expect(await storage.getApiKey('openai')).toBeNull();
+    expect(await storage.hasApiKey('openai')).toBe(false);
+    expect(await storage.getApiKey('anthropic')).toBe('sk-own');
+  });
+
+  it('deletes only the entry that was stored, whatever it is named', async () => {
+    const config = makeDiskLikeConfig('{"apiKeys":{"constructor":"sk-ctor","__proto__":"sk-proto","openai":"sk-oa"}}');
+    const storage = createSecureStorage(config);
+    await storage.deleteApiKey('constructor');
+    await storage.deleteApiKey('__proto__');
+    await storage.deleteApiKey('toString'); // never stored: nothing to remove, nothing to break
+    expect(JSON.parse(config.disk())).toEqual({ apiKeys: { openai: 'sk-oa' } });
+    expectPrototypeUntouched();
+  });
+
+  it('does not take a stored value that is not a string for a key', async () => {
+    const storage = createSecureStorage(makeDiskLikeConfig('{"apiKeys":{"a":1,"b":{"x":1},"c":true,"d":""}}'));
+    for (const name of ['a', 'b', 'c', 'd']) {
+      expect(await storage.getApiKey(name), name).toBeNull();
+      expect(await storage.hasApiKey(name), name).toBe(false);
+    }
+  });
+});

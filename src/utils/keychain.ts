@@ -119,17 +119,30 @@ class FallbackStorage implements SecureStorage {
 
   async getApiKey(providerId: string): Promise<string | null> {
     const keys = this.config.get('apiKeys') || {};
-    return keys[providerId] || null;
+    // Only the map's own entries: a provider named `constructor`, `toString` or
+    // `__proto__` would otherwise be answered by Object.prototype — a function
+    // or an object, handed back as an API key (and `Object.length` passes for a
+    // non-empty one in hasApiKey). A stored value that is not a string is not a
+    // key either.
+    const key: unknown = Object.prototype.hasOwnProperty.call(keys, providerId) ? keys[providerId] : undefined;
+    return typeof key === 'string' && key ? key : null;
   }
 
   async setApiKey(providerId: string, apiKey: string): Promise<void> {
-    const keys = this.config.get('apiKeys') || {};
-    keys[providerId] = apiKey;
+    // A copy, with the entry defined as an own data property rather than
+    // assigned: `keys['__proto__'] = apiKey` calls the prototype setter, which
+    // drops a string silently (the key is lost) and, given an object, would
+    // swap the map's prototype. Defining it stores the name like any other and
+    // leaves Object.prototype alone.
+    const keys = { ...(this.config.get('apiKeys') || {}) };
+    Object.defineProperty(keys, providerId, { value: apiKey, enumerable: true, writable: true, configurable: true });
     this.config.set('apiKeys', keys);
   }
 
   async deleteApiKey(providerId: string): Promise<void> {
-    const keys = this.config.get('apiKeys') || {};
+    const keys = { ...(this.config.get('apiKeys') || {}) };
+    // Own entries only, which is all `delete` ever removes; the copy above keeps
+    // an own `__proto__` entry an own entry.
     delete keys[providerId];
     this.config.set('apiKeys', keys);
   }

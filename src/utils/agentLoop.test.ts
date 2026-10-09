@@ -107,7 +107,8 @@ vi.mock('./history', async (importOriginal) => {
   };
 });
 
-import { runAgent, resolveDelegateModel, NO_ANSWER_NUDGE, NO_SUMMARY_ANSWER, type PermissionOutcome } from './agent';
+import { runAgent, resolveDelegateModel, NO_ANSWER_NUDGE, NO_ANSWER_NUDGE_AGAIN, NO_SUMMARY_ANSWER, type PermissionOutcome } from './agent';
+import { forgetSessionPermissions, sessionPermissionMemory } from './permissionScope';
 import { config, getApiKey } from '../config/index';
 import { createSecureStorage } from './keychain';
 import { callSessionTool, callSessionVirtualTool } from './mcpRegistry';
@@ -1156,17 +1157,18 @@ describe('a run whose last reply is no answer', () => {
       : then(chatCalls().indexOf(call) - n)));
   };
 
-  it('nudges once with the placeholder message, and takes the summary that follows', async () => {
+  it('nudges once, and takes the summary that follows', async () => {
     writeTimesThen(3, k => (k === 0 ? say(PLACEHOLDER) : say('Wrote three files; run npm test.')));
 
     const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10 });
 
     expect(chatCalls()).toHaveLength(5);
-    // What the model was sent for its tool turns, and after the echo.
+    // Until the echo the model is sent its tool turns as the placeholder; with
+    // the nudge it is not (see "a model that wrote the placeholder" below).
+    expect(chatCalls()[3].messages.filter(m => m.role === 'assistant').map(m => m.content)).toEqual([PLACEHOLDER, PLACEHOLDER, PLACEHOLDER]);
     const afterEcho = chatCalls()[4].messages;
-    expect(afterEcho.filter(m => m.role === 'assistant').map(m => m.content)).toEqual([PLACEHOLDER, PLACEHOLDER, PLACEHOLDER, PLACEHOLDER]);
-    expect(afterEcho.at(-1)).toEqual({ role: 'user', content: NO_ANSWER_NUDGE });
-    expect(afterEcho.at(-2)).toEqual({ role: 'assistant', content: PLACEHOLDER });
+    expect(afterEcho.at(-1)?.role).toBe('user');
+    expect(afterEcho.at(-1)?.content.endsWith(NO_ANSWER_NUDGE)).toBe(true);
     expect(result.success).toBe(true);
     expect(result.finalResponse).toBe('Wrote three files; run npm test.');
     expect(result.endedWithoutSummary).toBeUndefined();
@@ -1178,18 +1180,23 @@ describe('a run whose last reply is no answer', () => {
 
       const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10 });
 
-      // Two nudges, then no third.
+      // Two nudges, then no third: the first request ends on the nudge, the
+      // second on the firmer one that follows it, with the first still in it.
       expect(chatCalls()).toHaveLength(5);
-      expect(chatCalls().slice(3).map(c => c.messages.at(-1)?.content)).toEqual([NO_ANSWER_NUDGE, NO_ANSWER_NUDGE]);
+      const [first, second] = chatCalls().slice(3).map(c => c.messages.at(-1)!.content);
+      expect(first.endsWith(NO_ANSWER_NUDGE)).toBe(true);
+      expect(first).not.toContain(NO_ANSWER_NUDGE_AGAIN);
+      expect(second.endsWith(NO_ANSWER_NUDGE_AGAIN)).toBe(true);
+      expect(second.split(NO_ANSWER_NUDGE)).toHaveLength(2);
       expect(result.success).toBe(true);
       expect(result.finalResponse).toBe(NO_SUMMARY_ANSWER);
       expect(result.unstreamedText).toBe(NO_SUMMARY_ANSWER);
       expect(result.endedWithoutSummary).toBe(true);
-      // The echo went back as what it is, each time right before the nudge.
-      const sent = chatCalls()[4].messages;
-      sent.forEach((m, i) => {
-        if (m.role === 'user' && m.content === NO_ANSWER_NUDGE) expect(sent[i - 1]).toEqual({ role: 'assistant', content: reply || '(no reply)' });
-      });
+      // The echo is not sent back to the model: it would show it the reply
+      // it is being asked to replace (see "a model that wrote the placeholder").
+      for (const call of chatCalls().slice(3)) {
+        expect(call.messages.filter(m => m.role === 'assistant')).toEqual([]);
+      }
     });
   }
 
@@ -1315,5 +1322,284 @@ describe('a run whose last reply is no answer', () => {
     // The fix reply is an answer, and it replaces the line.
     expect(result.finalResponse).toBe('Fixed it.\n\n✓ Verification passed: 1/1 checks');
     expect(result.endedWithoutSummary).toBeUndefined();
+  });
+
+  // GLM-5.3 at max effort, on Z.AI, wrote "[tool call: read_file, read_file]"
+  // as a reply in five of 21 turns without a call (box trials, 2026-10-09)
+  // where it meant to call tools, and in one run in about twenty-five it wrote
+  // it again after the nudge, which ended the run on "without a summary". The
+  // reply is the turns the history showed it, written back; so it is asked
+  // again without them.
+  describe('a model that wrote the placeholder', () => {
+    const noPlaceholders = (call: ChatCall) => !call.messages.some(m => m.content.includes('[tool call:') || m.content === '(no reply)');
+    const alternates = (call: ChatCall) => call.messages.every((m, i) => i === 0 || m.role !== call.messages[i - 1].role);
+    /** Write, write, the echo, then what `after` says for each later request. */
+    const echoAfterTwoWrites = (after: (k: number) => ChatResponse) => setScript(call => {
+      const n = chatCalls().indexOf(call);
+      if (n < 2) return use(['write_file', { path: `src/f${n}.ts`, content: 'x' }]);
+      return n === 2 ? say(PLACEHOLDER) : after(n - 3);
+    });
+
+    it('is asked again without the placeholder turns, and with every result', async () => {
+      echoAfterTwoWrites(() => say('Wrote two files.'));
+
+      await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10 });
+
+      expect(chatCalls()).toHaveLength(4);
+      // Up to and including the request that got the echo, the history is as it was.
+      expect(chatCalls()[2].messages.filter(m => m.role === 'assistant').map(m => m.content)).toEqual([PLACEHOLDER, PLACEHOLDER]);
+      const sent = chatCalls()[3].messages;
+      expect(sent).toHaveLength(1);
+      expect(sent[0].role).toBe('user');
+      expect(sent[0].content.startsWith('x\n\n')).toBe(true);
+      expect(sent[0].content).toContain('src/f0.ts');
+      expect(sent[0].content).toContain('src/f1.ts');
+      expect(noPlaceholders(chatCalls()[3])).toBe(true);
+    });
+
+    it('keeps what it really said, and the roles alternating', async () => {
+      const narrated: ChatResponse = { content: 'Reading the controllers.', toolCalls: [{ tool: 'list_files', parameters: { path: '.' } }], usedNativeTools: true };
+      setScript(call => {
+        const n = chatCalls().indexOf(call);
+        if (n === 0 || n === 2) return use(['list_files', { path: '.' }]);
+        if (n === 1) return narrated;
+        return n === 3 ? say(PLACEHOLDER) : say('Listed the project.');
+      });
+
+      await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10 });
+
+      const sent = chatCalls()[4];
+      expect(sent.messages.filter(m => m.role === 'assistant')).toEqual([{ role: 'assistant', content: 'Reading the controllers.' }]);
+      expect(alternates(sent)).toBe(true);
+      expect(noPlaceholders(sent)).toBe(true);
+    });
+
+    it('is asked without them for the rest of the run, and not before the first one', async () => {
+      echoAfterTwoWrites(k => (k === 0 ? use(['write_file', { path: 'src/f3.ts', content: 'x' }]) : say('Wrote three files.')));
+
+      await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10 });
+
+      expect(chatCalls()).toHaveLength(5);
+      expect(chatCalls().slice(0, 3).map(c => c.messages.filter(m => m.content === PLACEHOLDER).length)).toEqual([0, 1, 2]);
+      for (const call of chatCalls().slice(3)) {
+        expect(noPlaceholders(call), `request ${chatCalls().indexOf(call) + 1}`).toBe(true);
+        expect(alternates(call)).toBe(true);
+      }
+      expect(chatCalls()[4].messages.at(-1)?.content).toContain('src/f3.ts');
+    });
+
+    it('is asked without them for a verification fix as well', async () => {
+      h.verifyQueue = [[failing('build', [{ file: 'src/a.ts', severity: 'error', message: 'Type error' }])], [passing('build')]];
+      setScript(call => {
+        if (lastMessage(call).includes('Verification Errors')) return say('Fixed it.');
+        const n = chatCalls().indexOf(call);
+        if (n === 0) return use(['write_file', { path: 'src/a.ts', content: 'x' }]);
+        return n === 1 ? say(PLACEHOLDER) : say('Implemented.');
+      });
+
+      await runAgent('x', ctx(), { autoVerify: 'build', maxFixAttempts: 2, maxIterations: 10 });
+
+      const fix = chatCalls().find(c => lastMessage(c).includes('Verification Errors'))!;
+      expect(fix).toBeDefined();
+      expect(noPlaceholders(fix)).toBe(true);
+      expect(alternates(fix)).toBe(true);
+    });
+
+    it('counts its nudges from the last tool call, not from the start of the run', async () => {
+      // Three echoes along the run, each followed by a tool call: the third
+      // used to find the two nudges spent and end the run.
+      setScript(call => {
+        const n = chatCalls().indexOf(call);
+        if (n >= 6) return say('Wrote three files; run npm test.');
+        return n % 2 === 0 ? use(['write_file', { path: `src/f${n}.ts`, content: 'x' }]) : say(PLACEHOLDER);
+      });
+
+      const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations: 20 });
+
+      expect(chatCalls()).toHaveLength(7);
+      expect(result.finalResponse).toBe('Wrote three files; run npm test.');
+      expect(result.endedWithoutSummary).toBeUndefined();
+    });
+
+    it('still gives up after two nudges in a row, however far the run had come', async () => {
+      setScript(call => {
+        const n = chatCalls().indexOf(call);
+        return n === 0 || n === 2 ? use(['write_file', { path: `src/f${n}.ts`, content: 'x' }]) : say(PLACEHOLDER);
+      });
+
+      const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations: 20 });
+
+      expect(chatCalls()).toHaveLength(6);
+      expect(result.finalResponse).toBe(NO_SUMMARY_ANSWER);
+      expect(result.endedWithoutSummary).toBe(true);
+    });
+
+    it('keeps counting narrated stops per run: the third is taken as the answer, whatever came between', async () => {
+      // "All three files are updated now" reads as an unfinished sentence, and
+      // a model that obeys the nudge with a call each time and ends on the same
+      // words would otherwise be nudged until the step limit and have its
+      // answer thrown away.
+      setScript(call => {
+        const n = chatCalls().indexOf(call);
+        return n % 2 === 0 ? use(['write_file', { path: `src/f${n}.ts`, content: 'x' }]) : say('All three files are updated now');
+      });
+
+      const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations: 20 });
+
+      expect(chatCalls()).toHaveLength(6);
+      expect(result.interrupted).toBeUndefined();
+      expect(result.finalResponse).toBe('All three files are updated now');
+    });
+
+    it('is asked without them for the fix request after one that was answered with one', async () => {
+      const typeError = failing('build', [{ file: 'src/a.ts', severity: 'error', message: 'Type error' }]);
+      h.verifyQueue = [[typeError], [typeError], [typeError], [passing('build')]];
+      let fixRequests = 0;
+      setScript(call => {
+        if (lastMessage(call).includes('Verification Errors')) {
+          fixRequests++;
+          if (fixRequests === 1) return use(['write_file', { path: 'src/a.ts', content: 'y' }]);
+          return fixRequests === 2 ? say(PLACEHOLDER) : say('Fixed it.');
+        }
+        return chatCalls().length === 1 ? use(['write_file', { path: 'src/a.ts', content: 'x' }]) : say('Implemented.');
+      });
+
+      await runAgent('x', ctx(), { autoVerify: 'build', maxFixAttempts: 4, maxIterations: 20 });
+
+      const fixes = chatCalls().filter(c => lastMessage(c).includes('Verification Errors'));
+      expect(fixes.length).toBeGreaterThanOrEqual(3);
+      // Before the echo the history is as it was; the request after it has none.
+      expect(noPlaceholders(fixes[1])).toBe(false);
+      expect(noPlaceholders(fixes[2])).toBe(true);
+      expect(alternates(fixes[2])).toBe(true);
+    });
+  });
+});
+
+// "Always Allow" used to cover the whole tool for the rest of one run: an
+// answer to `php artisan migrate` let every other command through, and the
+// next prompt asked about `php` again.
+describe('an "always allow" answer', () => {
+  const sh = (program: string, ...args: string[]) => use(['execute_command', { command: program, args }]);
+  /** One command per request, in order, then "All done." */
+  const commands = (...calls: Array<[string, ...string[]]>) => setScript(() => {
+    const n = chatCalls().length;
+    return n <= calls.length ? sh(...calls[n - 1]) : say('All done.');
+  });
+  /** Answers every question the same way, and writes down what was asked. */
+  const answering = (outcome: PermissionOutcome, asked: string[]) =>
+    async (t: { tool: string; parameters: Record<string, unknown> }): Promise<PermissionOutcome> => {
+      asked.push(t.tool === 'execute_command' ? String(t.parameters.command) : t.tool);
+      return outcome;
+    };
+
+  beforeEach(() => forgetSessionPermissions());
+  afterEach(() => forgetSessionPermissions());
+
+  it('covers the program, whatever its arguments, and not the other commands', async () => {
+    commands(['echo', 'one'], ['echo', 'two', 'three'], ['pwd'], ['echo']);
+    const asked: string[] = [];
+
+    await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10, onRequestPermission: answering('allow_always', asked) });
+
+    expect(asked).toEqual(['echo', 'pwd']);
+  });
+
+  it('does not cover another tool, or another spelling of the program', async () => {
+    writeFileSync(join(root, 'a.txt'), 'x');
+    setScript(() => {
+      const n = chatCalls().length;
+      if (n === 1) return sh('echo', 'one');
+      if (n === 2) return use(['delete_file', { path: 'a.txt' }]);
+      if (n === 3) return sh('/bin/echo', 'two');
+      if (n === 4) return sh('echo', 'three');
+      return say('All done.');
+    });
+    const asked: string[] = [];
+
+    await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10, onRequestPermission: answering('allow_always', asked) });
+
+    expect(asked).toEqual(['echo', 'delete_file', '/bin/echo']);
+  });
+
+  it('lasts one run when the caller keeps nothing between runs', async () => {
+    const asked: string[] = [];
+    for (let run = 0; run < 2; run++) {
+      h.calls = [];
+      commands(['echo', 'hi']);
+      await runAgent('x', ctx(), { autoVerify: false, maxIterations: 5, onRequestPermission: answering('allow_always', asked) });
+    }
+
+    expect(asked).toEqual(['echo', 'echo']);
+  });
+
+  it('lasts as long as the memory the caller keeps — a chat session', async () => {
+    const asked: string[] = [];
+    for (const session of ['chat-1', 'chat-1', 'chat-2']) {
+      h.calls = [];
+      commands(['echo', 'hi']);
+      await runAgent('x', ctx(), {
+        autoVerify: false, maxIterations: 5,
+        permissionMemory: sessionPermissionMemory(session),
+        onRequestPermission: answering('allow_always', asked),
+      });
+    }
+
+    // Once for chat-1, none for its second run, once more for chat-2.
+    expect(asked).toEqual(['echo', 'echo']);
+  });
+
+  it('given in a dry run, is not kept for the real run that follows', async () => {
+    // A dry run runs nothing, so "Always Allow" can be clicked without a
+    // second thought; it must not turn into a standing permission.
+    const asked: string[] = [];
+    commands(['echo', 'hi']);
+    await runAgent('x', ctx(), {
+      dryRun: true, autoVerify: false, maxIterations: 5,
+      permissionMemory: sessionPermissionMemory('chat-1'),
+      onRequestPermission: answering('allow_always', asked),
+    });
+    expect(asked).toEqual(['echo']);
+    expect(sessionPermissionMemory('chat-1').alwaysAllowed.size).toBe(0);
+
+    h.calls = [];
+    commands(['echo', 'hi']);
+    await runAgent('x', ctx(), {
+      autoVerify: false, maxIterations: 5,
+      permissionMemory: sessionPermissionMemory('chat-1'),
+      onRequestPermission: answering('allow_once', asked),
+    });
+
+    expect(asked).toEqual(['echo', 'echo']);
+  });
+
+  it('is honoured by a dry run, which asks nothing the session already allowed', async () => {
+    sessionPermissionMemory('chat-1').alwaysAllowed.add('execute_command:echo');
+    const asked: string[] = [];
+    commands(['echo', 'hi'], ['pwd']);
+
+    await runAgent('x', ctx(), {
+      dryRun: true, autoVerify: false, maxIterations: 5,
+      permissionMemory: sessionPermissionMemory('chat-1'),
+      onRequestPermission: answering('allow_once', asked),
+    });
+
+    expect(asked).toEqual(['pwd']);
+  });
+
+  it('is the only answer that outlives the run: a refusal does not', async () => {
+    const asked: string[] = [];
+    for (let run = 0; run < 2; run++) {
+      h.calls = [];
+      commands(['echo', 'a'], ['echo', 'b']);
+      await runAgent('x', ctx(), {
+        autoVerify: false, maxIterations: 5,
+        permissionMemory: sessionPermissionMemory('chat-1'),
+        onRequestPermission: answering('reject_always', asked),
+      });
+    }
+
+    // Within a run the second `echo` is refused without asking; the next run asks again.
+    expect(asked).toEqual(['echo', 'echo']);
   });
 });

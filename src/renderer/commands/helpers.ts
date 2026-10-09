@@ -9,7 +9,7 @@
  */
 
 import { isFlatFeeProvider } from '../../config/providers';
-import { formatCacheReadRates } from '../../utils/tokenTracker';
+import { formatCacheReadRates, formatTokenThreshold, type LongPromptPrice } from '../../utils/tokenTracker';
 import type { SyncFailure, SyncResult } from '../../utils/codeepCloud';
 
 // ─── Search snippet extraction ────────────────────────────────────────────────
@@ -206,6 +206,9 @@ export interface PricingRow {
   model: string;
   inputPer1M: number;
   outputPer1M: number;
+  /** The higher rates for a prompt over a threshold (getPricingTable). Absent
+   *  on the models billed at one rate. */
+  longPrompt?: LongPromptPrice;
 }
 
 /** A formatter for token counts (injected so this module stays pure). */
@@ -283,6 +286,11 @@ export function formatStatsReport(args: {
   lines.push('|---|---|---|');
   for (const p of pricing) {
     lines.push(`| ${p.model} | $${p.inputPer1M.toFixed(3)} | $${p.outputPer1M.toFixed(3)} |`);
+    // A second row, so the table says what a long prompt costs instead of
+    // quoting only the rate most requests pay.
+    if (p.longPrompt) {
+      lines.push(`| ${p.model} · prompt over ${formatTokenThreshold(p.longPrompt.overTokens)} tokens | $${p.longPrompt.inputPer1M.toFixed(3)} | $${p.longPrompt.outputPer1M.toFixed(3)} |`);
+    }
   }
 
   return lines.join('\n');

@@ -66,6 +66,7 @@ import { loadProjectPreferences } from '../utils/learning';
 import { MCP_MARKETPLACE } from '../utils/mcpMarketplace';
 import { loadCustomSkills, getSkippedCustomSkills } from '../utils/skills';
 import { createCheckpoint } from '../utils/checkpoints';
+import { forgetSessionPermissions, sessionPermissionMemory } from '../utils/permissionScope';
 
 const mockRegister = registerSessionServers as unknown as ReturnType<typeof vi.fn>;
 const mockPush = pushUserProfileResult as unknown as ReturnType<typeof vi.fn>;
@@ -631,6 +632,34 @@ describe('/rename onto a name that is taken', () => {
     await handleCommand('rename', ['taken'], ctx);
     expect(notices[notices.length - 1]).toBe('A session named "taken" already exists — pick another name');
     expect(loadSession('taken', projectDir)).toEqual(other);
+  });
+});
+
+describe('/rename of a chat that was told "Always Allow"', () => {
+  beforeEach(() => forgetSessionPermissions());
+  afterEach(() => forgetSessionPermissions());
+
+  it('goes on under the new name with those answers, and leaves the old name — which another chat may take — with none', async () => {
+    writeFileSync(join(projectDir, 'package.json'), '{}');
+    sessionPermissionMemory('test-session').alwaysAllowed.add('execute_command:npm');
+    const { ctx } = makeCtx(projectDir);
+    (ctx as { setSessionId: unknown }).setSessionId = vi.fn();
+
+    await handleCommand('rename', ['renamed-chat'], ctx);
+
+    expect(sessionPermissionMemory('renamed-chat').alwaysAllowed.has('execute_command:npm')).toBe(true);
+    expect(sessionPermissionMemory('test-session').alwaysAllowed.size).toBe(0);
+  });
+
+  it('leaves them where they are when the rename does not happen', async () => {
+    saveSession('taken', [{ role: 'user', content: 'the other conversation' }], projectDir);
+    sessionPermissionMemory('test-session').alwaysAllowed.add('write_file');
+    const { ctx } = makeCtx(projectDir);
+
+    await handleCommand('rename', ['taken'], ctx);
+
+    expect(sessionPermissionMemory('test-session').alwaysAllowed.has('write_file')).toBe(true);
+    expect(sessionPermissionMemory('taken').alwaysAllowed.size).toBe(0);
   });
 });
 

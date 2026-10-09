@@ -83,7 +83,8 @@ import { planTasks, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
 import { getTaskContextPrompt } from './taskContext';
 import { getLastUsage, getModelContextWindow } from './tokenTracker';
 import { looksUnfinished } from './unfinishedReply';
-import { NO_REPLY, isNotAnAnswer, toolTurnPlaceholder, withoutPlaceholderLines } from './toolTurnPlaceholder';
+import { NO_REPLY, isNotAnAnswer, toolTurnPlaceholder, withoutPlaceholderLines, withoutToolTurnPlaceholders } from './toolTurnPlaceholder';
+import { alwaysAllowScope } from './permissionScope';
 
 // ─── Notices given once per process ───────────────────────────────────────────
 
@@ -138,8 +139,16 @@ export function assistantHistoryText(content: string, toolCalls: ReadonlyArray<{
 /** What a model whose final reply was no answer — nothing, or the history's
  *  placeholder echoed back — is told, in place of the "Continue. Execute the
  *  tool calls now." a fragment gets: it may be done, and then the one thing
- *  missing is the summary. */
-export const NO_ANSWER_NUDGE = 'Your last message was only a placeholder for a tool call, not an answer. If work remains, make the tool call now. If the work is done, reply with a short summary for the user: what you did, which files you changed, how to run or test it, and anything still open.';
+ *  missing is the summary. It does not name the reply it answers: from the
+ *  first such reply on, the model is sent a history without it (see
+ *  withoutToolTurnPlaceholders), so "your last message" would be one it
+ *  cannot see. */
+export const NO_ANSWER_NUDGE = 'Your last reply had neither a tool call nor an answer. If work remains, make the tool call now. If the work is done, reply with a short summary for the user: what you did, which files you changed, how to run or test it, and anything still open.';
+
+/** The second nudge in a row, shorter and firmer. In the history a model that
+ *  has been through the first is sent, the two are one message, so the second
+ *  must not repeat the first. */
+export const NO_ANSWER_NUDGE_AGAIN = 'Still no tool call and no answer. Make the tool call now or, if the work is done, write the summary for the user.';
 
 /** The answer of a run whose model never wrote one, even when asked: said
  *  plainly. Nothing more, because what follows it differs: the chat lists the
@@ -407,7 +416,9 @@ export interface AgentOptions {
    *  so a sub-agent neither asks again about a tool the user already decided
    *  on nor runs one the user refused. `alwaysRejectedPaths` holds the same
    *  for a single file that decides what runs later, which is refused by name
-   *  rather than by tool. */
+   *  rather than by tool. A caller that keeps `alwaysAllowed` between runs
+   *  (the TUI and ACP do, per chat session — permissionScope.ts) makes an
+   *  "always allow" last that long; without one it lasts this run. */
   permissionMemory?: { alwaysAllowed: Set<string>; alwaysRejected: Set<string>; alwaysRejectedPaths?: Set<string> };
   /** Provider/model for this run only, used in place of the global selection.
    *  A sub-agent with its own `model:` runs on it this way; the global config
@@ -844,18 +855,42 @@ export async function runAgent(
   // would leave it unset.
   let result: AgentResult | undefined;
   let consecutiveTimeouts = 0;
+  // Narrated stops ("Let me check the files:") nudged so far in this run.
   let incompleteWorkRetries = 0;
+  // Replies that were no answer, in a row. Calling a tool is progress and ends
+  // the row: three such replies spread over a long run, each followed by a
+  // call, used up one allowance for the whole run and ended it.
+  let noAnswerRetries = 0;
   // The model's last reply was no answer and it was out of nudges; the run
   // ends on NO_SUMMARY_ANSWER unless the step limit pauses it first, or a
   // reply during verification gives the answer after all.
   let endedWithoutAnswer = false;
+  // The model has answered with the history's placeholder (or nothing) once:
+  // from then on it is sent the history without those turns, because asking
+  // again with two dozen of them in view got the same reply — a "[tool call:
+  // read_file]" written as text, which is no call. The loop's own history is
+  // not touched; see withoutToolTurnPlaceholders. Never on the Responses API,
+  // whose replay needs the messages as they were.
+  let sendHistoryWithoutPlaceholders = false;
+  const historyToSend = (): Message[] => (sendHistoryWithoutPlaceholders ? withoutToolTurnPlaceholders(messages) : messages);
   // If the model claims completion but the task isn't actually done, we nudge it
   // once or twice. More retries than that usually means the model is stuck, not
   // that it needs a third chance — bail out instead of spamming identical hints.
+  // Per run for a narrated stop, which a perfectly good answer can resemble
+  // ("All three files are updated now"); a model that obeys the nudge with a
+  // tool call each time would otherwise be nudged until the step limit.
   const maxIncompleteWorkRetries = 2;
-  // Track tools permanently allowed this session via allow_always. A delegated
-  // sub-agent shares its parent's sets, so an answer holds across delegation.
-  const alwaysAllowedTools = opts.permissionMemory?.alwaysAllowed ?? new Set<string>();
+  const maxNoAnswerRetries = 2;
+  // What allow_always covered: a tool by its name, a command by its program
+  // (permissionScope.ts). It lasts as long as the set the caller hands in — a
+  // chat session's, in the TUI and ACP — and this run when there is none. A
+  // delegated sub-agent shares its parent's sets, so an answer holds across
+  // delegation.
+  // A dry run runs nothing, so what it is told "always" must not outlive it:
+  // it works on a copy, and a real run adds to the caller's own set.
+  const alwaysAllowedTools = opts.dryRun && opts.permissionMemory
+    ? new Set(opts.permissionMemory.alwaysAllowed)
+    : (opts.permissionMemory?.alwaysAllowed ?? new Set<string>());
   // Track tools permanently rejected this session via reject_always
   const alwaysRejectedTools = opts.permissionMemory?.alwaysRejected ?? new Set<string>();
   // Files that decide what runs later and were refused for good this session.
@@ -1046,7 +1081,7 @@ export async function runAgent(
         if (decision === 'deny-always') alwaysRejectedPaths.add(trustBearing.file);
         return denied();
       }
-    } else if (opts.onRequestPermission && requiresPermission(toolCall.tool, dangerousTools) && !alwaysAllowedTools.has(toolCall.tool)) {
+    } else if (opts.onRequestPermission && requiresPermission(toolCall.tool, dangerousTools) && !alwaysAllowedTools.has(alwaysAllowScope(toolCall).key)) {
       // Every other tool: the run's dangerous set decides, and only when
       // there is a callback to ask through (e.g. ACP/Zed).
 
@@ -1060,7 +1095,7 @@ export async function runAgent(
       // any malformed/unknown outcome deny (see classifyPermissionOutcome).
       const decision = classifyPermissionOutcome(outcome);
       if (decision === 'allow-always') {
-        alwaysAllowedTools.add(toolCall.tool);
+        alwaysAllowedTools.add(alwaysAllowScope(toolCall).key);
       } else if (decision !== 'allow-once') {
         if (decision === 'deny-always') alwaysRejectedTools.add(toolCall.tool);
         return denied();
@@ -1243,7 +1278,7 @@ export async function runAgent(
       while (true) {
         try {
           chatResponse = await agentChat(
-            messages,
+            historyToSend(),
             systemPrompt,
             opts.onChunk,
             opts.abortSignal,
@@ -1451,25 +1486,28 @@ export async function runAgent(
         // A reply that is no answer: nothing at all, or the history's
         // placeholder for a tool turn echoed back. A model that had seen two
         // dozen of them ended a run on one, and it became the answer. Asked
-        // for the call or a summary, out of the same two nudges as a fragment;
-        // the echo goes back into the history as what it is, never kept as an
-        // answer. Out of nudges, the run ends on NO_SUMMARY_ANSWER (below the
-        // loop), not on the placeholder or on nothing. An echo above a real
-        // answer is dropped from it.
+        // for the call or a summary, twice in a row; the echo goes back into
+        // the history as what it is, never kept as an answer — and the model
+        // is sent the history without such turns from here on, since asking
+        // again with them in view got the same reply. Out of nudges, the run
+        // ends on NO_SUMMARY_ANSWER (below the loop), not on the placeholder
+        // or on nothing. An echo above a real answer is dropped from it.
         const reply = finalResponse;
         finalResponse = withoutPlaceholderLines(reply);
         if (isNotAnAnswer(finalResponse)) {
-          if (incompleteWorkRetries < maxIncompleteWorkRetries) {
-            incompleteWorkRetries++;
+          if (!native) sendHistoryWithoutPlaceholders = true;
+          if (noAnswerRetries < maxNoAnswerRetries) {
+            noAnswerRetries++;
             const echo: Message = { role: 'assistant', content: reply || NO_REPLY };
             messages.push(echo);
             if (native) responsesState.tagAssistant(echo, native);
-            messages.push({ role: 'user', content: NO_ANSWER_NUDGE });
+            messages.push({ role: 'user', content: noAnswerRetries === 1 ? NO_ANSWER_NUDGE : NO_ANSWER_NUDGE_AGAIN });
             finalResponse = '';
             continue;
           }
           endedWithoutAnswer = true;
           finalResponse = '';
+          noAnswerRetries = 0;
           incompleteWorkRetries = 0;
           break;
         }
@@ -1495,8 +1533,9 @@ export async function runAgent(
           finalResponse = '';
           continue;
         }
-        // Reset counter once model produces real output or we give up
+        // Reset counters once model produces real output or we give up
         incompleteWorkRetries = 0;
+        noAnswerRetries = 0;
         
         // Model is done
         debug(`Agent finished at iteration ${iteration}`);
@@ -1602,6 +1641,9 @@ export async function runAgent(
       };
       messages.push(toolResultsMessage);
       if (native && outputsByCall.length > 0) responsesState.tagToolOutputs(toolResultsMessage, outputsByCall);
+      // Calling a tool is progress and ends a row of replies that were no
+      // answer (see noAnswerRetries). Narrated stops stay counted per run.
+      noAnswerRetries = 0;
     }
     
     // Check if we hit max iterations — build partial summary from actions log
@@ -1750,7 +1792,7 @@ export async function runAgent(
           // Get AI response to fix errors
           try {
             const fixResponse = await agentChat(
-              messages,
+              historyToSend(),
               systemPrompt,
               opts.onChunk,
               opts.abortSignal,
@@ -1770,6 +1812,9 @@ export async function runAgent(
                 finalResponse = fixReply;
                 appended = '';
                 endedWithoutAnswer = false;
+              } else if (!fixResponse.native) {
+                // The same echo, the same remedy for the requests that follow.
+                sendHistoryWithoutPlaceholders = true;
               }
               continue; // Re-run verification
             }

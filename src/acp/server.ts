@@ -25,6 +25,7 @@ import {
 import { runAgentSession } from './session.js';
 import { loadCustomCommands } from '../utils/customCommands.js';
 import { registerSessionServers, disposeAllSessions as disposeAllMcpSessions } from '../utils/mcpRegistry.js';
+import { installShutdownHandlers } from './shutdown.js';
 import { selectSessionMcpServers, shadowedServerNotice } from '../utils/mcpConfig.js';
 import { handleMcpSamplingRequest } from '../utils/mcpSamplingBridge.js';
 import { executeCommandAsync, validateCommandAsync, commandEnv } from '../utils/shell.js';
@@ -34,6 +35,7 @@ import { PermissionOutcome } from '../utils/agent.js';
 import { ToolCall } from '../utils/tools.js';
 import { trustBearingWrite, type TrustBearingWrite } from '../utils/toolExecution.js';
 import { initWorkspace, loadWorkspace, handleCommand, type AcpSession, type AcpAgentRunOptions } from './commands.js';
+import { alwaysAllowLabel, permissionMemoryIn } from '../utils/permissionScope.js';
 import { beginTurn } from './turns.js';
 import {
   handleSetMode as handleSetModeExternal,
@@ -825,6 +827,9 @@ export function authFailureNotice(err: Error, providerId: string, keyConfigured:
   return `❌ No API key configured. Use /login <provider> <key> or set the environment variable (e.g. ZAI_API_KEY, ANTHROPIC_API_KEY).`;
 }
 
+/** Takes off the shutdown listeners the last startAcpServer() attached. */
+let removeShutdownHandlers: (() => void) | null = null;
+
 export function startAcpServer(transport: StdioTransport = new StdioTransport()): Promise<void> {
   // ACP sessionId → full AcpSession (includes history + codeep session tracking)
   const sessions = new Map<string, AcpServerSessionState>();
@@ -836,25 +841,12 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
 
   // Tear down all MCP child processes when the CLI dies. Without this,
   // killing `codeep acp` with Ctrl+C orphans any servers we spawned —
-  // they keep running until the user hunts them down with `ps`.
-  // Register only once per process; if the user starts multiple ACP servers
-  // in the same process (we don't but be defensive) the second listener
-  // would double-fire.
-  const shutdownSignals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
-  let shuttingDown = false;
-  const onShutdown = (signal: NodeJS.Signals) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    disposeAllMcpSessions().finally(() => {
-      // Mimic default Node exit behaviour after our cleanup runs.
-      process.exit(signal === 'SIGINT' ? 130 : 143);
-    });
-  };
-  for (const sig of shutdownSignals) {
-    // Only attach if nothing else has claimed the signal — Node prints
-    // a warning when listener count > 10 per signal.
-    if (process.listenerCount(sig) === 0) process.on(sig, onShutdown);
-  }
+  // they keep running until the user hunts them down with `ps`. A second
+  // server in the same process (we don't start one, but be defensive) replaces
+  // the first one's listeners instead of adding to them. See
+  // installShutdownHandlers for why this attaches whatever else is listening.
+  removeShutdownHandlers?.();
+  removeShutdownHandlers = installShutdownHandlers(disposeAllMcpSessions);
 
   // A handler that throws, or an async one that rejects, is answered with a
   // JSON-RPC error by the transport — so async handlers return their promise.
@@ -1547,6 +1539,8 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
       // the question came from somewhere that has not looked, which is the
       // only case that pays for the lookup here.
       known?: TrustBearingWrite | null,
+      // A caller whose "always" means something else than the agent's says so.
+      ask?: { alwaysLabel?: string },
     ): Promise<PermissionOutcome> => {
       // A write to a file that decides what runs later says so in the
       // dialog — the editor shows `toolInput`, and "this file controls what
@@ -1565,7 +1559,7 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
         { optionId: 'allow_once',    name: 'Allow once',    kind: 'allow_once' as const },
         // No "always" for one of those files: the agent answers about this
         // file only and would not remember the answer anyway.
-        ...(trustBearing ? [] : [{ optionId: 'allow_always', name: 'Allow always', kind: 'allow_always' as const }]),
+        ...(trustBearing ? [] : [{ optionId: 'allow_always', name: ask?.alwaysLabel ?? alwaysAllowLabel(toolCall), kind: 'allow_always' as const }]),
         { optionId: 'reject_once',   name: 'Reject once',   kind: 'reject_once' as const },
         { optionId: 'reject_always', name: 'Reject always', kind: 'reject_always' as const },
       ]);
@@ -1594,6 +1588,9 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
     };
 
     const agentRun: AcpAgentRunOptions = {
+      // "Allow always" holds for the conversation this prompt belongs to, not
+      // for one run — and not for the next conversation of the same session.
+      permissionMemory: permissionMemoryIn((session.permissionStore ??= new Map()), session.codeepSessionId),
       // Manual mode gates write_file/edit_file for this run only, per call —
       // NOT by mutating the global `agentConfirmWriteFile` config, which
       // leaked the session's mode into the TUI/other processes and raced on
@@ -1774,6 +1771,7 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
             }
           },
           onRequestPermission: agentRun.onRequestPermission ?? agentRun.onAutoModePermission,
+          permissionMemory: agentRun.permissionMemory,
           extraDangerousTools: agentRun.extraDangerousTools,
           fs: agentRun.fs,
           onExecuteCommand: agentRun.onExecuteCommand,

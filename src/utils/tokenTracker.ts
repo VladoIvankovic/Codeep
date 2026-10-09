@@ -94,6 +94,9 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'claude-sonnet-4-6':            1_000_000,
   'claude-sonnet-5-5':            1_000_000,
   'claude-sonnet-5':              1_000_000,
+  // 1M context and 128K output (Haiku 5.5 overview); Haiku 4.5 has 200K. The
+  // window is not tiered: only the price is, by prompt length (below).
+  'claude-haiku-5-5':             1_000_000,
   'claude-haiku-4-5-20251001':    200_000,
   // DeepSeek
   'deepseek-flash':       1_000_000,
@@ -191,10 +194,34 @@ export function getModelContextWindow(model: string): number {
     ?? DEFAULT_CONTEXT_WINDOW;
 }
 
+/**
+ * A higher price for a request whose prompt is longer than `overTokens`.
+ *
+ * The whole request pays it — input, cache reads and writes, and output — not
+ * only the tokens past the line, and "prompt" is everything sent in, cache
+ * reads and writes included ("a request over the threshold pays the higher
+ * prices even when part of its prompt is a cache hit", Anthropic pricing). A
+ * prompt of exactly `overTokens` is still the lower tier ("up to 100,000
+ * tokens"). Cache reads and writes keep their usual multiples of whichever
+ * input rate applies.
+ */
+export interface LongPromptPrice {
+  overTokens: number;
+  inputPer1M: number;
+  outputPer1M: number;
+}
+
+export interface ModelPrice {
+  inputPer1M: number;
+  outputPer1M: number;
+  /** Absent for the models billed at one rate whatever the prompt length. */
+  longPrompt?: LongPromptPrice;
+}
+
 // Pricing table — USD per 1M tokens. Same rule as MODEL_CONTEXT_WINDOWS:
 // Primarily mirrors `providers.ts`. A few retired aliases remain so restored
 // historical sessions still show the rate that applied when they were created.
-const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }> = {
+const MODEL_PRICING: Record<string, ModelPrice> = {
   // Z.AI / ZhipuAI
   // Coding Plan is flat-fee; these official rates apply to pay-per-use.
   // GLM-5.3 reached the standalone API on 2026-08-19 and is listed at the same
@@ -254,6 +281,17 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   // The $4 one-hour write never applies: Codeep sends no cache `ttl`.
   'claude-sonnet-5-5':            { inputPer1M: 2.00,  outputPer1M: 10.00 },
   'claude-sonnet-5':              { inputPer1M: 2.00,  outputPer1M: 10.00 },
+  // Claude Haiku 5.5 (released 2026-10-07) is the one Claude model here priced
+  // by prompt length: $0.10/$0.50 for a prompt up to 100,000 tokens, $0.50/$2.50 for one
+  // over it (platform.claude.com pricing, read 2026-10-09). "Claude 4.6 and later
+  // models (except Claude Haiku 5.5)" bill the full 1M at one rate. Cache reads
+  // are 0.1× and 5-minute writes 1.25× of the tier's input rate — $0.01/$0.125
+  // and $0.05/$0.625 — the defaults, so it needs no row in the rate tables. The
+  // 1-hour write (2×) never applies: Codeep sends no cache `ttl`.
+  'claude-haiku-5-5': {
+    inputPer1M: 0.10, outputPer1M: 0.50,
+    longPrompt: { overTokens: 100_000, inputPer1M: 0.50, outputPer1M: 2.50 },
+  },
   'claude-haiku-4-5-20251001':    { inputPer1M: 1.00,  outputPer1M: 5.00 },
   // DeepSeek (cache-miss input pricing)
   // DeepSeek moved to peak / off-peak billing on 2026-08-16, with off-peak at
@@ -338,8 +376,48 @@ const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }>
   'Qwen/Qwen3-Coder-480B-A35B-Instruct': { inputPer1M: 0, outputPer1M: 0 },
 };
 
-export function getPricingTable(): { model: string; inputPer1M: number; outputPer1M: number }[] {
-  return Object.entries(MODEL_PRICING).map(([model, p]) => ({ model, ...p }));
+export type PricingTableRow = { model: string } & ModelPrice;
+
+/**
+ * Every priced model, for `/stats` and `npm run export:catalogue`. `longPrompt`
+ * is present only on a model that has one, so a row without it is exactly what
+ * this returned before the tier existed.
+ */
+export function getPricingTable(): PricingTableRow[] {
+  return Object.entries(MODEL_PRICING).map(([model, p]) => ({
+    model,
+    inputPer1M: p.inputPer1M,
+    outputPer1M: p.outputPer1M,
+    // Copied, so a caller cannot edit the table through the row it was given.
+    ...(p.longPrompt ? { longPrompt: { ...p.longPrompt } } : {}),
+  }));
+}
+
+/**
+ * The long-prompt tier a request falls in, or undefined when it pays the base
+ * rates. `promptTokens` is the whole prompt as the provider counts it: every
+ * extractor (extractAnthropicUsage adds Anthropic's separate cache fields
+ * back in; OpenAI-protocol and Responses counts include theirs) hands over a
+ * figure that already includes cache reads and writes, which is exactly how
+ * Anthropic measures the threshold. Strictly over — a prompt of exactly
+ * `overTokens` is still the lower tier.
+ */
+function longPromptTierFor(price: ModelPrice, promptTokens: number): LongPromptPrice | undefined {
+  const tier = price.longPrompt;
+  return tier && promptTokens > tier.overTokens ? tier : undefined;
+}
+
+/** A token threshold as people say it: 100000 → "100K", 1000000 → "1M". */
+export function formatTokenThreshold(tokens: number): string {
+  if (tokens >= 1_000_000 && tokens % 1_000_000 === 0) return `${tokens / 1_000_000}M`;
+  if (tokens >= 1_000 && tokens % 1_000 === 0) return `${tokens / 1_000}K`;
+  return String(tokens);
+}
+
+/** A per-1M rate to at least cents, and to more where it has them: 0.5 → "0.50", 0.125 → "0.125". */
+function formatRate(rate: number): string {
+  const decimals = (String(rate).split('.')[1] ?? '').length;
+  return rate.toFixed(Math.max(2, decimals));
 }
 
 // Session-level accumulator.
@@ -547,6 +625,11 @@ export interface ProviderCostBreakdown {
    *  0 for providers that don't report caching. */
   cacheReadTokens: number;
   estimatedCost: number;
+  /** How many of these requests were priced at the model's long-prompt rate
+   *  (see LongPromptPrice). Set only when it is more than none, so a model
+   *  without a tier reports exactly what it did before. Requests whose cost the
+   *  provider reported are not counted: they were not priced here. */
+  longPromptRequests?: number;
 }
 
 /**
@@ -731,20 +814,30 @@ export function getCostBreakdown(startIndex = 0): ProviderCostBreakdown[] {
     } else {
       const pricing = MODEL_PRICING[record.model];
       if (pricing) {
+        // A prompt over the model's long-prompt threshold pays that tier's
+        // rates for every token of THIS request. It is decided per record —
+        // never on the sum of a session — because Anthropic prices each
+        // request on its own; a session of fifty 60K-token prompts is all
+        // base rate.
+        const longTier = longPromptTierFor(pricing, record.promptTokens);
+        const rates = longTier ?? pricing;
+        if (longTier) existing.longPromptRequests = (existing.longPromptRequests ?? 0) + 1;
         // Cache writes and cache reads each bill at the fraction of the input
         // rate the model's provider charges for them (writes: 1.25× on
         // Anthropic and GPT-5.6+, 1.0× on Kimi and older GPT). The remaining
-        // (uncached) prompt tokens bill at the standard 1.0× rate.
+        // (uncached) prompt tokens bill at the standard 1.0× rate. The fraction
+        // is of the tier's input rate, so Haiku 5.5's read is $0.01 below the
+        // threshold and $0.05 above it.
         const cacheCreate = record.cacheCreationTokens ?? 0;
         const cacheRead = record.cacheReadTokens ?? 0;
         const cacheReadRate = cacheReadRateFor(record.model, record.provider);
         const cacheWriteRate = cacheWriteRateFor(record.model, record.provider);
         const uncachedPrompt = Math.max(0, record.promptTokens - cacheCreate - cacheRead);
         existing.estimatedCost +=
-          (uncachedPrompt / 1_000_000) * pricing.inputPer1M
-          + (cacheCreate / 1_000_000) * pricing.inputPer1M * cacheWriteRate
-          + (cacheRead / 1_000_000) * pricing.inputPer1M * cacheReadRate
-          + (record.completionTokens / 1_000_000) * pricing.outputPer1M;
+          (uncachedPrompt / 1_000_000) * rates.inputPer1M
+          + (cacheCreate / 1_000_000) * rates.inputPer1M * cacheWriteRate
+          + (cacheRead / 1_000_000) * rates.inputPer1M * cacheReadRate
+          + (record.completionTokens / 1_000_000) * rates.outputPer1M;
       }
     }
     grouped.set(key, existing);
@@ -809,8 +902,11 @@ export function getCacheStats(): CacheStats {
       const writeRate = cacheWriteRateFor(record.model, record.provider);
       if ((record.cacheReadTokens ?? 0) > 0) readRates.push(readRate);
       if ((record.cacheCreationTokens ?? 0) > 0) writeRates.push(writeRate);
-      const cReadSaved = ((record.cacheReadTokens ?? 0) / 1_000_000) * pricing.inputPer1M * (1 - readRate);
-      const cCreateCost = ((record.cacheCreationTokens ?? 0) / 1_000_000) * pricing.inputPer1M * (writeRate - 1);
+      // What a plain input token cost on THIS request: the long-prompt rate
+      // when its prompt was over the threshold, as getCostBreakdown billed it.
+      const inputRate = (longPromptTierFor(pricing, record.promptTokens) ?? pricing).inputPer1M;
+      const cReadSaved = ((record.cacheReadTokens ?? 0) / 1_000_000) * inputRate * (1 - readRate);
+      const cCreateCost = ((record.cacheCreationTokens ?? 0) / 1_000_000) * inputRate * (writeRate - 1);
       savings += cReadSaved - cCreateCost;
     }
   }
@@ -934,6 +1030,16 @@ export function formatCostReport(): string {
       const cost = isFlatFeeProvider(b.provider) ? 'included in plan' : `$${b.estimatedCost.toFixed(4)}`;
       lines.push(`| \`${b.provider}\` / \`${b.model}\` | ${formatTokenCount(b.promptTokens)} | ${formatTokenCount(b.completionTokens)} | ${cost} |`);
     }
+  }
+
+  // A request over a model's long-prompt threshold pays the higher rate for
+  // every token of it (Claude Haiku 5.5, past 100K prompt tokens: five times
+  // the listed price). Without a word, that row would look like a mistake.
+  for (const b of breakdown) {
+    const tier = MODEL_PRICING[b.model]?.longPrompt;
+    const n = b.longPromptRequests ?? 0;
+    if (!tier || n === 0 || isFlatFeeProvider(b.provider)) continue;
+    lines.push('', `_Note: ${n} request${n === 1 ? '' : 's'} on \`${b.model}\` had a prompt over ${formatTokenThreshold(tier.overTokens)} tokens, so ${n === 1 ? 'it was' : 'they were'} priced at that model's long-prompt rate for every token — $${formatRate(tier.inputPer1M)} in / $${formatRate(tier.outputPer1M)} out per 1M._`);
   }
 
   // Prompt caching summary — only shown if at least one cached call landed.

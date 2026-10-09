@@ -1,6 +1,6 @@
 # Model catalogue and maintenance policy
 
-Last full review: **2026-09-23**
+Last full review: **2026-10-09**
 
 ## Product scope
 
@@ -51,6 +51,9 @@ Last full review: **2026-09-23**
   OpenRouter's `vendor/dotted.id` finds the vendor row. Add an exact OpenRouter row only where OpenRouter's
   `context_length` is smaller than the vendor's (`openai/gpt-5.5`); dated
   snapshots such as `…-0813` match nothing and keep the 128K default.
+  A model priced by prompt length gets a `longPrompt` tier on its own pricing
+  row (Claude Haiku 5.5, below, is the first to have one); the cost maths, the cache
+  savings, `/cost`, `/stats` and the catalogue export all read it from there.
 - Add an exact migration for removed stored ids to `RETIRED_MODEL_REPLACEMENTS`
   in `src/config/providers.ts`, and the same entry to macOS
   `AppState.retiredModelReplacements`. Both are one flat lookup that never
@@ -367,6 +370,116 @@ Last full review: **2026-09-23**
   block, so `content[0].text` was empty on Opus 5.5 and Sonnet 5/5.5 whenever
   the model thought first. The CLI's chat, text-tool-fallback and planner reads
   now join the `text` blocks; the stream parsers already skipped thinking deltas.
+- **Claude Haiku 5.5** (`claude-haiku-5-5`, released 2026-10-07; a fixed id with
+  no date suffix and no alias; OpenRouter lists it dotted,
+  `anthropic/claude-haiku-5.5`) is the only Claude model in the catalogue
+  **priced by prompt length** (the first Codeep prices that way): $0.10 in /
+  $0.50 out for a prompt of up to 100,000 tokens, and $0.50 / $2.50 for one
+  over it — every token of that request, not only those past the line. "A
+  request's prompt length counts all of its input tokens, including cache
+  reads and cache writes. Each request is priced on its own: a request over
+  the threshold pays the higher prices even when part of its prompt is a cache
+  hit" (platform.claude.com pricing, read 2026-10-09). The
+  cache multiples are the usual ones in both tiers — read $0.01 / $0.05 (0.1×),
+  5-minute write $0.125 / $0.625 (1.25×) — so it has no row in the rate tables;
+  the 1-hour write ($0.20 / $1) never applies, because Codeep sends no cache
+  `ttl`. Batch is half of each. "Claude 4.6 and later models (except Claude
+  Haiku 5.5) … include the full 1M token context window at standard pricing":
+  every other Claude row stays flat.
+  - **How Codeep prices it.** Its `MODEL_PRICING` row carries a `longPrompt`
+    tier (`overTokens: 100_000`, $0.50 / $2.50) beside the base rates, and
+    `getCostBreakdown` picks the tier **per record**: `promptTokens` strictly
+    over 100,000 takes the tier, exactly 100,000 does not ("up to"). Every
+    extractor's `promptTokens` already includes cache reads and writes
+    (`extractAnthropicUsage` adds Anthropic's separate fields back in), which
+    is Anthropic's own measure, so the threshold reads it unchanged. It is never
+    decided on a session's total: fifty 60K prompts are all base rate. Cache
+    reads and writes bill at 0.1× and 1.25× of the tier's input rate, and
+    `getCacheStats` nets the savings at the same tier. A cost the provider
+    reports (OpenRouter's `usage.cost`, `actualCostUsd`) still beats the table;
+    OpenRouter lists the same override itself (`min_prompt_tokens: 100000`,
+    $0.50 / $2.50, read 2026-10-09). `/cost` adds a note when a request was
+    priced at the long rate, so a figure five times the listed price is not
+    mistaken for an error; `/stats` shows a second row in its pricing table;
+    `getPricingTable()` gives this one row a `longPrompt` key, and
+    `npm run export:catalogue` puts the same key under `pricing`, so the site
+    can show both tiers. The mechanism is generic, but this is its only row:
+    the other tiered models in this list (GPT-6, Grok, Gemini 3.1 Pro,
+    MiniMax-M3, Qwen 3.6 Plus) still carry just their short-context rate.
+    Giving them a tier is a data change, and a separate decision.
+  - 1M context, 128K output (300K on the Batch API, with a beta header). The
+    CLI has no per-model output table, and the `anthropic` provider no output
+    cap. Knowledge cutoff June 2026; retirement not sooner than 2027-10-07. The
+    Anthropic default stays Opus 5.5, where the models overview still says to
+    start.
+  - Thinking is adaptive and **on by default**, at a default effort of
+    **medium** — Opus 5.5's, where every other model defaults to high — over all
+    five levels (low, medium, high, xhigh, max). `/thinking auto` sends
+    nothing, so an Auto user runs it at medium; the CLI keeps no table of
+    per-model defaults, so none needed a row. The tiers send low, medium, high
+    and max. **The effort gate was a trap:** the Anthropic pattern in
+    `modelSupportsReasoningEffort` is an allowlist of families (`opus-5`,
+    `opus-4-x`, `sonnet-4-6|5`, `fable-5`), and `claude-haiku-5-5` matched none
+    of them — it would have shipped with `/thinking` hidden and no effort ever
+    sent. `haiku-5` is in the pattern now; Haiku 4.5 stays out by its own
+    guard. On OpenRouter the Max tier goes to `max`
+    (`openRouterMaxEffort`; its `supported_efforts` are max, xhigh, high, medium
+    and low, default medium, read 2026-10-09).
+  - **A response floor.** Thinking tokens "count toward max_tokens, so a small
+    limit can stop after a thinking block and before any text", so
+    `minResponseTokensFor` gives it the 32K floor (64K at Max) of Opus 5.5 and
+    Sonnet 5.5, matched exactly. Haiku 4.5, which thinks only when asked, stays
+    out. 32K is Codeep's number, not Anthropic's.
+  - **Sampling.** Omit `temperature`, `top_p` and `top_k`: sent, `temperature`
+    must be 1 and `top_p` 0.99, and any `top_k`, or `temperature` together with
+    `top_p`, is a 400. `claude-haiku-5` is in the sampling list (Haiku 4.5
+    stays out of it), and Codeep leaves the fields off.
+  Against Haiku 4.5, and why each change does or does not reach Codeep:
+  - `thinking: {type: "enabled", budget_tokens}` is a 400, and
+    `{type: "disabled"}` is allowed only at effort high or below. Codeep sends
+    no `thinking` field at all and has no "off" tier.
+  - **Prefill is a 400**, thinking on or off. Codeep never sends one: every
+    Anthropic request ends on a user turn — the prompt, tool results or a
+    nudge — and the only assistant turns it makes up ("Understood.") sit at the
+    start. An MCP server's sampling request is rebuilt to end on the last user
+    message too.
+  - A forced `tool_choice` (`any`, or a named tool) **is accepted** here,
+    unlike on Sonnet 5.5, but the reply starts with the tool call and has no
+    thinking block. Moot: Anthropic-format requests send no `tool_choice`
+    (auto), and OpenAI-format ones send `auto`.
+  - Safety classifiers can decline a request: `stop_reason: "refusal"`, HTTP
+    200, and **no server-side fallback** for this model. The notice added for
+    Sonnet 5.5 ("Claude declined this request …") already covers every
+    Anthropic-format path; OpenRouter replies still are not covered.
+  - Thinking blocks belong to the account that produced them and stay valid
+    only while everything before them is unchanged — a changed `system`,
+    `tools` or earlier message is a 400 (enforced by default for accounts
+    created on or after 2026-08-31). Codeep keeps history as plain text and
+    never replays thinking blocks, so compaction and `/rewind` cannot hit it,
+    as with Sonnet 5.5. Thinking text is omitted by default
+    (`display: "omitted"`); Codeep drops thinking blocks either way.
+    `between_tools` is Sonnet 5.5's, not this model's.
+  - **The same text is about 30% more tokens** (the tokenizer of Claude 4.7
+    and later). Against Haiku 4.5's $1 / $5 the rates are a tenth up to 100,000
+    prompt tokens and half above, so the bill for the same text still falls (to
+    about 13% and 65% of it), but the token counts `/cost` and the context
+    meter show rise by about 30%. Compaction is character-based, so no budget
+    moves.
+  - A reply can begin with a thinking block, so it is read by block type, as
+    for Opus 5.5 and Sonnet 5/5.5 (above). Priority Tier is not offered, and
+    computer use (`computer_toolset_20260801`) and the browser use tool are
+    ones Codeep does not use. Per-message effort changes need a beta header;
+    Codeep sends one effort per request.
+
+  Haiku 4.5 (`claude-haiku-4-5-20251001`) stays in the picker as the previous
+  Haiku, now named "Claude Haiku 4.5", with **no migration**: it is still
+  offered, and a map entry for an offered id would undo the user's pick at every
+  launch (the rule under the update checklist; `providers.test.ts` checks it).
+
+  **Not live-tested.** No request has been sent to Haiku 5.5. The effort
+  parameter, the response floor, the omitted sampling fields, the refusal
+  notice and the tier maths rest on Anthropic's pages and OpenRouter's
+  catalogue (read 2026-10-09), not on a recorded response.
 - **Every Grok text model has a ≥200K tier**, not only 4.5/4.6: 4.7, 4.6, 4.5,
   build-0.1 and 4.3 all double once a prompt reaches 200K tokens. The higher rate
   then applies to **all** tokens in that request, not only those past 200K. Both
@@ -406,7 +519,10 @@ Last full review: **2026-09-23**
 - **Claude Haiku 4.5 may retire from 2026-10-15** ("not sooner than"), with no
   named replacement yet. Anthropic gives at least 60 days' notice and had given
   none by 2026-09-23, so the earliest realistic date is about 2026-11-22. That is
-  an inference, not a published date; recheck the deprecations page.
+  an inference, not a published date; recheck the deprecations page. Claude
+  Haiku 5.5 (above) has been the Haiku in the picker since 2026-10-09, and 4.5
+  stays beside it with no migration. Recheck the deprecations page for 4.5's
+  date before moving anyone off it.
 - **Gemini 3.1 Pro has a long-context tier:** $4/$18 above 200K prompt tokens
   (cache $0.40). The table carries $2/$12. Stored `gemini-3-flash-preview`
   migrates to `gemini-3.6-flash` (Google's deprecations table; its 3.5 guide

@@ -1185,3 +1185,129 @@ describe('Claude Sonnet 5.5', () => {
     expect(getPricingTable().find(m => m.model === SONNET)).toEqual({ model: SONNET, inputPer1M: 2, outputPer1M: 10 });
   });
 });
+
+// Claude Haiku 5.5, released 2026-10-07 (platform.claude.com Haiku 5.5
+// overview, What's new, migration guide, effort and pricing pages, read
+// 2026-10-09). Every value is asserted on its own and through OpenRouter's
+// dotted id. The `claude-haiku-4-5` family is the trap: the effort gate is an
+// allowlist of families, and none of them matches `claude-haiku-5-5`.
+describe('Claude Haiku 5.5', () => {
+  const HAIKU = 'claude-haiku-5-5';
+  const HAIKU_4 = 'claude-haiku-4-5-20251001';
+  const OR_HAIKU = 'anthropic/claude-haiku-5.5';
+
+  it('is the Haiku in the Anthropic picker, directly above Haiku 4.5, which stays unmigrated', () => {
+    const models = PROVIDERS['anthropic'].models;
+    const ids = models.map(m => m.id);
+    expect(ids.indexOf(HAIKU)).toBeGreaterThan(-1);
+    expect(ids.indexOf(HAIKU_4)).toBe(ids.indexOf(HAIKU) + 1);
+    const haiku55 = models.find(m => m.id === HAIKU)!;
+    expect(haiku55.name).toBe('Claude Haiku 5.5');
+    // The picker states the tier: no other Claude model here is priced by prompt length.
+    expect(haiku55.description).toMatch(/\$0\.10\/\$0\.50/);
+    expect(haiku55.description).toMatch(/over 100K tokens \$0\.50\/\$2\.50/);
+    const haiku45 = models.find(m => m.id === HAIKU_4)!;
+    expect(haiku45.name).toBe('Claude Haiku 4.5');
+    expect(haiku45.description).toBe('Previous Haiku — kept for pinned configs');
+    // Haiku 4.5 is still Active, so nothing moves a config off it — and a
+    // source in the migration map must never be a model the provider offers.
+    expect(replacementModelFor('anthropic', HAIKU_4)).toBeUndefined();
+    expect(replacementModelFor('anthropic', 'claude-haiku-4-5')).toBeUndefined();
+    expect(replacementModelFor('anthropic', HAIKU)).toBeUndefined();
+    expect(replacementModelFor('openrouter', 'anthropic/claude-haiku-4.5')).toBeUndefined();
+    // Not a default for anyone: the overview still says to start with Opus 5.5.
+    expect(PROVIDERS['anthropic'].defaultModel).toBe('claude-opus-5-5');
+  });
+
+  it('is in the OpenRouter fallback under the dotted id OpenRouter lists, not the hyphenated one', () => {
+    const models = getProvider('openrouter')!.models;
+    const ids = models.map(m => m.id);
+    expect(ids).toContain(OR_HAIKU);
+    expect(ids).not.toContain('anthropic/claude-haiku-5-5');
+    // After the Sonnets, with the rest of the Anthropic block.
+    expect(ids.indexOf(OR_HAIKU)).toBe(ids.indexOf('anthropic/claude-sonnet-5') + 1);
+    expect(models.find(m => m.id === OR_HAIKU)!.name).toBe('Claude Haiku 5.5');
+  });
+
+  // "If a request includes temperature, it must be 1 ... top_p ... 0.99 ... Any
+  // other value returns a 400 error. So does any top_k value."
+  it('gets no sampling params, directly and on OpenRouter — and Haiku 4.5 still does', () => {
+    expect(canonicalModelId(OR_HAIKU)).toBe(HAIKU);
+    expect(modelRejectsSamplingParams(HAIKU)).toBe(true);
+    expect(modelRejectsSamplingParams(OR_HAIKU)).toBe(true);
+    expect(modelRejectsSamplingParams(HAIKU_4)).toBe(false);
+    expect(modelRejectsSamplingParams('claude-haiku-4-5')).toBe(false);
+    expect(modelRejectsSamplingParams('anthropic/claude-haiku-4.5')).toBe(false);
+  });
+
+  // The allowlist trap: `claude-haiku-5-5` matches none of opus-5, opus-4-x,
+  // sonnet-4-6/5 or fable-5, so without its own entry /thinking is hidden.
+  it('takes the thinking control, which the family allowlist would have missed — Haiku 4.5 does not', () => {
+    expect(modelSupportsReasoningEffort('anthropic', HAIKU)).toBe(true);
+    expect(modelSupportsReasoningEffort('anthropic', OR_HAIKU)).toBe(true);
+    expect(modelSupportsReasoningEffort('anthropic', HAIKU_4)).toBe(false);
+    expect(modelSupportsReasoningEffort('anthropic', 'claude-haiku-4-5')).toBe(false);
+    expect(modelSupportsReasoningEffort('anthropic', 'anthropic/claude-haiku-4.5')).toBe(false);
+    // OpenRouter exposes the control for everything.
+    expect(modelSupportsReasoningEffort('openrouter', OR_HAIKU)).toBe(true);
+  });
+
+  // Effort low / medium / high / xhigh / max, default medium; Auto sends nothing.
+  it('takes every effort tier on Anthropic, and nothing on Auto', () => {
+    expect(availableReasoningTiers('anthropic', HAIKU)).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+    expect(availableReasoningTiers('anthropic', HAIKU_4)).toEqual([]);
+    expect(reasoningParamsFor('anthropic', HAIKU, 'auto')).toEqual({});
+    for (const tier of ['low', 'medium', 'high', 'max'] as const) {
+      expect(reasoningParamsFor('anthropic', HAIKU, tier), tier).toEqual({ output_config: { effort: tier } });
+    }
+    expect(reasoningParamsFor('anthropic', HAIKU_4, 'high')).toEqual({});
+  });
+
+  // OpenRouter's /api/v1/models lists supported_efforts max/xhigh/high/medium/low
+  // for it (read 2026-10-09); the Max tier goes as high as the model lists.
+  it('goes to "max" at the Max tier on OpenRouter, where Haiku 4.5 stays at "high"', () => {
+    expect(reasoningParamsFor('openrouter', OR_HAIKU, 'max')).toEqual({ reasoning: { effort: 'max' } });
+    expect(reasoningParamsFor('openrouter', OR_HAIKU, 'medium')).toEqual({ reasoning: { effort: 'medium' } });
+    expect(availableReasoningTiers('openrouter', OR_HAIKU)).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+    expect(reasoningParamsFor('openrouter', 'anthropic/claude-haiku-4.5', 'max')).toEqual({ reasoning: { effort: 'high' } });
+    expect(availableReasoningTiers('openrouter', 'anthropic/claude-haiku-4.5')).toEqual(['auto', 'low', 'medium', 'high']);
+  });
+
+  it('keeps every listed tier distinct (drift guard)', () => {
+    for (const [pid, model] of [['anthropic', HAIKU], ['openrouter', OR_HAIKU]]) {
+      const tiers = availableReasoningTiers(pid, model).filter(t => t !== 'auto');
+      const params = tiers.map(t => JSON.stringify(reasoningParamsFor(pid, model, t)));
+      expect(new Set(params).size, `${pid}/${model}`).toBe(tiers.length);
+    }
+  });
+
+  // "Thinking tokens count toward max_tokens, so a small limit can stop after a
+  // thinking block and before any text."
+  it('gets the 32K response floor, 64K at Max, directly and on OpenRouter — and Haiku 4.5 does not', () => {
+    expect(minResponseTokensFor(HAIKU, 'auto')).toBe(32_768);
+    expect(minResponseTokensFor(HAIKU, undefined)).toBe(32_768);
+    expect(minResponseTokensFor(HAIKU, 'high')).toBe(32_768);
+    expect(minResponseTokensFor(HAIKU, 'max')).toBe(65_536);
+    expect(minResponseTokensFor(OR_HAIKU, 'auto')).toBe(32_768);
+    expect(minResponseTokensFor(OR_HAIKU, 'max')).toBe(65_536);
+    expect(minResponseTokensFor(HAIKU_4, 'max')).toBe(0);
+    expect(minResponseTokensFor('claude-haiku-4-5', 'auto')).toBe(0);
+    expect(minResponseTokensFor('anthropic/claude-haiku-4.5', 'auto')).toBe(0);
+    // Exact, like the Sonnet floor: the family name alone does not take it in.
+    expect(minResponseTokensFor('claude-haiku-5', 'max')).toBe(0);
+  });
+
+  it('has its own context and price rows, the tier included, not a fallback by accident', () => {
+    expect(getModelContextWindow(HAIKU)).toBe(1_000_000);
+    expect(getModelContextWindow(OR_HAIKU)).toBe(1_000_000);
+    expect(getModelContextWindow(HAIKU_4)).toBe(200_000);
+    expect(getPricingTable().find(m => m.model === HAIKU)).toEqual({
+      model: HAIKU,
+      inputPer1M: 0.1,
+      outputPer1M: 0.5,
+      longPrompt: { overTokens: 100_000, inputPer1M: 0.5, outputPer1M: 2.5 },
+    });
+    // Haiku 4.5 keeps its flat $1/$5, with no tier.
+    expect(getPricingTable().find(m => m.model === HAIKU_4)).toEqual({ model: HAIKU_4, inputPer1M: 1, outputPer1M: 5 });
+  });
+});

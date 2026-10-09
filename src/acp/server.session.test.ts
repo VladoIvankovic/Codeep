@@ -16,7 +16,7 @@ import { StdioTransport } from './transport';
 import { startAcpServer, executeAcpCommand } from './server';
 import { runAgentSession, type AgentSessionOptions } from './session';
 import { initWorkspace, loadWorkspace, handleCommand } from './commands';
-import { registerSessionServers } from '../utils/mcpRegistry';
+import { registerSessionServers, disposeAllSessions } from '../utils/mcpRegistry';
 import { config, saveSession, getApiKey } from '../config/index';
 import { ApiError } from '../api/index';
 import { selectSessionMcpServers } from '../utils/mcpConfig';
@@ -174,7 +174,7 @@ function deferredRuns() {
 
 beforeEach(() => {
   process.env.CODEEP_ACP_COMMANDS_DELAY_MS = '0';
-  for (const event of ['SIGINT', 'SIGTERM']) listenersBefore.set(event, process.listeners(event as NodeJS.Signals));
+  for (const event of ['SIGINT', 'SIGTERM', 'SIGHUP']) listenersBefore.set(event, process.listeners(event as NodeJS.Signals));
   listenersBefore.set('stdin-end', process.stdin.listeners('end') as Function[]);
   ws = mkdtempSync(join(tmpdir(), 'codeep-acp-session-'));
   config.set('autoSave', true);
@@ -196,7 +196,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  for (const event of ['SIGINT', 'SIGTERM'] as NodeJS.Signals[]) {
+  for (const event of ['SIGINT', 'SIGTERM', 'SIGHUP'] as NodeJS.Signals[]) {
     for (const l of process.listeners(event)) {
       if (!listenersBefore.get(event)!.includes(l)) process.removeListener(event, l);
     }
@@ -902,7 +902,7 @@ describe('the permission prompt for a file that decides what runs later', () => 
    * would otherwise answer with the first session's callback and count the
    * first session's prompts.
    */
-  async function askAbout(modeId: 'auto' | 'manual', toolCall: ToolCall) {
+  async function askAbout(modeId: 'auto' | 'manual', toolCall: ToolCall, ask?: { alwaysLabel?: string }) {
     client.answers['session/request_permission'] = () => ({ result: { outcome: { type: 'selected', optionId: 'allow_once' } } });
     const before = client.requests('session/request_permission').length;
     const sessionId = await newSession();
@@ -913,7 +913,7 @@ describe('the permission prompt for a file that decides what runs later', () => 
     }
     await client.waitForResponse(prompt(sessionId, 'do it'));
     const agentOpts = vi.mocked(runAgentSession).mock.lastCall![0];
-    const answer = await agentOpts.onRequestPermission!(toolCall);
+    const answer = await agentOpts.onRequestPermission!(toolCall, undefined, ask);
     return { answer, asked: client.requests('session/request_permission').slice(before) };
   }
 
@@ -977,6 +977,26 @@ describe('the permission prompt for a file that decides what runs later', () => 
     expect(plain.asked[0].params!.options.map((o: { optionId: string }) => o.optionId))
       .toEqual(['allow_once', 'allow_always', 'reject_once', 'reject_always']);
   });
+
+  it('lets a caller word the "always" option for what its answer means — a skill\'s shell line', async () => {
+    const skillLine = { tool: 'execute_command', parameters: { command: 'git add -A && git commit -m "x"', args: [] } };
+
+    const asked = await askAbout('manual', skillLine, { alwaysLabel: "Allow all of this skill's commands" });
+    const always = asked.asked[0].params!.options.find((o: { optionId: string }) => o.optionId === 'allow_always');
+    expect(always.name).toBe("Allow all of this skill's commands");
+
+    // Without one, the option names the program and the session.
+    const plain = await askAbout('manual', skillLine);
+    const plainAlways = plain.asked[0].params!.options.find((o: { optionId: string }) => o.optionId === 'allow_always');
+    expect(plainAlways.name).toMatch(/^Always Allow git add -A && git commit.* \(this session\)$/);
+  });
+
+  it('says what "Allow always" covers and for how long', async () => {
+    const plain = await askAbout('manual', ordinary);
+    const always = plain.asked[0].params!.options.find((o: { optionId: string }) => o.optionId === 'allow_always');
+    expect(always.name).toBe(`Always Allow ${ordinary.tool} (this session)`);
+    expect(always.kind).toBe('allow_always');
+  });
 });
 
 // ─── Real slash commands against the server's session ───────────────────────
@@ -1008,6 +1028,43 @@ describe('slash commands that change the session', () => {
       { role: 'user', content: 'continue old work' },
       { role: 'assistant', content: 'answer' },
     ], ws);
+  });
+
+  it('"Allow always" belongs to the conversation: kept across its prompts, gone after /session new', async () => {
+    const sessionId = await newSession();
+    await client.waitForResponse(prompt(sessionId, 'hello'));
+    await client.waitForResponse(prompt(sessionId, 'hello again'));
+    await client.waitForResponse(prompt(sessionId, '/session new'));
+    await client.waitForResponse(prompt(sessionId, 'a new conversation'));
+
+    const [first, second, third] = vi.mocked(runAgentSession).mock.calls.map((c) => c[0].permissionMemory!);
+    expect(first.alwaysAllowed).toBe(second.alwaysAllowed);
+    expect(third.alwaysAllowed).not.toBe(first.alwaysAllowed);
+    // A refusal never outlives the prompt it was given in.
+    expect(second.alwaysRejected).not.toBe(first.alwaysRejected);
+  });
+
+  it('"Allow always" is not shared with another session, nor with a conversation loaded from disk', async () => {
+    const { writeFileSync } = await import('fs');
+    writeFileSync(join(ws, 'package.json'), '{}');
+    const realConfig = await vi.importActual<typeof import('../config/index')>('../config/index');
+    expect(realConfig.saveSession('old-work', WORK, ws)).toBe(true);
+
+    const one = await newSession();
+    const two = await newSession();
+    await client.waitForResponse(prompt(one, 'hello'));
+    await client.waitForResponse(prompt(two, 'hello'));
+    await client.waitForResponse(prompt(one, '/session load old-work'));
+    await client.waitForResponse(prompt(one, 'continue'));
+    // A second ACP session (another window, perhaps another project) that
+    // loads a conversation of the same name is still not the first one's.
+    await client.waitForResponse(prompt(two, '/session load old-work'));
+    await client.waitForResponse(prompt(two, 'continue'));
+
+    const [inOne, inTwo, afterLoad, afterLoadInTwo] = vi.mocked(runAgentSession).mock.calls.map((c) => c[0].permissionMemory!);
+    expect(inOne.alwaysAllowed).not.toBe(inTwo.alwaysAllowed);
+    expect(afterLoad.alwaysAllowed).not.toBe(inOne.alwaysAllowed);
+    expect(afterLoadInTwo.alwaysAllowed).not.toBe(afterLoad.alwaysAllowed);
   });
 
   it('/save <name>: later turns are saved under the new name', async () => {
@@ -1535,6 +1592,47 @@ describe('execute_command in the client terminal', () => {
 });
 
 // ─── A prompt the provider refuses with 401 ──────────────────────────────────
+
+// The server ends on SIGHUP, SIGINT and SIGTERM by stopping the MCP servers it
+// spawned. conf's exit hook (when-exit) has claimed all three by the time the
+// server starts, because the config module is always imported: a guard that
+// attached only to a signal nobody listened to never attached, and a SIGTERM
+// left every MCP child running (shutdown.process.test.ts shows it for real).
+describe('shutting down on a signal', () => {
+  beforeEach(() => { vi.mocked(disposeAllSessions).mockClear(); });
+
+  it.each([['SIGHUP', 129], ['SIGINT', 130], ['SIGTERM', 143]] as const)(
+    '%s stops the MCP servers, then exits %i',
+    async (signal, code) => {
+      expect(listenersBefore.get(signal)!.length, 'conf already listens to the signal').toBeGreaterThan(0);
+      const ours = process.listeners(signal).filter((l) => !listenersBefore.get(signal)!.includes(l));
+      expect(ours, 'the server attached its own listener').toHaveLength(1);
+
+      // The listener is called directly: process.emit would run conf's too,
+      // and that one raises the real signal on the test worker.
+      const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      let release!: () => void;
+      vi.mocked(disposeAllSessions).mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+      (ours[0] as () => void)();
+      expect(disposeAllSessions).toHaveBeenCalledTimes(1);
+      expect(exit, 'not before the servers are told').not.toHaveBeenCalled();
+      // when-exit raises the signal again, and an editor can send a second one.
+      (ours[0] as () => void)();
+      expect(disposeAllSessions).toHaveBeenCalledTimes(1);
+
+      release();
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(code));
+      expect(exit).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('does not pile listeners up when a server is started again in the same process', () => {
+    const before = process.listenerCount('SIGTERM');
+    void startAcpServer(new FakeClient());
+    void startAcpServer(new FakeClient());
+    expect(process.listenerCount('SIGTERM')).toBe(before);
+  });
+});
 
 describe('a prompt refused with 401', () => {
   // Kimi Code answers 401 for plan limits, with its reason in the body

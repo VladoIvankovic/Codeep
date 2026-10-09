@@ -150,7 +150,7 @@ When started in a project directory, Codeep automatically:
 - **Cross-session recall** - `/recall <query>` searches across **all** saved sessions, ranked by relevance + recency. Add `--resume` to load the top match, or `--summarize` for an LLM recap of what you accomplished across matches
 - **Cross-device resume (`/cloud`)** - Sessions you run on one device (CLI, Mac app, VS Code) sync to `codeep.dev`. `/cloud` lists them and pulls the selected one back locally, so you can start a session on your desktop and continue on your laptop. Run `codeep account` once to link your devices; scoped to the current project when one is open.
 - **Export** - Save to Markdown, JSON, or plain text
-- `/cost` - Per-session token usage and estimated cost (per provider/model)
+- `/cost` - Per-session token usage and estimated cost (per provider/model; a model priced by prompt length, like Claude Haiku 5.5 above 100K tokens, is priced request by request)
 - `/compact [keepN]` - AI-summarize older messages to free up context (keeps last N, default 4)
 - `/checkpoint [name]` - Snapshot the current session (conversation + provider/model + agent-touched files + git HEAD)
 - `/checkpoints` - List saved checkpoints for this workspace
@@ -1161,6 +1161,8 @@ Tasks are loaded into the agent context so the AI sees them automatically on the
 | `dangerous` (default) | Ask before configurable dangerous tools |
 | `always` | Ask before every action |
 | `never` | Execute without asking |
+
+A dialog's **Allow** and **Deny** answer for that one action; Deny also stops the agent asking again about the same tool for the rest of that run. **Always Allow** is kept for the chat — until you start a new chat, load another session or quit — and covers a tool by its name, and for `execute_command` only the program: "Always Allow php (this session)" lets `php` run with any arguments and still asks about `npm`. A write to a file that decides what runs later (`.git/config`, a git hook, an MCP server list) is asked about every time and has no Always Allow, and a dry run keeps nothing it was told "always".
 
 In `dangerous` mode, configure which tools require confirmation via `/settings`:
 - **Confirm: delete_file** — ON by default

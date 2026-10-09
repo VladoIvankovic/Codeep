@@ -36,6 +36,7 @@ import {
 } from '../config/index';
 import { setTelegramToken, clearTelegramToken, hasTelegramToken } from '../utils/telegramCredentials';
 import { pinAgentConfirmation } from './agentConfirmation';
+import { moveSessionPermissions } from '../utils/permissionScope';
 import { getProjectContext } from '../utils/project';
 import { getCurrentVersion } from '../utils/update';
 import { getProviderList, getProvider, modelSupportsReasoningEffort, reasoningParamsFor, availableReasoningTiers, resolveReasoningTier, agentTurnReasoningNote, replacementModelFor, REASONING_TIERS, type ReasoningTier, type OpenAIWire } from '../config/providers';
@@ -1027,6 +1028,9 @@ Format: use headers per category, only include categories where you found issues
       if (renameSession(ctx.sessionId, newName, ctx.projectPath)) {
         const oldId = ctx.sessionId;
         ctx.setSessionId(newName);
+        // The chat goes on under the new name with what it had allowed; the
+        // old name, which another chat may take, keeps nothing.
+        moveSessionPermissions(oldId, newName);
         if (ctx.setSessionDisplayName) ctx.setSessionDisplayName(newName);
         ctx.app.notify(`Session renamed to: ${newName}`);
         // Sync new name to dashboard
