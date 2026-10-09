@@ -194,6 +194,48 @@ describe('executeAgentTask tool previews', () => {
   });
 });
 
+// The run that ended on "Using write_file." — now on a plain line — must
+// still list what it did under it, as any finished run does.
+describe('a run whose model wrote no summary', () => {
+  it('says so first, then that the steps and the files below are what it did', async () => {
+    const line = 'The model ended the run without writing a summary.';
+    vi.mocked(runAgent).mockResolvedValue({
+      success: true,
+      iterations: 26,
+      endedWithoutSummary: true,
+      actions: [
+        { type: 'write', target: 'public/index.php', result: 'success', timestamp: 1 },
+        { type: 'read', target: 'composer.json', result: 'success', timestamp: 2 },
+      ],
+      finalResponse: line,
+      unstreamedText: line,
+    });
+
+    await executeAgentTask('make the site work', false, makeCtx());
+
+    expect(messages.find(m => m.content.includes('**Agent completed**'))?.content).toBe([
+      line,
+      '',
+      'What it did is listed below.',
+      '',
+      '**Agent completed** in 26 step(s)',
+      '',
+      '**Files changed:**',
+      '  ✓ write: `public/index.php`',
+      '',
+      '1 read/search operation(s) performed',
+    ].join('\n'));
+  });
+
+  it('adds nothing to a run that has its summary', async () => {
+    vi.mocked(runAgent).mockResolvedValue({ success: true, iterations: 1, actions: [], finalResponse: 'done' });
+
+    await executeAgentTask('task', false, makeCtx());
+
+    expect(messages.find(m => m.content.includes('**Agent completed**'))?.content).toBe('done\n\n**Agent completed** in 1 step(s)');
+  });
+});
+
 describe('executeAgentTask session identity', () => {
   it('saves and syncs the run under the conversation it belongs to', async () => {
     vi.mocked(runAgent).mockResolvedValue({ success: true, iterations: 1, actions: [], finalResponse: 'done' });

@@ -326,7 +326,7 @@ describe('buildResponsesInput', () => {
     const rs = (id: string) => ({ id, type: 'reasoning', summary: [], encrypted_content: `ENC-${id}` });
     const fc = { id: 'fc_1', type: 'function_call', call_id: 'call_1', name: 'read_file', arguments: '{}' };
     const cutOff: Message = { role: 'assistant', content: '(no reply)' };
-    const partial: Message = { role: 'assistant', content: 'Using read_file.' };
+    const partial: Message = { role: 'assistant', content: '[tool call: read_file]' };
     state.tagAssistant(cutOff, { providerId: 'openai', model: 'gpt-6-sol', dialect: 'openai', items: [rs('rs_a')], rejectedCalls: [] });
     state.tagAssistant(partial, { providerId: 'openai', model: 'gpt-6-sol', dialect: 'openai', items: [rs('rs_b'), fc, rs('rs_c')], rejectedCalls: [] });
     const input = buildResponsesInput([{ role: 'user', content: 'go' }, cutOff, { role: 'user', content: 'Continue.' }, partial], state, target);

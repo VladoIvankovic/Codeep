@@ -11,6 +11,81 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.10.1] — 2026-10-09
+
+> TL;DR — A new machine gets its API keys with `codeep account sync --keys`, `account push` skips keys from environment variables, the welcome block follows the session, and agent runs no longer end on "Using write_file."
+
+### Fixed
+
+- **A new machine gets its API keys without typing one in first.**
+  `codeep account sync` pulled API keys only once cloud key sync had been
+  turned on with `/keysync on` — a command in the chat, which does not start
+  without a key. `codeep account sync --keys` now turns cloud key sync on and
+  pulls them, and on a terminal, on a machine with no API key yet, `codeep
+  account sync` asks first ([y/N], No by default). Both say first that synced
+  keys are stored server-readable on codeep.dev, and that with key sync on
+  `codeep account push` uploads the API keys stored on this machine; key sync
+  then stays on, as after `/keysync on`. Keys stay opt-in and off by default:
+  a machine that already has a key, a script, a pipe and CI are never asked,
+  only told the command to run, and `CODEEP_NO_KEY_SYNC` still keeps key sync
+  off. Ctrl+C at the question cancels the whole sync, keys pressed before a
+  question was shown never answer it, and an entry from codeep.dev that is not
+  an API key is skipped and counted. Where there is no system keychain, the
+  sync says that the keys were stored in plain text, and in which file.
+- **The pulled keys pick the provider.** After a sync on a terminal, or with
+  `--keys`, when the provider Codeep would start on has no key (one in the
+  environment counts), it switches to the first of the pulled keys' providers
+  in the order `/provider` lists them, and says so ("Using Anthropic — change
+  it with /provider"). The next `codeep` opens the chat instead of the
+  provider picker. A provider that has a key, or needs none, is left as it is.
+- **`codeep account push` no longer uploads keys read from environment
+  variables.** With cloud key sync on it sent every key Codeep could see, an
+  exported `ANTHROPIC_API_KEY` included — and where a key was stored as well,
+  it sent the exported one instead. It now uploads the API keys stored on this
+  machine (the system keychain, or the plain-text fallback) and names the
+  providers it left out because their key came from the environment.
+- **`codeep account` offers the sync.** Once the machine is linked, it asks
+  whether to pull your agents, commands and profile now ([Y/n]), and asks
+  about keys next if key sync is off and the machine has no key. Outside a
+  terminal it prints the commands to run. On a linked machine with no key
+  yet, the first-run provider screen points at `codeep account sync --keys`,
+  and its footer now says that Esc cancels setup, which it does — it said
+  "skip (provider chosen later)".
+- **An agent run no longer ends on a bare "Using write_file.".** After a
+  long run of file writes, the model sometimes ended with that line instead
+  of a summary — the text Codeep kept for each turn that only called tools,
+  which the model had seen a few dozen times — and it was shown as the answer;
+  the auto-review could end the same way ("Using read_file."). Such a turn is
+  now kept as `[tool call: write_file]`, which no answer looks like. A run
+  whose last reply is only that, or nothing, is asked once or twice for the
+  missing call or a short summary of what it did, what changed and how to
+  test it; if it still writes none, the answer says so in a plain line —
+  "The model ended the run without writing a summary." — and the chat adds
+  "What it did is listed below." above the steps and files it lists, as
+  before. A placeholder echoed above a real answer is dropped from it, a
+  reviewer that writes nothing is shown as "(the reviewer finished without
+  writing a review)", and a short answer such as "ready" or "Using Redis." is
+  kept as it is.
+- **The terminal survives a closed window during `codeep account`.** A
+  SIGTERM or SIGHUP — the terminal window closed, or a `kill` sent to the
+  process that was asking — while `codeep account` was asking a question left
+  the shell without echo or line editing. The terminal is now put back first,
+  and the command ends with 143 or 129, as the signal would have. A Ctrl+C
+  pressed just as a question appears cancels it like a Ctrl+C at the question,
+  instead of being lost.
+- **Ctrl+C outside the chat ends the command like any other.** In
+  `codeep account`, `review`, `hook` and `acp`, Ctrl+C cleared the screen and
+  the scrollback, printed "Goodbye!" and exited 0 — in `acp` into the editor's
+  connection. They now stop quietly with exit code 130; in the chat, Ctrl+C
+  still saves the conversation and says goodbye.
+- **The welcome block follows the session.** It kept the provider, model,
+  Agent Mode and account of the moment Codeep started. It now changes with
+  `/provider`, `/model`, `/agent`, `/settings` and a loaded profile, and shows
+  an account linked with `codeep account` in another terminal within a couple
+  of seconds. It and `/status` now call a machine linked when it can sync, as
+  `/account` and `codeep account sync` do: a GitHub id from an older link
+  that never got its sync token showed as linked.
+
 ## [3.10.0] — 2026-10-05
 
 > TL;DR — On Omarchy, Codeep now appears in the Agents panel with its plan, and its models count toward the panel's "Mostly …" line. A new local usage ledger in `~/.codeep/usage` keeps no prompt text or paths.

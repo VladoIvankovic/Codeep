@@ -49,7 +49,7 @@ vi.mock('./history', async (importOriginal) => {
   };
 });
 
-import { runAgent, resetAgentToolsNoticeForTests } from './agent';
+import { runAgent, resetAgentToolsNoticeForTests, NO_ANSWER_NUDGE } from './agent';
 import { config } from '../config/index';
 
 type Item = Record<string, unknown>;
@@ -255,7 +255,9 @@ describe('replies that stop short', () => {
     // Its reasoning led to a call that never finished: neither is replayed.
     expect(JSON.stringify(input)).not.toContain('rs_3');
     expect(JSON.stringify(input)).not.toContain('call_X');
-    expect(input[input.length - 1]).toEqual({ type: 'message', role: 'user', content: 'Continue. Execute the tool calls now.' });
+    // The cut-off turn left no text: no answer, so the nudge asks for the call
+    // or a summary (agent.ts, NO_ANSWER_NUDGE).
+    expect(input[input.length - 1]).toEqual({ type: 'message', role: 'user', content: NO_ANSWER_NUDGE });
     expectPaired(input);
   });
 

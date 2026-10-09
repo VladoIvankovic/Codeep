@@ -30,7 +30,7 @@ import {
   isManuallyInitializedProject,
   setApiKey,
   setProvider,
-  getGithubId,
+  getSyncToken,
 } from '../config/index';
 import {
   isProjectDirectory,
@@ -38,7 +38,7 @@ import {
   ProjectContext,
 } from '../utils/project';
 import { getCurrentVersion, checkForUpdates, getUpdateInstructions } from '../utils/update';
-import { getProviderList, isNoApiKeyProvider, resolveReasoningTier } from '../config/providers';
+import { getProvider, getProviderList, isNoApiKeyProvider, resolveReasoningTier } from '../config/providers';
 import { getSessionStats, getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
 import { getGitStatus, isGitRepository, type GitStatus } from '../utils/git';
 import { reportStats, syncSession, syncSessionAsync, generateProjectId, ensureDeviceRegistered } from '../utils/codeepCloud';
@@ -64,6 +64,8 @@ import { followOmarchyTheme, type OmarchyThemeWatch } from './omarchyTheme';
 import { keepOmarchyAgentRecord } from './omarchyAgents';
 import { recordPromptInLedger } from '../utils/usageLedger';
 import { welcomeContent } from './welcome';
+import { watchConfig, type ConfigWatch } from './configWatch';
+import { syncKeysLoginHint } from '../utils/accountSync';
 
 // ─── Global state ─────────────────────────────────────────────────────────────
 
@@ -78,7 +80,7 @@ let gitBranchCache: { path: string; branch?: string; refusal?: string } | null =
 const gitRefusalReported = new Set<string>();
 let projectContext: ProjectContext | null = null;
 let hasWriteAccess = false;
-/** Rewrites the welcome block from the current access; set once the App is up. */
+/** Rewrites the welcome block from the current state; set once the App is up. */
 let refreshWelcome: () => void = () => {};
 let sessionId = getCurrentSessionId();
 let app: App;
@@ -209,6 +211,8 @@ let isAgentRunningFlag = false;
 let telegramInbox: { stop: () => void; drain: () => void } | null = null;
 /** Following the Omarchy desktop theme; null when this is not Omarchy. */
 let omarchyTheme: OmarchyThemeWatch | null = null;
+/** Following the config for the welcome block; null until the TUI is up. */
+let welcomeWatch: ConfigWatch | null = null;
 let agentAbortController: AbortController | null = null;
 let pendingInteractiveContext: PendingInteractiveContext | null = null;
 
@@ -509,7 +513,7 @@ async function handleCommand(command: string, args: string[]): Promise<void> {
 // ─── Login flow (full-screen, pre-app) ───────────────────────────────────────
 
 async function showLoginFlow(): Promise<string | null> {
-  return runLoginFlow({ providers: getProviderList(), setProvider, setApiKey });
+  return runLoginFlow({ providers: getProviderList(), setProvider, setApiKey, hint: syncKeysLoginHint() });
 }
 
 // ─── Session picker ───────────────────────────────────────────────────────────
@@ -585,6 +589,7 @@ Usage:
   codeep --yolo       Start without stopping to ask, for this launch only (see below)
   codeep account        Link CLI to your codeep.dev dashboard
   codeep account sync   Pull personalities + commands + profile (+ keys if cloud key sync is on)
+  codeep account sync --keys  The same, turning cloud key sync on to pull your API keys too
   codeep account push   Push personalities + commands + profile (+ keys if cloud key sync is on)
   codeep account purge-keys  Delete all your API keys stored on codeep.dev (cloud only; local keychain untouched)
   codeep acp          Start ACP server (for Zed editor integration)
@@ -621,142 +626,15 @@ Commands (in chat):
     const sub = launch.args[0];
 
     if (sub === 'sync' || sub === 'pull') {
-      const { getSyncToken, setApiKey, loadAllApiKeys: loadKeys, isKeySyncEnabled } = await import('../config/index.js');
-      if (!getSyncToken()) {
-        console.log('\n  Not linked to codeep.dev. Run: codeep account\n');
-        process.exit(1);
-      }
-      // Run the one-time plaintext->keychain migration BEFORE storing any pulled
-      // key. Otherwise the first setApiKey flips keysSecured=true and any local
-      // legacy plaintext keys would never migrate (orphaned, invisible).
-      await loadKeys();
-
-      // API keys are opt-in (default OFF). Pull them only when cloud key sync is
-      // enabled; the personal config below always syncs (no secrets).
-      if (isKeySyncEnabled()) {
-        const { pullKeys } = await import('../utils/codeepCloud.js');
-        process.stdout.write('  Pulling keys from codeep.dev...');
-        const keys = await pullKeys();
-        if (!keys) {
-          console.log(' failed.\n  Check your connection or re-link with: codeep account\n');
-          process.exit(1);
-        }
-        const count = Object.keys(keys).length;
-        if (count === 0) {
-          console.log(' no keys found.\n  Add keys at codeep.dev/dashboard');
-        } else {
-          let synced = 0;
-          for (const [provider, key] of Object.entries(keys)) {
-            try {
-              await setApiKey(key, provider);
-              synced++;
-            } catch {
-              console.log(`\n  Warning: could not securely store the key for ${provider}.`);
-            }
-          }
-          console.log(` synced ${synced} key${synced !== 1 ? 's' : ''}.`);
-        }
-      } else {
-        console.log('  Cloud key sync is off — skipping API keys. Enable with: /keysync on');
-      }
-
-      // Also pull portable personal config — personalities + custom commands +
-      // the user profile. Web-edited personalities replace their local copy
-      // after a safety backup; commands/profile retain additive merge rules.
-      const { pullPersonalities, pullCommands, pullUserProfileResult, getLastPersonalityPullBackupCount } = await import('../utils/codeepCloud.js');
-      // Report all three outcomes, not just the interesting one. Printing only
-      // on count > 0 made a failed sync look identical to a sync with nothing
-      // new — silence meant either, and the user could not tell which.
-      const { describeSyncFailure } = await import('../utils/codeepCloud.js');
-      const personalities = await pullPersonalities();
-      if (!personalities.ok) {
-        console.log(`  Could not pull agents — ${describeSyncFailure(personalities.reason)}.`);
-      } else if (personalities.count > 0) {
-        console.log(`  Pulled ${personalities.count} personalit${personalities.count === 1 ? 'y' : 'ies'}.`);
-        const backups = getLastPersonalityPullBackupCount();
-        if (backups > 0) console.log(`  Backed up ${backups} replaced local cop${backups === 1 ? 'y' : 'ies'} in ~/.codeep/backups/personalities/.`);
-      } else if (personalities.removed === 0) {
-        console.log('  Agents already up to date.');
-      }
-      if (personalities.ok && personalities.removed > 0) {
-        console.log(`  Removed ${personalities.removed} agent${personalities.removed === 1 ? '' : 's'} deleted on codeep.dev (backed up first).`);
-      }
-      const commands = await pullCommands();
-      if (!commands.ok) {
-        console.log(`  Could not pull custom commands — ${describeSyncFailure(commands.reason)}.`);
-      } else if (commands.count > 0) {
-        console.log(`  Pulled ${commands.count} custom command${commands.count === 1 ? '' : 's'}.`);
-      }
-      const profile = await pullUserProfileResult();
-      if (!profile.ok) {
-        console.log(`  Could not pull your profile (about you) — ${describeSyncFailure(profile.reason)}.`);
-      } else if (profile.count > 0) {
-        console.log('  Pulled your profile (about you).');
-      }
-      console.log('');
-      process.exit(0);
+      // In utils/accountSync.ts, which the offer after linking (below) runs too.
+      const { runAccountSync } = await import('../utils/accountSync.js');
+      process.exit(await runAccountSync({ keys: launch.args.includes('--keys') }));
     }
 
     if (sub === 'push') {
-      const { getSyncToken, getApiKey, isKeySyncEnabled } = await import('../config/index.js');
-      if (!getSyncToken()) {
-        console.log('\n  Not linked to codeep.dev. Run: codeep account\n');
-        process.exit(1);
-      }
-
-      // API keys are opt-in (default OFF). Push them only when cloud key sync is
-      // enabled; the personal config below always pushes (no secrets).
-      let keyPushFailed = false;
-      if (isKeySyncEnabled()) {
-        const { pushKeys } = await import('../utils/codeepCloud.js');
-        const { PROVIDERS } = await import('../config/providers.js');
-        await loadAllApiKeys();
-        const keys: Record<string, string> = {};
-        for (const providerId of Object.keys(PROVIDERS)) {
-          const key = getApiKey(providerId);
-          if (key) keys[providerId] = key;
-        }
-        const count = Object.keys(keys).length;
-        if (count === 0) {
-          console.log('  No local API keys to push.');
-        } else {
-          process.stdout.write(`  Pushing ${count} key${count !== 1 ? 's' : ''} to codeep.dev...`);
-          const ok = await pushKeys(keys);
-          console.log(ok ? ' done.' : ' failed.');
-          keyPushFailed = !ok;
-        }
-      } else {
-        console.log('  Cloud key sync is off — skipping API keys. Enable with: /keysync on');
-      }
-
-      // Also push portable personal config — personalities + commands + profile.
-      const { pushPersonalities, pushCommands, pushUserProfileResult } = await import('../utils/codeepCloud.js');
-      const { describeSyncFailure } = await import('../utils/codeepCloud.js');
-      const personalities = await pushPersonalities();
-      if (!personalities.ok) {
-        console.log(`  Could not push agents — ${describeSyncFailure(personalities.reason)}.`);
-      } else if (personalities.count > 0) {
-        console.log(`  Pushed ${personalities.count} personalit${personalities.count === 1 ? 'y' : 'ies'}.`);
-      }
-      const commands = await pushCommands();
-      if (!commands.ok) {
-        console.log(`  Could not push custom commands — ${describeSyncFailure(commands.reason)}.`);
-      } else if (commands.count > 0) {
-        console.log(`  Pushed ${commands.count} custom command${commands.count === 1 ? '' : 's'}.`);
-      }
-      // No local profile is nothing to push, not a failure.
-      const profile = await pushUserProfileResult();
-      const profilePushFailed = !profile.ok;
-      if (!profile.ok) {
-        console.log(`  Could not push your profile (about you) — ${describeSyncFailure(profile.reason)}.`);
-      } else if (profile.count > 0) {
-        console.log('  Pushed your profile (about you).');
-      }
-      console.log('');
-      // Any push that was reported as failed fails the command, so a script
-      // running it can tell.
-      const anyFailed = keyPushFailed || !personalities.ok || !commands.ok || profilePushFailed;
-      process.exit(anyFailed ? 1 : 0);
+      // In utils/accountSync.ts too, which decides which keys may go up.
+      const { runAccountPush } = await import('../utils/accountSync.js');
+      process.exit(await runAccountPush());
     }
 
     if (sub === 'purge-keys') {
@@ -774,8 +652,15 @@ Commands (in chat):
     }
 
     const { runAccountFlow } = await import('../utils/codeepCloud.js');
-    await runAccountFlow();
-    process.exit(0);
+    // Once linked, offer the sync that comes next anyway (utils/accountSync.ts)
+    // rather than leave it to be guessed: on a new machine it is what brings
+    // the keys, before the TUI can start without them.
+    let code = 0;
+    if (await runAccountFlow()) {
+      const { offerSyncAfterLink } = await import('../utils/accountSync.js');
+      code = await offerSyncAfterLink();
+    }
+    process.exit(code);
   }
 
   // ACP server mode — started by Zed via Agent Client Protocol
@@ -807,6 +692,20 @@ Commands (in chat):
   // screen, so a first run is in the theme from its first frame.
   omarchyTheme = followOmarchyTheme({ enabled: () => config.get('followOmarchyTheme') !== false });
   if (omarchyTheme) process.on('exit', () => omarchyTheme?.stop());
+
+  // A SIGINT ends the TUI as /exit does: the terminal restored, the
+  // conversation saved, "Goodbye!". Registered here, where the TUI starts, and
+  // not for the whole process: for account, review, hook and acp that cleanup
+  // was wrong — it wiped the screen and the scrollback and printed "Goodbye!"
+  // over a `codeep account` waiting for the browser, and into acp's JSON-RPC
+  // stream. They end on Ctrl+C as any program does now (130, nothing
+  // written). Not under Vitest, where main() runs once per launch test and
+  // each handler would end the worker.
+  if (!process.env.VITEST) {
+    process.on('SIGINT', () => {
+      gracefulShutdown().finally(() => process.exit(0));
+    });
+  }
 
   await loadAllApiKeys();
   // Re-announce this device to the dashboard. Cheap, fire-and-forget, and it
@@ -884,11 +783,7 @@ Commands (in chat):
     yolo: isAgentConfirmationPinned,
   });
 
-  const provider = getCurrentProvider();
-  const providers = getProviderList();
-  const providerInfo = providers.find(p => p.id === provider.id);
   const version = getCurrentVersion();
-  const model = config.get('model');
 
   // Workspace notices, under the access lines. Warn before first use if this
   // workspace defines project-scoped custom slash commands. They run as user
@@ -942,23 +837,37 @@ Commands (in chat):
   // Folder Access is asked below, after the intro: until it is answered the
   // welcome says so instead of claiming a mode it cannot know yet.
   let accessPending = needsPermissionDialog;
-  const currentWelcome = () => welcomeContent({
-    version,
-    providerName: providerInfo?.name,
-    model,
-    projectPath,
-    hasProjectContext: projectContext !== null,
-    hasWriteAccess,
-    accessPending,
-    agentMode: config.get('agentMode') || 'off',
-    yolo: launch.yolo,
-    accountLinked: !!getGithubId(),
-    notices,
-  });
+  const currentWelcome = () => {
+    // Read from the config each time, not kept from startup: /provider,
+    // /model, /agent, /settings and a profile change these mid-session, and
+    // `codeep account` links the machine from another terminal. Plain reads
+    // only — getCurrentProvider() repairs an unknown provider by writing the
+    // config, and a write here would set off the refresh it runs in.
+    const providerId = config.get('provider');
+    return welcomeContent({
+      version,
+      providerName: getProvider(providerId)?.name ?? providerId,
+      model: config.get('model'),
+      projectPath,
+      hasProjectContext: projectContext !== null,
+      hasWriteAccess,
+      accessPending,
+      agentMode: config.get('agentMode') || 'off',
+      yolo: launch.yolo,
+      // A sync token, as `/account` and `codeep account sync` decide it: a
+      // GitHub id without one (an older link) cannot sync anything.
+      accountLinked: !!getSyncToken(),
+      notices,
+    });
+  };
   app.addMessage({ role: 'welcome', content: currentWelcome() });
   // Written again whenever what it describes changes: the startup questions
-  // answered, or /grant.
+  // answered, /grant, and the config — changed here or by another process
+  // (configWatch.ts). The watch starts here, with the TUI: acp, review, hook
+  // and account have all returned by now.
   refreshWelcome = () => app.updateWelcome(currentWelcome());
+  welcomeWatch = watchConfig(config, () => refreshWelcome());
+  process.on('exit', () => welcomeWatch?.stop());
 
   app.start();
 
@@ -1199,8 +1108,10 @@ async function gracefulShutdown() {
   }
 
   // Stop following the theme before the App goes: nothing is left to
-  // recolour.
+  // recolour. Nor any welcome to rewrite — a refresh landing after app.stop()
+  // would draw over the restored terminal.
   omarchyTheme?.stop();
+  welcomeWatch?.stop();
 
   // Now restore terminal after agent has fully stopped
   if (app) app.stop();
@@ -1262,10 +1173,6 @@ if (!process.env.VITEST) {
     const message = reason instanceof Error ? reason.message : String(reason);
     if (app) app.notifyWarn(`Background error: ${message}`);
     else console.error('Unhandled rejection:', reason);
-  });
-
-  process.on('SIGINT', () => {
-    gracefulShutdown().finally(() => process.exit(0));
   });
 
   main().catch((error) => {

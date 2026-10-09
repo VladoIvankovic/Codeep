@@ -24,6 +24,9 @@ export interface LoginFlowOptions {
   providers: LoginFlowProvider[];
   setProvider: (id: string) => void;
   setApiKey: (key: string) => Promise<void>;
+  /** One line on the provider screen, above its key hints — on a linked
+   *  machine, the way to keys already on codeep.dev (utils/accountSync.ts). */
+  hint?: string;
   /** For tests; a new Screen and Input otherwise. */
   screen?: Screen;
   input?: Input;
@@ -53,7 +56,7 @@ export function runLoginFlow(options: LoginFlowOptions): Promise<string | null> 
 
     const renderCurrentStep = () => {
       if (currentStep === 'provider') {
-        renderProviderSelect(screen, providers, selectedProviderIndex);
+        renderProviderSelect(screen, providers, selectedProviderIndex, options.hint);
       } else if (loginScreen) {
         loginScreen.render();
       }

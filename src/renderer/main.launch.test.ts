@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import Conf from 'conf';
 import { analyzeForClarification } from '../utils/interactive';
+import { PROVIDERS } from '../config/providers';
 import { handleInlineConfirmKey, confirmFooter } from './handlers';
 import type { ConfirmOptions } from './App';
 
@@ -53,6 +55,10 @@ vi.mock('../config/index', async (importOriginal) => ({
 vi.mock('../utils/codeepCloud', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/codeepCloud')>()),
   ensureDeviceRegistered: vi.fn(),
+  // Startup pulls the learning preferences of a linked machine, and the
+  // welcome tests below link it: unmocked, that was a real request to
+  // codeep.dev with a test token.
+  pullLearning: vi.fn(async () => null),
 }));
 vi.mock('../utils/update', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/update')>()),
@@ -78,6 +84,23 @@ vi.mock('./agentExecution', async (importOriginal) => ({
 vi.mock('../utils/mcpConfig', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../utils/mcpConfig')>();
   return { ...actual, selectSessionMcpServers: vi.fn(actual.selectSessionMcpServers) };
+});
+// The config watch main() starts for the welcome block, kept so each test can
+// stop it: fs.watchFile outlives vi.resetModules(), and a watch left over from
+// an earlier launch would rewrite the welcome from that launch's state. It
+// polls every 50 ms rather than every two seconds, so a write by another
+// process shows within a test's wait.
+const watches = vi.hoisted(() => [] as Array<{ stop(): void }>);
+vi.mock('./configWatch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./configWatch')>();
+  return {
+    ...actual,
+    watchConfig: (...[target, onChange, options]: Parameters<typeof actual.watchConfig>) => {
+      const watch = actual.watchConfig(target, onChange, { ...options, pollMs: 50 });
+      watches.push(watch);
+      return watch;
+    },
+  };
 });
 
 const savedArgv = process.argv;
@@ -117,7 +140,21 @@ const userMessages = () => called('addMessage')
   .filter(m => m.role === 'user')
   .map(m => m.content);
 
+/** Every request a launch tried to send. A failed one is swallowed — the
+ *  startup syncs are best-effort — so it is counted here and fails the test.
+ *  Refused for the whole file, between tests too: codeepCloud retries after
+ *  1 s and 2 s, and a retry that lands after its test must not find the real
+ *  fetch. It counts against the test that is running then. */
+const requests: string[] = [];
+const refuse = async (url: unknown) => {
+  requests.push(String(url));
+  throw new Error(`test tried to reach ${String(url)}`);
+};
+
+afterAll(() => { vi.unstubAllGlobals(); });
+
 beforeEach(() => {
+  vi.stubGlobal('fetch', refuse);
   // realpath: main.ts reads process.cwd(), which resolves a symlinked TMPDIR.
   folder = realpathSync(mkdtempSync(join(tmpdir(), 'codeep-launch-')));
   process.chdir(folder);
@@ -129,11 +166,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const watch of watches.splice(0)) watch.stop();
   vi.useRealTimers();
+  vi.stubGlobal('fetch', refuse);
   process.chdir(savedCwd);
   process.argv = savedArgv;
   vi.restoreAllMocks();
   rmSync(folder, { recursive: true, force: true });
+  expect(requests.splice(0), 'requests sent from a launch').toEqual([]);
 });
 
 describe('codeep --yolo', () => {
@@ -446,6 +486,113 @@ describe('the welcome block', () => {
     await launch('--yolo');
     expect(welcome()).toContain('Access   Read & Write');
     expect(welcome()).not.toContain('Chat only');
+  });
+
+  // Until 3.10.1 everything but the access stayed as it was at startup:
+  // /provider, /model, /agent, or `codeep account` in another terminal,
+  // showed only after a restart.
+  describe('follows the config', () => {
+    /** The config as a test found it, put back however the test ends. */
+    async function keep(...keys: string[]): Promise<() => void> {
+      const { config } = await import('../config/index');
+      const store = config as unknown as { get(key: string): unknown; set(key: string, value: unknown): void };
+      const saved = keys.map(key => [key, store.get(key)] as const);
+      return () => { for (const [key, value] of saved) store.set(key, value); };
+    }
+    const refreshes = () => called('updateWelcome').length;
+
+    it('changed by /provider and /model', async () => {
+      const restore = await keep('provider', 'model', 'protocol');
+      try {
+        const { config } = await launch('--yolo');
+        config.setProvider('openai');
+        await vi.waitFor(() => expect(welcome().split('\n')[0])
+          .toContain(`  ·  ${PROVIDERS.openai.name}  ·  ${PROVIDERS.openai.defaultModel}`));
+
+        config.config.set('model', 'a-model-picked-by-hand');
+        await vi.waitFor(() => expect(welcome().split('\n')[0])
+          .toContain(`  ·  ${PROVIDERS.openai.name}  ·  a-model-picked-by-hand`));
+      } finally {
+        restore();
+      }
+    });
+
+    it('changed by /agent', async () => {
+      const restore = await keep('agentMode');
+      try {
+        const { config: stored } = await import('../config/index');
+        stored.set('agentMode', 'off');
+        const { config } = await launch('--yolo');
+        expect(welcome()).not.toContain('Agent Mode ON');
+
+        config.config.set('agentMode', 'on');
+        await vi.waitFor(() => expect(welcome()).toContain('Agent Mode ON'));
+        config.config.set('agentMode', 'off');
+        await vi.waitFor(() => expect(welcome()).not.toContain('Agent Mode ON'));
+      } finally {
+        restore();
+      }
+    });
+
+    it('in its account line, which a sync token decides and not a GitHub id', async () => {
+      const restore = await keep('githubId', 'syncToken');
+      try {
+        const { config } = await launch('--yolo');
+        expect(welcome()).toContain('Account  not linked');
+
+        // An older link, which never got its token: `account sync` says "Not
+        // linked", so the welcome must too.
+        const before = refreshes();
+        config.config.set('githubId', '4242');
+        await vi.waitFor(() => expect(refreshes()).toBeGreaterThan(before));
+        expect(welcome()).toContain('Account  not linked');
+
+        config.config.set('syncToken', 'sync-token');
+        await vi.waitFor(() => expect(welcome()).toContain('Account  codeep.dev linked'));
+      } finally {
+        restore();
+      }
+    });
+
+    it('written by another process: `codeep account` in another terminal', async () => {
+      const restore = await keep('syncToken');
+      try {
+        await launch('--yolo');
+        expect(welcome()).toContain('Account  not linked');
+
+        // A Conf of its own on the same file, as another `codeep` has: a real
+        // atomic write, and no event in this process.
+        const other = new Conf<Record<string, unknown>>({ projectName: 'codeep', cwd: process.env.CODEEP_CONFIG_DIR });
+        other.set('syncToken', 'linked-in-another-terminal');
+        await vi.waitFor(() => expect(welcome()).toContain('Account  codeep.dev linked'), { timeout: 3000 });
+      } finally {
+        restore();
+      }
+    });
+
+    it('with reads alone, so a refresh never writes and never sets off another', async () => {
+      const restore = await keep('provider', 'model', 'protocol');
+      try {
+        const { config, set } = await launch('--yolo');
+        set.mockClear();
+
+        // A provider this version does not have, as another version can leave it.
+        config.config.set('provider', 'retired-provider');
+        await vi.waitFor(() => expect(welcome().split('\n')[0]).toContain('  ·  retired-provider  ·  '));
+        // getCurrentProvider() would have put the catalogue's first in its
+        // place: a write, from inside the refresh, that starts the next one.
+        expect(config.config.get('provider')).toBe('retired-provider');
+
+        // The status bar does make that repair, on its next frame. That is one
+        // more refresh, which writes nothing either.
+        (ui.options?.getStatus as () => unknown)();
+        await vi.waitFor(() => expect(welcome()).not.toContain('retired-provider'));
+        await new Promise(resolve => setTimeout(resolve, 400));
+        expect(set.mock.calls.map(([key]) => key as unknown)).toEqual(['provider', 'provider']);
+      } finally {
+        restore();
+      }
+    });
   });
 });
 

@@ -34,8 +34,12 @@ function openBrowser(url: string): void {
  * Full `codeep account` flow.
  * Registers a code, opens browser, polls until authorized.
  * Saves github_id + username to config on success.
+ *
+ * Resolves true once this machine is linked, so the caller can offer the
+ * first sync (utils/accountSync.ts) — and only then: after a timeout there is
+ * no token to sync with.
  */
-export async function runAccountFlow(): Promise<void> {
+export async function runAccountFlow(): Promise<boolean> {
   const code = randomBytes(24).toString('hex');
   const deviceId = getDeviceId();
   const deviceHostname = hostname();
@@ -55,7 +59,7 @@ export async function runAccountFlow(): Promise<void> {
 
   if (!registerOk) {
     console.error('\n  Could not reach codeep.dev. Check your internet connection.\n');
-    return;
+    return false;
   }
 
   // Say that the browser can be somewhere else, because it can and nothing
@@ -114,6 +118,7 @@ export async function runAccountFlow(): Promise<void> {
   if (!authorized) {
     console.log('\n\n  Timed out. Please run \'codeep account\' again.\n');
   }
+  return authorized;
 }
 
 // ─── Stats reporting ──────────────────────────────────────────────────────────

@@ -568,6 +568,12 @@ export async function executeAgentTask(
         completionLines.push(result.finalResponse);
         completionLines.push('');
       }
+      // The model wrote no summary (agent.ts, NO_SUMMARY_ANSWER): the steps
+      // and files below are all there is, so say that they are what it did.
+      if (result.endedWithoutSummary) {
+        completionLines.push('What it did is listed below.');
+        completionLines.push('');
+      }
       completionLines.push(`**Agent completed** in ${result.iterations} step(s)`);
       if (fileChanges.length > 0) {
         completionLines.push('');

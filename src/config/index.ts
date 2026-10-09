@@ -683,38 +683,62 @@ export const PROTOCOLS: Record<string, string> = {
  */
 export async function loadApiKey(providerId?: string): Promise<string> {
   const provider = providerId || config.get('provider');
-  const providerConfig = getProvider(provider);
-  
+
   // Check environment variable first
-  if (providerConfig?.envKey) {
-    const envKey = process.env[providerConfig.envKey];
-    if (envKey) {
-      apiKeyCache.set(provider, envKey);
-      return envKey;
-    }
+  const fromEnv = envApiKey(provider);
+  if (fromEnv) {
+    apiKeyCache.set(provider, fromEnv);
+    return fromEnv;
   }
-  
-  // Legacy env vars for z.ai
-  if (provider === 'z.ai') {
-    if (process.env.ZAI_API_KEY) {
-      apiKeyCache.set(provider, process.env.ZAI_API_KEY);
-      return process.env.ZAI_API_KEY;
-    }
-    if (process.env.ZHIPUAI_API_KEY) {
-      apiKeyCache.set(provider, process.env.ZHIPUAI_API_KEY);
-      return process.env.ZHIPUAI_API_KEY;
-    }
-  }
-  
-  // Secure storage (OS keychain). Migrate any legacy plaintext keys first.
-  await migrateKeysToSecureStorage();
-  const stored = await secureKeyStore().getApiKey(provider);
+
+  const stored = await loadStoredApiKey(provider);
   if (stored) {
     apiKeyCache.set(provider, stored);
     return stored;
   }
 
   return '';
+}
+
+/**
+ * A provider's key from the environment: its own variable, and for z.ai the
+ * legacy ZAI_API_KEY and ZHIPUAI_API_KEY too; '' when there is none. What
+ * loadApiKey reads first, and what `codeep account push` leaves out and names
+ * (utils/accountSync.ts) — from process.env, without a keychain read.
+ */
+export function envApiKey(providerId: string): string {
+  const envKey = getProvider(providerId)?.envKey;
+  if (envKey && process.env[envKey]) return process.env[envKey]!;
+  // Legacy env vars for z.ai
+  if (providerId === 'z.ai') return process.env.ZAI_API_KEY || process.env.ZHIPUAI_API_KEY || '';
+  return '';
+}
+
+/**
+ * The key stored on this machine for a provider — in the system keychain, or
+ * the plain-text config fallback — and never one from the environment. It is
+ * what loadApiKey falls back to after the environment variables, and it
+ * leaves the cache alone. `codeep account push` uploads only these
+ * (utils/accountSync.ts): a key a shell exports is the shell's, not this
+ * machine's to put on codeep.dev.
+ */
+export async function loadStoredApiKey(providerId: string): Promise<string> {
+  // Secure storage (OS keychain). Migrate any legacy plaintext keys first.
+  await migrateKeysToSecureStorage();
+  const key = await secureKeyStore().getApiKey(providerId);
+  // A string or nothing: the plain-text map answers a name like `constructor`
+  // with Object's own member.
+  return typeof key === 'string' ? key : '';
+}
+
+/**
+ * Whether keys go to the system keychain — false once Codeep has fallen back
+ * to the plain-text config, because there is no keychain or it refused a
+ * write. `codeep account sync` says so when the keys it stored went there.
+ */
+export async function keychainInUse(): Promise<boolean> {
+  const store = secureKeyStore();
+  return store.isKeychainAvailable ? store.isKeychainAvailable() : true;
 }
 
 /**

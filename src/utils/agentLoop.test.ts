@@ -107,7 +107,7 @@ vi.mock('./history', async (importOriginal) => {
   };
 });
 
-import { runAgent, resolveDelegateModel, type PermissionOutcome } from './agent';
+import { runAgent, resolveDelegateModel, NO_ANSWER_NUDGE, NO_SUMMARY_ANSWER, type PermissionOutcome } from './agent';
 import { config, getApiKey } from '../config/index';
 import { createSecureStorage } from './keychain';
 import { callSessionTool, callSessionVirtualTool } from './mcpRegistry';
@@ -1138,6 +1138,182 @@ describe('a turn that only called tools', () => {
     const second = chatCalls()[1];
     expect(second).toBeDefined();
     expect(second.messages.filter(m => m.content.trim() === '')).toEqual([]);
-    expect(second.messages.find(m => m.role === 'assistant')?.content).toBe('Using read_file.');
+    expect(second.messages.find(m => m.role === 'assistant')?.content).toBe('[tool call: read_file]');
+  });
+});
+
+// A run of 26 steps that wrote twenty files ended on "Using write_file.", and
+// its auto-review on "Using read_file.": the history kept every tool-only turn
+// as that line, and the model wrote it back as its last message.
+describe('a run whose last reply is no answer', () => {
+  const PLACEHOLDER = '[tool call: write_file]';
+  const writes = (n: number) => (call: ChatCall) => chatCalls().indexOf(call) < n;
+  /** n write_file turns, then whatever `then` answers for each later request. */
+  const writeTimesThen = (n: number, then: (k: number) => ChatResponse) => {
+    const first = writes(n);
+    setScript(call => (first(call)
+      ? use(['write_file', { path: `src/f${chatCalls().indexOf(call)}.ts`, content: 'x' }])
+      : then(chatCalls().indexOf(call) - n)));
+  };
+
+  it('nudges once with the placeholder message, and takes the summary that follows', async () => {
+    writeTimesThen(3, k => (k === 0 ? say(PLACEHOLDER) : say('Wrote three files; run npm test.')));
+
+    const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10 });
+
+    expect(chatCalls()).toHaveLength(5);
+    // What the model was sent for its tool turns, and after the echo.
+    const afterEcho = chatCalls()[4].messages;
+    expect(afterEcho.filter(m => m.role === 'assistant').map(m => m.content)).toEqual([PLACEHOLDER, PLACEHOLDER, PLACEHOLDER, PLACEHOLDER]);
+    expect(afterEcho.at(-1)).toEqual({ role: 'user', content: NO_ANSWER_NUDGE });
+    expect(afterEcho.at(-2)).toEqual({ role: 'assistant', content: PLACEHOLDER });
+    expect(result.success).toBe(true);
+    expect(result.finalResponse).toBe('Wrote three files; run npm test.');
+    expect(result.endedWithoutSummary).toBeUndefined();
+  });
+
+  for (const [label, reply] of [['the placeholder', PLACEHOLDER], ['an empty reply', ''], ['"(no reply)"', '(no reply)']] as const) {
+    it(`ends on a plain line, not ${label}, when the model never answers`, async () => {
+      writeTimesThen(2, () => say(reply));
+
+      const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10 });
+
+      // Two nudges, then no third.
+      expect(chatCalls()).toHaveLength(5);
+      expect(chatCalls().slice(3).map(c => c.messages.at(-1)?.content)).toEqual([NO_ANSWER_NUDGE, NO_ANSWER_NUDGE]);
+      expect(result.success).toBe(true);
+      expect(result.finalResponse).toBe(NO_SUMMARY_ANSWER);
+      expect(result.unstreamedText).toBe(NO_SUMMARY_ANSWER);
+      expect(result.endedWithoutSummary).toBe(true);
+      // The echo went back as what it is, each time right before the nudge.
+      const sent = chatCalls()[4].messages;
+      sent.forEach((m, i) => {
+        if (m.role === 'user' && m.content === NO_ANSWER_NUDGE) expect(sent[i - 1]).toEqual({ role: 'assistant', content: reply || '(no reply)' });
+      });
+    });
+  }
+
+  it('drops an echoed placeholder line from an answer, and takes the answer without a nudge', async () => {
+    writeTimesThen(1, () => say(`${PLACEHOLDER}\nDone: wrote index.php.`));
+
+    const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10 });
+
+    expect(chatCalls()).toHaveLength(2);
+    expect(result.finalResponse).toBe('Done: wrote index.php.');
+  });
+
+  it('drops it from a reply to a fix request as well', async () => {
+    h.verifyQueue = [[failing('build', [{ file: 'src/a.ts', severity: 'error', message: 'Type error' }])], [passing('build')]];
+    setScript(call => {
+      if (lastMessage(call).includes('Verification Errors')) return say('[tool call: edit_file]\nFixed the import.');
+      return chatCalls().length === 1 ? use(['write_file', { path: 'src/a.ts', content: 'x' }]) : say('Implemented.');
+    });
+
+    const result = await runAgent('x', ctx(), { autoVerify: 'build', maxFixAttempts: 2, maxIterations: 10 });
+
+    expect(result.finalResponse).toBe('Fixed the import.\n\n✓ Verification passed: 1/1 checks');
+  });
+
+  for (const answer of ['ready', '42', 'Using Redis.']) {
+    it(`takes a short answer as it is: ${JSON.stringify(answer)}`, async () => {
+      writeTimesThen(1, () => say(answer));
+
+      const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10 });
+
+      expect(chatCalls()).toHaveLength(2);
+      expect(result.finalResponse).toBe(answer);
+    });
+  }
+
+  it('still pauses at the step limit with nothing to answer', async () => {
+    for (const maxIterations of [2, 4]) {
+      h.calls = [];
+      writeTimesThen(1, () => say(''));
+
+      const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations });
+
+      expect(result.interrupted, `${maxIterations} steps`).toBe('iteration_limit');
+      expect(result.finalResponse).not.toContain(NO_SUMMARY_ANSWER);
+      expect(result.endedWithoutSummary).toBeUndefined();
+    }
+  });
+
+  it('gives the auto-review block a line of its own when the reviewer writes nothing', async () => {
+    config.set('agentAutoReview', true);
+    setScript(call => {
+      if (call.sub) return say('[tool call: read_file]');
+      return chatCalls().length === 1 ? use(['write_file', { path: 'src/a.ts', content: 'x' }]) : say('Implemented.');
+    });
+
+    const result = await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10 });
+
+    expect(result.finalResponse).toBe('Implemented.\n\n---\n### Auto-review (reviewer)\n(the reviewer finished without writing a review)');
+    expect(result.finalResponse).not.toContain('[tool call');
+  });
+
+  it('reports a delegated run with no summary as one, not with the line for the user', async () => {
+    setScript(call => {
+      if (call.sub) return say('');
+      if (!chatCalls().some(c => c.sub)) return use(['delegate', { task: 'look around' }]);
+      return say('Delegated.');
+    });
+
+    await runAgent('x', ctx(), { autoVerify: false, maxIterations: 10 });
+
+    const back = chatCalls().filter(c => !c.sub).at(-1)!;
+    expect(lastMessage(back)).toContain('[agent] (sub-agent finished without a summary)');
+    expect(lastMessage(back)).not.toContain(NO_SUMMARY_ANSWER);
+  });
+
+  it('keeps the answer when the model replies to a fix request with a placeholder', async () => {
+    h.verifyQueue = [[failing('build', [{ file: 'src/a.ts', severity: 'error', message: 'Type error' }])], [passing('build')]];
+    setScript(call => {
+      if (lastMessage(call).includes('Verification Errors')) return say('[tool call: edit_file]');
+      return chatCalls().length === 1 ? use(['write_file', { path: 'src/a.ts', content: 'x' }]) : say('Implemented.');
+    });
+
+    const result = await runAgent('x', ctx(), { autoVerify: 'build', maxFixAttempts: 2, maxIterations: 10 });
+
+    expect(result.finalResponse).toBe('Implemented.\n\n✓ Verification passed: 1/1 checks');
+  });
+
+  it('sends a fix turn that only called tools back as the placeholder, not empty', async () => {
+    // Empty, it is an empty non-final message to the next request — the 400
+    // assistantHistoryText exists to avoid — and the main loop never sent one.
+    const typeError = failing('build', [{ file: 'src/a.ts', severity: 'error', message: 'Type error' }]);
+    h.verifyQueue = [[typeError], [typeError], [passing('build')]];
+    let fixRequests = 0;
+    setScript(call => {
+      if (lastMessage(call).includes('Verification Errors')) {
+        fixRequests++;
+        return fixRequests === 1 ? use(['write_file', { path: 'src/a.ts', content: 'y' }]) : say('Fixed the type error.');
+      }
+      return chatCalls().length === 1 ? use(['write_file', { path: 'src/a.ts', content: 'x' }]) : say('Implemented.');
+    });
+
+    await runAgent('x', ctx(), { autoVerify: 'build', maxFixAttempts: 3, maxIterations: 10 });
+
+    const second = chatCalls().filter(c => lastMessage(c).includes('Verification Errors'))[1];
+    expect(second).toBeDefined();
+    expect(second.messages.filter(m => m.content.trim() === '')).toEqual([]);
+    const results = second.messages.findIndex(m => m.content.startsWith('Fix results:'));
+    expect(second.messages[results - 1]).toEqual({ role: 'assistant', content: PLACEHOLDER });
+  });
+
+  it('never sends the plain line back to the model as its own words', async () => {
+    h.verifyQueue = [[failing('build', [{ file: 'src/a.ts', severity: 'error', message: 'Type error' }])], [passing('build')]];
+    setScript(call => {
+      if (lastMessage(call).includes('Verification Errors')) return say('Fixed it.');
+      return chatCalls().length === 1 ? use(['write_file', { path: 'src/a.ts', content: 'x' }]) : say(PLACEHOLDER);
+    });
+
+    const result = await runAgent('x', ctx(), { autoVerify: 'build', maxFixAttempts: 2, maxIterations: 10 });
+
+    for (const call of chatCalls()) {
+      expect(call.messages.some(m => m.role === 'assistant' && m.content.includes(NO_SUMMARY_ANSWER))).toBe(false);
+    }
+    // The fix reply is an answer, and it replaces the line.
+    expect(result.finalResponse).toBe('Fixed it.\n\n✓ Verification passed: 1/1 checks');
+    expect(result.endedWithoutSummary).toBeUndefined();
   });
 });

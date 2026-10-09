@@ -966,6 +966,39 @@ describe('the provider a fresh session starts on', () => {
   });
 });
 
+// ─── /status ─────────────────────────────────────────────────────────────────
+
+// /account, `codeep account sync` and the welcome block call a machine linked
+// when it has a sync token. /status read the GitHub id, so a machine with an
+// older link that never got its token was "linked" here and "Not linked to
+// codeep.dev" to the sync.
+describe('/status and the account', () => {
+  const saved = { githubId: config.get('githubId'), syncToken: config.get('syncToken') };
+  afterEach(() => {
+    config.set('githubId', saved.githubId);
+    config.set('syncToken', saved.syncToken);
+  });
+  const accountLine = async () => {
+    const { ctx, messages } = makeCtx(projectDir);
+    await handleCommand('status', [], ctx);
+    return messages.map(m => m.content).join('\n').split('\n').find(line => line.startsWith('**Account**'));
+  };
+
+  it('says not linked for a GitHub id without a sync token', async () => {
+    config.set('githubId', '4242');
+    config.set('syncToken', '');
+    expect(await accountLine()).toBe('**Account**    not linked — run: codeep account');
+  });
+
+  it('says linked for a sync token, with the GitHub id when there is one', async () => {
+    config.set('syncToken', 'sync-token');
+    config.set('githubId', '4242');
+    expect(await accountLine()).toBe('**Account**    linked (4242)');
+    config.set('githubId', '');
+    expect(await accountLine()).toBe('**Account**    linked');
+  });
+});
+
 // ─── a profile loaded under --yolo ───────────────────────────────────────────
 
 describe('a profile loaded during a --yolo run', () => {

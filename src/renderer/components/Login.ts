@@ -270,7 +270,8 @@ function openUrl(url: string): void {
 export function renderProviderSelect(
   screen: Screen,
   providers: Array<{ id: string; name: string; description?: string }>,
-  selectedIndex: number
+  selectedIndex: number,
+  hint?: string,
 ): void {
   const { width, height } = screen.getSize();
 
@@ -354,8 +355,20 @@ export function renderProviderSelect(
     }
   }
 
-  // Footer
-  screen.write(2, footerY, '↑↓ Navigate · Enter Select · Esc skip (provider chosen later)', fg.gray);
+  // Footer. Esc ends setup ("Setup cancelled." in main.ts); it said "skip
+  // (provider chosen later)", which sent people to a later that never came.
+  screen.write(2, footerY, '↑↓ Navigate · Enter Select · Esc Cancel setup', fg.gray);
+
+  // The hint goes on the row between the box and the key hints, which the
+  // box never takes (it ends two rows above the footer), so the list keeps
+  // every row it had. Left out on a terminal too short for that row to be
+  // below the box and the subtitle; cut at the width, so a hint puts what
+  // matters first.
+  const hintY = footerY - 1;
+  if (hint && hintY > Math.max(3, boxY + boxHeight - 1)) {
+    const room = Math.max(1, width - 4);
+    screen.write(2, hintY, hint.length > room ? hint.slice(0, room - 1) + '…' : hint, fg.white);
+  }
 
   screen.showCursor(false);
   screen.fullRender();

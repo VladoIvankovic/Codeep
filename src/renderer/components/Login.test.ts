@@ -102,6 +102,75 @@ describe('the provider list', () => {
   });
 });
 
+// Esc ends setup — main.ts prints "Setup cancelled." and exits — and the
+// footer said "Esc skip (provider chosen later)", a later that never came.
+describe('the provider list footer', () => {
+  it('says that Esc cancels setup', () => {
+    const screen = screenOf(30);
+    renderProviderSelect(screen, PROVIDERS, 0);
+    const footer = rowsOf(screen)[28];
+    expect(footer).toContain('Esc Cancel setup');
+    expect(footer).not.toContain('chosen later');
+  });
+});
+
+// On a linked machine the list says where the keys already are: one more
+// line, which must not cost the list a row.
+describe('the provider list with a hint', () => {
+  const HINT = 'Keys on codeep.dev: codeep account sync --keys';
+
+  for (const height of [15, 20, 24, 30, 34, 40, 50]) {
+    for (const selected of [0, 11, 23]) {
+      it(`puts it above the key hints and moves nothing else at ${height} rows (selected ${selected})`, () => {
+        const screen = screenOf(height);
+        renderProviderSelect(screen, PROVIDERS, selected);
+        const without = rowsOf(screen);
+        renderProviderSelect(screen, PROVIDERS, selected, HINT);
+        const rows = rowsOf(screen);
+
+        expect(without[height - 3].trim()).toBe('');
+        expect(rows[height - 3].trim()).toBe(HINT);
+        for (let y = 0; y < height; y++) {
+          if (y !== height - 3) expect(rows[y], `row ${y}`).toBe(without[y]);
+        }
+        // Below the box, above the key hints.
+        const boxBottom = rows.reduce((last, row, y) => (row.includes('╰') ? y : last), -1);
+        expect(boxBottom).toBeGreaterThan(4);
+        expect(boxBottom).toBeLessThan(height - 3);
+        expect(rows[height - 2]).toContain('↑↓ Navigate');
+      });
+    }
+  }
+
+  it('shows the whole command at 50 columns', () => {
+    // At 50 the old wording ended "…run: code…".
+    const screen = screenOf(30, 50);
+    renderProviderSelect(screen, PROVIDERS, 0, HINT);
+    expect(rowsOf(screen)[27].trim()).toBe(HINT);
+  });
+
+  it('is cut to the width of a narrower terminal', () => {
+    const screen = screenOf(30, 40);
+    renderProviderSelect(screen, PROVIDERS, 0, HINT);
+    const row = rowsOf(screen)[27];
+    expect(row.trim()).toBe(HINT.slice(0, 35) + '…');
+    expect(row.trimEnd().length).toBeLessThanOrEqual(38);
+  });
+
+  it('is left out where there is no row for it, and the title stays', () => {
+    for (let height = 4; height < 15; height++) {
+      const screen = screenOf(height);
+      renderProviderSelect(screen, PROVIDERS, 5);
+      const without = rowsOf(screen);
+      renderProviderSelect(screen, PROVIDERS, 5, HINT);
+      const rows = rowsOf(screen);
+      expect(rows[1], `${height} rows`).toContain('Welcome to Codeep');
+      if (!rows.some(row => row.includes('Keys on codeep.dev'))) expect(rows).toEqual(without);
+      for (const step of undo.splice(0).reverse()) step();
+    }
+  });
+});
+
 describe('the API key screen', () => {
   const SAVE_ERROR = 'Could not save the API key (secure storage unavailable). Please try again.';
 

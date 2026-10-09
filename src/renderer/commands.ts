@@ -310,12 +310,15 @@ export async function handleCommand(
     }
 
     case 'status': {
-      const { getGithubId } = await import('../config/index.js');
+      const { getGithubId, getSyncToken } = await import('../config/index.js');
       const provider = getCurrentProvider();
       const providers = getProviderList();
       const providerInfo = providers.find(p => p.id === provider.id);
       const model = config.get('model') as string;
       const githubId = getGithubId();
+      // Linked means a sync token, as `/account`, `codeep account sync` and the
+      // welcome block decide it; the GitHub id is only what this shows of it.
+      const linked = Boolean(getSyncToken());
       const lines: string[] = ['## Status', ''];
       lines.push(`**Provider**   ${providerInfo?.name ?? provider.id}  ·  ${model}`);
       if (ctx.projectContext) {
@@ -327,7 +330,7 @@ export async function handleCommand(
       if (ctx.addedFiles.size > 0) {
         lines.push(`**Context**    ${ctx.addedFiles.size} file${ctx.addedFiles.size !== 1 ? 's' : ''} added`);
       }
-      lines.push(`**Account**    ${githubId ? `linked (${githubId})` : 'not linked — run: codeep account'}`);
+      lines.push(`**Account**    ${linked ? (githubId ? `linked (${githubId})` : 'linked') : 'not linked — run: codeep account'}`);
       lines.push(`**Session**    ${ctx.sessionId}`);
       ctx.app.addMessage({ role: 'system', content: lines.join('\n') } as Message);
       break;

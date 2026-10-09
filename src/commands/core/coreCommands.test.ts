@@ -16,7 +16,7 @@ vi.mock('../../config/index', () => ({
 }));
 
 import { telemetryCommand } from './telemetry';
-import { keysyncCommand } from './keysync';
+import { keysyncCommand, KEY_SYNC_ON, KEY_SYNC_DISCLOSURE } from './keysync';
 
 describe('core /telemetry', () => {
   beforeEach(() => {
@@ -88,6 +88,25 @@ describe('core /keysync', () => {
     const r = keysyncCommand(['on']);
     expect(configSet).toHaveBeenCalledWith('syncKeysToCloud', true);
     expect(r.message).toMatch(/server-readable/); // disclosure must always ride along
+  });
+
+  it('says what it said before 3.10.1, put together from the halves the shell shows', () => {
+    // `codeep account sync` prints the disclosure before it asks and the
+    // first half once key sync is on (utils/accountSync.ts).
+    const r = keysyncCommand(['on']);
+    expect(r.message).toBe('Cloud key sync on — `codeep account push`/`sync` will now upload/download API keys. Note: synced keys are stored server-readable on codeep.dev.');
+    expect(r.message).toBe(`${KEY_SYNC_ON} ${KEY_SYNC_DISCLOSURE}`);
+    expect(KEY_SYNC_DISCLOSURE).toMatch(/server-readable on codeep\.dev/);
+  });
+
+  it('says what it said before 3.10.1 when turned off and when asked', () => {
+    expect(keysyncCommand(['off']).message).toBe('Cloud key sync off — API keys stay in your OS keychain only. (`codeep account purge-keys` wipes any keys already on the server.)');
+    expect(keysyncCommand([]).message).toBe([
+      'Cloud key sync: off',
+      '- Config flag `syncKeysToCloud`: false',
+      '',
+      'OFF by default — API keys live only in your OS keychain unless enabled. When on, `codeep account push`/`sync` move keys, stored server-readable on codeep.dev.',
+    ].join('\n'));
   });
 
   it('turns sync off and mentions purge-keys', () => {

@@ -404,8 +404,10 @@ export class App {
 
   /**
    * Rewrite the welcome block, in place, when what it says has changed — the
-   * startup questions answered, or /grant. A transcript without one (a loaded
-   * session replaced it) is left alone.
+   * startup questions answered, /grant, or the config (main.ts follows it
+   * with configWatch.ts). The same content changes nothing, and a transcript
+   * without one (Ctrl+L cleared it, or a loaded session replaced it) is left
+   * alone.
    */
   updateWelcome(content: string): void {
     const index = this.messages.findIndex(m => m.role === 'welcome');

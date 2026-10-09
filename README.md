@@ -435,7 +435,7 @@ You write safe, reversible DB migrations…
 
 `tools` is an allowlist enforced at dispatch (a `researcher` literally can't write files). Sub-agents inherit your profile + project rules, and their changes are covered by `/undo`.
 
-**Guaranteed review:** enable **Agent Auto-Review** in `/settings` (`agentAutoReview`) and after any run that changes files, Codeep automatically delegates to the `reviewer` and appends its findings — a review stage that always happens. Off by default.
+**Guaranteed review:** enable **Agent Auto-Review** in `/settings` (`agentAutoReview`) and after any run that changes files, Codeep automatically delegates to the `reviewer` and appends its findings — a review stage that always happens; a reviewer that writes nothing is shown as "(the reviewer finished without writing a review)". Off by default.
 
 ### Project Rules
 Define project-specific instructions that the AI always follows. Create a rules file in your project root (first non-empty file wins):
@@ -984,14 +984,36 @@ codeep account   # Opens browser → sign in with GitHub → CLI is linked
 
 ### API key sync
 
-Add keys once on the dashboard, then sync them to any machine:
+API keys are opt-in: they stay in your OS keychain until you turn on cloud key
+sync, with `/keysync on` or from the shell. Synced keys are stored
+server-readable on codeep.dev — encrypted at rest using AES-256-GCM, with a key
+the server holds. Add keys once on the dashboard, then sync them to any machine:
 
 ```bash
-codeep account sync   # Pull keys + config from codeep.dev → local
-codeep account push   # Push local keys + config → codeep.dev
+codeep account sync --keys  # Turn on key sync and pull your keys — a new machine's first step
+codeep account sync         # Pull keys (when key sync is on) + config from codeep.dev → local
+codeep account push         # Push this machine's stored keys (when key sync is on) + config → codeep.dev
 ```
 
-Keys are encrypted at rest using AES-256-GCM.
+`--keys` shows the same note as `/keysync on` before turning it on, and key sync
+stays on afterwards. On a terminal, on a machine with no API key yet, `codeep
+account sync` without `--keys` asks first (No by default); a machine that
+already has a key, a script, a pipe and CI are never asked, only told the
+command to run. Keys pressed before a question appears never answer it, and
+Ctrl+C at a question cancels the sync with nothing pulled. After a pull on a
+terminal, or with `--keys`, if the provider Codeep would start on has no key
+(one in the environment counts), it switches to the first of the pulled keys'
+providers in the order `/provider` lists them, so the next `codeep` opens the
+chat rather than the provider picker. Without a system keychain the keys are
+stored in plain text in the config file, and the sync says so. `codeep account`
+offers this sync as soon as it has linked the machine.
+
+With key sync on, `codeep account push` uploads the API keys stored on this
+machine — in the system keychain, or the plain-text fallback — and never a key
+read from an environment variable; it names the providers it left out for that
+reason. `/keysync off` turns key sync off again, `codeep account purge-keys`
+deletes the keys stored on codeep.dev, and `CODEEP_NO_KEY_SYNC=1` keeps it off
+whatever the setting says.
 
 ### Personal config sync
 
@@ -1214,14 +1236,16 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 | `/tasks add <title>` | Create a new task on the dashboard |
 | `/tasks done <n>` | Mark task #n as done |
 | `/tasks delete <n>` | Delete task #n permanently |
+| `/keysync [on\|off]` | Show or switch syncing API keys to codeep.dev. Off by default: keys stay in your OS keychain, and synced keys are stored server-readable on codeep.dev. When on, `codeep account push` uploads the keys stored on this machine (never ones read from environment variables). From the shell: `codeep account sync --keys` |
 
 **CLI commands (outside chat):**
 
 | Command | Description |
 |---------|-------------|
 | `codeep account` | Link CLI to codeep.dev (GitHub OAuth) |
-| `codeep account sync` | Pull API keys + personalities + commands from codeep.dev → local |
-| `codeep account push` | Push local API keys + personalities + commands → codeep.dev |
+| `codeep account sync` | Pull personalities + commands + profile from codeep.dev → local, and API keys when cloud key sync is on (on a terminal, on a machine with no API key yet, it asks to turn it on) |
+| `codeep account sync --keys` | The same, turning cloud key sync on to pull your API keys — on a new machine, the step before the first `codeep` |
+| `codeep account push` | Push local personalities + commands + profile → codeep.dev, and, when cloud key sync is on, the API keys stored on this machine — never ones read from environment variables |
 | `codeep review [files…]` | Offline, deterministic code review for CI — markdown or `--json`, `--fail-on <error\|warning\|info\|none>` sets the exit code. No API key needed. |
 | `codeep -- <prompt>` | Start a new session and send `<prompt>` as its first message (also `-p <prompt>` / `--prompt <prompt>`). Everything after `--` is the prompt, so `codeep -- review` asks the model rather than running `codeep review`, and a leading `/` is sent as text, not run as a slash command. Startup's own questions come first: the project and access questions without `--yolo`, and with or without it, trusting a workspace's own MCP servers the first time. |
 | `codeep --yolo` | Start without stopping to ask, for this launch only — for launchers that open Codeep unattended (`codeep --yolo -- "<prompt>"`). Agent actions run without confirmation (Agent Confirmation: Never) and without clarifying questions first (Agent Interactive Mode: Off), the folder is used as the project with read & write access, and a new session starts. Neither the folder access nor these settings are saved: the next plain `codeep` asks as before (the conversation itself is saved as a session, as usual), and changing either setting in `/settings` (or loading a saved profile, for Agent Confirmation) ends `--yolo`'s hold on it. Writes the agent makes with its file tools to files that decide what runs later (`.git/config`, git hooks, MCP server lists) are still confirmed, but a shell command is not checked that way: under `--yolo` it runs without asking and can write those same files. A workspace's own MCP servers (`.mcp.json`) still ask to be trusted the first time, before the prompt is sent. The status bar shows **YOLO** while confirmations are off. |
@@ -1576,7 +1600,7 @@ Open the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`) and run:
 - **`Codeep: Review Current File`** — run `/review <file>` on the active editor.
 - **`Codeep: New Session`** — start a fresh session in the chat.
 
-If you already set up keys in the CLI (or via the [codeep.dev](https://codeep.dev/dashboard) dashboard + `codeep account sync`), the extension picks them up automatically on first launch — no welcome prompt.
+If you already set up keys in the CLI (or via the [codeep.dev](https://codeep.dev/dashboard) dashboard + `codeep account sync --keys`), the extension picks them up automatically on first launch — no welcome prompt.
 
 ### Live plan & reasoning stream
 

@@ -244,4 +244,24 @@ describe('the welcome block', () => {
     app.updateWelcome('Access   Read & Write');
     expect(messages().map(m => m.content)).toEqual(['Access   Read & Write', 'hi']);
   });
+
+  // It is rewritten after every config change now (configWatch.ts), most of
+  // which it does not show: a rewrite that says the same must cost nothing.
+  it('is left alone when it would say the same, and stays gone after Ctrl+L', () => {
+    const { app, send } = startApp();
+    const internals = app as unknown as { messages: Array<{ role: string; content: string }>; messageCache: unknown[] };
+    app.addMessage({ role: 'welcome', content: 'Account  codeep.dev linked' } as never);
+    // What the last frame drew of it, kept until its content changes.
+    internals.messageCache[0] = ['a rendered line'];
+    const render = vi.spyOn(app, 'scheduleRender');
+
+    app.updateWelcome('Account  codeep.dev linked');
+    expect(internals.messageCache[0]).toEqual(['a rendered line']);
+    expect(render).not.toHaveBeenCalled();
+
+    send('\x0c'); // Ctrl+L clears the chat, the welcome with it.
+    expect(internals.messages).toEqual([]);
+    app.updateWelcome('Account  not linked  ·  run: codeep account');
+    expect(internals.messages).toEqual([]);
+  });
 });

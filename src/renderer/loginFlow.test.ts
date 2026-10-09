@@ -13,7 +13,7 @@ import { resetPalette, setPalette } from './palette';
 
 const TEAL = '38;2;0;128;128';
 
-function startFlow(save: (key: string) => Promise<void> = async () => {}) {
+function startFlow(save: (key: string) => Promise<void> = async () => {}, hint?: string) {
   const writes: string[] = [];
   vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => { writes.push(String(chunk)); return true; });
   const screen = new Screen();
@@ -28,6 +28,7 @@ function startFlow(save: (key: string) => Promise<void> = async () => {}) {
     ],
     setProvider: vi.fn(),
     setApiKey,
+    hint,
     screen,
     input,
   });
@@ -87,6 +88,25 @@ describe('the provider picker', () => {
 
     input.feed('\x1b');
     await expect(result).resolves.toBeNull();
+  });
+
+  it('shows the hint it is given, through a redraw, and none otherwise', async () => {
+    // main.ts gives one on a machine linked to codeep.dev (utils/accountSync.ts).
+    const hint = 'Keys on codeep.dev: codeep account sync --keys';
+    const linked = startFlow(undefined, hint);
+    expect(linked.frame()).toContain(hint);
+    linked.fresh();
+    process.stdout.emit('resize');
+    expect(linked.frame()).toContain(hint);
+    linked.input.feed('\x1b');
+    await expect(linked.result).resolves.toBeNull();
+    vi.restoreAllMocks();
+
+    const plain = startFlow();
+    expect(plain.frame()).toContain('Welcome to Codeep');
+    expect(plain.frame()).not.toContain('codeep account sync');
+    plain.input.feed('\x1b');
+    await expect(plain.result).resolves.toBeNull();
   });
 
   it('stops listening once setup is over', async () => {

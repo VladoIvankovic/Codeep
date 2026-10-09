@@ -85,6 +85,20 @@ describe('runAgentSession — the end of the response', () => {
     expect(chunks).toEqual(['Reading the files first.', `\n\n${notice}`]);
   });
 
+  // The model streamed its placeholder echo; the line that replaced it as the
+  // answer was never streamed, and must still reach the editor.
+  it('sends the line for a run whose model wrote no summary after the echo it streamed', async () => {
+    // Only the line: the editor showed the run's tool calls above it.
+    const line = 'The model ended the run without writing a summary.';
+    agentReturns(['[tool call: write_file]'], {
+      success: true, iterations: 26, actions: [], endedWithoutSummary: true,
+      finalResponse: line,
+      unstreamedText: line,
+    });
+    await expect(start()).resolves.toBeUndefined();
+    expect(chunks).toEqual(['[tool call: write_file]', `\n\n${line}`]);
+  });
+
   it('sends nothing more when everything was streamed', async () => {
     agentReturns([SUMMARY], { success: true, iterations: 1, actions: [], finalResponse: SUMMARY, unstreamedText: '' });
     await start();

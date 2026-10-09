@@ -20,6 +20,7 @@ vi.mock('../config/index', async (importOriginal) => ({
 }));
 vi.mock('../utils/codeepCloud', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/codeepCloud')>()),
+  pullKeys: vi.fn(async () => ({})),
   pushPersonalities: vi.fn(),
   pushCommands: vi.fn(),
   pushUserProfileResult: vi.fn(),
@@ -28,19 +29,27 @@ vi.mock('../utils/codeepCloud', async (importOriginal) => ({
   pullUserProfileResult: vi.fn(),
   runAccountFlow: vi.fn(async () => { throw new Error('the interactive account flow must not run'); }),
 }));
+// The TUI's config watch, which no account command may start.
+vi.mock('./configWatch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./configWatch')>()),
+  watchConfig: vi.fn(() => ({ stop: () => {} })),
+}));
 
 import {
   pushPersonalities, pushCommands, pushUserProfileResult,
   pullPersonalities, pullCommands, pullUserProfileResult,
+  pullKeys, runAccountFlow,
 } from '../utils/codeepCloud';
+import { watchConfig } from './configWatch';
+import { KEY_SYNC_DISCLOSURE } from '../commands/core/keysync';
 
 class Exited extends Error {}
 
 let output: string[];
 const savedArgv = process.argv;
 
-/** Load main.ts as `codeep account <sub>` and return the exit code. */
-async function account(sub: 'push' | 'sync'): Promise<number | undefined> {
+/** Load main.ts as `codeep account <args…>` and return the exit code. */
+async function account(...args: string[]): Promise<number | undefined> {
   const codes: Array<number | undefined> = [];
   vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
     codes.push(code);
@@ -48,7 +57,7 @@ async function account(sub: 'push' | 'sync'): Promise<number | undefined> {
     // again; that one must not throw.
     if (codes.length === 1) throw new Exited();
   }) as never);
-  process.argv = ['node', 'codeep', 'account', sub];
+  process.argv = ['node', 'codeep', 'account', ...args];
   vi.resetModules();
   const { main } = await import('./main');
   await main().catch((err) => { if (!(err instanceof Exited)) throw err; });
@@ -134,5 +143,57 @@ describe('codeep account sync', () => {
 
     expect(await account('sync')).toBe(0);
     expect(output.join('\n')).not.toContain('profile');
+  });
+});
+
+// The worker's stdin and stdout are pipes, so none of these is a terminal:
+// nothing here is asked, and what a pipe is told is what is read back.
+describe('codeep account sync --keys', () => {
+  it('reaches the sync: the disclosure, key sync turned on, the keys pulled', async () => {
+    vi.stubEnv('CODEEP_NO_KEY_SYNC', '');
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.mocked(pullUserProfileResult).mockResolvedValue(nothing);
+    vi.mocked(pullKeys).mockClear();
+    const { config } = await import('../config/index');
+    try {
+      expect(await account('sync', '--keys')).toBe(0);
+      expect(output.join('\n')).toContain(`  ${KEY_SYNC_DISCLOSURE}`);
+      expect(pullKeys).toHaveBeenCalledTimes(1);
+      expect(config.get('syncKeysToCloud')).toBe(true);
+    } finally {
+      config.set('syncKeysToCloud', false);
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('codeep account', () => {
+  it('says what to run next once the machine is linked', async () => {
+    vi.mocked(runAccountFlow).mockResolvedValueOnce(true);
+    vi.mocked(pullPersonalities).mockClear();
+
+    expect(await account()).toBe(0);
+    expect(output.join('\n')).toContain('  Next: codeep account sync');
+    expect(pullPersonalities).not.toHaveBeenCalled();
+  });
+
+  it('offers nothing when the machine did not get linked', async () => {
+    vi.mocked(runAccountFlow).mockResolvedValueOnce(false);
+
+    expect(await account()).toBe(0);
+    expect(output.join('\n')).not.toContain('Next:');
+  });
+});
+
+describe('the config watch behind the welcome block', () => {
+  it('is not started by an account command', async () => {
+    vi.mocked(pullUserProfileResult).mockResolvedValue(nothing);
+    vi.mocked(pushUserProfileResult).mockResolvedValue(nothing);
+    vi.mocked(runAccountFlow).mockResolvedValueOnce(true);
+
+    await account('sync');
+    await account('push');
+    await account();
+    expect(watchConfig).not.toHaveBeenCalled();
   });
 });

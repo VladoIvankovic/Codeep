@@ -83,6 +83,7 @@ import { planTasks, formatTaskPlan, TaskPlan, SubTask } from './taskPlanner';
 import { getTaskContextPrompt } from './taskContext';
 import { getLastUsage, getModelContextWindow } from './tokenTracker';
 import { looksUnfinished } from './unfinishedReply';
+import { NO_REPLY, isNotAnAnswer, toolTurnPlaceholder, withoutPlaceholderLines } from './toolTurnPlaceholder';
 
 // ─── Notices given once per process ───────────────────────────────────────────
 
@@ -125,13 +126,30 @@ function truncateToolResult(output: string, toolName: string): string {
  * non-empty content except for the optional final assistant message").
  * agentChat turns that 400 into the text-tool fallback, which sends the same
  * history and fails the same way, so the run died on its second iteration.
- * Naming the tools keeps the turn truthful and non-empty.
+ * Naming the tools keeps the turn truthful and non-empty — in a form no
+ * answer takes (toolTurnPlaceholder.ts says what the old one led to).
  */
 export function assistantHistoryText(content: string, toolCalls: ReadonlyArray<{ tool: string }>): string {
   if (content.trim()) return content;
-  if (toolCalls.length > 0) return `Using ${[...new Set(toolCalls.map(t => t.tool))].join(', ')}.`;
-  return '(no reply)';
+  if (toolCalls.length > 0) return toolTurnPlaceholder(toolCalls);
+  return NO_REPLY;
 }
+
+/** What a model whose final reply was no answer — nothing, or the history's
+ *  placeholder echoed back — is told, in place of the "Continue. Execute the
+ *  tool calls now." a fragment gets: it may be done, and then the one thing
+ *  missing is the summary. */
+export const NO_ANSWER_NUDGE = 'Your last message was only a placeholder for a tool call, not an answer. If work remains, make the tool call now. If the work is done, reply with a short summary for the user: what you did, which files you changed, how to run or test it, and anything still open.';
+
+/** The answer of a run whose model never wrote one, even when asked: said
+ *  plainly. Nothing more, because what follows it differs: the chat lists the
+ *  run's steps and files under it (agentExecution.ts adds "What it did is
+ *  listed below."), an editor has shown the tool calls above it, and a
+ *  Telegram notice or progress.md lists nothing after it. */
+export const NO_SUMMARY_ANSWER = 'The model ended the run without writing a summary.';
+
+/** A delegated run's result when it wrote no summary. */
+const NO_SUB_AGENT_SUMMARY = '(sub-agent finished without a summary)';
 
 // ─── Context window compression ───────────────────────────────────────────────
 
@@ -414,6 +432,9 @@ export interface AgentResult {
   /** Commands of the verification checks that still failed when the run
    *  ended. Set only when that is why the run did not succeed. */
   failedChecks?: string[];
+  /** Set when the model never wrote an answer, even after being asked for
+   *  one: `finalResponse` then starts with NO_SUMMARY_ANSWER. */
+  endedWithoutSummary?: boolean;
   /**
    * The end of `finalResponse` that runAgent wrote itself instead of taking
    * it from the model's last reply: the verification passed / failed / could
@@ -824,6 +845,10 @@ export async function runAgent(
   let result: AgentResult | undefined;
   let consecutiveTimeouts = 0;
   let incompleteWorkRetries = 0;
+  // The model's last reply was no answer and it was out of nudges; the run
+  // ends on NO_SUMMARY_ANSWER unless the step limit pauses it first, or a
+  // reply during verification gives the answer after all.
+  let endedWithoutAnswer = false;
   // If the model claims completion but the task isn't actually done, we nudge it
   // once or twice. More retries than that usually means the model is stuck, not
   // that it needs a third chance — bail out instead of spamming identical hints.
@@ -916,7 +941,10 @@ export async function runAgent(
         onThinking: (t) => opts.onThinking?.(tag(t)),
         // No chatHistory → the sub-agent gets a fresh context window.
       });
-      const summary = sub.finalResponse?.trim() || '(sub-agent finished without a summary)';
+      // A sub-agent that wrote no summary ends on NO_SUMMARY_ANSWER, whose
+      // "listed below" means nothing to the model reading this result.
+      const reply = sub.endedWithoutSummary ? '' : (sub.finalResponse?.trim() ?? '');
+      const summary = isNotAnAnswer(reply) ? NO_SUB_AGENT_SUMMARY : reply;
       return { success: sub.success, output: `[${label}] ${summary}`, tool: 'delegate', parameters: toolCall.parameters };
     } catch (err) {
       return fail(`Sub-agent "${label}" failed: ${(err as Error).message}`);
@@ -1420,6 +1448,32 @@ export async function runAgent(
           .replace(/```(?:json|tool_call)?\s*\{[\s\S]*?\}\s*```/g, '') // Only strip tool-call-like code blocks
           .trim();
         
+        // A reply that is no answer: nothing at all, or the history's
+        // placeholder for a tool turn echoed back. A model that had seen two
+        // dozen of them ended a run on one, and it became the answer. Asked
+        // for the call or a summary, out of the same two nudges as a fragment;
+        // the echo goes back into the history as what it is, never kept as an
+        // answer. Out of nudges, the run ends on NO_SUMMARY_ANSWER (below the
+        // loop), not on the placeholder or on nothing. An echo above a real
+        // answer is dropped from it.
+        const reply = finalResponse;
+        finalResponse = withoutPlaceholderLines(reply);
+        if (isNotAnAnswer(finalResponse)) {
+          if (incompleteWorkRetries < maxIncompleteWorkRetries) {
+            incompleteWorkRetries++;
+            const echo: Message = { role: 'assistant', content: reply || NO_REPLY };
+            messages.push(echo);
+            if (native) responsesState.tagAssistant(echo, native);
+            messages.push({ role: 'user', content: NO_ANSWER_NUDGE });
+            finalResponse = '';
+            continue;
+          }
+          endedWithoutAnswer = true;
+          finalResponse = '';
+          incompleteWorkRetries = 0;
+          break;
+        }
+
         // Did the model announce work and stop without calling a tool? Only
         // structural, language-agnostic signals — see unfinishedReply.ts, which
         // also says why a short answer ("ready", "42", a path) is never nudged.
@@ -1556,6 +1610,10 @@ export async function runAgent(
       if (!opts.nested) writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);
       return result;
     }
+
+    // Never an empty answer, nor a placeholder: say plainly that there is
+    // none. Never streamed, so it travels in unstreamedText.
+    if (endedWithoutAnswer) appendToResponse(NO_SUMMARY_ANSWER);
     
     // Self-verification: Run build/test and fix errors if needed
     const autoVerifyRaw = opts.autoVerify ?? config.get('agentAutoVerify');
@@ -1677,7 +1735,8 @@ export async function runAgent(
             fixPrompt = `${errorMessage}\n\nAttempt ${fixAttempt}/${maxFixAttempts}: Your previous fix was partially successful but errors remain. Re-read ALL affected files and take a fresh look — consider whether there are related issues you missed.`;
           }
 
-          messages.push({ role: 'assistant', content: finalResponse });
+          // The model's own last words, which NO_SUMMARY_ANSWER is not.
+          messages.push({ role: 'assistant', content: endedWithoutAnswer ? NO_REPLY : finalResponse });
           messages.push({
             role: 'user',
             content: fixPrompt,
@@ -1703,14 +1762,21 @@ export async function runAgent(
             const { content: fixContent, toolCalls: fixToolCalls } = fixResponse;
             
             if (fixToolCalls.length === 0) {
-              // Agent gave up or thinks it's fixed
-              finalResponse = fixContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-              appended = '';
+              // Agent gave up or thinks it's fixed: its reply is the answer
+              // now — when it is one. Nothing, or a placeholder echoed back,
+              // would replace the answer the run has with no answer.
+              const fixReply = withoutPlaceholderLines(fixContent.replace(/<think>[\s\S]*?<\/think>/gi, ''));
+              if (!isNotAnAnswer(fixReply)) {
+                finalResponse = fixReply;
+                appended = '';
+                endedWithoutAnswer = false;
+              }
               continue; // Re-run verification
             }
             
-            // Execute fix tool calls
-            const fixTurn: Message = { role: 'assistant', content: fixContent };
+            // Execute fix tool calls. Never an empty turn: see
+            // assistantHistoryText, which the main loop's turns go through too.
+            const fixTurn: Message = { role: 'assistant', content: assistantHistoryText(fixContent, fixToolCalls) };
             messages.push(fixTurn);
             if (fixResponse.native) responsesState.tagAssistant(fixTurn, fixResponse.native);
             const fixResults: string[] = [];
@@ -1805,7 +1871,10 @@ export async function runAgent(
           parameters: { agent: 'reviewer', task: reviewTask },
         } as ToolCall);
         const body = (review.output || '').replace(/^\[reviewer\]\s*/, '').trim();
-        if (body) appendToResponse(`\n\n---\n### Auto-review (reviewer)\n${body}`);
+        // A reviewer that wrote nothing gets a line that says so, not the
+        // placeholder it may have echoed.
+        const text = body === NO_SUB_AGENT_SUMMARY ? '(the reviewer finished without writing a review)' : body;
+        if (text) appendToResponse(`\n\n---\n### Auto-review (reviewer)\n${text}`);
       } catch {
         // A failed review must never fail the run.
       }
@@ -1817,6 +1886,7 @@ export async function runAgent(
       actions,
       finalResponse,
       ...(verificationFailure ? { error: verificationFailure, failedChecks: stillFailing } : {}),
+      ...(endedWithoutAnswer ? { endedWithoutSummary: true } : {}),
       unstreamedText: appended.trim(),
     };
     if (!opts.nested) writeProgressLog(projectContext.root || '', prompt, result, projectContext.name);

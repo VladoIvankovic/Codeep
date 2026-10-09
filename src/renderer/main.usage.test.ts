@@ -74,6 +74,21 @@ vi.mock('../utils/mcpRegistry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/mcpRegistry')>()),
   registerSessionServers: vi.fn(async () => ({ registered: [], errors: [] })),
 }));
+// The config watch main() starts for the welcome block, kept so each test can
+// stop it: fs.watchFile outlives vi.resetModules(), so every launch would
+// leave one polling the config file for the rest of the run.
+const watches = vi.hoisted(() => [] as Array<{ stop(): void }>);
+vi.mock('./configWatch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./configWatch')>();
+  return {
+    ...actual,
+    watchConfig: (...args: Parameters<typeof actual.watchConfig>) => {
+      const watch = actual.watchConfig(...args);
+      watches.push(watch);
+      return watch;
+    },
+  };
+});
 // Whether this machine is Omarchy, as the Agents panel record asks it. Off
 // unless a test turns it on; the theme keeps asking the real question.
 const omarchy = vi.hoisted(() => ({ here: false }));
@@ -139,6 +154,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  for (const watch of watches.splice(0)) watch.stop();
   vi.useRealTimers();
   process.chdir(savedCwd);
   process.argv = savedArgv;

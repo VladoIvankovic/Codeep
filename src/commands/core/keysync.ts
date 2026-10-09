@@ -8,6 +8,17 @@
 import { config, keySyncForcedOffByEnv, isKeySyncEnabled } from '../../config/index';
 import { ok, warn, info, type CommandResult } from './index';
 
+/**
+ * What turning key sync on does, and the disclosure that goes with it — the
+ * two halves of what `/keysync on` says. Exported because `codeep account
+ * sync` turns it on too (utils/accountSync.ts), on a new machine where the
+ * TUI cannot start yet: it shows the disclosure before it asks or acts on
+ * --keys, and the first half once it is on. One wording in both places, so
+ * the shell never says it more softly than the TUI does.
+ */
+export const KEY_SYNC_ON = 'Cloud key sync on — `codeep account push`/`sync` will now upload/download API keys.';
+export const KEY_SYNC_DISCLOSURE = 'Note: synced keys are stored server-readable on codeep.dev.';
+
 export function keysyncCommand(args: string[]): CommandResult {
   const sub = args[0]?.toLowerCase();
   const envOff = keySyncForcedOffByEnv();
@@ -21,7 +32,7 @@ export function keysyncCommand(args: string[]): CommandResult {
     config.set('syncKeysToCloud', sub === 'on');
     return ok(
       sub === 'on'
-        ? 'Cloud key sync on — `codeep account push`/`sync` will now upload/download API keys. Note: synced keys are stored server-readable on codeep.dev.'
+        ? `${KEY_SYNC_ON} ${KEY_SYNC_DISCLOSURE}`
         : 'Cloud key sync off — API keys stay in your OS keychain only. (`codeep account purge-keys` wipes any keys already on the server.)',
     );
   }

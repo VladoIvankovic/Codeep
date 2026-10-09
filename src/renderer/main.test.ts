@@ -15,7 +15,7 @@ vi.mock('../utils/mcpRegistry', async (importOriginal) => ({
   registerSessionServers: vi.fn(async () => ({ registered: [], errors: [] })),
 }));
 
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { deriveSessionName, startTuiMcpServers, startTrustedWorkspaceMcp } from './main';
@@ -190,6 +190,91 @@ describe('exit paths', () => {
     const flush = body.indexOf('flushAutoSave()');
     expect(flush).toBeGreaterThan(body.indexOf('autoSaveSession('));
     expect(flush).toBeLessThan(body.indexOf('process.exit(1)'));
+  });
+});
+
+describe('the config watch behind the welcome block', () => {
+  it('starts with the TUI, after acp, review, hook and account have returned', () => {
+    // A server or a CI run has no welcome to rewrite, and a poll of its own
+    // on the config file is a cost it would pay for nothing.
+    const body = sliceFrom('export async function main(');
+    const start = body.indexOf('welcomeWatch = watchConfig(config, () => refreshWelcome());');
+    expect(start).toBeGreaterThan(-1);
+    for (const mode of ['review', 'hook', 'account', 'acp']) {
+      const branch = body.indexOf(`if (launch.kind === '${mode}')`);
+      expect(branch, mode).toBeGreaterThan(-1);
+      expect(start, mode).toBeGreaterThan(branch);
+    }
+    // After the refresh it calls is the real one: before, it is a no-op.
+    expect(start).toBeGreaterThan(body.indexOf('refreshWelcome = () => app.updateWelcome(currentWelcome());'));
+    expect(mainSource.match(/\bwatchConfig\(/g) ?? []).toHaveLength(1);
+  });
+
+  it('is stopped on exit, and in gracefulShutdown before the App', () => {
+    // A refresh landing after app.stop() would draw over the restored terminal.
+    expect(sliceFrom('export async function main(')).toContain("process.on('exit', () => welcomeWatch?.stop());");
+    const body = sliceFrom('async function gracefulShutdown(');
+    const stop = body.indexOf('welcomeWatch?.stop();');
+    expect(stop).toBeGreaterThan(-1);
+    expect(stop).toBeLessThan(body.indexOf('app.stop()'));
+  });
+});
+
+describe('the SIGINT handler', () => {
+  // gracefulShutdown is the TUI's way out. Registered for the whole process,
+  // it ran for `codeep account` too: Ctrl+C at "Waiting for GitHub login"
+  // wiped the screen and the scrollback, printed "Goodbye!" and exited 0 —
+  // and wrote the same into acp's JSON-RPC stream.
+  it('is registered only where the TUI starts, before the login screen', () => {
+    const mainBody = sliceFrom('export async function main(');
+    const outsideMain = mainSource.slice(0, mainSource.indexOf('export async function main('))
+      + mainSource.slice(mainSource.indexOf(mainBody) + mainBody.length);
+    expect(outsideMain).not.toContain("process.on('SIGINT'");
+    expect(mainBody.match(/process\.on\('SIGINT'/g) ?? []).toHaveLength(1);
+
+    const handler = mainBody.indexOf("process.on('SIGINT'");
+    for (const mode of ['review', 'hook', 'version', 'help', 'account', 'acp', 'error']) {
+      const branch = mainBody.indexOf(`if (launch.kind === '${mode}')`);
+      expect(branch, mode).toBeGreaterThan(-1);
+      expect(handler, mode).toBeGreaterThan(branch);
+    }
+    expect(handler).toBeLessThan(mainBody.indexOf('await showLoginFlow()'));
+    expect(handler).toBeLessThan(mainBody.indexOf('app = new App('));
+    expect(mainBody.slice(handler, handler + 120)).toContain('gracefulShutdown().finally(() => process.exit(0))');
+  });
+});
+
+describe('codeep account push', () => {
+  // Which keys may go up is decided in utils/accountSync.ts: those stored on
+  // this machine, never one from an environment variable. The push used to
+  // collect them here, from the key cache, which holds the environment's
+  // first; an inline copy back here would pass every test of the module.
+  it('sends API keys from the shared module only', () => {
+    const start = mainSource.indexOf("if (sub === 'push') {");
+    const branch = mainSource.slice(start, mainSource.indexOf("if (sub === 'purge-keys') {", start));
+    expect(branch).toContain('process.exit(await runAccountPush());');
+    expect(branch).not.toMatch(/\bgetApiKey\(|\bpushKeys\(/);
+  });
+
+  it('has one place in the source that calls pushKeys', () => {
+    const calls: string[] = [];
+    for (const name of readdirSync('src', { recursive: true }) as string[]) {
+      if (!name.endsWith('.ts') || name.endsWith('.test.ts')) continue;
+      const lines = readFileSync(join('src', name), 'utf-8').split('\n');
+      lines.forEach((line, i) => {
+        const code = line.trim();
+        if (code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) return;
+        if (/\bpushKeys\(/.test(code) && !code.startsWith('export async function pushKeys(')) calls.push(`${name}:${i + 1}`);
+      });
+    }
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatch(/^utils[\\/]accountSync\.ts:/);
+  });
+});
+
+describe('the first-run provider screen', () => {
+  it('gets the line that points a linked machine at its keys', () => {
+    expect(sliceFrom('async function showLoginFlow(')).toContain('hint: syncKeysLoginHint()');
   });
 });
 
