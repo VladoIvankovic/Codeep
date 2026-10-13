@@ -12,7 +12,7 @@ import { isAnthropicRefusalNotice } from '../api/anthropicContent';
 import { runAgent, AgentResult, PermissionOutcome } from '../utils/agent';
 import { TelegramApproval, outcomeForAnswer, describePermissionOutcome } from '../utils/telegramApproval';
 import { loadTelegramCredentials } from '../utils/telegramCredentials';
-import { composeRunMessages, noticeAnswer, sendTelegramNotice, shouldNotify } from '../utils/telegramNotify';
+import { composeRunMessages, noticeAnswer, sendTelegramNotice, shortLabel, shouldNotify } from '../utils/telegramNotify';
 import { takeRunFromPhone } from '../utils/telegramInbox';
 import { isFlatFeeProvider } from '../config/providers';
 import { raceApproval, type RaceParticipant } from '../utils/approvalRace';
@@ -30,6 +30,7 @@ import { getGitStatus, isGitRepository } from '../utils/git';
 import { getCostBreakdown, getRecordCount } from '../utils/tokenTracker';
 import { recordPromptInLedger } from '../utils/usageLedger';
 import { createFileDiff, createEditDiff, formatDiffForDisplay } from '../utils/diffPreview';
+import * as desktopAttention from './desktopAttention';
 
 export function getActionType(toolName: string): string {
   return toolName.includes('write') ? 'write' :
@@ -276,12 +277,25 @@ export function isDangerousTask(task: string): boolean {
   return DANGEROUS_TASK_KEYWORDS.some(k => lower.includes(k));
 }
 
+export interface ExecuteAgentTaskOptions {
+  /**
+   * What the desktop toast and the live status file call this run, for a task
+   * that is not text the user typed. A skill's agent step is built from the
+   * step before it, whose output is the model's reply or a command's output —
+   * words that must never reach a notification (Omarchy writes every toast to
+   * disk). Defaults to the task itself.
+   */
+  notifyLabel?: string;
+}
+
 export async function executeAgentTask(
   task: string,
   dryRun: boolean,
   ctx: AppExecutionContext,
+  opts: ExecuteAgentTaskOptions = {},
 ): Promise<AgentRunOutcome> {
   const { app, projectContext } = ctx;
+  const desktopLabel = opts.notifyLabel ?? task;
 
   if (!projectContext) {
     app.notify('Agent requires project context');
@@ -296,6 +310,10 @@ export async function executeAgentTask(
   ctx.setAgentRunning(true);
   const abortController = new AbortController();
   ctx.setAbortController(abortController);
+  // The run's own clock, taken before anything that awaits: the desktop toast
+  // says how long it took from here (the phone's, below, from after the
+  // credentials are read).
+  const runBegan = Date.now();
   // Read once, at the start: by the time the run ends the global id may name
   // another conversation.
   const sessionId = ctx.sessionId || getCurrentSessionId();
@@ -308,9 +326,26 @@ export async function executeAgentTask(
   const runMessage = { role: 'user' as const, content: prefix + task };
   app.addMessage(runMessage);
   app.setAgentRunning(true);
+  desktopAttention.runStarted(desktopLabel);
 
   const context = projectContext;
   let outcome: AgentRunOutcome = 'failed';
+  // What the run answered, for the toast: a model that declined says so as its
+  // whole answer, and a run that was declined did not finish.
+  let finalAnswer = '';
+  // The desktop hears how the run ended once. As soon as the result is in —
+  // not after the sync and the phone's notice below, which can take seconds
+  // of network — and from `finally` for a run that threw before it had one.
+  let desktopTold = false;
+  const tellDesktop = () => {
+    if (desktopTold) return;
+    desktopTold = true;
+    desktopAttention.runEnded({
+      task: desktopLabel,
+      finished: outcome === 'success' && !isAnthropicRefusalNotice(finalAnswer),
+      elapsedMs: Date.now() - runBegan,
+    });
+  };
 
   try {
     const fileContext = ctx.formatAddedFilesContext();
@@ -422,11 +457,21 @@ export async function executeAgentTask(
         };
       }
 
-      const { answer } = await raceApproval(
-        inTerminal,
-        onPhone,
-        outcome => describePermissionOutcome(outcome),
-      );
+      // The dialog is open (inTerminal made it above): the desktop is told,
+      // and says so itself in ten seconds if nobody has answered. Ended
+      // however this settles — here, on the phone, or by neither side being
+      // able to ask.
+      const stopWaiting = desktopAttention.waiting('approval', { task: desktopLabel, tool: toolCall.tool });
+      let answer: PermissionOutcome | null;
+      try {
+        ({ answer } = await raceApproval(
+          inTerminal,
+          onPhone,
+          outcome => describePermissionOutcome(outcome),
+        ));
+      } finally {
+        stopWaiting();
+      }
 
       // Nobody answered — neither side could even ask. `classifyPermissionOutcome`
       // fails closed on anything it does not recognise, and this is spelled
@@ -565,6 +610,8 @@ export async function executeAgentTask(
       : result.aborted ? 'aborted'
       : result.interrupted ? 'interrupted'
       : 'failed';
+    finalAnswer = result.finalResponse ?? '';
+    tellDesktop();
 
     if (result.success) {
       const fileChanges = result.actions.filter(a => a.type === 'write' || a.type === 'edit' || a.type === 'delete');
@@ -665,11 +712,6 @@ export async function executeAgentTask(
     // returned nothing. Everything downstream then fell back to the session id,
     // so a run reported itself to the dashboard, and announced itself on
     // Telegram, as "session-2026-09-02-ddc1f13c" instead of its task.
-    const shortLabel = (text: string) => {
-      const words = text.replace(/\s+/g, ' ').trim().split(' ').slice(0, 5).join(' ');
-      return words.length > 48 ? words.slice(0, 45) + '…' : words;
-    };
-
     // What THIS run was asked to do. The session name below is the first task's
     // and stays put, which is right for a session and wrong for one run inside
     // it: the second task in a session would otherwise announce itself on
@@ -776,6 +818,8 @@ export async function executeAgentTask(
     app.addMessage({ role: 'assistant', content: `Agent error: ${err.message}` });
     app.notify(`Agent error: ${err.message}`, 5000);
   } finally {
+    // A run that threw before it had a result.
+    tellDesktop();
     // Ensure cleanup even if an exception occurs (may already be false from success path)
     ctx.setAgentRunning(false);
     ctx.setAbortController(null);
@@ -888,7 +932,9 @@ export async function runSkill(
           }
           // A later step (commit, push, deploy) must not run after an agent
           // step that failed, was stopped or left checks failing.
-          executeAgentTask(task, false, ctx).then((outcome) => {
+          // Labelled by the skill, not by the step: the step's text carries
+          // the previous step's output (see ExecuteAgentTaskOptions).
+          executeAgentTask(task, false, ctx, { notifyLabel: `${skill.name} skill` }).then((outcome) => {
             if (outcome === 'success') {
               resolve('Agent completed');
             } else if (outcome === 'aborted') {

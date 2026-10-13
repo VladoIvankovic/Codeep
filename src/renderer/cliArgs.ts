@@ -12,6 +12,7 @@
  *
  *   codeep review [args…]       args[0] only — the rest is review's own
  *   codeep hook [args…]         args[0] only
+ *   codeep usage [args…]        args[0] only
  *   codeep … --version | -v     anywhere before `--`
  *   codeep … --help | -h        anywhere before `--`
  *   codeep account [sub]        args[0] only
@@ -26,6 +27,7 @@
 export type LaunchArgs =
   | { kind: 'review'; args: string[] }
   | { kind: 'hook'; args: string[] }
+  | { kind: 'usage'; args: string[] }
   | { kind: 'version' }
   | { kind: 'help' }
   | { kind: 'account'; args: string[] }
@@ -46,6 +48,7 @@ export function parseLaunchArgs(args: string[]): LaunchArgs {
   // review usage rather than the top-level help.
   if (args[0] === 'review') return { kind: 'review', args: args.slice(1) };
   if (args[0] === 'hook') return { kind: 'hook', args: args.slice(1) };
+  if (args[0] === 'usage') return { kind: 'usage', args: args.slice(1) };
 
   let version = false;
   let help = false;

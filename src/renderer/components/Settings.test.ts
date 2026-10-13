@@ -298,6 +298,18 @@ describe('the Omarchy row', () => {
   it('nor is the Agents panel row, which would have no panel to show Codeep in', () => {
     expect(SETTINGS.some(s => s.key === 'omarchyAgentsPanel')).toBe(false);
   });
+
+  it('nor is the live status row, which would have no plugin to read it', () => {
+    expect(SETTINGS.some(s => s.key === 'omarchyLiveStatus')).toBe(false);
+  });
+});
+
+describe('the desktop notifications row', () => {
+  // Offered where notify-send can be: Linux. Settings.desktopNotifications.test.ts
+  // covers what the row does, on every platform.
+  it.skipIf(process.platform === 'linux')('is not offered where there is no notify-send', () => {
+    expect(SETTINGS.some(s => s.key === 'desktopNotifications')).toBe(false);
+  });
 });
 
 describe('select options match the values they read back', () => {

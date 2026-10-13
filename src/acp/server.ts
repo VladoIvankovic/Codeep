@@ -830,7 +830,21 @@ export function authFailureNotice(err: Error, providerId: string, keyConfigured:
 /** Takes off the shutdown listeners the last startAcpServer() attached. */
 let removeShutdownHandlers: (() => void) | null = null;
 
-export function startAcpServer(transport: StdioTransport = new StdioTransport()): Promise<void> {
+/** What the host that starts the server can ask to hear about. */
+export interface AcpServerHooks {
+  /**
+   * A prompt is being run. `task` is what the user typed — never the files
+   * and selections the editor attached, which are file contents — and `cwd`
+   * the session's workspace. Returns what to call when it has ended, however
+   * it ended.
+   */
+  promptStarted?: (task: string, cwd: string | undefined) => () => void;
+}
+
+export function startAcpServer(
+  transport: StdioTransport = new StdioTransport(),
+  hooks: AcpServerHooks = {},
+): Promise<void> {
   // ACP sessionId → full AcpSession (includes history + codeep session tracking)
   const sessions = new Map<string, AcpServerSessionState>();
 
@@ -848,6 +862,20 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
   removeShutdownHandlers?.();
   removeShutdownHandlers = installShutdownHandlers(disposeAllMcpSessions);
 
+  /** Tells the host a prompt began, and returns what tells it that it ended. Never throws. */
+  const promptStarted = (req: JsonRpcRequest): (() => void) => {
+    try {
+      const params = req.params as SessionPromptParams | undefined;
+      const typed = Array.isArray(params?.prompt)
+        ? params.prompt.filter((b) => b?.type === 'text').map((b) => b.text ?? '').join(' ')
+        : '';
+      const cwd = params ? sessions.get(params.sessionId)?.workspaceRoot : undefined;
+      return hooks.promptStarted?.(typed, cwd) ?? (() => {});
+    } catch {
+      return () => {};
+    }
+  };
+
   // A handler that throws, or an async one that rejects, is answered with a
   // JSON-RPC error by the transport — so async handlers return their promise.
   transport.start((msg: JsonRpcRequest | JsonRpcNotification): Promise<void> | undefined => {
@@ -864,7 +892,12 @@ export function startAcpServer(transport: StdioTransport = new StdioTransport())
       case 'session/new':          handleSessionNew(req);           break;
       case 'session/load':         handleSessionLoad(req);          break;
       case 'session/resume':       handleSessionResume(req);        break;
-      case 'session/prompt':       return handleSessionPrompt(req);
+      case 'session/prompt': {
+        // Ended when the request is answered, which is when the run is over:
+        // handleSessionPrompt returns while the agent is still going.
+        transport.whenAnswered(req.id, promptStarted(req));
+        return handleSessionPrompt(req);
+      }
       case 'session/set_mode':     handleSetMode(req);              break;
       case 'session/set_config_option': handleSetConfigOption(req); break;
       case 'session/list':             handleSessionList(req);          break;

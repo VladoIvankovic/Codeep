@@ -53,6 +53,20 @@ vi.mock('../utils/telegramApproval', async (importOriginal) => {
   };
 });
 vi.mock('../utils/telegramInbox', () => ({ takeRunFromPhone: vi.fn(() => false) }));
+// What the run tells the desktop, recorded: the toasts and the status file
+// have their own tests (desktopNotify.test.ts, omarchyStatus.test.ts); here it
+// is the run's side of that conversation that is read.
+const desktop = vi.hoisted(() => ({ ends: [] as Array<() => void> }));
+vi.mock('./desktopAttention', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./desktopAttention')>()),
+  runStarted: vi.fn(),
+  runEnded: vi.fn(),
+  waiting: vi.fn(() => {
+    const end = vi.fn();
+    desktop.ends.push(end);
+    return end;
+  }),
+}));
 vi.mock('../utils/codeepCloud', () => ({
   reportStats: vi.fn(),
   syncSession: vi.fn(),
@@ -85,6 +99,7 @@ import { handleInlineConfirmKey, confirmFooter } from './handlers';
 import type { TrustBearingWrite } from '../utils/toolExecution';
 import type { ProjectContext } from '../utils/project';
 import { forgetSessionPermissions } from '../utils/permissionScope';
+import { runEnded, runStarted, waiting } from './desktopAttention';
 
 let root: string;
 let messages: Array<{ role: string; content: string }>;
@@ -406,6 +421,146 @@ describe('the Telegram message at the end of a terminal run', () => {
   });
 });
 
+describe('what the desktop is told', () => {
+  const result = (fields: Partial<Awaited<ReturnType<typeof runAgent>>>) =>
+    ({ success: true, iterations: 1, actions: [], finalResponse: 'done', ...fields }) as Awaited<ReturnType<typeof runAgent>>;
+
+  beforeEach(() => {
+    vi.mocked(runStarted).mockClear();
+    vi.mocked(runEnded).mockClear();
+    vi.mocked(waiting).mockClear();
+    desktop.ends.length = 0;
+  });
+
+  /** The clock moved on by `ms` while the run "runs". */
+  function runTakes(ms: number, fields: Partial<Awaited<ReturnType<typeof runAgent>>> = {}) {
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset);
+    vi.mocked(runAgent).mockImplementationOnce(async () => {
+      offset = ms;
+      return result(fields);
+    });
+    return clock;
+  }
+
+  it('hears that a run started, with the task as it was typed, before the model is asked', async () => {
+    vi.mocked(runAgent).mockResolvedValueOnce(result({}));
+    await executeAgentTask('fix the login bug in src/auth/login.ts', false, makeCtx());
+    expect(runStarted).toHaveBeenCalledTimes(1);
+    expect(runStarted).toHaveBeenCalledWith('fix the login bug in src/auth/login.ts');
+    expect(vi.mocked(runStarted).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(runAgent).mock.invocationCallOrder[0]);
+  });
+
+  it('hears once that it finished, and how long it took from before anything was awaited', async () => {
+    const clock = runTakes(61_000);
+    try {
+      await executeAgentTask('analyse the project', false, makeCtx());
+    } finally {
+      clock.mockRestore();
+    }
+    expect(runEnded).toHaveBeenCalledTimes(1);
+    expect(runEnded).toHaveBeenCalledWith({ task: 'analyse the project', finished: true, elapsedMs: expect.any(Number) });
+    const { elapsedMs } = vi.mocked(runEnded).mock.calls[0][0];
+    expect(elapsedMs).toBeGreaterThanOrEqual(61_000);
+    expect(elapsedMs).toBeLessThan(70_000);
+  });
+
+  it.each([
+    ['stopped by the user', { success: false, aborted: true }],
+    ['paused at a limit', { success: false, interrupted: 'iteration_limit' as const }],
+    ['failed', { success: false, error: 'boom' }],
+    // A refusal is the model's whole answer, as a success: it did not do the task.
+    ['declined by the model', { success: true, finalResponse: 'Claude declined this request (category: cyber).' }],
+  ])('hears that a run that was %s did not finish', async (_how, fields) => {
+    vi.mocked(runAgent).mockResolvedValueOnce(result(fields));
+    await executeAgentTask('go', false, makeCtx());
+    expect(runEnded).toHaveBeenCalledTimes(1);
+    expect(runEnded).toHaveBeenCalledWith(expect.objectContaining({ task: 'go', finished: false }));
+  });
+
+  it('hears that a run that threw did not finish, once', async () => {
+    vi.mocked(runAgent).mockRejectedValueOnce(new Error('network down'));
+    await executeAgentTask('go', false, makeCtx());
+    expect(runEnded).toHaveBeenCalledTimes(1);
+    expect(runEnded).toHaveBeenCalledWith(expect.objectContaining({ finished: false }));
+  });
+
+  it('hears that a run ended before the phone has been told, which takes a network', async () => {
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async () => { await held; return new Response('{"ok":true}', { status: 200 }); }));
+    vi.mocked(loadTelegramCredentials).mockResolvedValue({ botToken: 'bot', chatID: '42' });
+    const clock = runTakes(61_000);
+    try {
+      const running = executeAgentTask('analyse the project', false, makeCtx());
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+      // The phone's notice is in flight and the run's function has not returned.
+      expect(runEnded).toHaveBeenCalledTimes(1);
+      release();
+      await running;
+    } finally {
+      clock.mockRestore();
+      vi.mocked(loadTelegramCredentials).mockResolvedValue(null);
+      vi.unstubAllGlobals();
+    }
+    expect(runEnded).toHaveBeenCalledTimes(1);
+  });
+
+  it('hears nothing of a run that never started', async () => {
+    await executeAgentTask('go', false, makeCtx({ projectContext: null }));
+    expect(runStarted).not.toHaveBeenCalled();
+    expect(runEnded).not.toHaveBeenCalled();
+  });
+
+  it('is told an approval is waiting for as long as the dialog is open', async () => {
+    config.set('agentConfirmation', 'dangerous');
+    let answer: () => void = () => {};
+    const ctx = makeCtx();
+    (ctx.app as unknown as { showConfirm: unknown }).showConfirm = (o: { onConfirm: () => void }) => { answer = o.onConfirm; };
+    let outcome: unknown;
+    vi.mocked(runAgent).mockImplementation(async (_task, _context, opts) => {
+      const asked = opts?.onRequestPermission?.({ tool: 'execute_command', parameters: { command: 'rm', args: ['-rf', 'build'] } });
+      // The dialog is open: the desktop knows, and it has not been ended.
+      expect(waiting).toHaveBeenCalledTimes(1);
+      expect(desktop.ends).toHaveLength(1);
+      expect(desktop.ends[0]).not.toHaveBeenCalled();
+      answer();
+      outcome = await asked;
+      expect(desktop.ends[0]).toHaveBeenCalledTimes(1);
+      return result({});
+    });
+    await executeAgentTask('clean up the build', false, makeCtx({ app: ctx.app }));
+    expect(outcome).toBe('allow_once');
+    // The tool by its name, and the task: the toast shows the name and never
+    // what the command is.
+    expect(waiting).toHaveBeenCalledWith('approval', { task: 'clean up the build', tool: 'execute_command' });
+  });
+
+  it('is told an approval is over when it was refused, too', async () => {
+    config.set('agentConfirmation', 'dangerous');
+    const ctx = makeCtx();
+    (ctx.app as unknown as { showConfirm: unknown }).showConfirm = (o: { onCancel: () => void }) => o.onCancel();
+    vi.mocked(runAgent).mockImplementation(async (_task, _context, opts) => {
+      await opts?.onRequestPermission?.({ tool: 'delete_file', parameters: { path: 'a.txt' } });
+      return result({});
+    });
+    await executeAgentTask('go', false, makeCtx({ app: ctx.app }));
+    expect(desktop.ends).toHaveLength(1);
+    expect(desktop.ends[0]).toHaveBeenCalledTimes(1);
+  });
+
+  it('is told of no approval in a mode that asks about nothing', async () => {
+    config.set('agentConfirmation', 'never');
+    vi.mocked(runAgent).mockImplementation(async (_task, _context, opts) => {
+      await opts?.onRequestPermission?.({ tool: 'write_file', parameters: { path: 'a.txt', content: 'x' } });
+      return result({});
+    });
+    await executeAgentTask('go', false, makeCtx());
+    expect(waiting).not.toHaveBeenCalled();
+  });
+});
+
 describe('the confirmation for a dangerous tool', () => {
   it('shows the start of a long target, not only its end', async () => {
     config.set('agentConfirmation', 'dangerous');
@@ -687,6 +842,54 @@ describe('a skill whose prompt step is declined', () => {
     vi.mocked(chat).mockResolvedValueOnce('widget-layout');
     await runSkill('name-it', [], makeCtx());
     expect(existsSync(marker)).toBe(true);
+  });
+});
+
+describe('the desktop toast of a skill\'s agent step', () => {
+  beforeEach(() => {
+    vi.mocked(runStarted).mockClear();
+    vi.mocked(runEnded).mockClear();
+  });
+
+  it('is named by the skill, never by words of the step before it', async () => {
+    // A step's text carries ${_prev}: after a prompt step that is the model's
+    // reply, after a command step a command's output. Omarchy writes every
+    // toast to disk, so none of it may reach one.
+    writeCustomSkill('leaky', [
+      { type: 'prompt', content: 'explain the failure' },
+      { type: 'agent', content: '${_prev}\n\nApply the fix described above.' },
+    ]);
+    vi.mocked(chat).mockResolvedValueOnce('The login handler fails because the token expires early');
+    vi.mocked(runAgent).mockResolvedValueOnce({ success: true, iterations: 1, actions: [], finalResponse: 'fixed' });
+
+    await runSkill('leaky', [], makeCtx());
+
+    // The agent saw the model's words…
+    expect(vi.mocked(runAgent).mock.calls[0][0]).toContain('The login handler fails because the token expires early');
+    // …and the desktop heard only the skill's name.
+    expect(runStarted).toHaveBeenCalledTimes(1);
+    expect(runStarted).toHaveBeenCalledWith('leaky skill');
+    expect(runEnded).toHaveBeenCalledWith(expect.objectContaining({ task: 'leaky skill', finished: true }));
+  });
+
+  it('names an approval wait the same way', async () => {
+    writeCustomSkill('leaky', [
+      { type: 'prompt', content: 'explain the failure' },
+      { type: 'agent', content: '${_prev}\n\nApply the fix.' },
+    ]);
+    config.set('agentConfirmation', 'dangerous');
+    vi.mocked(waiting).mockClear();
+    vi.mocked(chat).mockResolvedValueOnce('password authentication failed for user admin');
+    vi.mocked(runAgent).mockImplementationOnce(async (_task, _context, opts) => {
+      await opts?.onRequestPermission?.({ tool: 'execute_command', parameters: { command: 'ls', args: [] } });
+      return { success: true, iterations: 1, actions: [], finalResponse: 'ok' };
+    });
+    const ctx = makeCtx();
+    (ctx.app as unknown as { showConfirm: unknown }).showConfirm = (o: { onConfirm: () => void }) => { o.onConfirm(); };
+
+    await runSkill('leaky', [], ctx);
+
+    expect(waiting).toHaveBeenCalledWith('approval', { task: 'leaky skill', tool: 'execute_command' });
   });
 });
 

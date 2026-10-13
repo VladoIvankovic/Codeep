@@ -113,6 +113,9 @@ export const COMMANDS: CommandDef[] = [
   // the switch — so /stats printed the /cost report and its own handler (per-
   // model breakdown, cache summary, pricing table) never ran.
   { name: 'stats', description: 'Detailed session view — per-model breakdown, cache, and pricing table', category: 'general' },
+  // The ledger, not the session: /cost and /stats are this run's tokens, this
+  // is what Codeep has used across runs, on the days it was used.
+  { name: 'usage', description: 'What Codeep used — today, the last 7 days, all time, by model', category: 'general', usage: ['--days N'] },
   { name: 'clear', description: 'Clear chat', category: 'general', hidden: true },
   { name: 'exit', description: 'Quit application', category: 'general', hidden: true },
 
@@ -422,6 +425,8 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
         web: 'Token usage and estimated cost this session, per provider and model, with prompt-cache savings' },
       { key: '/stats', description: 'Detailed view — per-model breakdown, cache, pricing table',
         web: 'Detailed session view — per-model breakdown, plan-aware totals, prompt-cache reads and writes, and the per-1M pricing table' },
+      { key: '/usage [--days N]', description: 'What Codeep used — today, 7 days, all time, by model',
+        web: 'What Codeep has used across sessions, from its local usage ledger — today, the last 7 days, all time and tokens by model, with the days listed for --days N. The same figures as `codeep usage` in the shell, which also prints JSON with --json' },
       { key: '/clear', description: 'Clear chat' },
       { key: '/exit', description: 'Quit application' },
     ],

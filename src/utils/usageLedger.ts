@@ -53,6 +53,19 @@ export interface ModelTokens {
   cacheCreationInputTokens: number;
 }
 
+/**
+ * What one local day holds: the figures `codeep usage` lists per day and sums
+ * for "today" and "this week". The sessions are kept as the hashes the ledger
+ * has, not as a count, because a session that spans two days is one session in
+ * the week and two in the sum of its days.
+ */
+export interface DayUsage {
+  prompts: number;
+  sessions: string[];
+  /** By model, under the ledger's own keys, as UsageSummary.modelUsage. */
+  models: Record<string, ModelTokens>;
+}
+
 export interface UsageSummary {
   totalPrompts: number;
   /** Distinct sessions (by the hash of their id), across every month. */
@@ -64,6 +77,13 @@ export interface UsageSummary {
   modelUsage: Record<string, ModelTokens>;
   /** The provider id of the most recent usage line; null before the first. */
   lastProvider: string | null;
+}
+
+/** The summary, and the same lines day by day. */
+export interface UsageReportData {
+  summary: UsageSummary;
+  /** Local `YYYY-MM-DD` → that day. Only days with at least one line. */
+  days: Map<string, DayUsage>;
 }
 
 // ─── Writing ─────────────────────────────────────────────────────────────────
@@ -210,6 +230,10 @@ interface MonthTotals {
   sessions: string[];
   dates: string[];
   models: Record<string, ModelTokens>;
+  /** The same lines by local day. A cache entry written before this field
+   *  existed has none, and is read again rather than taken for a month
+   *  without days. */
+  days: Record<string, DayUsage>;
   /** The month's most recent usage line. */
   last: { t: number; p: string } | null;
 }
@@ -221,6 +245,7 @@ interface CachedMonth extends MonthTotals {
 }
 
 const MONTH_FILE = /^\d{4}-\d{2}\.jsonl$/;
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const CACHE_FILE = 'cache.json';
 const CACHE_VERSION = 1;
 
@@ -236,6 +261,21 @@ const CACHE_VERSION = 1;
  * mid-write, an edit by hand) is skipped. Never throws.
  */
 export function readUsageSummary(options: { dir?: string; now?: number } = {}): UsageSummary {
+  return combine(loadMonths(options));
+}
+
+/**
+ * The same ledger as readUsageSummary, with its lines also kept by local day
+ * — what `codeep usage` is made of. One read serves both halves, and the
+ * closed-month cache holds the days too.
+ */
+export function readUsageReport(options: { dir?: string; now?: number } = {}): UsageReportData {
+  const months = loadMonths(options);
+  return { summary: combine(months), days: combineDays(months) };
+}
+
+/** Every month's totals, from the cache where it can be. Never throws. */
+function loadMonths(options: { dir?: string; now?: number }): MonthTotals[] {
   const months: MonthTotals[] = [];
   try {
     const dir = options.dir ?? usageLedgerDir();
@@ -286,7 +326,7 @@ export function readUsageSummary(options: { dir?: string; now?: number } = {}): 
   } catch (err) {
     debug('Usage ledger: could not read it:', err);
   }
-  return combine(months);
+  return months;
 }
 
 function totalMonth(text: string): MonthTotals {
@@ -294,22 +334,24 @@ function totalMonth(text: string): MonthTotals {
   const sessions = new Set<string>();
   const dates = new Set<string>();
   const models = new Map<string, ModelTokens>();
+  const days = new Map<string, DayBuckets>();
   let last: MonthTotals['last'] = null;
   for (const raw of text.split('\n')) {
     const line = parseLine(raw);
     if (!line) continue;
-    dates.add(localDate(line.t));
+    const date = localDate(line.t);
+    dates.add(date);
+    const day = days.get(date) ?? newDay();
+    days.set(date, day);
     if (line.k === 'p') {
       prompts++;
       sessions.add(line.s);
+      day.prompts++;
+      day.sessions.add(line.s);
       continue;
     }
-    const bucket = models.get(line.m) ?? emptyTokens();
-    bucket.inputTokens += line.in;
-    bucket.outputTokens += line.out;
-    bucket.cacheReadInputTokens += line.cr;
-    bucket.cacheCreationInputTokens += line.cw;
-    models.set(line.m, bucket);
+    addTokens(models, line.m, line);
+    addTokens(day.models, line.m, line);
     // Ties go to the later line: it was appended later.
     if (!last || line.t >= last.t) last = { t: line.t, p: line.p };
   }
@@ -318,8 +360,33 @@ function totalMonth(text: string): MonthTotals {
     sessions: [...sessions],
     dates: [...dates],
     models: Object.fromEntries(models),
+    days: Object.fromEntries([...days].map(([date, day]) => [date, {
+      prompts: day.prompts,
+      sessions: [...day.sessions],
+      models: Object.fromEntries(day.models),
+    }])),
     last,
   };
+}
+
+/** A day while its lines are being added up. */
+interface DayBuckets {
+  prompts: number;
+  sessions: Set<string>;
+  models: Map<string, ModelTokens>;
+}
+
+function newDay(): DayBuckets {
+  return { prompts: 0, sessions: new Set(), models: new Map() };
+}
+
+function addTokens(models: Map<string, ModelTokens>, model: string, line: UsageLine): void {
+  const bucket = models.get(model) ?? emptyTokens();
+  bucket.inputTokens += line.in;
+  bucket.outputTokens += line.out;
+  bucket.cacheReadInputTokens += line.cr;
+  bucket.cacheCreationInputTokens += line.cw;
+  models.set(model, bucket);
 }
 
 function combine(months: MonthTotals[]): UsageSummary {
@@ -353,6 +420,33 @@ function combine(months: MonthTotals[]): UsageSummary {
     modelUsage: Object.fromEntries(models),
     lastProvider: last?.p ?? null,
   };
+}
+
+function combineDays(months: MonthTotals[]): Map<string, DayUsage> {
+  const merged = new Map<string, DayBuckets>();
+  for (const month of months) {
+    for (const [date, day] of Object.entries(month.days)) {
+      // A day is in one month's file, so this only merges a ledger that was
+      // edited by hand or moved between machines.
+      const into = merged.get(date) ?? newDay();
+      merged.set(date, into);
+      into.prompts += day.prompts;
+      for (const session of day.sessions) into.sessions.add(session);
+      for (const [model, tokens] of Object.entries(day.models)) {
+        const bucket = into.models.get(model) ?? emptyTokens();
+        bucket.inputTokens += tokens.inputTokens;
+        bucket.outputTokens += tokens.outputTokens;
+        bucket.cacheReadInputTokens += tokens.cacheReadInputTokens;
+        bucket.cacheCreationInputTokens += tokens.cacheCreationInputTokens;
+        into.models.set(model, bucket);
+      }
+    }
+  }
+  return new Map([...merged].map(([date, day]) => [date, {
+    prompts: day.prompts,
+    sessions: [...day.sessions],
+    models: Object.fromEntries(day.models),
+  }]));
 }
 
 /** One line, or null when it is not a whole, well-formed event. */
@@ -416,6 +510,20 @@ function isCachedMonth(value: unknown): value is CachedMonth {
   }
   const last = month.last as Record<string, unknown> | null;
   if (last !== null && (!last || typeof last !== 'object' || typeof last.t !== 'number' || typeof last.p !== 'string')) return false;
+  // Missing in a cache written by 3.10.x: the month is read again, once, and
+  // the cache is written with its days.
+  if (!month.days || typeof month.days !== 'object' || Array.isArray(month.days)) return false;
+  for (const [date, entry] of Object.entries(month.days as Record<string, unknown>)) {
+    if (!DATE.test(date) || !entry || typeof entry !== 'object') return false;
+    const day = entry as Record<string, unknown>;
+    if (!isCount(day.prompts) || !isStrings(day.sessions)) return false;
+    if (!day.models || typeof day.models !== 'object' || Array.isArray(day.models)) return false;
+    for (const tokens of Object.values(day.models as Record<string, unknown>)) {
+      if (!tokens || typeof tokens !== 'object') return false;
+      const t = tokens as Record<string, unknown>;
+      if (![t.inputTokens, t.outputTokens, t.cacheReadInputTokens, t.cacheCreationInputTokens].every(isCount)) return false;
+    }
+  }
   return true;
 }
 
@@ -449,8 +557,8 @@ function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-/** `YYYY-MM-DD`, local. */
-function localDate(t: number): string {
+/** `YYYY-MM-DD`, local: the day a line is counted on. */
+export function localDate(t: number): string {
   const date = new Date(t);
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }

@@ -7,6 +7,8 @@ import { updateRateLimits } from '../../utils/ratelimit';
 import { pinAgentConfirmation, pinAgentInteractive } from '../agentConfirmation';
 import { isOmarchy, reapplyOmarchyTheme } from '../omarchyTheme';
 import { applyOmarchyAgentsPanel } from '../omarchyAgents';
+import { applyOmarchyLiveStatus } from '../omarchyStatus';
+import { desktopNotificationsEnabled, desktopNotificationsOffered } from '../desktopAttention';
 
 // Primary color: #f02a30 (Codeep red)
 
@@ -53,6 +55,19 @@ function writeSetting(setting: SettingItem, value: string | number | boolean): v
   // Likewise the panel: Off takes Codeep's record out now, and On puts it
   // back now rather than after the next model call.
   if (setting.key === 'omarchyAgentsPanel') applyOmarchyAgentsPanel(value === true);
+  // And the live status file an Omarchy plugin reads.
+  if (setting.key === 'omarchyLiveStatus') applyOmarchyLiveStatus(value === true);
+}
+
+/**
+ * A select's current value: what is stored, or — for a setting that may be
+ * unset and then decided by the machine — what the row shows. Taking only
+ * what is stored made an unset "Desktop notifications" look like it was on
+ * no option at all, so every key wrote the first one: On, which on Omarchy
+ * is what it already was.
+ */
+function currentOf(setting: SettingItem): unknown {
+  return config.get(setting.key) ?? setting.getValue();
 }
 
 /**
@@ -73,6 +88,32 @@ const OMARCHY_SETTINGS: SettingItem[] = isOmarchy() ? [{
   key: 'omarchyAgentsPanel',
   label: "Show in Omarchy's Agents panel",
   getValue: () => config.get('omarchyAgentsPanel') !== false,
+  type: 'select',
+  options: [
+    { value: true, label: 'On' },
+    { value: false, label: 'Off' },
+  ],
+}, {
+  key: 'omarchyLiveStatus',
+  label: 'Share live status with Omarchy plugins',
+  getValue: () => config.get('omarchyLiveStatus') !== false,
+  type: 'select',
+  options: [
+    { value: true, label: 'On' },
+    { value: false, label: 'Off' },
+  ],
+}] : [];
+
+/**
+ * The toast row, offered on Linux with `notify-send` on PATH — elsewhere it
+ * would switch nothing. Decided once, like the rows above. It shows what is in
+ * force, so an unset setting reads On on Omarchy and Off elsewhere; choosing
+ * either writes an explicit value.
+ */
+const NOTIFICATION_SETTINGS: SettingItem[] = desktopNotificationsOffered() ? [{
+  key: 'desktopNotifications',
+  label: 'Desktop notifications',
+  getValue: () => desktopNotificationsEnabled(),
   type: 'select',
   options: [
     { value: true, label: 'On' },
@@ -388,6 +429,7 @@ export const SETTINGS: SettingItem[] = [
       { value: true, label: 'On (push/sync to codeep.dev)' },
     ],
   },
+  ...NOTIFICATION_SETTINGS,
   ...OMARCHY_SETTINGS,
 ];
 
@@ -523,7 +565,7 @@ export function handleSettingsKey(
     }
     
     if (setting.type === 'select' && setting.options) {
-      const current = config.get(setting.key);
+      const current = currentOf(setting);
       const currentIdx = setting.options.findIndex(o => o.value === current);
       const newIdx = key === 'left'
         ? (currentIdx - 1 + setting.options.length) % setting.options.length
@@ -545,7 +587,7 @@ export function handleSettingsKey(
     }
 
     if (setting.type === 'select' && setting.options) {
-      const current = config.get(setting.key);
+      const current = currentOf(setting);
       const currentIdx = setting.options.findIndex(o => o.value === current);
       const newIdx = (currentIdx + 1) % setting.options.length;
       writeSetting(setting, setting.options[newIdx].value);

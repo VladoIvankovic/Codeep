@@ -476,10 +476,13 @@ Last full review: **2026-10-09**
   offered, and a map entry for an offered id would undo the user's pick at every
   launch (the rule under the update checklist; `providers.test.ts` checks it).
 
-  **Not live-tested.** No request has been sent to Haiku 5.5. The effort
-  parameter, the response floor, the omitted sampling fields, the refusal
-  notice and the tier maths rest on Anthropic's pages and OpenRouter's
-  catalogue (read 2026-10-09), not on a recorded response.
+  **Live-tested once, not recorded.** On 2026-10-09 the owner sent Haiku 5.5 a
+  request from the 3.10.2 build on Omarchy and it was answered, so the request
+  shape is accepted. Which effort tier it ran at, and whether any prompt went
+  over 100K tokens, was not written down: the effort parameter's values, the
+  response floor, the refusal notice and the tier maths still rest on
+  Anthropic's pages and OpenRouter's catalogue (read 2026-10-09), not on a
+  recorded response.
 - **Every Grok text model has a ≥200K tier**, not only 4.5/4.6: 4.7, 4.6, 4.5,
   build-0.1 and 4.3 all double once a prompt reaches 200K tokens. The higher rate
   then applies to **all** tokens in that request, not only those past 200K. Both

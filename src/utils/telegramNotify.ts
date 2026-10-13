@@ -27,6 +27,21 @@ export function shouldNotify(elapsedMs: number, enabled: boolean): boolean {
   return enabled && elapsedMs >= NOTIFY_AFTER_MS;
 }
 
+/**
+ * What a run is called in a notice: its first five words, cut at 48
+ * characters. The phone's head and the desktop toast (desktopNotify.ts) name a
+ * run the same way, so this is the one place that decides how.
+ *
+ * `keepWord` drops words before the first five are taken — the toast uses it
+ * to leave out file names and paths, which a cut applied afterwards would
+ * only half hide (`configurat…`). Without it this is exactly what the phone's
+ * head has always said.
+ */
+export function shortLabel(text: string, keepWord: (word: string) => boolean = () => true): string {
+  const words = text.replace(/\s+/g, ' ').trim().split(' ').filter(keepWord).slice(0, 5).join(' ');
+  return words.length > 48 ? words.slice(0, 45) + '…' : words;
+}
+
 /** `92s` / `4m 12s` / `1h 03m` — short enough to read on a lock screen. */
 export function formatDuration(ms: number): string {
   const seconds = Math.round(ms / 1000);

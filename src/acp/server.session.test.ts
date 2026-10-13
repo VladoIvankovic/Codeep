@@ -1669,3 +1669,84 @@ describe('a prompt refused with 401', () => {
     expect(chunkText()).toContain('No API key configured');
   });
 });
+
+// ─── What the host that started the server hears of a prompt ────────────────
+
+describe('the host\'s hook on a prompt', () => {
+  /** A server started again, now with hooks: the one beforeEach made is replaced. */
+  function startWithHooks(hooks: Parameters<typeof startAcpServer>[1]) {
+    client = new FakeClient();
+    void startAcpServer(client, hooks);
+    client.send_({ id: nextId++, method: 'initialize', params: { protocolVersion: 1, clientCapabilities: {} } });
+  }
+
+  it('hears what the user typed — not the files the editor attached — and where, until the prompt ends', async () => {
+    const ended = vi.fn();
+    const promptStarted = vi.fn(() => ended);
+    startWithHooks({ promptStarted });
+    const runs = deferredRuns();
+    const sessionId = await newSession();
+
+    const id = nextId++;
+    client.send_({ id, method: 'session/prompt', params: { sessionId, prompt: [
+      { type: 'text', text: 'explain' },
+      { type: 'resource', resource: { uri: 'file:///work/keys.ts', text: 'export const SECRET = "hunter2"' } },
+      { type: 'text', text: 'this file' },
+    ] } });
+    await vi.waitFor(() => expect(runs).toHaveLength(1));
+    expect(promptStarted).toHaveBeenCalledTimes(1);
+    expect(promptStarted).toHaveBeenCalledWith('explain this file', ws);
+    expect(JSON.stringify(promptStarted.mock.calls)).not.toContain('hunter2');
+    expect(ended).not.toHaveBeenCalled();
+
+    runs[0].finish();
+    await client.waitForResponse(id);
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledTimes(1));
+  });
+
+  it('hears that a prompt that failed has ended', async () => {
+    const ended = vi.fn();
+    startWithHooks({ promptStarted: () => ended });
+    vi.mocked(runAgentSession).mockRejectedValue(new Error('provider fell over'));
+    const sessionId = await newSession();
+    const id = prompt(sessionId, 'hello');
+    await client.waitForResponse(id);
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledTimes(1));
+  });
+
+  it('hears that a prompt that was refused before it ran has ended', async () => {
+    const ended = vi.fn();
+    const promptStarted = vi.fn(() => ended);
+    startWithHooks({ promptStarted });
+    const sessionId = await newSession();
+    const id = nextId++;
+    client.send_({ id, method: 'session/prompt', params: { sessionId } }); // no prompt blocks
+    expect((await client.waitForResponse(id)).error?.code).toBe(-32603);
+    expect(promptStarted).toHaveBeenCalledWith('', ws);
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledTimes(1));
+  });
+
+  it('hears that a prompt that went to the vision model has ended', async () => {
+    const ended = vi.fn();
+    startWithHooks({ promptStarted: () => ended });
+    const sessionId = await newSession();
+    const id = nextId++;
+    client.send_({ id, method: 'session/prompt', params: { sessionId, prompt: [
+      { type: 'text', text: 'what is in this screenshot?' },
+      { type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' },
+    ] } });
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledTimes(1));
+  });
+
+  it('is not allowed to break a prompt', async () => {
+    startWithHooks({ promptStarted: () => { throw new Error('the status file is on fire'); } });
+    const sessionId = await newSession();
+    const id = prompt(sessionId, 'hello');
+    expect((await client.waitForResponse(id)).result).toEqual({ stopReason: 'end_turn' });
+  });
+
+  it('runs fine with no host at all', async () => {
+    const sessionId = await newSession();
+    expect((await client.waitForResponse(prompt(sessionId, 'hello'))).result).toEqual({ stopReason: 'end_turn' });
+  });
+});

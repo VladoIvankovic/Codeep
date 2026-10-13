@@ -137,6 +137,46 @@ describe('/learn rule', () => {
   });
 });
 
+// ─── /usage ──────────────────────────────────────────────────────────────────
+
+describe('/usage', () => {
+  const ledger = () => join(tempHome, '.codeep', 'usage');
+
+  beforeEach(() => { rmSync(ledger(), { recursive: true, force: true }); });
+  afterEach(() => { rmSync(ledger(), { recursive: true, force: true }); });
+
+  it('shows what the ledger holds as a table, fenced so the columns stay put', async () => {
+    const { recordPromptInLedger, recordUsageInLedger } = await import('../utils/usageLedger');
+    recordPromptInLedger('a-session', 'tui');
+    recordUsageInLedger({ promptTokens: 1000, completionTokens: 500, totalTokens: 1500 }, 'glm-5.3', 'z.ai');
+    const { ctx, messages, notices } = makeCtx(projectDir);
+    await handleCommand('usage', [], ctx);
+    expect(notices).toEqual([]);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe('system');
+    expect(messages[0].content.startsWith('```\nCodeep usage — ')).toBe(true);
+    expect(messages[0].content.endsWith('\n```')).toBe(true);
+    expect(messages[0].content).toMatch(/Today\s+1\s+1\s+1\.5K/);
+    expect(messages[0].content).toContain('glm-5.3');
+    // Without --days: the summary only, no list of days under a heading.
+    expect(messages[0].content).not.toMatch(/^Last \d+ days$/m);
+  });
+
+  it('lists the days for --days N', async () => {
+    const { ctx, messages } = makeCtx(projectDir);
+    await handleCommand('usage', ['--days', '3'], ctx);
+    expect(messages[0].content).toContain('Last 3 days');
+    expect(messages[0].content.match(/\d{4}-\d{2}-\d{2}\s+0 prompts/g)).toHaveLength(3);
+  });
+
+  it('says what is wrong with an argument it does not take, and shows nothing', async () => {
+    const { ctx, messages, notices } = makeCtx(projectDir);
+    await handleCommand('usage', ['--days', '0'], ctx);
+    expect(messages).toEqual([]);
+    expect(notices).toEqual(['--days needs a whole number from 1 to 366']);
+  });
+});
+
 // ─── /apply ──────────────────────────────────────────────────────────────────
 
 // "Apply Changes" answers on one key: you asked for the changes and they are

@@ -289,6 +289,56 @@ describe('the Omarchy Agents panel record', () => {
   });
 });
 
+describe('what the terminal says to the desktop', () => {
+  const body = () => sliceFrom('export async function main(');
+
+  it('runs `codeep usage` beside review and hook, before anything asks for a key', () => {
+    const main = body();
+    const usage = main.indexOf("if (launch.kind === 'usage')");
+    expect(usage).toBeGreaterThan(main.indexOf("if (launch.kind === 'hook')"));
+    expect(usage).toBeLessThan(main.indexOf("if (launch.kind === 'version')"));
+    expect(usage).toBeLessThan(main.indexOf('await loadAllApiKeys()'));
+    expect(main.slice(usage, main.indexOf('\n  }\n', usage))).toMatch(/process\.exit\(await runUsageCommand\(launch\.args\)\)/);
+  });
+
+  it('starts the live status where the TUI starts, and an ACP server\'s where that starts', () => {
+    const main = body();
+    const tui = main.indexOf("startOmarchyLiveStatus({\n    kind: 'tui',");
+    expect(tui).toBeGreaterThan(main.indexOf("if (launch.kind === 'error')"));
+    expect(tui).toBeLessThan(main.indexOf('await loadAllApiKeys();', tui - 1));
+    expect(main).toContain("enabled: () => config.get('omarchyLiveStatus') !== false,");
+
+    const acpBranch = main.indexOf("if (launch.kind === 'acp')");
+    const acp = main.indexOf("startOmarchyLiveStatus({\n      kind: 'acp',", acpBranch);
+    expect(acp).toBeGreaterThan(acpBranch);
+    expect(acp).toBeLessThan(main.indexOf('await startAcpServer(', acpBranch));
+    expect(main).toContain('promptStarted: (task, cwd) => trackLiveWork(task, cwd)');
+  });
+
+  it('keeps the question the agent put before a run in one place, which tells the desktop', () => {
+    const setter = sliceFrom('function setPendingInteractive(');
+    expect(setter).toMatch(/desktopAttention\.waiting\('question', \{ task: pending\.originalTask \}\)/);
+    expect(setter).toMatch(/endQuestionWait\?\.\(\)/);
+    // Every way the question is set or cleared goes through it.
+    expect(mainSource).not.toMatch(/pendingInteractiveContext = (?!pending;)/);
+    expect(sliceFrom('async function handleSubmit(')).toMatch(/setPendingInteractive\(null\)/);
+    expect(mainSource).toMatch(/\(\) => pendingInteractiveContext,\s+setPendingInteractive,/);
+  });
+});
+
+describe('an ACP server', () => {
+  it('has no way to toast: nothing under src/acp reaches the desktop notifier', () => {
+    // The editor has its own UI for "waiting for you". The status file is
+    // the one thing it writes, and it is handed in by main.ts.
+    const sources = readdirSync('src/acp').filter(name => name.endsWith('.ts') && !name.endsWith('.test.ts'));
+    expect(sources.length).toBeGreaterThan(3);
+    for (const name of sources) {
+      const code = readFileSync(join('src/acp', name), 'utf-8');
+      expect(code, name).not.toMatch(/desktopNotify|desktopAttention|notify-send/);
+    }
+  });
+});
+
 describe('deriveSessionName', () => {
   it('returns an empty string for blank input', () => {
     expect(deriveSessionName('')).toBe('');

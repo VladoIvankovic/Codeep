@@ -32,6 +32,13 @@ describe('parseLaunchArgs — the subcommands that were there before', () => {
     expect(parseLaunchArgs(['acp', '-v'])).toEqual({ kind: 'version' });
   });
 
+  it('hands usage everything after its name, and lets it answer its own --help', () => {
+    expect(parseLaunchArgs(['usage'])).toEqual({ kind: 'usage', args: [] });
+    expect(parseLaunchArgs(['usage', '--json', '--days', '30'])).toEqual({ kind: 'usage', args: ['--json', '--days', '30'] });
+    expect(parseLaunchArgs(['usage', '--help'])).toEqual({ kind: 'usage', args: ['--help'] });
+    expect(parseLaunchArgs(['usage', '-v'])).toEqual({ kind: 'usage', args: ['-v'] });
+  });
+
   it('hands account its subcommand', () => {
     expect(parseLaunchArgs(['account'])).toEqual({ kind: 'account', args: [] });
     expect(parseLaunchArgs(['account', 'sync'])).toEqual({ kind: 'account', args: ['sync'] });
@@ -47,6 +54,7 @@ describe('parseLaunchArgs — the subcommands that were there before', () => {
   it('only takes a subcommand from the first word', () => {
     expect(parseLaunchArgs(['--yolo', 'review'])).toEqual(chat(true, null));
     expect(parseLaunchArgs(['--yolo', 'account', 'sync'])).toEqual(chat(true, null));
+    expect(parseLaunchArgs(['--yolo', 'usage'])).toEqual(chat(true, null));
   });
 
   it('ignores unknown flags and stray words, as it always has', () => {
@@ -97,6 +105,9 @@ describe('parseLaunchArgs — the launch prompt', () => {
     expect(parseLaunchArgs(['--', 'hook', 'install'])).toEqual(chat(false, 'hook install'));
     expect(parseLaunchArgs(['--', 'account', 'purge-keys'])).toEqual(chat(false, 'account purge-keys'));
     expect(parseLaunchArgs(['--', 'acp'])).toEqual(chat(false, 'acp'));
+    expect(parseLaunchArgs(['--', 'usage'])).toEqual(chat(false, 'usage'));
+    expect(parseLaunchArgs(['--yolo', '--', 'usage', '--json'])).toEqual(chat(true, 'usage --json'));
+    expect(parseLaunchArgs(['-p', 'usage'])).toEqual(chat(false, 'usage'));
     expect(parseLaunchArgs(['-p', 'review'])).toEqual(chat(false, 'review'));
   });
 

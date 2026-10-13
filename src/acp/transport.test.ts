@@ -271,6 +271,75 @@ describe('StdioTransport — failing handlers', () => {
   });
 });
 
+describe('StdioTransport — hearing that a request was answered', () => {
+  const quiet = () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  };
+
+  it('runs the hook once the result is sent, and only then', () => {
+    quiet();
+    const answered = vi.fn();
+    const t = new StdioTransport();
+    (t as unknown as { handler: unknown }).handler = (msg: { id: number }) => { t.whenAnswered(msg.id, answered); };
+    feed(t, '{"jsonrpc":"2.0","id":7,"method":"session/prompt"}\n');
+    expect(answered).not.toHaveBeenCalled();
+    // A notification, and somebody else's response, are not the answer.
+    t.notify('session/update', {});
+    t.respond(8, {});
+    expect(answered).not.toHaveBeenCalled();
+    t.respond(7, { stopReason: 'end_turn' });
+    expect(answered).toHaveBeenCalledTimes(1);
+    t.respond(7, { stopReason: 'end_turn' });
+    expect(answered).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs it for an error as well', () => {
+    quiet();
+    const answered = vi.fn();
+    const t = new StdioTransport();
+    (t as unknown as { handler: unknown }).handler = () => {};
+    feed(t, '{"jsonrpc":"2.0","id":"p","method":"session/prompt"}\n');
+    t.whenAnswered('p', answered);
+    t.error('p', -32000, 'it failed');
+    expect(answered).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs it for the error the transport sends for a handler that failed', async () => {
+    quiet();
+    const answered = vi.fn();
+    const t = new StdioTransport();
+    (t as unknown as { handler: unknown }).handler = (msg: { id: number }) => {
+      t.whenAnswered(msg.id, answered);
+      return Promise.reject(new Error('boom'));
+    };
+    feed(t, '{"jsonrpc":"2.0","id":9,"method":"session/prompt"}\n');
+    await vi.waitFor(() => expect(answered).toHaveBeenCalledTimes(1));
+  });
+
+  it('runs it at once for a request that has already been answered', () => {
+    quiet();
+    const answered = vi.fn();
+    const t = new StdioTransport();
+    (t as unknown as { handler: unknown }).handler = () => {};
+    feed(t, '{"jsonrpc":"2.0","id":1,"method":"x"}\n');
+    t.respond(1, {});
+    t.whenAnswered(1, answered);
+    expect(answered).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not made to fail a response by a hook that throws', () => {
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const t = new StdioTransport();
+    (t as unknown as { handler: unknown }).handler = () => {};
+    feed(t, '{"jsonrpc":"2.0","id":1,"method":"x"}\n');
+    t.whenAnswered(1, () => { throw new Error('hook'); });
+    expect(() => t.respond(1, { ok: true })).not.toThrow();
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ─── The debug log ─────────────────────────────────────────────────────────
 
 describe('redactCredentials', () => {

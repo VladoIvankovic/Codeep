@@ -1083,6 +1083,7 @@ Tasks are loaded into the agent context so the AI sees them automatically on the
 | `/status` | Show current configuration status |
 | `/version` | Show version and current provider/model |
 | `/update` | Check for updates |
+| `/usage [--days N]` | What Codeep used, from its local usage ledger: today, the last 7 days, all time and tokens by model; `--days N` lists the last N days. The same as `codeep usage` in the shell — see [`codeep usage`](#codeep-usage) |
 | `/clear` | Clear chat history and start new session |
 | `/exit` or `/quit` | Quit application |
 
@@ -1248,6 +1249,7 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 | `codeep account sync` | Pull personalities + commands + profile from codeep.dev → local, and API keys when cloud key sync is on (on a terminal, on a machine with no API key yet, it asks to turn it on) |
 | `codeep account sync --keys` | The same, turning cloud key sync on to pull your API keys — on a new machine, the step before the first `codeep` |
 | `codeep account push` | Push local personalities + commands + profile → codeep.dev, and, when cloud key sync is on, the API keys stored on this machine — never ones read from environment variables |
+| `codeep usage [--json] [--days N]` | What Codeep used, from the usage ledger on this machine: a short table, or with `--json` one JSON document (`schemaVersion` 1) for scripts and widgets. No API key, no network. See [`codeep usage`](#codeep-usage) |
 | `codeep review [files…]` | Offline, deterministic code review for CI — markdown or `--json`, `--fail-on <error\|warning\|info\|none>` sets the exit code. No API key needed. |
 | `codeep -- <prompt>` | Start a new session and send `<prompt>` as its first message (also `-p <prompt>` / `--prompt <prompt>`). Everything after `--` is the prompt, so `codeep -- review` asks the model rather than running `codeep review`, and a leading `/` is sent as text, not run as a slash command. Startup's own questions come first: the project and access questions without `--yolo`, and with or without it, trusting a workspace's own MCP servers the first time. |
 | `codeep --yolo` | Start without stopping to ask, for this launch only — for launchers that open Codeep unattended (`codeep --yolo -- "<prompt>"`). Agent actions run without confirmation (Agent Confirmation: Never) and without clarifying questions first (Agent Interactive Mode: Off), the folder is used as the project with read & write access, and a new session starts. Neither the folder access nor these settings are saved: the next plain `codeep` asks as before (the conversation itself is saved as a session, as usual), and changing either setting in `/settings` (or loading a saved profile, for Agent Confirmation) ends `--yolo`'s hold on it. Writes the agent makes with its file tools to files that decide what runs later (`.git/config`, git hooks, MCP server lists) are still confirmed, but a shell command is not checked that way: under `--yolo` it runs without asking and can write those same files. A workspace's own MCP servers (`.mcp.json`) still ask to be trusted the first time, before the prompt is sent. The status bar shows **YOLO** while confirmations are off. |
@@ -1385,6 +1387,8 @@ With write access enabled:
 | Agent Max Fix Attempts | 1 | Max attempts to auto-fix errors when Auto-Verify is enabled. More than 1 usually means the agent is stuck — bail and let the user decide. |
 | Follow Omarchy theme | On | On [Omarchy](https://omarchy.org) only (the row is not shown elsewhere): paint Codeep's own colours — the brand red, the greys, the code colours — from the current Omarchy theme, and switch with it while Codeep runs. `Off` keeps Codeep's colours. Codeep only reads `~/.local/state/omarchy/current/theme/colors.toml`, and watches it for the next switch. |
 | Show in Omarchy's Agents panel | On | On [Omarchy](https://omarchy.org) only (the row is not shown elsewhere): list Codeep in the bar's Agents panel, from a record of its usage counts — see [Omarchy's Agents panel](#omarchys-agents-panel). `Off` removes the record. |
+| Desktop notifications | Auto | On Linux with `notify-send` installed (the row is not shown elsewhere): a desktop notification when a run ends after 30 seconds, or an approval or a question has waited 10 — see [Desktop notifications](#desktop-notifications). Not set, it is On on [Omarchy](https://omarchy.org) and Off elsewhere; `On` and `Off` are what you chose, and win. |
+| Share live status with Omarchy plugins | On | On [Omarchy](https://omarchy.org) only (the row is not shown elsewhere): keep a small file saying whether Codeep is idle, working or waiting for you, for a bar plugin to read — see [Live status for desktop integrations](#live-status-for-desktop-integrations). `Off` removes the file. |
 
 ### Omarchy's Agents panel
 
@@ -1424,6 +1428,115 @@ every platform: one line per model call `/cost` counts (time, provider, model,
 token counts) and one per prompt (time, a hash of the session id), with no
 prompt text, file contents or session names. Codeep sends it nowhere. It
 starts counting with 3.10.0; nothing earlier is in it.
+
+### Desktop notifications, `codeep usage` and live status
+
+Three things for a desktop that is not the terminal Codeep runs in. None of them
+sends anything off this machine.
+
+#### Desktop notifications
+
+On Linux, Codeep can tell you with a desktop notification when it needs you, or
+has finished, while you were somewhere else. It runs `notify-send`, so the
+notification lands wherever your desktop shows them — on
+[Omarchy](https://omarchy.org), the shell is the notification daemon.
+
+| When | The notification says |
+|------|-----------------------|
+| A run you started in the terminal ends after 30 seconds or more — including one started with `codeep --yolo -- "<prompt>"`, with Agent Mode on | `Codeep finished — <task>` or `Codeep stopped — <task>`, and `took 4m 12s`. *Stopped* is a run you stopped, one that paused at a safety limit, one that failed, and one the model declined. |
+| An approval dialog has waited 10 seconds | `Codeep is waiting for your approval`, and the tool's name (`execute_command`) |
+| A clarifying question has waited 10 seconds | `Codeep has a question`, and the task |
+
+What a notification holds, and why that is all. A desktop keeps what it shows:
+Omarchy writes every notification to files under
+`~/.local/state/omarchy/notifications/`, and a toast is read over a shoulder. So
+a notification is made of a fixed phrase, the first five words of what you typed
+(at most 48 characters, with paths, URLs, names that have an extension and the
+characters `<`, `>` and `&` left out), how long it took, and the *name* of a
+tool — and never the answer, a command line or a path. A skill's agent step is
+named by the skill (`commit skill`), because its text carries the step before
+it. Nothing you or the model wrote reaches the command line of `notify-send`
+except as one argument after `--`, with control characters, escape sequences and
+bidirectional marks removed.
+
+Nothing is shown when you are looking at it: on Hyprland, if the focused window
+is the terminal Codeep runs in, the notification is skipped. Where that cannot
+be told — another desktop, a `tmux` session, no `hyprctl` — you are notified. A notification that cannot be delivered is dropped quietly;
+it never stops or slows a run. The ACP server (Zed, VS Code) never sends one:
+the editor has its own way of asking.
+
+**Desktop notifications** in `/settings` (shown on Linux when `notify-send` is
+installed) sets `desktopNotifications` in the config. Not set, it is *auto*: On
+on Omarchy, Off on every other desktop, decided each time. `On` and `Off` are
+what you chose — `Off` wins everywhere. Telegram's settings are separate and
+unchanged.
+
+#### `codeep usage`
+
+```bash
+codeep usage                 # today, the last 7 days, all time, tokens by model
+codeep usage --days 30       # …and the last 30 days, one row each
+codeep usage --json          # one JSON document, for a script or a widget
+codeep usage --json --days 14
+```
+
+It reads the [usage ledger](#omarchys-agents-panel) in `~/.codeep/usage/` and
+nothing else: no network, no API key, any platform. `--days N` takes 1 to 366.
+Days are your local calendar days, as the ledger counts them, so a late night
+is the day it started on, and a day a clock changes on is still one day. The
+same table is `/usage` in the chat. Exit code 0; 2 for an argument it does not
+take. With an empty ledger `--json` prints the same document with zeros and
+nulls.
+
+`--json` prints exactly this, keys in this order (`tokens` is input + output +
+cache reads + cache writes; `week` is always the last seven days, today
+included, whatever `--days` lists; `days` is the last N days, oldest first, with
+the days nothing happened on at zero; model keys are the ledger's, busiest
+first):
+
+```json
+{"schemaVersion":1,"generatedAt":"2026-10-13T09:30:00.000Z",
+ "today":{"date":"2026-10-13","prompts":3,"sessions":2,"tokens":584,
+          "byModel":{"glm-5.3":{"inputTokens":51,"outputTokens":6,"cacheReadInputTokens":501,"cacheCreationInputTokens":26}}},
+ "days":[{"date":"2026-10-12","prompts":0,"tokens":0},{"date":"2026-10-13","prompts":3,"tokens":584}],
+ "week":{"prompts":3,"sessions":2,"tokens":584},
+ "total":{"prompts":3,"sessions":2,"activeDays":1,"tokens":584,"firstDate":"2026-10-13"},
+ "models":{"glm-5.3":{"inputTokens":51,"outputTokens":6,"cacheReadInputTokens":501,"cacheCreationInputTokens":26}},
+ "lastProvider":"z.ai","lastProviderName":"Z.AI (ZhipuAI)"}
+```
+
+(Shown wrapped; it is one line.) It holds counts, model ids and a provider's
+name, never prompt text, a session name or a path.
+
+#### Live status for desktop integrations
+
+On Omarchy, each Codeep process keeps one small file that a bar plugin can read
+to show what Codeep is doing:
+
+```
+~/.local/state/codeep/sessions/<pid>.json        (under $XDG_STATE_HOME when set)
+```
+
+```json
+{"schemaVersion":1,"pid":1234,"kind":"tui","startedAt":"2026-10-13T09:00:00.000Z","updatedAt":"2026-10-13T09:04:12.000Z","cwd":"/home/u/Work/x","project":"x","state":"working","task":"fix the login bug","provider":"z.ai","model":"glm-5.3"}
+```
+
+`state` is `idle`, `working`, `approval` (a dialog is waiting for you) or
+`question` (a clarifying question is); `task` is the same short label a
+notification carries — file names and paths left out — while the state is not
+`idle`, and `null` otherwise; `kind` is `tui` or `acp`. `cwd` and `project` are
+the directory Codeep works in. The file is readable by you only (0600, in a 0700
+directory), replaced whole through a temporary file so it is never half written,
+and written at most once a second.
+
+It is written when Codeep starts and removed when it ends — also when the
+terminal is closed on Codeep or it is sent SIGTERM. A Codeep that is killed
+(SIGKILL) or crashes leaves its file: a reader should treat a file whose process
+is not running as stale, and the next Codeep to start removes the files of
+processes that are gone. A relative `XDG_STATE_HOME` is ignored, as the XDG
+specification says. **Share live
+status with Omarchy plugins** in `/settings` (On by default, shown only on
+Omarchy) turns it off, and `Off` removes the file at once.
 
 ## Usage Examples
 

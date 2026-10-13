@@ -79,6 +79,12 @@ describe.skipIf(process.platform !== 'linux')('Follow Omarchy theme', () => {
     expect(SETTINGS[panel].getValue()).toBe(true);
   });
 
+  it('comes with the live status row, On by default, after the panel row', () => {
+    const live = SETTINGS.findIndex(s => s.key === 'omarchyLiveStatus');
+    expect(live).toBe(SETTINGS.findIndex(s => s.key === 'omarchyAgentsPanel') + 1);
+    expect(SETTINGS[live].getValue()).toBe(true);
+  });
+
   it('offers its own current value, in one type', () => {
     const setting = SETTINGS[row()];
     const values = (setting.options ?? []).map(o => o.value);

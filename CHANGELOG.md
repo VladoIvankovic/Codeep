@@ -11,6 +11,55 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.11.0] — 2026-10-13
+
+> TL;DR — On Omarchy, Codeep now sends a desktop notification when a run ends or waits for you (opt-in on other Linux), `codeep usage --json` prints your usage, and bar plugins can see its status.
+
+### Added
+
+- **A desktop notification when Codeep needs you.** On Linux, through
+  `notify-send`, Codeep tells you when a run you started in the terminal ends
+  after 30 seconds or more (`Codeep finished — <task>` or `Codeep stopped —
+  <task>`, and how long it took), when an approval has waited 10 seconds
+  (`Codeep is waiting for your approval`, and the tool's name), and when a
+  clarifying question has (`Codeep has a question`, and the task). "Stopped" is
+  a run you stopped, one that paused at a safety limit, one that failed, and
+  one the model declined. A run started with `codeep --yolo -- "<prompt>"`
+  notifies the same way, with Agent Mode on. On Omarchy, whose shell is the notification daemon,
+  it is on; elsewhere it is off until you turn it on. **Desktop notifications**
+  in `/settings` (shown on Linux when `notify-send` is installed) sets it, and
+  what you set wins over the default. When you are looking at it — on Hyprland,
+  when the focused window is the terminal Codeep runs in — nothing is shown.
+  A notification says only a fixed phrase, the first five words of what you
+  typed (at most 48 characters, leaving out paths, URLs, names with an
+  extension and the characters `<`, `>` and `&`), the duration and a tool's
+  name — never an answer, a command or a path, because the desktop keeps what
+  it shows: Omarchy writes every notification to files under
+  `~/.local/state/omarchy/notifications/`. A skill's agent step is named by
+  the skill (`commit skill`), since its text carries the step before it. The
+  ACP server in an editor never sends one. Telegram's settings are unchanged.
+- **`codeep usage [--json] [--days N]`, and `/usage`.** What Codeep used,
+  from the local usage ledger and nothing else: today, the last 7 days, all
+  time, and tokens by model, as a short table, or with `--json` as one JSON
+  document (`schemaVersion` 1) for scripts and desktop widgets. `--days N`
+  lists the last N days, zero-filled, counted by your local calendar day.
+  No network, no API key, any platform; with an empty ledger it prints zeros
+  and exits 0.
+- **Live status for desktop integrations, on Omarchy.** Each Codeep process
+  keeps a small file, `~/.local/state/codeep/sessions/<pid>.json` (under
+  `$XDG_STATE_HOME` when that is set; readable by you only), saying whether
+  it is idle, working, waiting for an approval or waiting for an answer, with
+  the same short task label as a notification, the project, provider and
+  model. A bar plugin reads it to show what Codeep is doing. The file is
+  removed when Codeep ends, including when its terminal is closed on it or it
+  is sent SIGTERM. One that is killed (SIGKILL) or crashes leaves it behind:
+  a plugin treats a file whose process is gone as stale, and the next Codeep
+  to start removes it. A relative `XDG_STATE_HOME` is ignored, as the XDG
+  specification says.
+  **Share live status with Omarchy plugins** in `/settings` (On by default,
+  shown only on Omarchy) turns it off, and Off removes the file at once. The
+  ACP server writes its own, with `kind` `acp`.
+
 ## [3.10.2] — 2026-10-09
 
 > TL;DR — Claude Haiku 5.5 arrives at $0.10/$0.50 (five times that past 100K prompt tokens), far fewer runs end "without a summary", and Always Allow now lasts the whole chat.

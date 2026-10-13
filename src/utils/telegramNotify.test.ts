@@ -10,6 +10,7 @@ import {
   MAX_ANSWER_LENGTH,
   MAX_ANSWER_PARTS,
   stripMarkdown,
+  shortLabel,
 } from './telegramNotify';
 
 describe('shouldNotify', () => {
@@ -208,5 +209,30 @@ describe('noticeAnswer', () => {
   it('keeps a terminal run\'s answer off the chat unless the user turned that on', () => {
     expect(noticeAnswer({ fromPhone: false, terminalAnswers: false, finalResponse: 'done' })).toBeUndefined();
     expect(noticeAnswer({ fromPhone: false, terminalAnswers: true, finalResponse: 'done' })).toBe('done');
+  });
+});
+
+describe('shortLabel', () => {
+  // What the phone's head has said since the run's name came from the task
+  // and not the session: moved here from agentExecution.ts so the desktop
+  // toast names a run the same way, and pinned so the move changed nothing.
+  it('is the first five words, white space collapsed', () => {
+    expect(shortLabel('fix the login bug')).toBe('fix the login bug');
+    expect(shortLabel('  fix \n the\tlogin   bug in the auth module ')).toBe('fix the login bug in');
+    expect(shortLabel('')).toBe('');
+    expect(shortLabel('   ')).toBe('');
+  });
+
+  it('is cut at 48 characters, 45 and an ellipsis', () => {
+    const long = 'internationalization internationalization internationalization';
+    expect(shortLabel(long)).toBe(`${long.slice(0, 45)}…`);
+    expect(shortLabel('x'.repeat(48))).toBe('x'.repeat(48));
+    expect(shortLabel('x'.repeat(49))).toBe(`${'x'.repeat(45)}…`);
+  });
+
+  it('can leave words out before it takes five, which the phone never does', () => {
+    const words = 'one SKIP two SKIP three four five six';
+    expect(shortLabel(words)).toBe('one SKIP two SKIP three');
+    expect(shortLabel(words, word => word !== 'SKIP')).toBe('one two three four five');
   });
 });

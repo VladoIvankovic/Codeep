@@ -169,6 +169,19 @@ export interface ConfigSchema {
    *  like the theme: on Omarchy the panel is where agents are. Off removes
    *  the record. Does nothing anywhere else. */
   omarchyAgentsPanel: boolean;
+  /** Tell the desktop with a toast (`notify-send`) when a run in the terminal
+   *  has taken 30 seconds or more and ended, or an approval or a question has
+   *  waited 10 — renderer/desktopAttention.ts. UNSET on purpose, and kept
+   *  unset by the defaults: unset is "auto", on where Omarchy is and off
+   *  elsewhere, decided at every toast; true and false are what the user said,
+   *  and false always wins. Linux only. */
+  desktopNotifications?: boolean;
+  /** On an Omarchy desktop, say what this Codeep is doing (idle, working,
+   *  waiting for an approval or an answer) in a small file under
+   *  `~/.local/state/codeep/sessions/`, for a bar plugin to read —
+   *  renderer/omarchyStatus.ts. Default true, like the Agents panel. Off
+   *  removes the file. Does nothing anywhere else. */
+  omarchyLiveStatus: boolean;
   projectPermissions: ProjectPermission[];
   /** @deprecated Legacy PLAINTEXT key store. Kept only so the one-time
    *  migration into secure storage can read it; emptied afterwards. New keys
@@ -395,6 +408,7 @@ function createConfig(): Conf<ConfigSchema> {
     agentInteractive: true,
     followOmarchyTheme: true,
     omarchyAgentsPanel: true,
+    omarchyLiveStatus: true,
     protocol: 'openai',
     plan: 'lite',
     language: 'en',

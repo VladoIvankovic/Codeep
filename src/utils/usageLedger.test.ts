@@ -28,6 +28,7 @@ import {
 import {
   ledgerFileName,
   onLedgerAppend,
+  readUsageReport,
   readUsageSummary,
   recordPromptInLedger,
   usageLedgerDir,
@@ -528,6 +529,153 @@ describe('readUsageSummary', () => {
     const { modelUsage } = readUsageSummary({ now: NOW });
     expect(modelUsage.constructor).toEqual({ inputTokens: 1, outputTokens: 2, cacheReadInputTokens: 3, cacheCreationInputTokens: 4 });
     expect(Object.keys(modelUsage).sort()).toEqual(['__proto__', 'constructor', 'glm-5.3'].sort());
+  });
+});
+
+// ─── By day ──────────────────────────────────────────────────────────────────
+
+describe('readUsageReport', () => {
+  const NOW = new Date(2026, 9, 5, 12).getTime();
+  const at = (month: number, day: number, hour = 12, minute = 0) => new Date(2026, month - 1, day, hour, minute).getTime();
+  const p = (t: number, s: string) => JSON.stringify({ t, k: 'p', s, src: 'tui' });
+  const u = (t: number, provider: string, m: string, tokens: [number, number, number, number]) =>
+    JSON.stringify({ t, k: 'u', p: provider, m, in: tokens[0], out: tokens[1], cr: tokens[2], cw: tokens[3] });
+  const file = (name: string) => join(ledger(), name);
+  const writeMonth = (name: string, rows: string[]) => {
+    mkdirSync(ledger(), { recursive: true });
+    writeFileSync(file(name), rows.map(row => row + '\n').join(''));
+  };
+  type CachedDays = Record<string, { prompts: number; sessions: string[]; models: Record<string, unknown> }>;
+  const readCache = () => JSON.parse(readFileSync(file('cache.json'), 'utf8')) as {
+    version: number;
+    months: Record<string, { size: number; mtimeMs: number; prompts: number; days?: CachedDays }>;
+  };
+  const writeCache = (cache: unknown) => writeFileSync(file('cache.json'), JSON.stringify(cache));
+  const day = (date: string) => readUsageReport({ now: NOW }).days.get(date);
+
+  beforeEach(() => {
+    writeMonth('2026-09.jsonl', [
+      p(at(9, 29), 'a'),
+      p(at(9, 30), 'b'),
+      u(at(9, 30), 'z.ai', 'glm-5.3', [100, 10, 1000, 0]),
+    ]);
+    writeMonth('2026-10.jsonl', [
+      p(at(10, 1), 'b'),
+      p(at(10, 2), 'c'),
+      p(at(10, 2, 13), 'c'),
+      u(at(10, 2), 'anthropic', 'claude-opus-5-5', [5, 50, 500, 200]),
+      u(at(10, 2, 9), 'z.ai', 'glm-5.3', [1, 1, 1, 1]),
+      u(at(10, 2, 10), 'z.ai', 'glm-5.3', [2, 2, 2, 2]),
+    ]);
+  });
+
+  it('keeps each day\'s prompts, sessions and tokens by model', () => {
+    const { summary, days } = readUsageReport({ now: NOW });
+    expect([...days.keys()].sort()).toEqual(['2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02']);
+    expect(days.get('2026-10-02')).toEqual({
+      prompts: 2,
+      // One session, asked twice.
+      sessions: ['c'],
+      models: {
+        'claude-opus-5-5': { inputTokens: 5, outputTokens: 50, cacheReadInputTokens: 500, cacheCreationInputTokens: 200 },
+        'glm-5.3': { inputTokens: 3, outputTokens: 3, cacheReadInputTokens: 3, cacheCreationInputTokens: 3 },
+      },
+    });
+    expect(days.get('2026-09-30')).toEqual({
+      prompts: 1,
+      sessions: ['b'],
+      models: { 'glm-5.3': { inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 1000, cacheCreationInputTokens: 0 } },
+    });
+    // The summary half is what readUsageSummary says.
+    expect(summary).toEqual(readUsageSummary({ now: NOW }));
+  });
+
+  it('puts a session that spans two days in both, and counts it once in total', () => {
+    expect(day('2026-09-30')?.sessions).toEqual(['b']);
+    expect(day('2026-10-01')?.sessions).toEqual(['b']);
+    expect(readUsageReport({ now: NOW }).summary.totalSessions).toBe(3);
+  });
+
+  it('counts a line on its LOCAL day, not its UTC day', () => {
+    process.env.TZ = 'Pacific/Auckland';
+    // 01:00 on 2 October in Auckland is still 1 October by UTC.
+    const t = new Date(2026, 9, 2, 1, 0).getTime();
+    expect(new Date(t).toISOString().slice(0, 10)).toBe('2026-10-01');
+    writeMonth('2026-10.jsonl', [p(t, 'nz'), u(t, 'z.ai', 'glm-5.3', [1, 1, 1, 1])]);
+    rmSync(file('2026-09.jsonl'));
+    const days = readUsageReport({ now: t }).days;
+    expect([...days.keys()]).toEqual(['2026-10-02']);
+    expect(days.get('2026-10-02')?.prompts).toBe(1);
+
+    process.env.TZ = 'America/Los_Angeles';
+    // 03:00 UTC on 1 October is the evening of 30 September in Los Angeles —
+    // and its file is September's, so the day and the month agree.
+    const la = Date.UTC(2026, 9, 1, 3, 0);
+    rmSync(file('2026-10.jsonl'));
+    writeMonth('2026-09.jsonl', [p(la, 'la')]);
+    expect([...readUsageReport({ now: la }).days.keys()]).toEqual(['2026-09-30']);
+  });
+
+  it('merges a day that two month files both hold', () => {
+    // Not something Codeep writes; a ledger edited by hand or moved.
+    writeMonth('2026-09.jsonl', [p(at(10, 2, 8), 'x'), p(at(9, 30), 'b')]);
+    expect(day('2026-10-02')).toMatchObject({ prompts: 2 + 1 });
+    expect(day('2026-10-02')?.sessions.sort()).toEqual(['c', 'x']);
+  });
+
+  it('has no days with no ledger, and writes nothing', () => {
+    rmSync(ledger(), { recursive: true, force: true });
+    expect(readUsageReport({ now: NOW }).days.size).toBe(0);
+    expect(existsSync(ledger())).toBe(false);
+  });
+
+  describe('the closed-month cache', () => {
+    it('holds a closed month\'s days, and not the current month\'s', () => {
+      readUsageReport({ now: NOW });
+      const cache = readCache();
+      expect(Object.keys(cache.months)).toEqual(['2026-09.jsonl']);
+      expect(Object.keys(cache.months['2026-09.jsonl'].days ?? {})).toEqual(['2026-09-29', '2026-09-30']);
+      expect(cache.months['2026-09.jsonl'].days?.['2026-09-30']).toMatchObject({ prompts: 1, sessions: ['b'] });
+    });
+
+    it('takes a closed month\'s days from the cache while its size and mtime are unchanged', () => {
+      readUsageReport({ now: NOW });
+      const cache = readCache();
+      cache.months['2026-09.jsonl'].days!['2026-09-30'].prompts = 99;
+      writeCache(cache);
+      expect(day('2026-09-30')?.prompts).toBe(99);
+      // The totals come from the same entry.
+      expect(readUsageSummary({ now: NOW }).totalPrompts).toBe(2 + 3);
+    });
+
+    it('reads a month again whose cache entry has no days, as 3.10.x wrote it', () => {
+      readUsageReport({ now: NOW });
+      const cache = readCache();
+      // As the 3.10 ledger wrote it: everything but the days, and numbers
+      // that would show if the entry were used.
+      delete cache.months['2026-09.jsonl'].days;
+      cache.months['2026-09.jsonl'].prompts = 99;
+      writeCache(cache);
+      expect(day('2026-09-30')).toMatchObject({ prompts: 1, sessions: ['b'] });
+      expect(readUsageSummary({ now: NOW }).totalPrompts).toBe(2 + 3);
+      // And written again, with its days.
+      expect(readCache().months['2026-09.jsonl'].days).toBeDefined();
+      expect(readCache().months['2026-09.jsonl'].prompts).toBe(2);
+    });
+
+    it.each([
+      ['days that is not an object', { days: [] }],
+      ['a day that is not a date', { days: { yesterday: { prompts: 1, sessions: [], models: {} } } }],
+      ['a day with a count that is not a number', { days: { '2026-09-30': { prompts: 'many', sessions: [], models: {} } } }],
+      ['a day with tokens that make no sense', { days: { '2026-09-30': { prompts: 1, sessions: [], models: { x: { inputTokens: -1 } } } } }],
+    ])('reads a month again whose cached %s', (_what, broken) => {
+      readUsageReport({ now: NOW });
+      const cache = readCache();
+      Object.assign(cache.months['2026-09.jsonl'], broken, { prompts: 99 });
+      writeCache(cache);
+      expect(day('2026-09-30')).toMatchObject({ prompts: 1 });
+      expect(readCache().months['2026-09.jsonl'].prompts).toBe(2);
+    });
   });
 });
 

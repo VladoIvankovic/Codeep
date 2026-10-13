@@ -63,6 +63,8 @@ import { parseLaunchArgs } from './cliArgs';
 import { agentConfirmationMode, pinAgentConfirmation, pinAgentInteractive, isAgentConfirmationPinned } from './agentConfirmation';
 import { followOmarchyTheme, type OmarchyThemeWatch } from './omarchyTheme';
 import { keepOmarchyAgentRecord } from './omarchyAgents';
+import { startOmarchyLiveStatus, trackLiveWork } from './omarchyStatus';
+import * as desktopAttention from './desktopAttention';
 import { recordPromptInLedger } from '../utils/usageLedger';
 import { welcomeContent } from './welcome';
 import { watchConfig, type ConfigWatch } from './configWatch';
@@ -216,6 +218,20 @@ let omarchyTheme: OmarchyThemeWatch | null = null;
 let welcomeWatch: ConfigWatch | null = null;
 let agentAbortController: AbortController | null = null;
 let pendingInteractiveContext: PendingInteractiveContext | null = null;
+/** Ends the desktop's wait on the question that is open; null when none is. */
+let endQuestionWait: (() => void) | null = null;
+
+/**
+ * The clarifying questions the agent put before a run, or none. Kept here so
+ * the desktop is told in one place when one opens — a toast if it goes
+ * unanswered for ten seconds, a "question" in the status file — and when it
+ * is answered or dropped.
+ */
+function setPendingInteractive(pending: PendingInteractiveContext | null): void {
+  pendingInteractiveContext = pending;
+  endQuestionWait?.();
+  endQuestionWait = pending ? desktopAttention.waiting('question', { task: pending.originalTask }) : null;
+}
 
 // ─── Context factory ──────────────────────────────────────────────────────────
 
@@ -312,7 +328,7 @@ async function handleSubmit(message: string): Promise<void> {
     const answers = parseAnswers(message, pendingInteractiveContext.context);
     const enhancedTask = enhancePromptWithAnswers(pendingInteractiveContext.context, answers);
     const dryRun = pendingInteractiveContext.dryRun;
-    pendingInteractiveContext = null;
+    setPendingInteractive(null);
 
     const confirmationMode = agentConfirmationMode();
     if (confirmationMode === 'never' || dryRun) {
@@ -360,7 +376,7 @@ async function handleSubmit(message: string): Promise<void> {
   if (agentMode === 'on' && projectContext && hasWriteAccess && !isAgentRunningFlag) {
     runAgentTask(message, false, ctx,
       () => pendingInteractiveContext,
-      (v) => { pendingInteractiveContext = v; },
+      setPendingInteractive,
     );
     return;
   }
@@ -575,6 +591,13 @@ export async function main(): Promise<void> {
     process.exit(runHookCommand(launch.args));
   }
 
+  // What Codeep used, from the ledger alone: no API key, no keychain, no
+  // network, and nothing but the table or the JSON on stdout.
+  if (launch.kind === 'usage') {
+    const { runUsageCommand } = await import('../utils/usageReport.js');
+    process.exit(await runUsageCommand(launch.args));
+  }
+
   if (launch.kind === 'version') {
     console.log(`Codeep v${getCurrentVersion()}`);
     process.exit(0);
@@ -597,6 +620,7 @@ Usage:
   codeep review       Offline code review for CI (--json, --fail-on, --rules, --ai)
   codeep hook install   Install a git pre-commit hook running \`codeep review\`
   codeep hook uninstall Remove the Codeep git hook
+  codeep usage        What Codeep used: today, 7 days, all time, by model (--json, --days N)
   codeep --version    Show version
   codeep --help       Show this help
 
@@ -666,9 +690,17 @@ Commands (in chat):
 
   // ACP server mode — started by Zed via Agent Client Protocol
   if (launch.kind === 'acp') {
+    // On Omarchy, say what this server is doing for a bar plugin to read
+    // (omarchyStatus.ts). It writes its file and never toasts: the editor
+    // has its own way of telling you.
+    startOmarchyLiveStatus({
+      kind: 'acp',
+      enabled: () => config.get('omarchyLiveStatus') !== false,
+      info: () => ({ cwd: process.cwd(), provider: config.get('provider'), model: config.get('model') }),
+    });
     await loadAllApiKeys();
     const { startAcpServer } = await import('../acp/server.js');
-    await startAcpServer();
+    await startAcpServer(undefined, { promptStarted: (task, cwd) => trackLiveWork(task, cwd) });
     return;
   }
 
@@ -693,6 +725,15 @@ Commands (in chat):
   // screen, so a first run is in the theme from its first frame.
   omarchyTheme = followOmarchyTheme({ enabled: () => config.get('followOmarchyTheme') !== false });
   if (omarchyTheme) process.on('exit', () => omarchyTheme?.stop());
+
+  // And say what this terminal is doing, for a bar plugin to read
+  // (omarchyStatus.ts): idle now, and working / approval / question as the
+  // run goes. Removed when the process ends.
+  startOmarchyLiveStatus({
+    kind: 'tui',
+    enabled: () => config.get('omarchyLiveStatus') !== false,
+    info: () => ({ cwd: projectPath, provider: config.get('provider'), model: config.get('model') }),
+  });
 
   // A SIGINT ends the TUI as /exit does: the terminal restored, the
   // conversation saved, "Goodbye!". Registered here, where the TUI starts, and

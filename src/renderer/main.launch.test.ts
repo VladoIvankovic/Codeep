@@ -80,6 +80,18 @@ vi.mock('./agentExecution', async (importOriginal) => ({
   runAgentTask: vi.fn(async (...args: unknown[]) => { await ui.onRun?.(...args); }),
   executeAgentTask: vi.fn(async () => 'success'),
 }));
+// What the terminal tells the desktop about a question that waits, recorded.
+const attention = vi.hoisted(() => ({
+  waits: [] as Array<{ kind: string; what: unknown; end: () => void }>,
+}));
+vi.mock('./desktopAttention', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./desktopAttention')>()),
+  waiting: vi.fn((kind: string, what: unknown) => {
+    const end = vi.fn();
+    attention.waits.push({ kind, what, end });
+    return end;
+  }),
+}));
 // Recorded, so a test can tell when startup has read the MCP config.
 vi.mock('../utils/mcpConfig', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../utils/mcpConfig')>();
@@ -322,6 +334,28 @@ describe('a launch prompt in a workspace with its own MCP servers', () => {
 });
 
 describe('the answer to clarifying questions', () => {
+  it('tells the desktop a question is waiting, until it is answered', async () => {
+    ui.onRun = (task, _dryRun, _ctx, _getPending, setPending) => {
+      (setPending as (v: unknown) => void)({
+        originalTask: task, context: analyzeForClarification(task as string), dryRun: false,
+      });
+    };
+    attention.waits.length = 0;
+    await launch('--yolo');
+    const submit = ui.options?.onSubmit as (text: string) => Promise<void>;
+    await submit('refactor my waybar config');
+    expect(attention.waits).toHaveLength(1);
+    expect(attention.waits[0].kind).toBe('question');
+    // The task as it was typed: the toast's label is made from it.
+    expect(attention.waits[0].what).toEqual({ task: 'refactor my waybar config' });
+    expect(attention.waits[0].end).not.toHaveBeenCalled();
+
+    await submit('proceed');
+    expect(attention.waits[0].end).toHaveBeenCalledTimes(1);
+    // Nothing else is waiting.
+    expect(attention.waits).toHaveLength(1);
+  });
+
   it('runs without "Confirm Agent Task" under --yolo, as the run itself would', async () => {
     // Held for questions the way runAgentTask holds a vague task. Under --yolo
     // that takes Agent Interactive Mode switched back on in /settings, which

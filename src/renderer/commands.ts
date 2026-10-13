@@ -1611,6 +1611,24 @@ Format: use headers per category, only include categories where you found issues
       break;
     }
 
+    case 'usage': {
+      const { buildUsageReport, formatUsageReport, parseUsageArgs } = await import('../utils/usageReport');
+      const { readUsageReport } = await import('../utils/usageLedger');
+      const parsed = parseUsageArgs(args);
+      if (!parsed.ok) {
+        ctx.app.notify(parsed.help ? 'Usage: /usage [--days N]' : parsed.message.replace(/^codeep usage: /, ''));
+        break;
+      }
+      const now = Date.now();
+      const report = buildUsageReport(readUsageReport({ now }), { now, days: parsed.days });
+      // Fenced, so the columns stay where they are.
+      ctx.app.addMessage({
+        role: 'system',
+        content: '```\n' + formatUsageReport(report, { daysListed: parsed.daysGiven }) + '\n```',
+      });
+      break;
+    }
+
     case 'compact': {
       const messages = ctx.app.getMessages();
       const keepRecent = parseKeepRecent(args[0]);

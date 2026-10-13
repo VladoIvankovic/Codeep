@@ -168,6 +168,8 @@ export class StdioTransport {
   // before answering gets an error reply; one that fails after answering
   // must not produce a second response for the same id.
   private unanswered = new Set<number | string>();
+  /** What to run when a request has been answered, by its id. */
+  private answeredHooks = new Map<number | string, () => void>();
 
   start(handler: MessageHandler): void {
     this.handler = handler;
@@ -245,8 +247,33 @@ export class StdioTransport {
   }
 
   send(msg: JsonRpcResponse | JsonRpcNotification): void {
-    if ('id' in msg) this.unanswered.delete(msg.id);
+    if ('id' in msg) {
+      this.unanswered.delete(msg.id);
+      const answered = this.answeredHooks.get(msg.id);
+      if (answered) {
+        this.answeredHooks.delete(msg.id);
+        try {
+          answered();
+        } catch {
+          // A hook is the host's; it cannot be why a response is not sent.
+        }
+      }
+    }
     this.write(JSON.stringify(msg));
+  }
+
+  /**
+   * Run `fn` once request `id` has been answered, with a result or with an
+   * error — whichever, and whatever code did the answering, which for a
+   * prompt is not the handler that was called: that returns long before.
+   * At once if it already has been. At most once.
+   */
+  whenAnswered(id: number | string, fn: () => void): void {
+    if (!this.unanswered.has(id)) {
+      fn();
+      return;
+    }
+    this.answeredHooks.set(id, fn);
   }
 
   respond(id: number | string, result: unknown): void {
