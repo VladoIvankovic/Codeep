@@ -286,6 +286,27 @@ describe('planTasks request budget and sampling', () => {
     expect(body()).not.toHaveProperty('temperature');
   });
 
+  // Gemini 4 Argon's thinking counts inside max_output_tokens ("a hard limit"),
+  // and Google says to raise a limit under 32,768 for it — the planner's 2048 is
+  // exactly that case. It also ignores sampling parameters, so none is sent.
+  it('gives Gemini 4 Argon the same room, directly and on OpenRouter, without a temperature', async () => {
+    answer('openai');
+    await planTasks('Build the feature', project, { providerId: 'google', model: 'gemini-4-argon', protocol: 'openai' });
+    expect(body().max_tokens).toBe(32_768);
+    expect(body()).not.toHaveProperty('temperature');
+
+    answer('openai');
+    await planTasks('Build the feature', project, { providerId: 'openrouter', model: 'google/gemini-4-argon', protocol: 'openai' });
+    expect(body().max_tokens).toBe(32_768);
+    expect(body()).not.toHaveProperty('temperature');
+
+    // The other Gemini keep the planner's 2048, and 3.6 Flash its temperature.
+    answer('openai');
+    await planTasks('Build the feature', project, { providerId: 'google', model: 'gemini-3.6-flash', protocol: 'openai' });
+    expect(body().max_tokens).toBe(2048);
+    expect(body().temperature).toBe(0.3);
+  });
+
   // The plan used to be read from content[0], which is the thinking block on a
   // model that thinks first — so a real plan parsed as "" and fell back.
   it('reads the plan after a leading thinking block', async () => {

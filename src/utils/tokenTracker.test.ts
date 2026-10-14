@@ -1197,3 +1197,140 @@ describe('Claude Haiku 5.5 (priced by prompt length)', () => {
     });
   });
 });
+
+// Gemini 4 Argon (GA 2026-10-13). Introductory $2.00 in / $10.00 out (thinking
+// included) through 2026-11-30, $4.00 / $20.00 from 2026-12-01; implicit cache
+// reads −95% ($0.10, then $0.20), no cache-write charge, one rate whatever the
+// prompt length (pricing page, read 2026-10-14).
+describe('Gemini 4 Argon', () => {
+  const ARGON = 'gemini-4-argon';
+
+  it('is sized at the unified 1,048,576 window, directly and through OpenRouter', () => {
+    expect(getModelContextWindow(ARGON)).toBe(1_048_576);
+    // No exact OpenRouter row: the canonical id reaches the vendor row.
+    expect(getModelContextWindow('google/gemini-4-argon')).toBe(1_048_576);
+  });
+
+  // Not the 2026-12-01 step: a scheduled rise entered early is how Sonnet 5
+  // over-reported by 50% — see the Gemini 3.x promo note in tokenTracker.ts.
+  it('prices at the rate billed now, not the one scheduled for 2026-12-01', () => {
+    const row = getPricingTable().find(e => e.model === ARGON);
+    expect(row).toEqual({ model: ARGON, inputPer1M: 2, outputPer1M: 10 });
+    expect(row).not.toHaveProperty('longPrompt');
+  });
+
+  // 0.10 against 2.00: the 0.1 default would bill every cache hit at $0.20.
+  it('reads the cache at 0.05×, and writes it at the plain input rate', () => {
+    expect(cacheReadRateFor(ARGON, 'google')).toBe(0.05);
+    expect(cacheWriteRateFor(ARGON, 'google')).toBe(1);
+    // The neighbours keep the defaults.
+    expect(cacheReadRateFor('gemini-3.8-flash', 'google')).toBe(0.1);
+    expect(cacheWriteRateFor('gemini-3.8-flash', 'google')).toBe(1.25);
+  });
+
+  it('bills a request with cache hits at $2 in, $0.10 cached and $10 out', () => {
+    recordTokenUsage(
+      { promptTokens: 100_000, completionTokens: 10_000, totalTokens: 110_000, cacheReadTokens: 80_000 },
+      ARGON,
+      'google',
+    );
+    // 20,000 × $2 + 80,000 × $0.10 + 10,000 × $10, per 1M = 0.04 + 0.008 + 0.10.
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.148, 8);
+    // Saved against paying full price for the 80,000: 80,000 × ($2 − $0.10) / 1M.
+    expect(getCacheStats().estimatedSavingsUsd).toBeCloseTo(0.152, 8);
+    expect(getCacheStats().cacheReadRates).toEqual([0.05]);
+  });
+
+  it('does not tier a long prompt: 900K tokens in is the same $2', () => {
+    recordTokenUsage({ promptTokens: 900_000, completionTokens: 0, totalTokens: 900_000 }, ARGON, 'google');
+    const [row] = getCostBreakdown();
+    expect(row.estimatedCost).toBeCloseTo(1.8, 8);
+    expect(row.longPromptRequests).toBeUndefined();
+  });
+
+  // The price lookup is by exact id (unchanged by this model): OpenRouter's
+  // `google/gemini-4-argon` has no row, so what it costs is what OpenRouter
+  // reports in `usage.cost`, which agentChat records.
+  it('prices an OpenRouter request from the cost OpenRouter reports, as it does every OpenRouter id', () => {
+    recordTokenUsage(
+      { promptTokens: 1_000, completionTokens: 1_000, totalTokens: 2_000 },
+      'google/gemini-4-argon',
+      'openrouter',
+      0.0123,
+    );
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.0123, 8);
+  });
+
+  it('keeps the rows for the two deprecated Flash ids, so old exports still price', () => {
+    const byModel = new Map(getPricingTable().map(e => [e.model, e]));
+    expect(byModel.get('gemini-3.7-flash')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 3.75 });
+    expect(byModel.get('gemini-3.5-flash')).toMatchObject({ inputPer1M: 1.5, outputPer1M: 9 });
+    expect(getModelContextWindow('gemini-3.7-flash')).toBe(1_048_576);
+    expect(getModelContextWindow('gemini-3.5-flash')).toBe(1_048_576);
+  });
+});
+
+// Google's OpenAI-compatible endpoint leaves thinking OUT of completion_tokens
+// and has no completion_tokens_details: the figures below are the owner's own
+// run of Gemini 4 Argon on 2026-10-14 (scripts/verify-gemini-argon.mjs),
+// verbatim. 207 − 47 − 7 = 153 thinking tokens that Google bills as output.
+describe('extractOpenAIUsage — Google thinking tokens (the compat gap)', () => {
+  const LIVE_EFFORT = { usage: { completion_tokens: 7, prompt_tokens: 47, total_tokens: 207 } };
+
+  it('adds the gap to the completion count for google: 7 + 153 = 160', () => {
+    expect(extractOpenAIUsage(LIVE_EFFORT, 'google')).toEqual({
+      promptTokens: 47, completionTokens: 160, totalTokens: 207,
+    });
+  });
+
+  it('prices that call at 160 output tokens, not 7', () => {
+    recordTokenUsage(extractOpenAIUsage(LIVE_EFFORT, 'google')!, 'gemini-4-argon', 'google');
+    // 47 × $2 + 160 × $10, per 1M. Counting completion_tokens alone gave 0.000164.
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.001694, 9);
+    expect(getSessionStats().totalCompletionTokens).toBe(160);
+  });
+
+  it('leaves the other live usages alone: they carry no gap', () => {
+    for (const usage of [
+      { completion_tokens: 5, prompt_tokens: 38, total_tokens: 43 },    // plain
+      { completion_tokens: 24, prompt_tokens: 124, total_tokens: 148 }, // tool call
+      { completion_tokens: 6, prompt_tokens: 172, total_tokens: 178 },  // follow-up
+    ]) {
+      expect(extractOpenAIUsage({ usage }, 'google')).toEqual({
+        promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens, totalTokens: usage.total_tokens,
+      });
+    }
+  });
+
+  it('adds nothing once total equals prompt + completion — thinking folded in later is never counted twice', () => {
+    expect(extractOpenAIUsage({ usage: { completion_tokens: 160, prompt_tokens: 47, total_tokens: 207 } }, 'google')!.completionTokens).toBe(160);
+  });
+
+  it('keeps the cached count: the gap is not prompt tokens', () => {
+    const usage = extractOpenAIUsage({
+      usage: { completion_tokens: 7, prompt_tokens: 5_000, total_tokens: 5_160, prompt_tokens_details: { cached_tokens: 4_096 } },
+    }, 'google')!;
+    expect(usage).toMatchObject({ promptTokens: 5_000, completionTokens: 160, totalTokens: 5_160, cacheReadTokens: 4_096 });
+  });
+
+  it('does not touch any other provider, whatever the gap (total_tokens may differ there)', () => {
+    for (const provider of ['openai', 'openrouter', 'z.ai', 'deepseek', 'xai', 'ollama', 'custom', undefined]) {
+      expect(extractOpenAIUsage(LIVE_EFFORT, provider)!.completionTokens, String(provider)).toBe(7);
+    }
+    // Without the argument — every caller from before it — nothing changes.
+    expect(extractOpenAIUsage(LIVE_EFFORT)!.completionTokens).toBe(7);
+  });
+
+  it('does not touch OpenRouter\'s google/gemini-4-argon: its usage folds reasoning into completion_tokens', () => {
+    const data = { usage: { completion_tokens: 160, prompt_tokens: 47, total_tokens: 207, cost: 0.0017 } };
+    expect(extractOpenAIUsage(data, 'openrouter')).toMatchObject({ completionTokens: 160, totalTokens: 207 });
+    // And a gap there is not Google's: it is left as reported.
+    expect(extractOpenAIUsage(LIVE_EFFORT, 'openrouter')!.completionTokens).toBe(7);
+  });
+
+  it('survives missing fields (a usage with no total)', () => {
+    expect(extractOpenAIUsage({ usage: { prompt_tokens: 10, completion_tokens: 5 } }, 'google'))
+      .toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 0 });
+  });
+});
+

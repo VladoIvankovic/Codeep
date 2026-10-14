@@ -1,6 +1,6 @@
 # Model catalogue and maintenance policy
 
-Last full review: **2026-10-09**
+Last full review: **2026-10-14**
 
 ## Product scope
 
@@ -44,6 +44,13 @@ Last full review: **2026-10-09**
   `deepseek-flash` failed `deepseek-v4` in three places, one of which sized its
   context window at 128K instead of 1M. Search `providers.ts`, `ModelTuning`,
   `CostEstimator` and `ContextWindowEstimator` for the old family name.
+- **Check where a thinking model reports its thinking tokens.** They are billed
+  as output, and a client that reads one count misses them if the provider
+  reports them apart: Google's OpenAI-compat `usage` left 153 of 160 output
+  tokens out of `completion_tokens` (only the gap in `total_tokens` showed
+  them), and native `usageMetadata` carries `thoughtsTokenCount` beside
+  `candidatesTokenCount` (see the Gemini 4 Argon entry). Read a real response
+  before trusting the field names.
 - Update CLI context/pricing in `src/utils/tokenTracker.ts`, including the
   cache-read and cache-write rates (model, surface and provider tables).
   The context table is read by exact id, then by canonical id (macOS
@@ -498,7 +505,242 @@ Last full review: **2026-10-09**
 - **Gemini 3.6 / 3.7 / 3.8 Flash run a promotional $0.75/$3.75 through
   2026-12-31**, scheduled to step back to $1.50/$7.50 on 2027-01-01. Revisit all
   three together on that date — not before: a scheduled rise entered early is how
-  Sonnet 5 over-reported by 50% after Anthropic cancelled its own.
+  Sonnet 5 over-reported by 50% after Anthropic cancelled its own. (3.7 Flash is
+  deprecated since 2026-10-08, below; its row stays for old session exports.)
+- **Gemini 4 Argon** (`gemini-4-argon`, GA 2026-10-13; OpenRouter
+  `google/gemini-4-argon`, listed in OpenRouter's `/api/v1/models` on
+  2026-10-14 with a 1,048,576 context and $2/$10) is the Google default and
+  first in the picker. Everything here is either from Google's own pages, read
+  2026-10-14 (latest-model, models, pricing, openai-compat, deprecations,
+  release notes), or from **the owner's run on 2026-10-14** of
+  `scripts/verify-gemini-argon.mjs` with their own key (8 requests, recorded
+  verbatim at the end of this entry). The script is the way to settle what is
+  still open (it has since gained `stream` and `stream-tools` legs, a fourth
+  replay rebuilt the way the app rebuilds it, and the path of every
+  signature; 12 requests in all); it prints `usage` and `usageMetadata`
+  verbatim, on both paths Codeep uses: the OpenAI-compat endpoint (CLI) and
+  native `generateContent` (macOS), and takes `--model <id>` to ask the same
+  questions of another Gemini.
+  - **Price steps on 2026-12-01.** Introductory $2.00 in / $10.00 out (thinking
+    is output) through 2026-11-30, then **$4.00 / $20.00**; cached input $0.10,
+    then $0.20. The tables carry **the current $2/$10** and the step is not
+    written ahead of time — the rule from the Flash note above and from Sonnet
+    5. **Revisit on 2026-12-01, not before**: CLI `MODEL_PRICING`, macOS
+    `CostEstimator`, then `npm run export:catalogue`. The cache-read ratio does
+    not move (see next). No long-prompt tier on the Standard rows; Batch and
+    Flex are half, Priority $3.60/$18 → $7.20/$36, none of them used.
+  - **Cache read is 0.05×** ($0.10 against $2.00; "discounts cached input by
+    95%"), a per-model row in the CLI's `MODEL_CACHE_READ_RATE` and macOS
+    `CostEstimator` — the 0.1× default would bill every hit at twice its price.
+    Implicit caching only, for prompts of at least 4,096 tokens; **explicit
+    caching (`cachedContents`, `extra_body.google.cached_content`) is not
+    supported** and Codeep never creates one, so there is nothing to remove.
+    No cache-write charge and no storage price (write rate 1.0). **What its
+    `usage` reports for a cache hit is still unverified**: every request of
+    the owner's run was far below the 4,096-token threshold, so no hit was
+    seen and the rate is Google's published price, not a measurement.
+  - **Thinking tokens: reported apart, and now counted** (owner's run,
+    2026-10-14).
+    - *OpenAI-compat (CLI).* **Seen on one NON-streamed reply of one model
+      only** — the CLI streams chat and agent turns, and the final
+      `include_usage` chunk was not observed (open: a `stream: true` compat
+      leg in the script). `usage` leaves thinking OUT of
+      `completion_tokens` and has no `completion_tokens_details`:
+      `{"completion_tokens":7,"prompt_tokens":47,"total_tokens":207}` at
+      `reasoning_effort: "high"` — 207 − 47 − 7 = 153 thinking tokens that
+      exist only as the gap in the total, billed as output. (At the default
+      effort the totals had no gap: 5 + 38 = 43.) `extractOpenAIUsage(data,
+      providerId)` in `src/utils/tokenTracker.ts` adds `total − prompt −
+      completion` to the completion count **for `google` only**, passed from
+      every call site that has a provider id (chat(), the agent streams and
+      non-streamed turns, the text-tool fallback). Not for OpenRouter, whose
+      usage already folds reasoning into `completion_tokens`, nor for any
+      other provider, where `total_tokens` may legitimately differ. The rule is
+      by shape: it fires on any Google model whose reply has the gap, and
+      adds nothing twice if Google folds thinking in (the gap is then 0).
+      Argon's reply is the only one inspected; whether 3.x had the same gap,
+      so that its past estimates were low, is not known. `reasoningTokens` is
+      not set, since there is no field to read it from.
+    - *Native (macOS).* `usageMetadata` reports it beside the answer:
+      `{"promptTokenCount":47,"candidatesTokenCount":7,"totalTokenCount":186,
+      "thoughtsTokenCount":132}` — total = prompt + candidates + thoughts.
+      `GoogleProtocolClient` now adds `thoughtsTokenCount` to the output
+      count; it read `candidatesTokenCount` alone before, which under-counted
+      every Gemini thinking model it could talk to. Google's Thinking guide:
+      "response pricing is the sum of output tokens and thinking tokens".
+    - The task planner (`src/utils/taskPlanner.ts`) and the text-tool
+      fallback's streamed path (`handleStream`) record **no usage at all**, and
+      did not before; not changed.
+  - **Unified window, and thinking counts in the cap.** 1,048,576 tokens for
+    input + thinking + output together; default `max_output_tokens` 65,536,
+    "a hard limit: the response stops once thinking and output together reach
+    it". Google: "We recommend at least 32,768, since Gemini 4 Argon can spend
+    more of the limit on thinking". Both clients send at least
+    **32,768 at every tier** (CLI `minResponseTokensFor`, macOS
+    `ModelTuning.responseTokenBudget`). Max sends `high`, the same request as
+    High, so it gets no larger floor — unlike Claude's 64K at Max. Where it
+    bites: the CLI planner's 2,048 and any `maxTokens` lowered in /settings (the
+    one-time bump to 32,768 runs once, so a lower value set later sticks), and
+    macOS, whose Google client used to send
+    `maxResponseTokens` (8,192) straight to the wire — the Claude floor was
+    wired to the Anthropic client only. **Check every client that sends a cap
+    when a floor is added.** A reply longer than 64K needs the Interactions
+    API's background execution (or client-side continuation, which Google
+    describes for GenerateContent); Codeep does neither, so one request ends
+    at its cap.
+  - **Sampling parameters are ignored**, not rejected ("If provided, they are
+    ignored"). Argon is on the omit lists anyway (CLI `SAMPLING_PARAMS_REJECTED`,
+    macOS `samplingParamsRejectedModels`): omitting is the safe side, and a
+    /settings temperature should not look like it does something here.
+  - **Effort.** `low | medium (default) | high`. The OpenAI-compat table maps
+    `reasoning_effort` minimal→low, low→low, medium→medium, high→high; macOS
+    sends `thinkingConfig.thinkingLevel` natively. No level switches thinking
+    off. Both `/thinking` gates were `gemini-3` prefixes, which
+    `gemini-4-argon` fails (the `gpt-6-astra` trap again); both name it exactly
+    now. Max sends `high`. `reasoning_effort: "high"` was accepted on the
+    compat endpoint (owner's run).
+  - **Paid key only.** "Not available on the Free tier or on the Google AI Pro
+    plan" — the CLI's picker description and provider hint say so; **the macOS
+    app shows nothing**, its picker lists bare ids. It is the Google default in
+    both, so a key on the free tier that selects Google starts on a model it
+    cannot call until it picks another. How each client reports Google's
+    refusal for a free-tier key is not verified (the run used a paid key):
+    macOS treats a Gemini quota 400 as a retryable rate limit, so it may show
+    retries and a rate-limit message rather than "needs a paid key".
+  - **Latency, and the timeouts that follow** (owner's runs). The same
+    one-line requests took 3.7 s and 29.0 s at the default effort, and 59.7 s
+    and 3.5 s at `reasoning_effort: "high"`, on the compat endpoint in two
+    runs the same day (native, `thinkingLevel: high`: 9.7 s and 4.6 s). It is
+    uneven, not by effort, and a prompt that needs real thinking will be
+    slower. Google: hard prompts "can take several minutes", use HTTP timeouts
+    of at least 15 minutes.
+    - **CLI plain `chat()`** (the TUI's own chat mode, /plan, compaction
+      summaries, session titles, /recall, /me learn, headless review and the
+      MCP sampling bridge; the task planner makes its own request with no timer
+      of its own) ran on `apiTimeout`, 60 s, one timer for the whole reply
+      streamed or not — the 59.7 s reply came in 0.3 s under it, and 29 s
+      was seen at default effort. Argon now
+      gets a **300 s floor** there: `minRequestTimeoutMsFor(model)` in
+      `src/config/providers.ts` (canonical-id match, like
+      `minResponseTokensFor`), read as `Math.max(config.get('apiTimeout'),
+      floor)` at both `chat()` timer sites in `src/api/index.ts`, so a larger
+      `apiTimeout` still wins. 300 s is the most a non-streamed reply can
+      wait: Node's fetch (undici) cuts a connection that is silent for 300 s
+      (headers or body — observed on Node 24.16 against a local server)
+      whatever timer is set. Nothing else moved; the global default is
+      untouched.
+    - **CLI agent turns** get `agentApiTimeout` (600 s) × 1.0, 1.2 (iteration
+      4+) or 1.5 (9+) — 600, 720 or 900 s, then ×1.5 and ×2 on up to two
+      timeout retries (`maxTimeoutRetries` is 3 and the loop breaks at 3, so
+      ×2.5 is never sent; plain `chat()` does not retry a timeout at all) — as
+      ONE total-time timer that streaming does not reset (`agentChat.ts`), and
+      under it the same 300 s undici cut. Unchanged.
+    - **macOS**'s Google client sets an idle `timeoutInterval = 300`, which
+      resets on every byte. Unchanged; there is no per-model hook there.
+    - **Not done:** 15 minutes. It needs an `undici` Agent with
+      `headersTimeout` and `bodyTimeout` raised (a new dependency, since
+      Node's bundled undici cannot be imported) and a per-model floor read by
+      `agentChat`; a retry after a timeout bills the thinking again. Do it if a
+      real turn ever hits the cut.
+  - **Interactions API.** Google's own quickstart, long decode and
+    "`previous_interaction_id`" server-side conversation state are the
+    Interactions API (`/v1beta/interactions`). Codeep uses Chat Completions on
+    the OpenAI-compat endpoint (CLI) and `streamGenerateContent` (macOS),
+    keeps conversation state client-side, and has not moved.
+  - **Thought signatures: required back on a replayed function call**
+    (owner's run, native `generateContent`).
+    - *The fact.* A function call replayed WITHOUT its `thoughtSignature` is
+      HTTP 400 INVALID_ARGUMENT, "Function call is missing a thought_signature
+      in functionCall parts … `default_api:read_file`, position 2". The same
+      call replayed as returned (signature kept, the `functionResponse` named
+      by the function) is a 200. The signature is a string on the
+      `functionCall` part, 124 characters on the one call seen (no thinking);
+      572 and 660 characters came back on high-effort text answers, and one
+      (124) on a plain "ready".
+    - *CLI: not affected.* It keeps history as plain text and never replays a
+      native function call (`src/utils/agent.ts`: the model's own turn goes back
+      as `assistantHistoryText`, tool results as a user message). The run's
+      OpenAI-compat follow-up replayed the reply as returned, which is stricter
+      than what the CLI sends and was accepted; the CLI's own follow-up shape
+      (plain text history) was not itself exercised.
+    - *macOS: fixed.* `GoogleProtocolClient` used to drop the signature and
+      name the `functionResponse` by its minted id (`gemini-call-N`), which is
+      what got the 400. It now parses `part["thoughtSignature"]` and puts it
+      into the minted id, `gemini-call-<n>~<signature>` (`GeminiCallID`, the
+      one place the format lives): `ContentBlock.toolUse` has no slot for it
+      and is matched in thirty-odd places, and a persisted conversation
+      round-trips it as a Codable string. On replay a signed call goes back
+      with `thoughtSignature` beside `functionCall`, and `functionResponse.name`
+      is the function's name (resolved in message order: the counter behind
+      `gemini-call-<n>` restarts every stream, so old history repeats
+      `gemini-call-1`). A model turn in which no call carries a signature
+      (history from before the fix, or another provider's) gets Google's
+      documented `skip_thought_signature_validator` on its FIRST call only;
+      the 2nd and later parallel calls of a signed turn get nothing, since
+      Google ships the signature on the first. **The id is long and has a `~`:**
+      Anthropic's `tool_use.id` is `^[a-zA-Z0-9_-]+$`, so the OpenAI,
+      Anthropic and Responses clients put `GeminiCallID.providerNeutral(id)`
+      on their wire (`gemini-call-<n>-<8 hex of the signature's SHA-256>`, for
+      both the call and its result) when a conversation moves to another
+      provider. Nothing else in the app, audit log, exporter or UI reads the
+      id's content.
+    - *Verified in the second run (12 requests):* the dummy is accepted on
+      Argon and on `gemini-3.8-flash` (leg 2 of 4); the call rebuilt the way
+      the app rebuilds it — `{functionCall: {name, args}}` plus that part's
+      own `thoughtSignature` — is accepted on both (leg 4 of 4; the signature
+      sits at `content.parts[0].thoughtSignature`); the replay without a
+      signature is the same 400 on both, so **tool use on Gemini 3.x was broken
+      on macOS before this fix, not only on Argon**; the `{"content": …}`
+      response shape is accepted.
+    - *Still unverified:* signature placement in `streamGenerateContent`
+      chunks (the runs used `generateContent`), parallel calls, a signature
+      replayed after a model switch, and Gemini 3.x other than 3.8 Flash.
+  - **Streamed usage on the compat path** (second run). Google puts `usage`
+    on EVERY chunk of a stream — 2 of 2 chunks in both streamed requests, the
+    same totals — so a handler that records each chunk that carries it counts
+    the reply once per chunk. `chat()`'s two stream handlers did (the agent
+    stream kept the last); both now record the last once. No streamed request
+    had thinking in it, so a streamed reply's gap in `total_tokens` was not
+    seen.
+  - **What is still unverified, in one place:** a streamed reply WITH thinking
+    (compat `usage` gap) and the streamed native `usageMetadata`; cache-hit
+    `usage` fields (below the 4,096-token threshold); Gemini 3.x other than
+    3.8 Flash; free-tier error text; replays with parallel calls; streamed
+    signature placement; a signature replayed after a model switch. Re-run
+    the script (`--model` included) and move each into the entry above when it
+    is settled.
+  - **Second run** (owner, 2026-10-14, 12 requests, then 6 on
+    `gemini-3.8-flash`): plain 28.9 s, `{"completion_tokens":5,
+    "prompt_tokens":38,"total_tokens":43}`; tool call 3.6 s; follow-up 6.3 s;
+    effort high 3.5 s, `{"completion_tokens":7,"prompt_tokens":47,
+    "total_tokens":174}` (120 thinking); streamed plain 2.4 s and tool call
+    3.0 s, usage on 2 of 2 chunks each; native high 4.6 s,
+    `{"promptTokenCount":47,"candidatesTokenCount":7,"totalTokenCount":205,
+    "thoughtsTokenCount":151}`; native replays: no signature 400, dummy 200,
+    as returned 200, rebuilt like the app 200. On `gemini-3.8-flash`: native
+    high `thoughtsTokenCount` 216 beside 3, the same 400 without a signature,
+    dummy, as returned and rebuilt all 200, signatures of 332 to 780
+    characters.
+  - **First run, verbatim figures** (owner, 2026-10-14, 8 requests): plain 3.7 s,
+    `{"completion_tokens":5,"prompt_tokens":38,"total_tokens":43}`; tool call
+    3.0 s, `read_file({"path":"notes.txt"})`, `{"completion_tokens":24,
+    "prompt_tokens":124,"total_tokens":148}`; follow-up as returned 1.9 s,
+    `{"completion_tokens":6,"prompt_tokens":172,"total_tokens":178}`; effort
+    high 59.7 s, 391, `{"completion_tokens":7,"prompt_tokens":47,
+    "total_tokens":207}`; native high 9.7 s, `usageMetadata` above; native
+    function call 9.6 s; native replay without a signature 400 in 0.2 s;
+    native replay as returned 20.3 s, "PELICAN".
+- **Gemini 3.7 Flash and 3.5 Flash are deprecated (2026-10-08).** Google
+  replaced them with `gemini-3.8-flash` and `gemini-3.6-flash` and removed them
+  from AI Studio's picker; the endpoints are "not shutting down" and "automatically
+  route" to the replacement, with no shutdown date. They left both pickers and
+  are in `RETIRED_MODEL_REPLACEMENTS` / `AppState.retiredModelReplacements`
+  (rule 3); pricing and context rows stay. Unchanged: `gemini-3.8-flash`,
+  `gemini-3.6-flash`, `gemini-3.5-flash-lite` and `gemini-3.1-pro-preview`
+  (a preview, "No shutdown date announced") are current. `google/gemini-3.7-flash`
+  is still in the OpenRouter fallback in both clients; OpenRouter's own
+  catalogue still served it on 2026-10-14 ($0.75/$3.75, 1,048,576), and so
+  `google/gemini-3.5-flash`, so it is not a dead id there.
 - **Both GLM Coding Plans accept exactly `glm-5.3` and `glm-5.3-flash`**
   ("Only the following two models can be called", docs.z.ai/devpack/faq; the
   China plan says the same). Both route 5.2/5.1 to 5.3; China also routes Turbo
@@ -579,8 +821,16 @@ Last full review: **2026-10-09**
   <https://developers.openai.com/api/docs/guides/latest-model>
   and <https://developers.openai.com/api/docs/guides/reasoning>
 - OpenAI prompt caching (cache-write billing): <https://developers.openai.com/api/docs/guides/prompt-caching>
-- Google Gemini: <https://ai.google.dev/gemini-api/docs/latest-model> (now 3.8
-  Flash only) and <https://ai.google.dev/gemini-api/docs/whats-new-gemini-3.5>
+- Google Gemini: <https://ai.google.dev/gemini-api/docs/latest-model> (now
+  "What's new in Gemini 4 Argon": id, thinking levels, output limits, the
+  migration checklist) and <https://ai.google.dev/gemini-api/docs/whats-new-gemini-3.5>
+- Google models: <https://ai.google.dev/gemini-api/docs/models>
+- Google pricing (per-model standard/batch/flex/priority and the dated
+  steps): <https://ai.google.dev/gemini-api/docs/pricing>
+- Google OpenAI-compat (what the CLI uses; the `reasoning_effort` →
+  `thinking_level` table): <https://ai.google.dev/gemini-api/docs/openai>
+- Google release notes (deprecation announcements land here first):
+  <https://ai.google.dev/gemini-api/docs/changelog>
 - Google lifecycle: <https://ai.google.dev/gemini-api/docs/deprecations>
 - DeepSeek changelog (newer than the news posts): <https://api-docs.deepseek.com/updates>
 - DeepSeek: <https://api-docs.deepseek.com/quick_start/pricing>

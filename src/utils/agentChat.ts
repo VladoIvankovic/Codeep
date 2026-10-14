@@ -680,8 +680,9 @@ export async function agentChat(
     }
 
     const data = await response.json();
-    const usageExtractor = protocol === 'openai' ? extractOpenAIUsage : extractAnthropicUsage;
-    const usage = usageExtractor(data);
+    // OpenAI-format usage takes the provider id: Google's compat endpoint leaves
+    // thinking out of completion_tokens (see extractOpenAIUsage).
+    const usage = protocol === 'openai' ? extractOpenAIUsage(data, providerId) : extractAnthropicUsage(data);
     if (usage) {
       // OpenRouter returns the authoritative per-call cost in
       // `usage.cost` (USD). Use it instead of our local pricing table
@@ -938,8 +939,7 @@ export async function agentChatFallback(
       content = await handleStream(response.body, protocol, onChunk);
     } else {
       const data = await response.json();
-      const fallbackUsageExtractor = protocol === 'openai' ? extractOpenAIUsage : extractAnthropicUsage;
-      const fallbackUsage = fallbackUsageExtractor(data);
+      const fallbackUsage = protocol === 'openai' ? extractOpenAIUsage(data, providerId) : extractAnthropicUsage(data);
       if (fallbackUsage) {
         const reportedCost = providerId === 'openrouter' && typeof data?.usage?.cost === 'number'
           ? data.usage.cost

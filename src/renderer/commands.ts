@@ -374,7 +374,7 @@ export async function handleCommand(
         if (sub === 'auto') {
           ctx.app.notify('Thinking effort: auto — each model uses its own default.');
         } else if (!supported) {
-          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 5.5, GPT-5.x or GPT-6, Gemini 3, DeepSeek V4, GLM-5.x, Kimi K3).`);
+          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 5.5, GPT-5.x or GPT-6, Gemini 3 or 4 Argon, DeepSeek V4, GLM-5.x, Kimi K3).`);
         } else {
           // Tell the user what THIS model will actually run (the tier may
           // collapse onto a level the model distinguishes, e.g. medium→high on Kimi K3).

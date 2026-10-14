@@ -103,8 +103,13 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'deepseek-v4-pro':      1_000_000,
   'deepseek-v4-flash':    1_000_000,
   // Google
+  // Gemini 4 Argon: "Input, thinking, and output share one window of 1,048,576
+  // tokens" (What's new in Gemini 4 Argon).
+  'gemini-4-argon':                1_048_576,
   'gemini-3.1-pro-preview':        1_048_576,
   'gemini-3.8-flash':              1_048_576,
+  // 3.7 Flash and 3.5 Flash left the picker on 2026-10-08 (deprecated; Google
+  // routes them to 3.8 and 3.6 Flash); the rows stay for old session exports.
   'gemini-3.7-flash':              1_048_576,
   'gemini-3.6-flash':              1_048_576,
   'gemini-3.5-flash':              1_048_576,
@@ -320,6 +325,16 @@ const MODEL_PRICING: Record<string, ModelPrice> = {
   // rows on that date. Deliberately NOT written ahead of time: Anthropic
   // cancelled exactly such a scheduled rise for Sonnet 5, and the pre-entered
   // figure over-reported every run by 50% until someone noticed by hand.
+  // Gemini 4 Argon is an INTRODUCTORY $2.00/$10.00 (cached input $0.10) through
+  // 2026-11-30, scheduled to double to $4.00/$20.00 (cached $0.20) on
+  // 2026-12-01 (pricing page, read 2026-10-14). The row carries what is billed
+  // now, and the step is deliberately NOT written ahead of time — the Sonnet 5
+  // lesson above. Revisit on 2026-12-01, not before; docs/MODEL_MAINTENANCE.md
+  // "Known pricing quirks". One rate whatever the prompt length (no long-prompt
+  // tier on the Standard rows), and the output price includes thinking tokens.
+  // Its cache read is $0.10 against $2.00 — 0.05x, not the 0.1 default — see
+  // MODEL_CACHE_READ_RATE; the ratio survives the step.
+  'gemini-4-argon':                { inputPer1M: 2.00, outputPer1M: 10.00 },
   'gemini-3.1-pro-preview':        { inputPer1M: 2.00, outputPer1M: 12.00 },
   'gemini-3.8-flash':              { inputPer1M: 0.75, outputPer1M: 3.75 },
   'gemini-3.7-flash':              { inputPer1M: 0.75, outputPer1M: 3.75 },
@@ -492,9 +507,29 @@ export function recordTokenUsage(
 }
 
 /**
- * Extract token usage from OpenAI-format API response
+ * Extract token usage from OpenAI-format API response.
+ *
+ * `providerId` is optional and only changes the answer for `google`. Google's
+ * OpenAI-compatible endpoint leaves thinking OUT of `completion_tokens` and
+ * has no `completion_tokens_details`: the owner's run of Gemini 4 Argon on
+ * 2026-10-14 returned `{"completion_tokens":7,"prompt_tokens":47,
+ * "total_tokens":207}`, i.e. 153 thinking tokens that exist only as the gap
+ * in the total, and Google bills them as output ("response pricing is the sum
+ * of output tokens and thinking tokens"). Counting `completion_tokens` alone
+ * priced that call at 7 output tokens instead of 160. That reply was NOT
+ * streamed; the final `include_usage` chunk of a streamed one (what chat and
+ * agent turns read) has not been observed, so this rests on its carrying the
+ * same total.
+ *
+ * Why an argument and not a rule for every provider: `total_tokens` may
+ * legitimately differ from prompt + completion elsewhere, and OpenRouter
+ * already folds reasoning into `completion_tokens` (its totals have no gap).
+ * The argument mirrors `extractResponsesUsage`'s `dialect`; every call site
+ * that holds a provider id passes it, and the gap rule is self-limiting — if
+ * Google ever folds thinking into `completion_tokens`, total equals the sum,
+ * the gap is 0 and nothing is added twice.
  */
-export function extractOpenAIUsage(data: any): TokenUsage | null {
+export function extractOpenAIUsage(data: any, providerId?: string): TokenUsage | null {
   if (data?.usage) {
     // OpenAI-protocol `prompt_tokens` is INCLUSIVE of cached prompt tokens.
     // Surface them so getCostBreakdown bills cache reads at the discounted
@@ -519,10 +554,17 @@ export function extractOpenAIUsage(data: any): TokenUsage | null {
     // cost maths subtracts them from the uncached remainder rather than adding
     // them. Unread, they billed at 1.0× and every estimate erred low.
     const written = data.usage.prompt_tokens_details?.cache_write_tokens;
+    const promptTokens = data.usage.prompt_tokens || 0;
+    let completionTokens = data.usage.completion_tokens || 0;
+    const totalTokens = data.usage.total_tokens || 0;
+    if (providerId === 'google' && totalTokens > promptTokens + completionTokens) {
+      // Thinking tokens, reported only as the gap (see the doc comment above).
+      completionTokens = totalTokens - promptTokens;
+    }
     return {
-      promptTokens: data.usage.prompt_tokens || 0,
-      completionTokens: data.usage.completion_tokens || 0,
-      totalTokens: data.usage.total_tokens || 0,
+      promptTokens,
+      completionTokens,
+      totalTokens,
       cacheCreationTokens: (typeof written === 'number' && written > 0) ? written : undefined,
       cacheReadTokens: cached || undefined,
     };
@@ -657,6 +699,12 @@ const MODEL_CACHE_READ_RATE: Record<string, number> = {
   // ($0.10 against $2 — models/gpt-6.1-sol). GPT-6 Sol, at the same $2, reads
   // at 10% ($0.20), the default, so it has no row: don't copy this one there.
   'gpt-6.1-sol': 0.05,
+  // "Implicit caching discounts cached input by 95%, to $0.10 per 1M tokens"
+  // against $2.00 ($0.20 against $4.00 from 2026-12-01 — the ratio holds). The
+  // 0.1 default would bill every cache hit at twice its price. Implicit
+  // caching only: explicit caching (cachedContents) is not supported on it, and
+  // Codeep never creates one.
+  'gemini-4-argon': 0.05,
   // V4 Pro's own ratio: $0.044 hit against $1.32 miss (peak; off-peak halves
   // both, so the ratio holds).
   'deepseek-v4-pro': 0.044 / 1.32,
@@ -748,6 +796,10 @@ const MODEL_CACHE_WRITE_RATE: Record<string, number> = {
   'gpt-5.5': 1,
   'gpt-5.4': 1,
   'gpt-5.4-mini': 1,
+  // Implicit caching has no write charge and no storage price on Gemini 4
+  // Argon (pricing page: "Implicit caching only"). No write count is reported
+  // either, so this is for any that ever is: a plain input token.
+  'gemini-4-argon': 1,
 };
 
 /**

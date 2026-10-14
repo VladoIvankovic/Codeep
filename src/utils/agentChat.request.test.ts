@@ -31,6 +31,7 @@ vi.mock('./codeepCloud', () => ({ syncProgress: vi.fn(), generateProjectId: vi.f
 
 import { agentChat, agentChatFallback } from './agentChat';
 import { REASONING_TIERS } from '../config/providers';
+import { getSessionStats, resetTokenTracking } from './tokenTracker';
 
 const originalFetch = global.fetch;
 let bodies: Record<string, unknown>[] = [];
@@ -192,6 +193,127 @@ describe('Claude Sonnet 5.5 on the wire', () => {
     expect(bodies[2].tool_choice).toBe('auto');
     expect(bodies[0]).not.toHaveProperty('thinking');
     expect(bodies[1]).not.toHaveProperty('thinking');
+  });
+});
+
+describe('Gemini 4 Argon on the wire', () => {
+  // Thinking counts inside max_output_tokens, a hard limit: Google says to raise
+  // a limit below 32,768 to at least that, since Argon can spend more of it on
+  // thinking. maxTokens 4096 is below even the 16K floor every turn has.
+  it('never sends it less than 32K — native, fallback, and via OpenRouter — and 3.8 Flash keeps 16K', async () => {
+    useModel('google', 'gemini-4-argon', 'openai', { maxTokens: 4096 });
+    await agentChat(messages, 'system');
+    useModel('google', 'gemini-4-argon', 'openai', { maxTokens: 4096, reasoningEffort: 'max' });
+    await agentChat(messages, 'system');
+    useModel('google', 'gemini-4-argon', 'openai', { maxTokens: 4096 });
+    await agentChatFallback(messages, 'system');
+    useModel('openrouter', 'google/gemini-4-argon', 'openai', { maxTokens: 4096 });
+    await agentChat(messages, 'system');
+    useModel('google', 'gemini-3.8-flash', 'openai', { maxTokens: 4096 });
+    await agentChat(messages, 'system');
+    // Max sends `high`, the same request as High, so it gets the same 32K.
+    expect(bodies.map(b => b.max_tokens)).toEqual([32_768, 32_768, 32_768, 32_768, 16_384]);
+  });
+
+  // 65,536 is Google's own default max_output_tokens; nothing here shows that a
+  // plain request is accepted above it (that is the long-decode path).
+  it('keeps a larger configured maxTokens', async () => {
+    useModel('google', 'gemini-4-argon', 'openai', { maxTokens: 65_536 });
+    await agentChat(messages, 'system');
+    expect(bodies[0].max_tokens).toBe(65_536);
+  });
+
+  // "Remove temperature, top_p, and top_k from your requests. If provided, they
+  // are ignored." Every tier goes as a thinking level Argon accepts.
+  it('sends no sampling parameters, with the tools, and each tier as low|medium|high', async () => {
+    for (const tier of REASONING_TIERS) {
+      useModel('google', 'gemini-4-argon', 'openai', { reasoningEffort: tier });
+      await agentChat(messages, 'system');
+    }
+    expect(bodies).toHaveLength(REASONING_TIERS.length);
+    for (const b of bodies) {
+      expect(b.model).toBe('gemini-4-argon');
+      expect(b).not.toHaveProperty('temperature');
+      expect(b).not.toHaveProperty('top_p');
+      expect(b).not.toHaveProperty('top_k');
+      expect(Array.isArray(b.tools) && (b.tools as unknown[]).length).toBeTruthy();
+    }
+    // auto, low, medium, high, max
+    expect(bodies.map(b => b.reasoning_effort)).toEqual([undefined, 'low', 'medium', 'high', 'high']);
+  });
+
+  it('sends the tier as reasoning.effort through OpenRouter, Max as high', async () => {
+    useModel('openrouter', 'google/gemini-4-argon', 'openai', { reasoningEffort: 'max' });
+    await agentChat(messages, 'system');
+    expect(bodies[0]).not.toHaveProperty('temperature');
+    expect(bodies[0].reasoning).toEqual({ effort: 'high' });
+  });
+
+  // Gemini 3.6 Flash still takes a temperature (it is not in the list) — the
+  // new entry must not have widened the rule.
+  it('still sends a temperature to Gemini 3.6 Flash', async () => {
+    useModel('google', 'gemini-3.6-flash', 'openai');
+    await agentChat(messages, 'system');
+    expect(bodies[0].temperature).toBe(0.7);
+  });
+});
+
+// The real token tracker, behind the real call sites. agentChat.test.ts and
+// agentStream.test.ts mock `extractOpenAIUsage`, so they cannot see whether a
+// call site hands it the provider. The figures are the owner's own run of
+// Gemini 4 Argon on 2026-10-14: Google's compat usage leaves thinking out of
+// completion_tokens, so 7 reported + 153 thinking = 160 billed as output.
+describe('Gemini 4 Argon usage: thinking tokens reach the tracker', () => {
+  const LIVE = { completion_tokens: 7, prompt_tokens: 47, total_tokens: 207 };
+
+  beforeEach(() => resetTokenTracking());
+
+  function streamedReply(usage: Record<string, unknown>): void {
+    const sse = [
+      { choices: [{ delta: { content: 'done' } }] },
+      { choices: [], usage },
+    ].map(chunk => `data: ${JSON.stringify(chunk)}`).join('\n\n') + '\n\ndata: [DONE]\n\n';
+    global.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(sse, { status: 200 });
+    }) as typeof fetch;
+  }
+
+  it('counts them on a non-streamed agent turn', async () => {
+    useModel('google', 'gemini-4-argon', 'openai');
+    reply = { choices: [{ message: { content: 'done', tool_calls: [] } }], usage: LIVE };
+    await agentChat(messages, 'system');
+    expect(getSessionStats().totalCompletionTokens).toBe(160);
+  });
+
+  it('counts them on a streamed agent turn, from the final chunk', async () => {
+    useModel('google', 'gemini-4-argon', 'openai');
+    streamedReply(LIVE);
+    const result = await agentChat(messages, 'system', () => {});
+    expect(result.content).toBe('done');
+    expect(getSessionStats().totalCompletionTokens).toBe(160);
+  });
+
+  it('counts them on the text-tool fallback', async () => {
+    useModel('google', 'gemini-4-argon', 'openai');
+    reply = { choices: [{ message: { content: 'done' } }], usage: LIVE };
+    await agentChatFallback(messages, 'system');
+    expect(getSessionStats().totalCompletionTokens).toBe(160);
+  });
+
+  it('does not add a gap on OpenRouter or any other provider', async () => {
+    reply = { choices: [{ message: { content: 'done', tool_calls: [] } }], usage: LIVE };
+    for (const [provider, model] of [['openrouter', 'google/gemini-4-argon'], ['z.ai', 'glm-5.3']] as const) {
+      resetTokenTracking();
+      useModel(provider, model, 'openai');
+      await agentChat(messages, 'system');
+      expect(getSessionStats().totalCompletionTokens, provider).toBe(7);
+    }
+    resetTokenTracking();
+    useModel('openrouter', 'google/gemini-4-argon', 'openai');
+    streamedReply(LIVE);
+    await agentChat(messages, 'system', () => {});
+    expect(getSessionStats().totalCompletionTokens).toBe(7);
   });
 });
 

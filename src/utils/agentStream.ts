@@ -165,7 +165,9 @@ export async function handleOpenAIAgentStream(
   }
 
   if (usageData) {
-    const usage = extractOpenAIUsage(usageData);
+    // The provider id matters: Google's compat usage leaves thinking out of
+    // completion_tokens (see extractOpenAIUsage).
+    const usage = extractOpenAIUsage(usageData, providerId);
     if (usage) {
       const reportedCost = providerId === 'openrouter' && typeof (usageData as { usage?: { cost?: number } })?.usage?.cost === 'number'
         ? (usageData as { usage: { cost: number } }).usage.cost

@@ -4,7 +4,7 @@ import { Message, config, getApiKey, resolveBaseUrl, describeUnsendableKey } fro
 import { withRetry, isNetworkError } from '../utils/retry';
 import { checkApiRateLimit } from '../utils/ratelimit';
 import { ProjectContext } from '../utils/project';
-import { getProvider, getProviderBaseUrl, getProviderAuthHeader, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, reasoningParamsFor, minResponseTokensFor, type ReasoningTier } from '../config/providers';
+import { getProvider, getProviderBaseUrl, getProviderAuthHeader, usesMaxCompletionTokens, requiresDefaultTemperature, modelRejectsSamplingParams, reasoningParamsFor, minResponseTokensFor, minRequestTimeoutMsFor, type ReasoningTier } from '../config/providers';
 import { logApiRequest, logApiResponse } from '../utils/logger';
 import { loadProjectIntelligence, generateContextFromIntelligence, ProjectIntelligence } from '../utils/projectIntelligence';
 import { loadProjectRules } from '../utils/agent';
@@ -431,7 +431,9 @@ async function chatOpenAI(
   ];
 
   const stream = Boolean(onChunk);
-  const timeout = config.get('apiTimeout');
+  // Never below the model's floor either (Gemini 4 Argon: 300 s, because it can
+  // take a minute at high effort — see minRequestTimeoutMsFor).
+  const timeout = Math.max(config.get('apiTimeout'), minRequestTimeoutMsFor(model));
   const temperature = config.get('temperature');
   // Never below the model's floor (Opus 5.5 / Sonnet 5.5 / Haiku 5.5 on OpenRouter — see minResponseTokensFor).
   const maxTokens = Math.max(config.get('maxTokens'), minResponseTokensFor(model, config.get('reasoningEffort') as ReasoningTier));
@@ -548,7 +550,7 @@ async function chatOpenAI(
           nodeStream.on('error', reject);
         });
         const parsed = JSON.parse(text) as OpenAIResponse;
-        const usage = extractOpenAIUsage(parsed);
+        const usage = extractOpenAIUsage(parsed, providerId);
         if (usage) recordTokenUsage(usage, model, providerId, openRouterReportedCost(providerId, parsed));
         return stripThinkTags(parsed.choices[0]?.message?.content || '');
       }
@@ -570,7 +572,9 @@ async function chatOpenAI(
       return handleOpenAIStream(response.body, onChunk!, providerId, model);
     } else {
       const data = await response.json() as OpenAIResponse;
-      const usage = extractOpenAIUsage(data);
+      // The provider id matters here: Google's compat usage leaves thinking
+      // out of completion_tokens (see extractOpenAIUsage).
+      const usage = extractOpenAIUsage(data, providerId);
       if (usage) recordTokenUsage(usage, model, providerId, openRouterReportedCost(providerId, data));
       const content = data.choices[0]?.message?.content || '';
       return stripThinkTags(content);
@@ -625,6 +629,19 @@ async function handleNodeStream(
 ): Promise<string> {
   const chunks: string[] = [];
   let buffer = '';
+  // Last usage seen, recorded once: see handleOpenAIStream.
+  let finalUsage: {
+    usage: NonNullable<ReturnType<typeof extractOpenAIUsage>>;
+    model: string;
+    provider: string;
+    cost: ReturnType<typeof openRouterReportedCost>;
+  } | null = null;
+  const recordFinalUsage = (): void => {
+    if (!finalUsage) return;
+    const u = finalUsage;
+    finalUsage = null;
+    recordTokenUsage(u.usage, u.model, u.provider, u.cost);
+  };
 
   return new Promise((resolve, reject) => {
     nodeStream.on('data', (raw: Buffer) => {
@@ -641,16 +658,16 @@ async function handleNodeStream(
           const content = parsed.choices?.[0]?.delta?.content;
           if (content) { chunks.push(content); onChunk(content); }
           if (parsed.usage) {
-            const usage = extractOpenAIUsage(parsed);
             const provider = config.get('provider');
-            if (usage) recordTokenUsage(usage, parsed.model || model, provider, openRouterReportedCost(provider, parsed));
+            const usage = extractOpenAIUsage(parsed, provider);
+            if (usage) finalUsage = { usage, model: parsed.model || model, provider, cost: openRouterReportedCost(provider, parsed) };
           }
         } catch { /* ignore parse errors */ }
       }
     });
-    nodeStream.on('end', () => resolve(stripThinkTags(chunks.join(''))));
+    nodeStream.on('end', () => { recordFinalUsage(); resolve(stripThinkTags(chunks.join(''))); });
     nodeStream.on('error', (err) => {
-      if (chunks.length > 0) resolve(stripThinkTags(chunks.join('')));
+      if (chunks.length > 0) { recordFinalUsage(); resolve(stripThinkTags(chunks.join(''))); }
       else reject(err);
     });
   });
@@ -666,6 +683,23 @@ async function handleOpenAIStream(
   const decoder = new TextDecoder();
   const chunks: string[] = [];
   let buffer = '';
+  // The reply's usage, taken from the LAST chunk that carries one and recorded
+  // once. OpenAI sends it on the final chunk only, but Google's compat stream
+  // puts it on more than one (the owner's run of 2026-10-14: both chunks of a
+  // two-chunk reply, with the same totals), each the running figure. Recording
+  // every chunk that has it counted such a reply twice.
+  let finalUsage: {
+    usage: NonNullable<ReturnType<typeof extractOpenAIUsage>>;
+    model: string;
+    provider: string;
+    cost: ReturnType<typeof openRouterReportedCost>;
+  } | null = null;
+  const recordFinalUsage = (): void => {
+    if (!finalUsage) return;
+    const u = finalUsage;
+    finalUsage = null;
+    recordTokenUsage(u.usage, u.model, u.provider, u.cost);
+  };
 
   try {
     while (true) {
@@ -688,12 +722,13 @@ async function handleOpenAIStream(
               chunks.push(content);
               onChunk(content);
             }
-            // Capture usage from final chunk (stream_options: include_usage)
+            // Usage rides on the final chunk (stream_options: include_usage);
+            // keep the latest one and record it after the stream.
             if (parsed.usage) {
-              const usage = extractOpenAIUsage(parsed);
               const provider = providerId ?? config.get('provider');
+              const usage = extractOpenAIUsage(parsed, provider);
               const m = parsed.model || modelOverride || 'unknown';
-              if (usage) recordTokenUsage(usage, m, provider, openRouterReportedCost(provider, parsed));
+              if (usage) finalUsage = { usage, model: m, provider, cost: openRouterReportedCost(provider, parsed) };
             }
           } catch {
             // Ignore parse errors
@@ -704,11 +739,13 @@ async function handleOpenAIStream(
   } catch (e: any) {
     // AggregateError / undici stream close — if we already have content, treat as complete
     if (chunks.length > 0) {
+      recordFinalUsage();
       return stripThinkTags(chunks.join(''));
     }
     throw e;
   }
 
+  recordFinalUsage();
   // Strip <think> tags from MiniMax and other providers
   return stripThinkTags(chunks.join(''));
 }
@@ -736,7 +773,8 @@ async function chatAnthropic(
       ];
 
   const stream = Boolean(onChunk);
-  const timeout = config.get('apiTimeout');
+  // Same request-timeout floor as chatOpenAI (see minRequestTimeoutMsFor).
+  const timeout = Math.max(config.get('apiTimeout'), minRequestTimeoutMsFor(model));
   const temperature = config.get('temperature');
   // Never below the model's floor: Opus 5.5's, Sonnet 5.5's and Haiku 5.5's default-on
   // thinking spends the same limit as the answer (see minResponseTokensFor).

@@ -19,6 +19,7 @@ import {
   toolsForceReasoningOff,
   agentTurnReasoningNote,
   minResponseTokensFor,
+  minRequestTimeoutMsFor,
   isDynamicModelsProvider,
   isFlatFeeProvider,
   REASONING_TIERS,
@@ -312,7 +313,9 @@ describe('providers', () => {
     it('offers Gemini 3.8 Flash and knows it rejects sampling params', () => {
       const ids = getProvider('google')!.models.map(m => m.id);
       expect(ids).toContain('gemini-3.8-flash');
-      expect(ids).toContain('gemini-3.7-flash');
+      // Deprecated by Google on 2026-10-08 (replaced by 3.8 Flash): off the
+      // picker, with a migration. See 'retired model migrations'.
+      expect(ids).not.toContain('gemini-3.7-flash');
       // Google removed the sampling parameters in the 3.7 generation and 3.8 is
       // built on 3.7 — sending temperature is a 400 on every call.
       expect(modelRejectsSamplingParams('gemini-3.8-flash')).toBe(true);
@@ -498,9 +501,11 @@ describe('providers', () => {
       expect(modelSupportsReasoningEffort('grok', 'grok-4.6')).toBe(true);
       expect(modelSupportsReasoningEffort('grok', 'grok-4.5')).toBe(true);
     });
-    it('lists Gemini 3.7 Flash and rejects its removed sampling params', () => {
-      expect(getProvider('google')!.models.map(m => m.id)).toContain('gemini-3.7-flash');
-      // Google removed temperature/top_p/top_k in this generation.
+    it('rejects the removed sampling params for Gemini 3.7 Flash, which is no longer offered', () => {
+      // Deprecated 2026-10-08 and routed by Google to 3.8 Flash, so it is off the
+      // picker — but a pinned id still reaches the wire until the migration moves
+      // it, and Google removed temperature/top_p/top_k in this generation.
+      expect(getProvider('google')!.models.map(m => m.id)).not.toContain('gemini-3.7-flash');
       expect(modelRejectsSamplingParams('gemini-3.7-flash')).toBe(true);
       expect(modelRejectsSamplingParams('gemini-3.6-flash')).toBe(false);
       expect(modelSupportsReasoningEffort('google', 'gemini-3.7-flash')).toBe(true);
@@ -543,7 +548,9 @@ describe('providers', () => {
     });
     it('lists current Gemini Flash models under google', () => {
       expect(getProvider('google')!.models.map(m => m.id)).toContain('gemini-3.6-flash');
-      expect(getProvider('google')!.models.map(m => m.id)).toContain('gemini-3.5-flash');
+      // 3.5 Flash was deprecated 2026-10-08 (replaced by 3.6 Flash); 3.5
+      // Flash-Lite is a different model and is still current.
+      expect(getProvider('google')!.models.map(m => m.id)).not.toContain('gemini-3.5-flash');
       expect(getProvider('google')!.models.map(m => m.id)).toContain('gemini-3.5-flash-lite');
       expect(modelSupportsReasoningEffort('google', 'gemini-3.5-flash-lite')).toBe(true);
     });
@@ -626,7 +633,9 @@ describe('providers', () => {
       expect(replacementModelFor('z.ai-api', 'glm-5')).toBe('glm-5.2');
       expect(replacementModelFor('z.ai-cn-api', 'glm-5.1')).toBe('glm-5.2');
       expect(replacementModelFor('openai', 'gpt-5.5')).toBe('gpt-5.6-sol');
-      expect(replacementModelFor('google', 'gemini-3.5-flash')).toBeUndefined();
+      // Deprecated 2026-10-08; Google names 3.6 Flash. (This used to be
+      // undefined while 3.5 Flash was still offered.)
+      expect(replacementModelFor('google', 'gemini-3.5-flash')).toBe('gemini-3.6-flash');
       expect(replacementModelFor('grok', 'grok-code-fast-1')).toBe('grok-build-0.1');
       expect(replacementModelFor('grok', 'grok-4-fast-reasoning')).toBe('grok-4.3');
       expect(replacementModelFor('kimi-api', 'kimi-k3-code')).toBe('kimi-k3');
@@ -725,7 +734,9 @@ describe('providers', () => {
       expect(provider!.name).toBe('Google AI');
       expect(provider!.description).toBe('Gemini models');
       expect(provider!.defaultProtocol).toBe('openai');
-      expect(provider!.defaultModel).toBe('gemini-3.1-pro-preview');
+      // Gemini 4 Argon (GA 2026-10-13) is Google's stable flagship; 3.1 Pro is
+      // still a preview, and no longer the default.
+      expect(provider!.defaultModel).toBe('gemini-4-argon');
       expect(provider!.protocols.openai?.baseUrl).toBe(
         'https://generativelanguage.googleapis.com/v1beta/openai'
       );
@@ -735,9 +746,10 @@ describe('providers', () => {
       expect(provider!.envKey).toBe('GOOGLE_API_KEY');
       expect(provider!.subscribeUrl).toBe('https://aistudio.google.com/apikey');
       const modelIds = provider!.models.map(m => m.id);
+      expect(modelIds[0]).toBe('gemini-4-argon');
       expect(modelIds).toContain('gemini-3.1-pro-preview');
       expect(modelIds).toContain('gemini-3.6-flash');
-      expect(modelIds).toContain('gemini-3.5-flash');
+      expect(modelIds).not.toContain('gemini-3.5-flash');
       expect(modelIds).toContain('gemini-3.5-flash-lite');
     });
   });
@@ -766,6 +778,9 @@ describe('providers', () => {
       expect(modelSupportsReasoningEffort('openai', 'gpt-5.5')).toBe(true);
       expect(modelSupportsReasoningEffort('openai', 'gpt-5.4-mini')).toBe(true);
       expect(modelSupportsReasoningEffort('google', 'gemini-3.1-pro-preview')).toBe(true);
+      // `gemini-4-argon` does not start with `gemini-3`: a prefix gate alone
+      // would have shipped it with /thinking hidden.
+      expect(modelSupportsReasoningEffort('google', 'gemini-4-argon')).toBe(true);
       expect(modelSupportsReasoningEffort('deepseek', 'deepseek-v4-pro')).toBe(true);
     });
     it('supports GLM-5.2 but not glm-5-turbo (toggle only)', () => {
@@ -884,6 +899,10 @@ describe('providers', () => {
         const g = reasoningParamsFor('google', 'gemini-3.6-flash', tier) as { reasoning_effort?: string };
         // 'minimal' is never emitted — gemini-3.7-flash rejects it outright.
         if (g.reasoning_effort) expect(['low', 'medium', 'high']).toContain(g.reasoning_effort);
+        // Argon's table is minimal|low → low, medium, high. No level switches
+        // thinking off, so 'none' is never sent either.
+        const a = reasoningParamsFor('google', 'gemini-4-argon', tier) as { reasoning_effort?: string };
+        if (a.reasoning_effort) expect(['low', 'medium', 'high']).toContain(a.reasoning_effort);
         const o = reasoningParamsFor('openai', 'gpt-5.5', tier) as { reasoning_effort?: string };
         if (o.reasoning_effort) expect(['none', 'low', 'medium', 'high', 'xhigh']).toContain(o.reasoning_effort);
         const o6 = reasoningParamsFor('openai', 'gpt-6-sol', tier) as { reasoning_effort?: string };
@@ -911,11 +930,11 @@ describe('providers', () => {
       const cases = [
         ['anthropic', 'claude-opus-5'], ['anthropic', 'claude-opus-5-5'], ['openai', 'gpt-5.5'],
         ['openai', 'gpt-5.6-sol'], ['openai', 'gpt-6.1-sol'], ['openai', 'gpt-6-sol'], ['openai', 'gpt-6-luna'],
-        ['google', 'gemini-3.1-pro-preview'], ['z.ai-api', 'glm-5.2'], ['z.ai', 'glm-5.3'],
+        ['google', 'gemini-3.1-pro-preview'], ['google', 'gemini-4-argon'], ['z.ai-api', 'glm-5.2'], ['z.ai', 'glm-5.3'],
         ['kimi-api', 'kimi-k3'], ['kimi', 'kimi-for-coding'],
         ['deepseek', 'deepseek-flash'], ['deepseek', 'deepseek-v4-pro'],
         ['openrouter', 'openai/gpt-5.5'], ['openrouter', 'openai/gpt-6.1-sol'], ['openrouter', 'openai/gpt-6-sol'], ['openrouter', 'x-ai/grok-4.7'],
-        ['openrouter', 'google/gemini-3.8-flash'],
+        ['openrouter', 'google/gemini-3.8-flash'], ['openrouter', 'google/gemini-4-argon'],
         ['grok', 'grok-4.3'], ['grok', 'grok-4.5'], ['grok', 'grok-4.6'], ['grok', 'grok-4.7'],
       ];
       for (const [pid, model] of cases) {
@@ -1309,5 +1328,142 @@ describe('Claude Haiku 5.5', () => {
     });
     // Haiku 4.5 keeps its flat $1/$5, with no tier.
     expect(getPricingTable().find(m => m.model === HAIKU_4)).toEqual({ model: HAIKU_4, inputPer1M: 1, outputPer1M: 5 });
+  });
+});
+
+// Gemini 4 Argon (`gemini-4-argon`), GA 2026-10-13, and the two Flash
+// deprecations of 2026-10-08. Sources, all under ai.google.dev/gemini-api/docs:
+// latest-model ("What's new in Gemini 4 Argon"), models, pricing,
+// openai-compatibility, deprecations and the release notes, read 2026-10-14.
+// No live request has been made.
+describe('Gemini 4 Argon', () => {
+  const ARGON = 'gemini-4-argon';
+  const OR_ARGON = 'google/gemini-4-argon';
+
+  it('is the first Google model and the Google default; 3.1 Pro stays, as the previous Pro', () => {
+    const google = getProvider('google')!;
+    expect(google.models[0]).toMatchObject({ id: ARGON, name: 'Gemini 4 Argon' });
+    expect(google.defaultModel).toBe(ARGON);
+    expect(google.models.map(m => m.id)).toContain('gemini-3.1-pro-preview');
+    // Its description must not still call 3.1 Pro the most capable Gemini.
+    expect(google.models.find(m => m.id === 'gemini-3.1-pro-preview')!.description).not.toMatch(/most capable/i);
+    // Said where the user picks it: a free-tier key cannot call it.
+    expect(google.models[0].description).toMatch(/paid/i);
+  });
+
+  it('moves only Google\'s default; z.ai keeps its own (index.test.ts holds the fresh-install defaults)', () => {
+    expect(getProvider('google')!.defaultModel).toBe(ARGON);
+    expect(getProvider('z.ai')!.defaultModel).not.toBe(ARGON);
+  });
+
+  it('is in the OpenRouter fallback, vendor-prefixed like its siblings', () => {
+    expect(getProvider('openrouter')!.models.map(m => m.id)).toContain(OR_ARGON);
+  });
+
+  it('has the 1,048,576 window, directly and through OpenRouter, and its own price row', () => {
+    expect(getModelContextWindow(ARGON)).toBe(1_048_576);
+    // No exact OpenRouter row: the canonical id finds the vendor row.
+    expect(getModelContextWindow(OR_ARGON)).toBe(1_048_576);
+    // The CURRENT price, $2/$10 — not the $4/$20 scheduled for 2026-12-01.
+    expect(getPricingTable().find(m => m.model === ARGON)).toEqual({ model: ARGON, inputPer1M: 2, outputPer1M: 10 });
+  });
+
+  // `gemini-4-argon` fails `startsWith('gemini-3')`, the gate it would
+  // otherwise have been checked by.
+  it('gets /thinking, with the three levels Argon takes', () => {
+    expect(modelSupportsReasoningEffort('google', ARGON)).toBe(true);
+    expect(modelSupportsReasoningEffort('google', OR_ARGON)).toBe(true);
+    expect(availableReasoningTiers('google', ARGON)).toEqual(['auto', 'low', 'medium', 'high']);
+    expect(availableReasoningTiers('openrouter', OR_ARGON)).toEqual(['auto', 'low', 'medium', 'high']);
+  });
+
+  it('sends each tier as a level it accepts, and Max as high', () => {
+    expect(reasoningParamsFor('google', ARGON, 'auto')).toEqual({});
+    expect(reasoningParamsFor('google', ARGON, 'low')).toEqual({ reasoning_effort: 'low' });
+    expect(reasoningParamsFor('google', ARGON, 'medium')).toEqual({ reasoning_effort: 'medium' });
+    expect(reasoningParamsFor('google', ARGON, 'high')).toEqual({ reasoning_effort: 'high' });
+    // Nothing above high exists for it: Max must not 400.
+    expect(reasoningParamsFor('google', ARGON, 'max')).toEqual({ reasoning_effort: 'high' });
+    // Never "minimal" (it would map to low anyway) and never "none": none of
+    // its levels switches thinking off.
+    for (const tier of REASONING_TIERS) {
+      const sent = (reasoningParamsFor('google', ARGON, tier) as { reasoning_effort?: string }).reasoning_effort;
+      if (sent) expect(['low', 'medium', 'high'], tier).toContain(sent);
+    }
+    // OpenRouter lists no ceiling above high for Gemini; the id keeps it.
+    expect(reasoningParamsFor('openrouter', OR_ARGON, 'max')).toEqual({ reasoning: { effort: 'high' } });
+    expect(reasoningParamsFor('openrouter', OR_ARGON, 'medium')).toEqual({ reasoning: { effort: 'medium' } });
+  });
+
+  it('resolves a tier the model does not distinguish to the one it will run', () => {
+    expect(resolveReasoningTier('google', ARGON, 'medium')).toBe('medium');
+    expect(resolveReasoningTier('google', ARGON, 'max')).toBe('high');
+  });
+
+  // "Remove sampling parameters: Remove temperature, top_p, and top_k from your
+  // requests. If provided, they are ignored."
+  it('withholds sampling parameters, namespaced the way OpenRouter routes it too', () => {
+    expect(modelRejectsSamplingParams(ARGON)).toBe(true);
+    expect(modelRejectsSamplingParams(OR_ARGON)).toBe(true);
+    expect(modelRejectsSamplingParams('gemini-4-argon-2026-10-13')).toBe(true);
+    // The neighbours are untouched.
+    expect(modelRejectsSamplingParams('gemini-3.6-flash')).toBe(false);
+    expect(modelRejectsSamplingParams('gemini-3.1-pro-preview')).toBe(false);
+  });
+
+  // Thinking counts inside max_output_tokens, a hard limit; Google: "raise
+  // max_output_tokens to at least 32,768".
+  it('has a 32,768 response floor at every tier, via OpenRouter too, and no other Gemini has one', () => {
+    for (const tier of [...REASONING_TIERS, undefined]) {
+      expect(minResponseTokensFor(ARGON, tier), String(tier)).toBe(32_768);
+      expect(minResponseTokensFor(OR_ARGON, tier), String(tier)).toBe(32_768);
+    }
+    for (const id of ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.1-pro-preview', 'gemini-3.5-flash-lite', 'gemini-4']) {
+      expect(minResponseTokensFor(id, 'max'), id).toBe(0);
+    }
+    // Claude's floors are unchanged by the early return.
+    expect(minResponseTokensFor('claude-opus-5-5', 'max')).toBe(65_536);
+    expect(minResponseTokensFor('claude-sonnet-5-5', 'high')).toBe(32_768);
+  });
+
+  // Owner's run, 2026-10-14: 3.7 s at the default effort, 59.7 s at
+  // reasoning_effort "high" for a one-line prompt, against the 60 s apiTimeout
+  // plain chat() runs on. 300 s is undici's own silent-connection cut, so it
+  // is also the most a non-streamed reply can wait.
+  it('floors plain-chat request timeouts at 300,000 ms for Argon alone, via OpenRouter and dated ids too', () => {
+    expect(minRequestTimeoutMsFor(ARGON)).toBe(300_000);
+    expect(minRequestTimeoutMsFor(OR_ARGON)).toBe(300_000);
+    expect(minRequestTimeoutMsFor('gemini-4-argon-2026-10-13')).toBe(300_000);
+    // The same canonical-id rule as the response floor (case, vendor prefix, dots).
+    expect(minRequestTimeoutMsFor('Google/Gemini-4-Argon')).toBe(300_000);
+    for (const id of ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.1-pro-preview', 'gemini-3.5-flash-lite',
+      'gemini-4', 'gemini-4-argonaut', 'claude-opus-5-5', 'gpt-6-sol', '']) {
+      expect(minRequestTimeoutMsFor(id), id).toBe(0);
+    }
+  });
+
+  // Google deprecated both on 2026-10-08, naming the replacement; the endpoints
+  // keep working and route to it, so the stored id still works until it moves.
+  it('moves the two deprecated Flash ids to the replacements Google names, off the picker', () => {
+    expect(replacementModelFor('google', 'gemini-3.7-flash')).toBe('gemini-3.8-flash');
+    expect(replacementModelFor('google', 'gemini-3.5-flash')).toBe('gemini-3.6-flash');
+    const offered = getProvider('google')!.models.map(m => m.id);
+    for (const gone of ['gemini-3.7-flash', 'gemini-3.5-flash']) expect(offered, gone).not.toContain(gone);
+    for (const target of ['gemini-3.8-flash', 'gemini-3.6-flash']) expect(offered, target).toContain(target);
+    // 3.5 Flash-Lite is a different model, still current, and must not move.
+    expect(offered).toContain('gemini-3.5-flash-lite');
+    expect(replacementModelFor('google', 'gemini-3.5-flash-lite')).toBeUndefined();
+    // Argon and the models still offered are never migrated away from.
+    for (const id of offered) expect(replacementModelFor('google', id), id).toBeUndefined();
+    // OpenRouter ids are the user's: never rewritten.
+    expect(replacementModelFor('openrouter', 'google/gemini-3.7-flash')).toBeUndefined();
+  });
+
+  it('keeps pricing and context rows for the two deprecated ids, so old session exports still read', () => {
+    const priced = new Map(getPricingTable().map(r => [r.model, r]));
+    expect(priced.get('gemini-3.7-flash')).toMatchObject({ inputPer1M: 0.75, outputPer1M: 3.75 });
+    expect(priced.get('gemini-3.5-flash')).toMatchObject({ inputPer1M: 1.5, outputPer1M: 9 });
+    expect(getModelContextWindow('gemini-3.7-flash')).toBe(1_048_576);
+    expect(getModelContextWindow('gemini-3.5-flash')).toBe(1_048_576);
   });
 });

@@ -11,6 +11,183 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.12.0] — 2026-10-14
+
+> TL;DR — Gemini 4 Argon is the new Google default ($2/$10 until 1 December), tried against Google's API. Its thinking tokens are counted, streamed replies once, and 3.7 and 3.5 Flash move to 3.8 and 3.6.
+
+### Added
+
+- **Gemini 4 Argon** (`gemini-4-argon`), Google's flagship reasoning model,
+  generally available since 13 October. It is first in the Google picker and
+  the Google default: 3.1 Pro, still a preview, moves down one place, and a
+  config that names it keeps it. The fresh-install provider is still Z.AI.
+  Through OpenRouter it is `google/gemini-4-argon` (listed there on 14
+  October, $2/$10). The owner ran it against Google's API on 14 October with
+  their own key (below); the rest comes from Google's own pages, read the same
+  day.
+  - **A paid key only.** Google does not offer it on the free tier or on the
+    Google AI Pro plan, so a key without billing cannot call it; the picker
+    says so.
+  - **One 1,048,576-token window**, shared by what you send, its thinking and
+    its answer.
+  - **`/thinking`** offers low, medium and high. Its own default is medium, so
+    Auto runs it there; Max sends high, as there is nothing above it, and no
+    level switches thinking off. (The gate was a `gemini-3` prefix, which
+    `gemini-4-argon` fails, so it would have shipped with `/thinking` hidden.)
+  - **Latency is uneven.** The same one-line requests took 3.7 s and 29 s at
+    its default effort, and 59.7 s and 3.5 s at `reasoning_effort: "high"`, in
+    two runs the same day (native: 9.7 s and 4.6 s). Effort did not decide
+    it; allow for tens of seconds, and more for a prompt that needs real
+    thinking.
+  - **At least 32,768 reply tokens on every tier.** Its thinking counts inside
+    `max_tokens`, a hard limit, and Google says to raise anything lower for it
+    because it "can spend more of the limit on thinking than earlier models".
+    This reaches the task planner, which sent 2,048.
+  - **No `temperature`, `top_p` or `top_k`.** Google ignores them on it, so
+    Codeep leaves them out.
+  - **$2.00 in / $10.00 out per million tokens** (thinking counts as output),
+    through 30 November; **$4.00 / $20.00 from 1 December**. Cached input is 95%
+    off ($0.10, then $0.20), and there is no cache-write charge or long-prompt
+    tier. Estimates use the rate billed now and do not anticipate the rise on 1
+    December; revisit the row on that date, not before (docs/MODEL_MAINTENANCE.md).
+- **`scripts/verify-gemini-argon.mjs`**, for the owner to run with their own key
+  (`GOOGLE_API_KEY`, at most 12 requests, asks y/N first, `--dry-run` sends
+  nothing). On the OpenAI-compatible endpoint the CLI uses: a plain turn, a
+  tool call with its follow-up, one at `reasoning_effort: "high"`, and the same
+  plain and tool-call requests STREAMED with usage requested in the stream (how
+  the CLI really sends them). On the native `generateContent` API the macOS app
+  uses: one at `thinkingLevel: high` with `usageMetadata` printed verbatim, and
+  a function call replayed four ways: without its thought signature, with
+  Google's documented placeholder, as returned, and rebuilt the way the app
+  rebuilds it (which proves the signature sits where the app reads it). It
+  prints status, finish reason, usage, timing and where each signature sits for
+  each, and which replay Google accepted. **`--model <id>`** points every check at
+  another model (`--model gemini-3.8-flash`), which is how to find out whether
+  Gemini 3.x behaves like Argon.
+
+### Changed
+
+- **Gemini 3.7 Flash and 3.5 Flash are gone from the picker.** Google deprecated
+  both on 8 October and routes requests for them to 3.8 Flash and 3.6 Flash,
+  which it names as the replacements; an existing setting moves to that model
+  at launch. Their price and context rows stay, so an old session export still
+  reads. Gemini 3.5 Flash-Lite, a different model, is untouched.
+
+### Fixed
+
+- **A Google model's thinking tokens are now counted.** On Google's
+  OpenAI-compatible endpoint (what Codeep uses for every Google model) the
+  reply's `completion_tokens` leaves thinking out and there is no
+  `completion_tokens_details`: the owner's test of Argon at high effort came
+  back as `{"completion_tokens":7,"prompt_tokens":47,"total_tokens":207}`, so
+  153 thinking tokens existed only as the gap in the total — and Google bills
+  them as output. `/cost`, `/stats` and the usage ledger counted 7 output
+  tokens where Google prices 160 (its pricing page: the output price includes
+  thinking tokens; no bill was read). When a Google reply's total exceeds prompt
+  plus completion, the difference now goes to the completion count. Nothing is
+  added for any other provider (OpenRouter already folds reasoning into
+  `completion_tokens`, and elsewhere a total may legitimately differ), and
+  nothing twice if Google ever folds thinking in. This is Google-wide, not
+  Argon-only: it applies to any Google model whose reply carries such a gap.
+  **That gap was seen on non-streamed replies.** Streamed replies carry
+  `total_tokens` too (the two streamed requests of the second run), but
+  neither had any thinking in it, so a streamed reply WITH thinking was not
+  seen; the fix reads the same field and its streamed tests use a shape
+  written from the non-streamed one. How far back 3.x under-counted is not
+  known either.
+- **A streamed reply's usage is counted once.** Google's compat stream puts
+  `usage` on every chunk (both chunks of both streamed requests of the second
+  run, with the same totals), and `chat()` recorded every chunk that carried
+  it, so a streamed chat reply — compaction summaries, session titles,
+  `/plan`, `/recall` — counted twice on Google. It now keeps the last chunk's
+  usage and records it once. (The agent-turn stream already kept the last;
+  OpenAI sends usage on the final chunk only, so nothing changes there.)
+- **Plain chat waits up to 5 minutes for Argon**, not 60 seconds. The chat
+  mode of the TUI, `/plan`, compaction summaries, session titles and `/recall`
+  all go through one `chat()` request on `apiTimeout`, a single timer for the
+  whole reply; replies of 59.7 s and 29 s for a one-line prompt were seen on
+  the same day, the first 0.3 seconds under it. Argon alone gets a 300-second
+  floor there (a larger `apiTimeout` still wins). 300 seconds is the most a
+  non-streamed reply can wait: Node's own fetch drops a connection that is
+  silent for 5 minutes whatever Codeep sets. Agent turns already had 10 to 15
+  minutes and are unchanged.
+
+### Verified
+
+By the owner, on 14 October, against `gemini-4-argon` with their own key
+(`scripts/verify-gemini-argon.mjs`, two runs of 8 and 12 requests, key not in
+the output; figures in docs/MODEL_MAINTENANCE.md):
+
+- **The OpenAI-compatible endpoint accepts it**: a plain turn, a call of a
+  function tool (`read_file`), its follow-up with the reply replayed as
+  returned, `reasoning_effort: "high"` with `max_tokens: 4096` (391,
+  `finish_reason: stop`, 153 and 120 thinking tokens outside
+  `completion_tokens` in the two runs), and the plain and tool-call requests
+  streamed with `stream_options.include_usage`. The streamed tool call
+  assembles into valid JSON.
+- **The native API reports thinking apart**: `{"promptTokenCount":47,
+  "candidatesTokenCount":7,"totalTokenCount":205,"thoughtsTokenCount":151}`.
+  Total is prompt plus candidates plus thoughts.
+- **A function call replayed without its `thoughtSignature` is an HTTP 400**
+  ("Function call is missing a thought_signature in functionCall parts"), on
+  Argon **and on `gemini-3.8-flash`** in the same test, and it is a 200 when
+  replayed as returned. The signature sits on the `functionCall` part
+  (`content.parts[0].thoughtSignature`; 124 characters on a call with no
+  thinking, 332 to 348 on 3.8 Flash). A call rebuilt the way the macOS app
+  rebuilds it — the call and that part's own signature, nothing else — is
+  answered too, on both models, so the placement the app reads is right.
+- **Google's documented placeholder** (`skip_thought_signature_validator`) on
+  the first call is accepted by both models, so history that carries no
+  signature can be replayed.
+- **Usage rides on every chunk of Google's compat stream** (both chunks of
+  each streamed request, same totals) — the double counting fixed above.
+- **A thought signature comes back on a plain answer too**, and on streamed
+  chunks (`delta.extra_content.google.thought_signature`), not only on
+  function calls.
+- **Latency is uneven**: 2 to 60 s for one-line requests across the two runs,
+  with no pattern by effort.
+- **Not a run, but a reading of the code:** the CLI is not affected by the
+  signature requirement, because it keeps history as plain text and never
+  replays a function call (the agent loop in `src/utils/agent.ts` sends the
+  model's own earlier turns as text and tool results as a user message).
+
+### Not verified
+
+Still open after those runs, and each is written down so it is not claimed:
+
+- **A streamed reply WITH thinking**: whether its final chunk carries the
+  same gap in `total_tokens`. The streamed requests had no thinking. The
+  native `streamGenerateContent` `usageMetadata` the macOS app reads is not
+  covered by any check, nor is where the signature sits in its chunks (the
+  native checks used `generateContent`).
+- **What `usage` reports for cached tokens.** Every request was far below the
+  4,096 tokens implicit caching needs, so no cache hit was seen: the 95% rate
+  is Google's published price, not a measurement.
+- **Gemini 3.x other than 3.8 Flash** on the native path (3.6 Flash, 3.5
+  Flash-Lite, 3.1 Pro): the same family and almost certainly the same, not
+  tested.
+- **How each client reports Google's refusal for a free-tier key**: the exact
+  text and status were not seen.
+- **Replays with parallel function calls**: every run made one call at a
+  time. Google puts the signature on the first call of a parallel turn only;
+  the macOS code follows that and it is untested live.
+- **A signature replayed after a model switch** (Argon to another Gemini, or
+  the reverse).
+- **The macOS `response` shape** `{"content": …}` is what the rebuilt replay
+  used and was accepted; other shapes were not compared.
+- That 32,768 is the right cap in practice — it is Google's advice, not a
+  measurement.
+
+### Left alone
+
+Google says hard prompts "can take several minutes" and to allow HTTP timeouts
+of at least 15 minutes. Agent turns here get 10 minutes (12, then 15 later in
+a run) as one timer that streaming does not reset, plain chat gets
+`apiTimeout` (60 seconds; 300 for Argon, above), and Node's fetch gives up on a
+connection silent for 5 minutes whatever Codeep allows — so 15 minutes would
+need a new dependency, and a retry after a timeout bills the thinking again.
+The task planner makes its own request with no timer of its own.
+
 ## [3.11.0] — 2026-10-13
 
 > TL;DR — On Omarchy, Codeep now sends a desktop notification when a run ends or waits for you (opt-in on other Linux), `codeep usage --json` prints your usage, and bar plugins can see its status.

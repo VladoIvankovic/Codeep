@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 
 // ─── Mock setup ──────────────────────────────────────────────────────────────
@@ -49,6 +49,8 @@ vi.mock('../config/providers', () => ({
   reasoningParamsFor: vi.fn(() => ({})),
   // No response floor for the models these tests use.
   minResponseTokensFor: vi.fn(() => 0),
+  // No request-timeout floor either; the floor's own describe drives it.
+  minRequestTimeoutMsFor: vi.fn(() => 0),
   // Added to match the real module — api/index.ts dynamically imports this
   // to decide whether to skip the API-key requirement (e.g. Ollama runs keyless).
   isNoApiKeyProvider: vi.fn((_id: string) => false),
@@ -90,7 +92,7 @@ vi.mock('./ollamaNative.js', () => ({
 import { chat, validateApiKey, setProjectContext } from './index';
 import { streamOllamaNativeChat } from './ollamaNative.js';
 import { config, getApiKey, resolveBaseUrl } from '../config/index';
-import { getProviderBaseUrl, getProviderAuthHeader, getProvider, modelRejectsSamplingParams, minResponseTokensFor } from '../config/providers';
+import { getProviderBaseUrl, getProviderAuthHeader, getProvider, modelRejectsSamplingParams, minResponseTokensFor, minRequestTimeoutMsFor } from '../config/providers';
 import { withRetry } from '../utils/retry';
 import { recordTokenUsage, extractOpenAIUsage, extractAnthropicUsage } from '../utils/tokenTracker';
 
@@ -657,5 +659,75 @@ describe('chat() — response floor', () => {
     await chat('hello');
     const bodies = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.map(c => JSON.parse(c[1].body));
     expect(bodies.map(b => b.max_tokens)).toEqual([32_768, 4096]);
+  });
+});
+
+describe('chat() — request timeout floor', () => {
+  // A one-line prompt took 59.7 s at high effort on Gemini 4 Argon (owner's run,
+  // 2026-10-14), against the 60 s apiTimeout plain chat() runs on. The helper's
+  // table is pinned in providers.test.ts; what is pinned HERE is that both
+  // transports read it, take the larger of it and apiTimeout, and pass THIS
+  // model to it. The mock answers by model, so a call with the wrong argument
+  // gets 0 and the timer stays at apiTimeout.
+  const floor = minRequestTimeoutMsFor as ReturnType<typeof vi.fn>;
+  let timers: { mock: { calls: unknown[][] }; mockRestore: () => void };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    global.fetch = vi.fn();
+    mockGetApiKey.mockReturnValue('test-key');
+    mockWithRetry.mockImplementation(async (fn: () => Promise<unknown>) => fn());
+    mockResolveBaseUrl.mockReturnValue('https://api.example.com');
+    mockGetProviderBaseUrl.mockReturnValue('https://api.example.com');
+    mockGetProviderAuthHeader.mockReturnValue('Bearer');
+    floor.mockImplementation((model: string) => (model === 'gemini-4-argon' ? 300_000 : 0));
+    timers = vi.spyOn(globalThis, 'setTimeout');
+  });
+
+  afterEach(() => {
+    timers.mockRestore();
+    floor.mockImplementation(() => 0);
+  });
+
+  function useConfig(vals: Record<string, unknown>): void {
+    mockConfig.get.mockImplementation((key: string) => ({
+      language: 'en', apiTimeout: 60_000, temperature: 0.7, maxTokens: 4096, reasoningEffort: 'auto', ...vals,
+    } as Record<string, unknown>)[key]);
+  }
+
+  /** The delays of every timer chat() armed. */
+  const delays = () => timers.mock.calls.map((c: unknown[]) => c[1]);
+
+  it('arms the OpenAI-protocol request timer at the floor, not at apiTimeout', async () => {
+    useConfig({ protocol: 'openai', provider: 'google', model: 'gemini-4-argon' });
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(makeResponse({ choices: [{ message: { content: 'ok' } }] }));
+    await chat('hello');
+    expect(floor).toHaveBeenCalledWith('gemini-4-argon');
+    expect(delays()).toContain(300_000);
+    expect(delays()).not.toContain(60_000);
+  });
+
+  it('arms the Anthropic-protocol request timer at the floor too', async () => {
+    useConfig({ protocol: 'anthropic', provider: 'custom', model: 'gemini-4-argon' });
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(makeResponse({ content: [{ type: 'text', text: 'ok' }] }));
+    await chat('hello');
+    expect(delays()).toContain(300_000);
+    expect(delays()).not.toContain(60_000);
+  });
+
+  it('keeps a larger apiTimeout the user set', async () => {
+    useConfig({ protocol: 'openai', provider: 'google', model: 'gemini-4-argon', apiTimeout: 900_000 });
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(makeResponse({ choices: [{ message: { content: 'ok' } }] }));
+    await chat('hello');
+    expect(delays()).toContain(900_000);
+    expect(delays()).not.toContain(300_000);
+  });
+
+  it('leaves every other model on apiTimeout', async () => {
+    useConfig({ protocol: 'openai', provider: 'google', model: 'gemini-3.8-flash' });
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(makeResponse({ choices: [{ message: { content: 'ok' } }] }));
+    await chat('hello');
+    expect(delays()).toContain(60_000);
+    expect(delays()).not.toContain(300_000);
   });
 });

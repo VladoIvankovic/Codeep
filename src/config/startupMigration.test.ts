@@ -43,11 +43,23 @@ describe('stored model migration at startup', () => {
     const cases: [string, string, string][] = [
       ['z.ai', 'glm-5.2', 'glm-5.3'],
       ['google', 'gemini-3-flash-preview', 'gemini-3.6-flash'],
+      // Deprecated by Google on 2026-10-08, each with a named replacement.
+      ['google', 'gemini-3.7-flash', 'gemini-3.8-flash'],
+      ['google', 'gemini-3.5-flash', 'gemini-3.6-flash'],
       ['openai', 'gpt-5.5', 'gpt-5.6-sol'],
     ];
     for (const [provider, from, to] of cases) {
       const { config } = await loadWith({ migrationVersion: 4, provider, model: from });
       expect(config.get('model'), `${provider}/${from}`).toBe(to);
+    }
+  });
+
+  // The map runs on every load, so a model Codeep offers must never be in it:
+  // a pick of Argon, or of the Flash models that stay, has to survive a launch.
+  it('leaves a Google config on a model that is still offered alone', async () => {
+    for (const model of ['gemini-4-argon', 'gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite']) {
+      const { config } = await loadWith({ migrationVersion: 4, provider: 'google', model });
+      expect(config.get('model'), model).toBe(model);
     }
   });
 

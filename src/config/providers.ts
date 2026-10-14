@@ -673,19 +673,29 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro',        description: 'Most capable Gemini model' },
+      // GA 2026-10-13. Not on Google's Free tier or the Google AI Pro plan —
+      // a paid API key only. 1,048,576 window shared by input, thinking and
+      // output; the thinking levels are low | medium (default) | high.
+      { id: 'gemini-4-argon',         name: 'Gemini 4 Argon',        description: 'Flagship reasoning model — 1M context, paid API key only' },
+      // The previous Pro, still a preview ("No shutdown date announced"), so
+      // it is no longer the default.
+      { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro',        description: 'Previous Pro model (preview)' },
       { id: 'gemini-3.8-flash',       name: 'Gemini 3.8 Flash',      description: 'Latest production Flash model — adjustable thinking, 64K output' },
-      { id: 'gemini-3.7-flash',       name: 'Gemini 3.7 Flash',      description: 'Previous production Flash model' },
+      // gemini-3.7-flash and gemini-3.5-flash are not listed: Google deprecated
+      // them on 2026-10-08 and names 3.8 Flash and 3.6 Flash as the
+      // replacements (RETIRED_MODEL_REPLACEMENTS below).
       { id: 'gemini-3.6-flash',       name: 'Gemini 3.6 Flash',      description: 'Earlier production Flash model' },
-      { id: 'gemini-3.5-flash',       name: 'Gemini 3.5 Flash',      description: 'Stable frontier Flash model for coding and long agentic tasks' },
       { id: 'gemini-3.5-flash-lite',  name: 'Gemini 3.5 Flash-Lite', description: 'Latest low-latency, low-cost workhorse' },
     ],
-    defaultModel: 'gemini-3.1-pro-preview',
+    // 3.1 Pro was the default while it was the most capable model. It is still
+    // a preview; Argon is Google's stable flagship. The global fresh-install
+    // provider and model (DEFAULT_PROVIDER / DEFAULT_MODEL) are unchanged.
+    defaultModel: 'gemini-4-argon',
     defaultProtocol: 'openai',
     envKey: 'GOOGLE_API_KEY',
     subscribeUrl: 'https://aistudio.google.com/apikey',
     groupLabel: 'Google AI',
-    hint: 'Pay-per-use via Google AI API key (aistudio.google.com).',
+    hint: 'Pay-per-use via Google AI API key (aistudio.google.com). Gemini 4 Argon needs a paid-tier key.',
   },
   'openrouter': {
     name: 'OpenRouter',
@@ -725,6 +735,11 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       { id: 'openai/gpt-6-luna',                name: 'GPT-6 Luna',         description: 'OpenAI — GPT-6, fast/cheap' },
       { id: 'openai/gpt-5.6-sol',               name: 'GPT-5.6 Sol',        description: 'OpenAI — flagship' },
       { id: 'openai/gpt-5.6-luna',              name: 'GPT-5.6 Luna',       description: 'OpenAI — fast/efficient' },
+      // Vendor-prefixed like its siblings, and read from OpenRouter's
+      // /api/v1/models on 2026-10-14: 1,048,576 context, $2/$10 (the same
+      // introductory price Google bills). `google/gemini-3.7-flash` below is
+      // deprecated at Google but was still served there that day.
+      { id: 'google/gemini-4-argon',            name: 'Gemini 4 Argon',     description: 'Google — flagship reasoning' },
       { id: 'google/gemini-3.8-flash',          name: 'Gemini 3.8 Flash',   description: 'Google — latest production Flash' },
       { id: 'google/gemini-3.7-flash',          name: 'Gemini 3.7 Flash',   description: 'Google — previous production Flash' },
       { id: 'deepseek/deepseek-v4.1-flash',     name: 'DeepSeek V4.1 Flash', description: 'DeepSeek — current model' },
@@ -819,6 +834,12 @@ const RETIRED_MODEL_REPLACEMENTS: Record<string, Record<string, string>> = {
     'gemini-3-flash-preview': 'gemini-3.6-flash',
     // Shut down 2026-03-09; the server already aliases the id to 3.1 Pro.
     'gemini-3-pro-preview': 'gemini-3.1-pro-preview',
+    // Deprecated 2026-10-08 (release notes, deprecations page): "no longer
+    // available to select in Google AI Studio"; the endpoints are not shutting
+    // down and Google routes API requests to the replacement it names. Their
+    // context and pricing rows stay for old session exports.
+    'gemini-3.7-flash': 'gemini-3.8-flash',
+    'gemini-3.5-flash': 'gemini-3.6-flash',
   },
   // The V4 Flash ids are retired and served by V4.1 Flash. There is no V4 Pro
   // entry: DeepSeek cancelled its routing to Flash (see the catalogue above),
@@ -1057,6 +1078,11 @@ export function providerNoStreamWithTools(providerId: string): boolean {
  * omission as default. Kimi K2.x code/thinking models fix temperature
  * internally and 400 on any custom value, so they're here too. Google removed
  * the deprecated sampling parameters outright in the Gemini 3.7 generation.
+ * Gemini 4 Argon is listed too, although its page words it differently: "Remove
+ * temperature, top_p, and top_k from your requests. If provided, they are
+ * ignored." Ignored is not rejected, so omitting is the safe side rather than a
+ * fix for a 400 — and it keeps the user's /settings temperature from looking
+ * like it does something on a model where it does nothing.
  * GPT-6 takes temperature/top_p only at reasoning_effort "none" (Astra and
  * 6.1 Sol never — they have no "none"): the direct `openai` provider already
  * omits them for every model through requiresDefaultTemperature, so this
@@ -1067,7 +1093,7 @@ export function providerNoStreamWithTools(providerId: string): boolean {
 const SAMPLING_PARAMS_REJECTED = [
   'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5', 'claude-haiku-5',
   'kimi-k3', 'kimi-k2.7-code', 'kimi-for-coding', 'k3',
-  'gemini-3.7-flash', 'gemini-3.8-flash',
+  'gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-4-argon',
   'gpt-6',
 ];
 
@@ -1116,15 +1142,51 @@ export function getEffectiveMaxTokens(providerId: string, requested: number): nu
  * stop after a thinking block and before any text" (What's new in Claude
  * Haiku 5.5). Haiku 4.5 does not think unless asked, so it stays out.
  *
+ * Gemini 4 Argon too, at 32,768 on every tier: its thinking counts in
+ * `max_output_tokens`, "a hard limit: the response stops once thinking and
+ * output together reach it", and its migration list says "We recommend at least
+ * 32,768, since Gemini 4 Argon can spend more of the limit on thinking" (What's
+ * new in Gemini 4 Argon). The Max tier gets no raise: it sends `high`, the same
+ * request as the High tier, and Google's own default is 65,536. It protects
+ * the task planner's 2048 and any maxTokens lowered in /settings below 32,768
+ * (the one-time bump to 32,768 in config/index.ts runs once, so a value set
+ * afterwards sticks) — on agent turns and in chat() alike.
+ *
  * Matched on the canonical id and exactly, so `anthropic/claude-opus-5.5`,
- * `anthropic/claude-sonnet-5.5` and `anthropic/claude-haiku-5.5` on OpenRouter
- * are covered, and `claude-sonnet-5` is not caught by a prefix.
+ * `anthropic/claude-sonnet-5.5`, `anthropic/claude-haiku-5.5` and
+ * `google/gemini-4-argon` on OpenRouter are covered, and `claude-sonnet-5` is
+ * not caught by a prefix.
  */
 export function minResponseTokensFor(model: string, tier: ReasoningTier | undefined): number {
   const id = canonicalModelId(model);
+  if (idMatches(id, 'gemini-4-argon')) return 32_768;
   const floored = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
   if (!floored.some(family => idMatches(id, family))) return 0;
   return tier === 'max' ? 65_536 : 32_768;
+}
+
+/**
+ * The smallest request timeout (ms) worth giving this model in plain `chat()`,
+ * or 0 for none. Callers take the larger of this and `apiTimeout` (60,000 ms
+ * by default), so a user who raised `apiTimeout` keeps the larger value.
+ *
+ * Gemini 4 Argon, 300,000 ms: the owner's run of 2026-10-14 answered a
+ * one-line prompt in 3.7 s at the default effort and in 59.7 s at
+ * `reasoning_effort: "high"` on the OpenAI-compatible endpoint — a hair under
+ * the 60 s `apiTimeout` that plain `chat()` runs on (the TUI's own chat mode,
+ * /plan, compaction summaries, session titles, /recall — one timer for the
+ * whole reply, streamed or not). Google says hard prompts "can take several
+ * minutes". 300 s is the most a NON-streamed reply can wait:
+ * Node's fetch (undici) cuts a connection that is silent for 300 s whatever
+ * timer we set (headers or body), so a larger number here would not buy time,
+ * only a later and less clear failure. Agent turns are not affected: they run
+ * on `agentApiTimeout` (600-900 s, agentChat.ts) and never read this.
+ *
+ * Matched exactly like `minResponseTokensFor`, so `google/gemini-4-argon` on
+ * OpenRouter and a dated variant of the id get it too.
+ */
+export function minRequestTimeoutMsFor(model: string): number {
+  return idMatches(canonicalModelId(model), 'gemini-4-argon') ? 300_000 : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1420,7 +1482,10 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
       return id.startsWith('gpt-5') || id.startsWith('gpt-6');
     case 'google':
       // Gemini 3.x thinking_level via the OpenAI-compat reasoning_effort mapping.
-      return id.startsWith('gemini-3');
+      // Gemini 4 Argon is `gemini-4-argon`, which a `gemini-3` prefix misses —
+      // the same trap as `gpt-6-astra` behind `gpt-5` — so it is named. Its
+      // OpenAI-compat table: minimal→low, low→low, medium→medium, high→high.
+      return id.startsWith('gemini-3') || idMatches(id, 'gemini-4-argon');
     case 'deepseek':
       // `deepseek-flash` does not start with `deepseek-v4` — a prefix check
       // alone would ship the current model with /thinking hidden, the same
@@ -1510,7 +1575,11 @@ export function reasoningParamsFor(
       // and documents low | medium | high. (Medium 400'd on Gemini 3 Preview,
       // which is why this used to collapse it — that was a preview-era bug and
       // is fixed.) 'max' has no Gemini equivalent, so it tops out at high.
-      // 'minimal' is deliberately not emitted: 3.7 Flash rejects it outright.
+      // 'minimal' is deliberately not emitted: 3.7 Flash rejects it outright
+      // (Argon would map it to low, which the Low tier already sends).
+      // Gemini 4 Argon takes the same three levels and defaults to medium, so
+      // every tier below maps to a value it accepts and Max sends high. None of
+      // its levels switches thinking off, and no tier tries to.
       return { reasoning_effort: tier === 'max' ? 'high' : tier };
     case 'deepseek':
       // V4.1 Flash and V4 Pro both distinguish low / high / max — "The thinking
