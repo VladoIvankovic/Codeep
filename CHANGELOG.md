@@ -11,6 +11,51 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.12.1] — 2026-10-15
+
+> TL;DR — A launcher can hand Codeep its prompt in a file with --prompt-file, so it stays out of the process list. The Omarchy bar widget's Ask field does that from plugin 1.1.0.
+
+### Added
+
+- **`codeep --prompt-file <path>`** (also `--prompt-file=<path>`) starts a new
+  session with the file's text as its first message, exactly as
+  `codeep -- <prompt>` would: a leading `/` is text, a prompt that says `review`
+  stays a prompt, and `--yolo` means what it did. It exists for launchers. A
+  word on the command line is public: any local user can read
+  `/proc/<pid>/cmdline` on a system whose `/proc` is not mounted with
+  `hidepid`, so `codeep -- "<prompt>"` shows the prompt in the process list for
+  as long as Codeep runs. The Omarchy bar widget's Ask field did exactly that
+  (reported against its first release, omacom/omarchy-plugin-marketplace
+  #11499); from plugin 1.1.0 it writes the prompt to a private file and passes
+  only the path. An environment variable would be private too, but does not
+  arrive through a terminal that runs as a single instance (ghostty, kitty,
+  foot's server), which starts the child from its own environment.
+  - **It is strict about what it reads.** The path must be absolute (no `~`, no
+    relative path). The file must be a regular file and not a symbolic link
+    (opened without following one, and looked at again through the open
+    descriptor), owned by you, and not writable by its group or by others, and
+    at most 256 KiB of UTF-8 text. A BOM is dropped and the text trimmed; an
+    empty file is an error. Anything else ends the launch with one line saying
+    why and exit code 1, before any session starts. No message holds the
+    prompt or the path.
+  - **It removes the file after reading it, but only a launcher's own temp
+    file:** a name of `codeep-prompt-` and at least six letters or digits (what
+    `mktemp codeep-prompt-XXXXXXXXXX` makes). Any other file is read and left
+    alone, and so is one that was refused. A failed removal is not an error.
+  - **One prompt.** `-p`/`--prompt`, `--` and `--prompt-file` are three ways to
+    give it; more than one is the existing "Give the prompt once" error, whose
+    message now names all three. A missing, `--` or empty path is a
+    missing-value error, as `-p`'s is.
+  - **An older Codeep ignores it** (an unknown flag and a stray word), and
+    starts without the prompt. A launcher asks `codeep --version` first; the
+    plugin does.
+  - **What it does not cover.** It keeps the prompt out of the process list,
+    nothing more. The conversation is saved as a session as it always was (the
+    whole prompt, in `.codeep/sessions` of the project or `~/.codeep/sessions`),
+    the audit log keeps the first 400 characters of it
+    (`.codeep/audit/<day>.jsonl`, on by default), and the live status file and
+    the notification name the run by its first five plain words.
+
 ## [3.12.0] — 2026-10-14
 
 > TL;DR — Gemini 4 Argon is the new Google default ($2/$10 until 1 December), tried against Google's API. Its thinking tokens are counted, streamed replies once, and 3.7 and 3.5 Flash move to 3.8 and 3.6.

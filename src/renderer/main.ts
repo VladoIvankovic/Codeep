@@ -60,6 +60,7 @@ import {
 import type { McpServer } from '../acp/protocol';
 import { symlinkedCodeepNotice } from '../utils/projectPaths';
 import { parseLaunchArgs } from './cliArgs';
+import { readLaunchPromptFile } from './promptFile';
 import { agentConfirmationMode, pinAgentConfirmation, pinAgentInteractive, isAgentConfirmationPinned } from './agentConfirmation';
 import { followOmarchyTheme, type OmarchyThemeWatch } from './omarchyTheme';
 import { keepOmarchyAgentRecord } from './omarchyAgents';
@@ -610,6 +611,7 @@ Usage:
   codeep              Start interactive chat
   codeep -- <prompt>  Start a new session and send <prompt> as its first message
   codeep -p <prompt>  The same, with the prompt as one argument (also --prompt)
+  codeep --prompt-file <path>  The same, from a file; a launcher's codeep-prompt-* temp file is deleted once read
   codeep --yolo       Start without stopping to ask, for this launch only (see below)
   codeep account        Link CLI to your codeep.dev dashboard
   codeep account sync   Pull personalities + commands + profile (+ keys if cloud key sync is on)
@@ -707,6 +709,24 @@ Commands (in chat):
   if (launch.kind === 'error') {
     console.error(`${launch.message}\nRun codeep --help for usage.`);
     process.exit(1);
+  }
+
+  // The launch prompt, from wherever it was given. `--prompt-file` is how a
+  // launcher hands one over without putting it in the process list (see
+  // promptFile.ts): read here, before anything else starts, so a launcher's
+  // temp file is gone from disk as soon as the prompt is in memory, and a file
+  // that cannot be taken ends the launch like a malformed command line does —
+  // not by opening a session that looks as if nothing had been asked. From
+  // here on it is exactly `-- <prompt>`: a leading "/" is text, and --yolo
+  // means what it always did.
+  let launchPrompt: string | null = launch.prompt;
+  if (launch.promptFile !== null) {
+    const read = readLaunchPromptFile(launch.promptFile);
+    if (!read.ok) {
+      console.error(`${read.message}\nRun codeep --help for usage.`);
+      process.exit(1);
+    }
+    launchPrompt = read.prompt;
   }
 
   // Pinned before anything can read it, and pinned rather than written to the
@@ -1069,7 +1089,7 @@ Commands (in chat):
     accessPending = false;
     refreshWelcome();
     settleStartupAnswered();
-    if (launch.prompt === null && !launch.yolo) {
+    if (launchPrompt === null && !launch.yolo) {
       showSessionPickerInline();
       return;
     }
@@ -1077,7 +1097,7 @@ Commands (in chat):
     // After the MCP step, whose trust question the run's own confirmation
     // would otherwise replace unanswered (see startupAnswered) — and so the
     // run starts with the MCP tools registered rather than racing them.
-    const prompt = launch.prompt;
+    const prompt = launchPrompt;
     if (prompt !== null) void mcpStartup.then(() => submitAsTyped(prompt));
   };
 

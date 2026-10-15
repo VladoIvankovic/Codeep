@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, realpathSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Conf from 'conf';
@@ -639,5 +639,134 @@ describe('a command line that cannot mean what it says', () => {
     await expect(launch('--yolo', '-p')).rejects.toThrow('exit 1');
     expect(errors.join('\n')).toContain('-p needs a value');
     expect(ui.options).toBeNull(); // the TUI never started
+  });
+});
+
+describe('a launch prompt from a file (--prompt-file)', () => {
+  // Outside the project folder: a launcher's temp file is nowhere near it.
+  let drop: string;
+  const SECRET = 'rotate the signing key and tell nobody';
+  beforeEach(() => { drop = realpathSync(mkdtempSync(join(tmpdir(), 'codeep-promptdrop-'))); });
+  afterEach(() => { rmSync(drop, { recursive: true, force: true }); });
+
+  const put = (name: string, text: string, mode = 0o600) => {
+    const path = join(drop, name);
+    writeFileSync(path, text, { mode });
+    chmodSync(path, mode);
+    return path;
+  };
+  const failing = () => {
+    const errors: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { errors.push(args.join(' ')); });
+    vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as never);
+    return errors;
+  };
+
+  it('sends what the file says as the first message, as `-- <prompt>` would, and removes the launcher\'s file', async () => {
+    const path = put('codeep-prompt-AbC123xyz0', '  add a README with "quotes" and $HOME\n');
+    const { runAgentTask } = await launch('--yolo', '--prompt-file', path);
+
+    await vi.waitFor(() => expect(runAgentTask).toHaveBeenCalledTimes(1));
+    expect(userMessages()).toEqual(['add a README with "quotes" and $HOME']);
+    expect(runAgentTask.mock.calls[0][0]).toBe('add a README with "quotes" and $HOME');
+    expect(called('setLoading').map(c => c.args[0])).toEqual([true]);
+    expect(titles()).toEqual([]);
+    expect(called('showSessionPicker')).toEqual([]);
+    expect(existsSync(path)).toBe(false);
+    // --yolo means what it always meant.
+    expect((ui.options?.yolo as () => boolean)()).toBe(true);
+  });
+
+  it('waits for the usual questions without --yolo, then sends it instead of offering a session', async () => {
+    const path = put('codeep-prompt-AbC123xyz0', 'add a README');
+    const { agentConfirmationMode, config, runAgentTask } = await launch('--prompt-file=' + path);
+
+    // The file is read before any question, so it is gone while the first is open.
+    expect(titles()).toEqual(['Set as Project?']);
+    expect(runAgentTask).not.toHaveBeenCalled();
+    expect(existsSync(path)).toBe(false);
+
+    (called('showConfirm')[0].args[0] as { onConfirm: () => void }).onConfirm();
+    (called('showPermission')[0].args[2] as (level: string) => void)('write');
+
+    await vi.waitFor(() => expect(runAgentTask).toHaveBeenCalledTimes(1));
+    expect(runAgentTask.mock.calls[0][0]).toBe('add a README');
+    expect(called('showSessionPicker')).toEqual([]);
+    expect(agentConfirmationMode()).toBe(config.config.get('agentConfirmation') || 'dangerous');
+    expect((ui.options?.yolo as () => boolean)()).toBe(false);
+  });
+
+  it('keeps a leading "/" text and a leading "-v" a prompt, and a subcommand name a prompt', async () => {
+    for (const text of ['/commit everything', '-v is this verbose', 'review']) {
+      ui.calls = [];
+      const path = put('codeep-prompt-AbC123xyz0', `${text}\n`);
+      const { runAgentTask } = await launch('--yolo', '--prompt-file', path);
+      await vi.waitFor(() => expect(runAgentTask).toHaveBeenCalledTimes(1));
+      expect(runAgentTask.mock.calls[0][0]).toBe(text);
+      expect(userMessages()).toEqual([text]);
+    }
+  });
+
+  it('leaves a file that is not a launcher\'s own where it is', async () => {
+    const path = put('notes.txt', 'summarize this repository', 0o644);
+    const { runAgentTask } = await launch('--yolo', '--prompt-file', path);
+    await vi.waitFor(() => expect(runAgentTask).toHaveBeenCalledTimes(1));
+    expect(runAgentTask.mock.calls[0][0]).toBe('summarize this repository');
+    expect(existsSync(path)).toBe(true);
+  });
+
+  it('exits 1 with the reason, and starts nothing, when the file cannot be taken', async () => {
+    const errors = failing();
+    const cases: Array<[string, string]> = [
+      [put('codeep-prompt-Writable123', SECRET, 0o666), 'written by its group or by others'],
+      [join(drop, 'codeep-prompt-NotThere123'), 'cannot read the prompt file (ENOENT)'],
+      [put('codeep-prompt-Empty123456', '  \n'), 'the prompt file is empty'],
+      ['relative/codeep-prompt-AbC123xyz0', 'must be absolute'],
+    ];
+    for (const [path, reason] of cases) {
+      errors.length = 0;
+      ui.options = null;
+      await expect(launch('--yolo', '--prompt-file', path)).rejects.toThrow('exit 1');
+      const said = errors.join('\n');
+      expect(said).toContain(reason);
+      expect(said).toContain('Run codeep --help for usage.');
+      expect(said).not.toContain(SECRET);
+      // Neither the path (a buggy launcher can put the prompt there) nor the
+      // launcher's file-name prefix: the message is a fixed phrase.
+      expect(said).not.toContain(path);
+      expect(said).not.toContain('codeep-prompt-');
+      expect(ui.options).toBeNull(); // the TUI never started
+    }
+    // A file that was refused before it was read stays.
+    expect(existsSync(join(drop, 'codeep-prompt-Writable123'))).toBe(true);
+  });
+
+  it('never echoes the path argument, even when that argument is the prompt text', async () => {
+    const errors = failing();
+    ui.options = null;
+    await expect(launch('--yolo', '--prompt-file', SECRET)).rejects.toThrow('exit 1');
+    const said = errors.join('\n');
+    expect(said).toContain('must be absolute');
+    expect(said).not.toContain(SECRET);
+    expect(ui.options).toBeNull();
+  });
+
+  it('is in codeep --help, in one line', async () => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.join(' ')); });
+    vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as never);
+    await expect(launch('--help')).rejects.toThrow('exit 0');
+    const flag = lines.join('\n').split('\n').filter(l => l.includes('--prompt-file'));
+    expect(flag).toHaveLength(1);
+    expect(flag[0]).toMatch(/^\s*codeep --prompt-file <path>\s+The same, from a file/);
+  });
+
+  it('refuses a second prompt before it reads, or removes, the file', async () => {
+    const errors = failing();
+    const path = put('codeep-prompt-AbC123xyz0', 'the one in the file');
+    await expect(launch('-p', 'and the one on the line', '--prompt-file', path)).rejects.toThrow('exit 1');
+    expect(errors.join('\n')).toContain('Give the prompt once');
+    expect(existsSync(path)).toBe(true);
+    expect(ui.options).toBeNull();
   });
 });

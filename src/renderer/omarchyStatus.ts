@@ -15,9 +15,10 @@
  * `state` is idle, working, approval (a dialog waits for you) or question (a
  * clarifying question does); `task` is the run's short label while it is
  * anything but idle, cleaned as a toast's is (desktopNotify.ts noticeLabel);
- * `kind` is `tui` or `acp`. Counts and names, never prompt text, an answer or
- * a command line — only the working directory and its name are paths, and
- * they are Codeep's own.
+ * `kind` is `tui` or `acp`. Counts and names: the task is a label of at most
+ * five plain words from the start of the prompt (paths, URLs and file names
+ * left out), never the prompt itself, an answer or a command line — only the
+ * working directory and its name are paths, and they are Codeep's own.
  *
  * The file is replaced whole — written to `.<pid>.<random>.tmp`, which a
  * reader scanning for `*.json` never lists, and renamed over `<pid>.json` — at
