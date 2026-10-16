@@ -7,6 +7,9 @@ import {
   formatDuration,
   shouldNotify,
   NOTIFY_AFTER_MS,
+  NOTICE_DELAY_CHOICES_S,
+  validNoticeDelaySeconds,
+  noticeDelayLabel,
   MAX_ANSWER_LENGTH,
   MAX_ANSWER_PARTS,
   stripMarkdown,
@@ -28,6 +31,96 @@ describe('shouldNotify', () => {
 
   it('never fires when the feature is off, however long the run', () => {
     expect(shouldNotify(60 * 60_000, false)).toBe(false);
+  });
+
+  it('still means a minute when no delay is passed', () => {
+    expect(NOTIFY_AFTER_MS).toBe(60_000);
+    expect(shouldNotify(59_999, true)).toBe(false);
+    expect(shouldNotify(60_000, true)).toBe(true);
+  });
+
+  describe('with a delay of its own', () => {
+    it('fires at exactly the delay and not a millisecond before', () => {
+      expect(shouldNotify(30_000, true, 30_000)).toBe(true);
+      expect(shouldNotify(29_999, true, 30_000)).toBe(false);
+      expect(shouldNotify(30_001, true, 30_000)).toBe(true);
+    });
+
+    it('does not fall back to a minute when the delay is shorter', () => {
+      expect(shouldNotify(15_000, true, 15_000)).toBe(true);
+      expect(shouldNotify(30_000, true, 15_000)).toBe(true);
+    });
+
+    it('holds a run back for as long as a longer delay says', () => {
+      expect(shouldNotify(61_000, true, 300_000)).toBe(false);
+      expect(shouldNotify(299_999, true, 300_000)).toBe(false);
+      expect(shouldNotify(300_000, true, 300_000)).toBe(true);
+    });
+
+    it('sends every run, however short, at a delay of zero', () => {
+      expect(shouldNotify(0, true, 0)).toBe(true);
+      expect(shouldNotify(1, true, 0)).toBe(true);
+    });
+
+    it('is still off when the feature is off', () => {
+      expect(shouldNotify(60 * 60_000, false, 0)).toBe(false);
+    });
+  });
+});
+
+describe('the notice delay choices', () => {
+  it('are the five the Mac app offers, in order, and a minute is among them', () => {
+    expect([...NOTICE_DELAY_CHOICES_S]).toEqual([0, 15, 30, 60, 300]);
+    expect(NOTICE_DELAY_CHOICES_S).toContain(NOTIFY_AFTER_MS / 1000);
+  });
+
+  describe('validNoticeDelaySeconds', () => {
+    it.each([0, 15, 30, 60, 300])('keeps %s', (seconds) => {
+      expect(validNoticeDelaySeconds(seconds)).toBe(seconds);
+    });
+
+    it('keeps 0 as 0 and does not mistake it for "unset"', () => {
+      expect(validNoticeDelaySeconds(0)).toBe(0);
+      // -0 is what JSON.parse("-0") gives; it is the choice 0, not a new value.
+      expect(Object.is(validNoticeDelaySeconds(-0), 0)).toBe(true);
+    });
+
+    it.each([
+      ['a string that spells a choice', '30'],
+      ['NaN', NaN],
+      ['Infinity', Infinity],
+      ['-Infinity', -Infinity],
+      ['a negative number', -1],
+      ['a number between choices', 45],
+      ['a number past the last choice', 3600],
+      ['a fraction of a choice', 29.5],
+      ['null', null],
+      ['undefined', undefined],
+      ['true', true],
+      ['false', false],
+      ['an object', {}],
+      ['an array holding a choice', [30]],
+    ])('falls back to a minute for %s', (_what, value) => {
+      expect(validNoticeDelaySeconds(value)).toBe(60);
+    });
+  });
+
+  describe('noticeDelayLabel', () => {
+    it.each([
+      [0, 'Right away'],
+      [15, '15 seconds'],
+      [30, '30 seconds'],
+      [60, '1 minute'],
+      [300, '5 minutes'],
+    ])('calls %s "%s"', (seconds, label) => {
+      expect(noticeDelayLabel(seconds)).toBe(label);
+    });
+
+    it('calls a value that is not offered the minute it will be treated as', () => {
+      expect(noticeDelayLabel(45)).toBe('1 minute');
+      expect(noticeDelayLabel('30')).toBe('1 minute');
+      expect(noticeDelayLabel(undefined)).toBe('1 minute');
+    });
   });
 });
 

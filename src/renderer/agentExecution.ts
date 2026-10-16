@@ -12,7 +12,7 @@ import { isAnthropicRefusalNotice } from '../api/anthropicContent';
 import { runAgent, AgentResult, PermissionOutcome } from '../utils/agent';
 import { TelegramApproval, outcomeForAnswer, describePermissionOutcome } from '../utils/telegramApproval';
 import { loadTelegramCredentials } from '../utils/telegramCredentials';
-import { composeRunMessages, noticeAnswer, sendTelegramNotice, shortLabel, shouldNotify } from '../utils/telegramNotify';
+import { composeRunMessages, noticeAnswer, sendTelegramNotice, shortLabel, shouldNotify, validNoticeDelaySeconds } from '../utils/telegramNotify';
 import { takeRunFromPhone } from '../utils/telegramInbox';
 import { isFlatFeeProvider } from '../config/providers';
 import { raceApproval, type RaceParticipant } from '../utils/approvalRace';
@@ -751,11 +751,12 @@ export async function executeAgentTask(
     if (telegramCredentials) {
       const elapsedMs = Date.now() - runStartedAt;
       const fromPhone = startedFromPhone;
-      // The one-minute threshold exists so a phone is not buzzed about work you
-      // watched finish. It has no business gating a run the phone itself asked
-      // for: that answer was wanted whether it took ten seconds or ten minutes,
-      // and withholding it leaves "Started —" as the last word.
-      if (fromPhone || shouldNotify(elapsedMs, true)) {
+      // The threshold is the delay you chose ("Telegram run notices after": a
+      // minute unless changed). It exists so a phone is not buzzed about work
+      // you watched finish. It has no business gating a run the phone itself
+      // asked for: that answer was wanted whether it took ten seconds or ten
+      // minutes, and withholding it leaves "Started —" as the last word.
+      if (fromPhone || shouldNotify(elapsedMs, true, validNoticeDelaySeconds(config.get('telegramNoticeAfter')) * 1000)) {
         const payPerUse = costBreakdown.filter(entry => !isFlatFeeProvider(entry.provider));
         // Usually one message. An answer past Telegram's limit continues into
         // further ones rather than being cut at the first — awaited in turn so

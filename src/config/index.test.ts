@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -228,3 +228,46 @@ describe('fresh-install defaults', () => {
   });
 });
 
+describe('telegramNoticeAfter', () => {
+  const originalDir = process.env.CODEEP_CONFIG_DIR;
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    process.env.CODEEP_CONFIG_DIR = originalDir;
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    vi.resetModules();
+  });
+
+  /** config/index.ts loaded fresh over a config.json holding `stored`. */
+  async function loadWith(stored: Record<string, unknown> | null) {
+    const dir = mkdtempSync(join(tmpdir(), 'codeep-notice-'));
+    dirs.push(dir);
+    if (stored) writeFileSync(join(dir, 'config.json'), JSON.stringify(stored));
+    process.env.CODEEP_CONFIG_DIR = dir;
+    vi.resetModules();
+    const [{ config }, { validNoticeDelaySeconds }] = await Promise.all([import('./index'), import('../utils/telegramNotify')]);
+    return { config, validNoticeDelaySeconds };
+  }
+
+  it('starts at a minute on a fresh install', async () => {
+    const { config } = await loadWith(null);
+    expect(config.get('telegramNoticeAfter')).toBe(60);
+  });
+
+  it('is added at a minute to a config written before it existed', async () => {
+    const { config } = await loadWith({ migrationVersion: 4, telegramApproval: true });
+    expect(config.get('telegramNoticeAfter')).toBe(60);
+  });
+
+  it('keeps a choice that was made', async () => {
+    const { config } = await loadWith({ migrationVersion: 4, telegramNoticeAfter: 15 });
+    expect(config.get('telegramNoticeAfter')).toBe(15);
+  });
+
+  it('loads over a stored value that is junk, and reads as a minute', async () => {
+    for (const junk of ['soon', '30', 45, -1, null, true]) {
+      const { config, validNoticeDelaySeconds } = await loadWith({ migrationVersion: 4, telegramNoticeAfter: junk });
+      expect(validNoticeDelaySeconds(config.get('telegramNoticeAfter')), String(junk)).toBe(60);
+    }
+  });
+});

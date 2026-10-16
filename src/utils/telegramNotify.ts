@@ -13,18 +13,75 @@ const API = 'https://api.telegram.org/bot';
 const REQUEST_TIMEOUT_MS = 10_000;
 
 /**
- * Runs shorter than this are not worth a notification.
+ * How long a terminal run must take before it sends its notice, unless you
+ * chose another delay: a minute.
  *
  * The problem this solves is walking away — starting something substantial,
  * making coffee, and not knowing it finished. A `git status` that returned in
  * two seconds was never going to outlast your attention, and a phone that
  * buzzes for every one of those gets muted within a day, taking the
  * notifications that mattered with it.
+ *
+ * A minute is where that holds for most people, not for everyone: someone whose
+ * runs take thirty seconds and who does walk away from them has nothing sent at
+ * all. So it is the default, and `telegramNoticeAfter` (see
+ * `NOTICE_DELAY_CHOICES_S`) lets the owner of the phone move it.
  */
 export const NOTIFY_AFTER_MS = 60_000;
 
-export function shouldNotify(elapsedMs: number, enabled: boolean): boolean {
-  return enabled && elapsedMs >= NOTIFY_AFTER_MS;
+/**
+ * The delays `telegramNoticeAfter` may hold, in seconds. `0` is every run, as
+ * soon as it ends.
+ *
+ * A short list rather than a free number: it is a row in a settings screen that
+ * cycles with the arrow keys, and the Mac app's "Send answers after" picker
+ * offers the same five, so the two apps say the same thing about the same phone.
+ */
+export const NOTICE_DELAY_CHOICES_S = [0, 15, 30, 60, 300] as const;
+
+export type NoticeDelaySeconds = (typeof NOTICE_DELAY_CHOICES_S)[number];
+
+/**
+ * The delay to use for whatever the config file holds.
+ *
+ * A config file is a text file anyone can edit, and an older or newer Codeep
+ * may have written something else into it: a string, `45`, `NaN`, `null`. A
+ * notice delay that is anything but one of the choices means a minute, which is
+ * what the default has always been. Never a crash, and never a delay that
+ * silently breaks the feature: `NaN` would hold back every notice, a negative
+ * one would send them all.
+ */
+export function validNoticeDelaySeconds(value: unknown): number {
+  // `find` rather than `includes`: it hands back the choice itself, so a stored
+  // -0 comes out as 0, and only a number can ever be `===` to one.
+  return NOTICE_DELAY_CHOICES_S.find(choice => choice === value) ?? NOTIFY_AFTER_MS / 1000;
+}
+
+const NOTICE_DELAY_LABELS: Record<NoticeDelaySeconds, string> = {
+  0: 'Right away',
+  15: '15 seconds',
+  30: '30 seconds',
+  60: '1 minute',
+  300: '5 minutes',
+};
+
+/**
+ * The words for a delay, in the Settings row and in the `/telegram` status
+ * line, so they are written in one place. A value that is not one of the
+ * choices is labelled as the minute it will be treated as.
+ */
+export function noticeDelayLabel(value: unknown): string {
+  return NOTICE_DELAY_LABELS[validNoticeDelaySeconds(value) as NoticeDelaySeconds];
+}
+
+/**
+ * Whether a run of `elapsedMs` is long enough to send its notice.
+ *
+ * `afterMs` is the chosen delay in milliseconds and defaults to a minute; a run
+ * that took exactly that long is sent, and `0` sends every run.
+ */
+export function shouldNotify(elapsedMs: number, enabled: boolean, afterMs: number = NOTIFY_AFTER_MS): boolean {
+  return enabled && elapsedMs >= afterMs;
 }
 
 /**

@@ -35,6 +35,7 @@ import {
   agentOpenAIWire,
 } from '../config/index';
 import { setTelegramToken, clearTelegramToken, hasTelegramToken } from '../utils/telegramCredentials';
+import { noticeDelayLabel } from '../utils/telegramNotify';
 import { pinAgentConfirmation } from './agentConfirmation';
 import { moveSessionPermissions } from '../utils/permissionScope';
 import { getProjectContext } from '../utils/project';
@@ -1188,6 +1189,7 @@ Format: use headers per category, only include categories where you found issues
       ctx.app.notify([
         `Telegram approval: ${enabled ? 'on' : 'off'}`,
         `Terminal answers: ${config.get('telegramTerminalAnswers') === true ? 'on' : 'off'}`,
+        `Notice after: ${noticeDelayLabel(config.get('telegramNoticeAfter'))}`,
         `Bot token: ${hasToken ? 'saved' : 'missing'}`,
         `Chat ID: ${chatId || 'missing'}`,
       ].join(' · '));

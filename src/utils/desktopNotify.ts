@@ -36,7 +36,7 @@ const debug = (...args: unknown[]) => {
 
 /**
  * A run shorter than this is not worth a toast: you watched it end. Half the
- * phone's minute, because the desktop is where you were a moment ago and a
+ * phone's default minute, because the desktop is where you were a moment ago and a
  * toast for a run you have to come back to is worth it sooner.
  */
 export const DESKTOP_NOTIFY_AFTER_MS = 30_000;

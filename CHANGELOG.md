@@ -11,6 +11,31 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.13.0] — 2026-10-16
+
+> TL;DR — A terminal run can now tell your phone right away, or after 15 s, 30 s, 1 or 5 min (Telegram run notices after, in /settings). 1 minute stays the default.
+
+### Added
+
+- **A choice of how long a run must take before it tells your phone.**
+  `/settings` has a new row, **Telegram run notices after**: Right away, 15
+  seconds, 30 seconds, 1 minute or 5 minutes. A run started at the terminal
+  sends its "Codeep finished" notice to Telegram once it has taken that long.
+  Runs of about half a minute used to send nothing, for everyone, and this is
+  the way to have them send.
+  - **1 minute is still the default.** Nothing changes until you pick another;
+    a phone is not buzzed about work you watched finish unless you ask for it.
+  - **A run started from the phone is unaffected.** It is always answered,
+    whatever the row says.
+  - **It governs the notice itself** (what ran, how long, tokens and cost).
+    Whether the notice also carries the agent's answer is still **Send
+    terminal answers to Telegram**, as before.
+  - **`/telegram`** shows the choice in its status line (`Notice after:`).
+  - **A value in the config file that is not one of the five** (a hand edit)
+    is read as 1 minute, and the row shows it as 1 minute.
+  - **The Mac app gets the same choice,** as **Send answers after**, in its
+    next release after 3.9.0.
+
 ## [3.12.1] — 2026-10-15
 
 > TL;DR — A launcher can hand Codeep its prompt in a file with --prompt-file, so it stays out of the process list. The Omarchy bar widget's Ask field does that from plugin 1.1.0.

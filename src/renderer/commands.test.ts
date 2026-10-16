@@ -34,6 +34,12 @@ vi.mock('../utils/codeepCloud', async (importOriginal) => ({
   pullCloudSession: vi.fn(async () => null),
 }));
 
+// /telegram asks the keychain whether a bot token is saved.
+vi.mock('../utils/telegramCredentials', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../utils/telegramCredentials')>()),
+  hasTelegramToken: vi.fn(async () => false),
+}));
+
 vi.mock('./agentExecution', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./agentExecution')>()),
   runSkill: vi.fn(async () => false),
@@ -134,6 +140,42 @@ describe('/learn rule', () => {
     await handleCommand('learn', ['rule', 'always', 'use', 'tabs'], ctx);
     await vi.waitFor(() => expect(notices).toContain('Custom rule added'));
     expect(loadProjectPreferences(projectDir).customRules).toEqual(['always use tabs']);
+  });
+});
+
+// ─── /telegram ───────────────────────────────────────────────────────────────
+
+describe('/telegram status line', () => {
+  const KEY = 'telegramNoticeAfter';
+  let saved: unknown;
+  beforeEach(() => { saved = config.get(KEY); });
+  afterEach(() => { config.set(KEY, (saved ?? 60) as number); });
+
+  async function statusWith(stored: unknown): Promise<string> {
+    if (stored === undefined) config.delete(KEY);
+    else config.set(KEY, stored as number);
+    const { ctx, notices } = makeCtx(projectDir);
+    (ctx.app as unknown as { showSecret: unknown }).showSecret = vi.fn();
+    await handleCommand('telegram', [], ctx);
+    expect(notices).toHaveLength(1);
+    return notices[0];
+  }
+
+  it.each([
+    [0, 'Right away'],
+    [15, '15 seconds'],
+    [30, '30 seconds'],
+    [60, '1 minute'],
+    [300, '5 minutes'],
+  ])('says "Notice after" for %s as %s, next to the terminal answers', async (seconds, label) => {
+    const status = await statusWith(seconds);
+    expect(status).toContain(`Terminal answers: off · Notice after: ${label} · Bot token: missing`);
+  });
+
+  it('says a minute for a stored value that is not one of the choices, and for none', async () => {
+    expect(await statusWith(45)).toContain('Notice after: 1 minute');
+    expect(await statusWith('30')).toContain('Notice after: 1 minute');
+    expect(await statusWith(undefined)).toContain('Notice after: 1 minute');
   });
 });
 

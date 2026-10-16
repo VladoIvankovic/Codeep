@@ -288,6 +288,103 @@ describe('handleSettingsKey — rate-limit side effect', () => {
   });
 });
 
+describe('the Telegram run notices row', () => {
+  const KEY = 'telegramNoticeAfter';
+  const row = () => SETTINGS[indexOf(KEY)];
+  const press = (key: string) => handleSettingsKey(key, false, initialState({ selectedIndex: indexOf(KEY) }));
+  /** Stored as a hand edit, an older build or a newer one might have left it. */
+  const store = (value: unknown) => config.set(KEY, value as number);
+  /** What the row shows as its current option. */
+  const shown = () => row().options!.find(o => o.value === row().getValue())?.label;
+
+  beforeEach(() => store(60));
+  afterEach(() => store(60));
+
+  it('sits right after "Send terminal answers to Telegram"', () => {
+    expect(indexOf(KEY)).toBe(indexOf('telegramTerminalAnswers') + 1);
+    expect(row().label).toBe('Telegram run notices after');
+    expect(row().type).toBe('select');
+  });
+
+  it('offers right away, 15 and 30 seconds, 1 and 5 minutes, as numbers', () => {
+    expect(row().options).toEqual([
+      { value: 0, label: 'Right away' },
+      { value: 15, label: '15 seconds' },
+      { value: 30, label: '30 seconds' },
+      { value: 60, label: '1 minute' },
+      { value: 300, label: '5 minutes' },
+    ]);
+    // toEqual treats 0 and '0' as different, but say it outright: a string
+    // option never matches getValue, and the row would go wrong silently.
+    expect(row().options!.every(o => typeof o.value === 'number')).toBe(true);
+  });
+
+  it('shows a minute by default, and again once the stored value is gone', () => {
+    expect(row().getValue()).toBe(60);
+    config.delete(KEY);
+    expect(row().getValue()).toBe(60);
+    expect(shown()).toBe('1 minute');
+  });
+
+  it('cycles forward writing numbers, and wraps from 5 minutes to right away', () => {
+    const seen: unknown[] = [];
+    for (let i = 0; i < 5; i++) {
+      press('right');
+      seen.push(config.get(KEY));
+    }
+    expect(seen).toEqual([300, 0, 15, 30, 60]);
+    expect(seen.every(v => typeof v === 'number')).toBe(true);
+  });
+
+  it('cycles backward, and wraps from right away to 5 minutes', () => {
+    store(0);
+    press('left');
+    expect(config.get(KEY)).toBe(300);
+    press('left');
+    expect(config.get(KEY)).toBe(60);
+  });
+
+  it('enter moves on and says to what', () => {
+    const r = press('enter');
+    expect(config.get(KEY)).toBe(300);
+    expect(r.notify).toBe('Telegram run notices after: 5 minutes');
+    expect(typeof config.get(KEY)).toBe('number');
+  });
+
+  it('reads 0 as a choice of its own, not as nothing chosen', () => {
+    store(0);
+    expect(row().getValue()).toBe(0);
+    expect(shown()).toBe('Right away');
+    press('right');
+    expect(config.get(KEY)).toBe(15);
+  });
+
+  // A stored value the row does not offer shows as 1 minute, and the first key
+  // press goes on from there instead of from a position the row never showed.
+  it.each([
+    ['a number between choices', 45],
+    ['a negative number', -1],
+    ['a string', 'soon'],
+    ['a string that spells a choice', '30'],
+  ])('shows %s as 1 minute and cycles on from it', (_what, junk) => {
+    store(junk);
+    expect(row().getValue()).toBe(60);
+    expect(shown()).toBe('1 minute');
+
+    press('right');
+    expect(config.get(KEY)).toBe(300);
+
+    store(junk);
+    press('left');
+    expect(config.get(KEY)).toBe(30);
+
+    store(junk);
+    const r = press('enter');
+    expect(config.get(KEY)).toBe(300);
+    expect(r.notify).toBe('Telegram run notices after: 5 minutes');
+  });
+});
+
 describe('the Omarchy row', () => {
   it('is not offered off Omarchy, where it would switch nothing', () => {
     // This worker's HOME has no ~/.local/state/omarchy; Settings.omarchy.test.ts

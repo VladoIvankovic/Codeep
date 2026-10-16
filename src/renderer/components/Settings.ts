@@ -9,6 +9,7 @@ import { isOmarchy, reapplyOmarchyTheme } from '../omarchyTheme';
 import { applyOmarchyAgentsPanel } from '../omarchyAgents';
 import { applyOmarchyLiveStatus } from '../omarchyStatus';
 import { desktopNotificationsEnabled, desktopNotificationsOffered } from '../desktopAttention';
+import { NOTICE_DELAY_CHOICES_S, noticeDelayLabel, validNoticeDelaySeconds } from '../../utils/telegramNotify';
 
 // Primary color: #f02a30 (Codeep red)
 
@@ -65,9 +66,17 @@ function writeSetting(setting: SettingItem, value: string | number | boolean): v
  * what is stored made an unset "Desktop notifications" look like it was on
  * no option at all, so every key wrote the first one: On, which on Omarchy
  * is what it already was.
+ *
+ * The same goes for a stored value the row does not offer.
  */
 function currentOf(setting: SettingItem): unknown {
-  return config.get(setting.key) ?? setting.getValue();
+  const stored = config.get(setting.key);
+  // A stored value the row does not offer — a hand-edited 45, a string — is
+  // what the row shows as something else (`getValue`), so cycling goes on from
+  // what is on screen. Left as it was, `findIndex` answered -1 and the first
+  // key press jumped to an option the row had never displayed as current.
+  if (stored !== undefined && setting.options?.some(o => o.value === stored)) return stored;
+  return setting.getValue();
 }
 
 /**
@@ -257,6 +266,17 @@ export const SETTINGS: SettingItem[] = [
       { value: true, label: 'ON' },
       { value: false, label: 'OFF' },
     ],
+  },
+  {
+    key: 'telegramNoticeAfter',
+    label: 'Telegram run notices after',
+    getValue: () => validNoticeDelaySeconds(config.get('telegramNoticeAfter')),
+    type: 'select',
+    // Numbers, not the strings '30' / '300': a string option never equals the
+    // number getValue returns, so the row would render the raw value and every
+    // key press would write a string the run's `validNoticeDelaySeconds` then
+    // throws away — a row that claims 5 minutes and sends after one.
+    options: NOTICE_DELAY_CHOICES_S.map(seconds => ({ value: seconds, label: noticeDelayLabel(seconds) })),
   },
   {
     key: 'telegramChatId',

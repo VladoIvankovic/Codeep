@@ -91,6 +91,7 @@ import { executeAgentTask, runAgentTask, runSkill, type AppExecutionContext, typ
 import { runAgent } from '../utils/agent';
 import { chat } from '../api/index';
 import { loadTelegramCredentials } from '../utils/telegramCredentials';
+import { takeRunFromPhone } from '../utils/telegramInbox';
 import { syncSession } from '../utils/codeepCloud';
 import { autoSaveSession, config } from '../config/index';
 import { recordTokenUsage } from '../utils/tokenTracker';
@@ -418,6 +419,95 @@ describe('the Telegram message at the end of a terminal run', () => {
     const texts = await sentTexts(true);
     expect(texts[0]).toContain('Codeep finished');
     expect(texts[0]).toContain('The answer: 140 files.');
+  });
+});
+
+describe('how long a terminal run must take before it tells the phone', () => {
+  /**
+   * The messages sent for a run that "takes" `runMs` (the clock is moved while
+   * it runs, as above) with `telegramNoticeAfter` stored as `after`. `after`
+   * of `undefined` is a config that never had the key.
+   */
+  async function sentAfter(runMs: number, after: unknown, opts: { fromPhone?: boolean } = {}): Promise<string[]> {
+    const texts: string[] = [];
+    const before = config.get('telegramNoticeAfter');
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset);
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: { body?: string }) => {
+      texts.push(JSON.parse(String(init?.body ?? '{}')).text);
+      return new Response('{"ok":true}', { status: 200 });
+    }));
+    vi.mocked(loadTelegramCredentials).mockResolvedValue({ botToken: 'bot', chatID: '42' });
+    vi.mocked(takeRunFromPhone).mockReturnValueOnce(opts.fromPhone === true);
+    vi.mocked(runAgent).mockImplementationOnce(async () => {
+      offset = runMs;
+      return { success: true, iterations: 1, actions: [], finalResponse: 'The answer: 140 files.' } as Awaited<ReturnType<typeof runAgent>>;
+    });
+    try {
+      if (after === undefined) config.delete('telegramNoticeAfter');
+      else config.set('telegramNoticeAfter', after as number);
+      await executeAgentTask('analyse the project', false, makeCtx());
+    } finally {
+      config.set('telegramNoticeAfter', before ?? 60);
+      vi.mocked(loadTelegramCredentials).mockResolvedValue(null);
+      vi.unstubAllGlobals();
+      clock.mockRestore();
+    }
+    return texts;
+  }
+
+  it('is a minute by default: a 30 second run sends nothing, a 61 second one does', async () => {
+    expect(await sentAfter(30_000, 60)).toEqual([]);
+    expect(await sentAfter(30_000, undefined)).toEqual([]);
+    expect((await sentAfter(61_000, 60)).join('\n')).toContain('Codeep finished');
+    expect((await sentAfter(61_000, undefined)).join('\n')).toContain('Codeep finished');
+  });
+
+  it('sends a 30 second run once the delay is 30 seconds, and one of 20 seconds not', async () => {
+    expect((await sentAfter(30_000, 30)).join('\n')).toContain('Codeep finished');
+    expect(await sentAfter(20_000, 30)).toEqual([]);
+  });
+
+  it('sends a 30 second run once the delay is 15 seconds', async () => {
+    expect((await sentAfter(30_000, 15)).join('\n')).toContain('Codeep finished');
+    expect(await sentAfter(10_000, 15)).toEqual([]);
+  });
+
+  it('sends even a one second run when the delay is right away', async () => {
+    const texts = await sentAfter(1_000, 0);
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain('Codeep finished');
+  });
+
+  it('holds back a 61 second run when the delay is 5 minutes, and sends one of 5 minutes', async () => {
+    expect(await sentAfter(61_000, 300)).toEqual([]);
+    expect((await sentAfter(300_000, 300)).join('\n')).toContain('Codeep finished');
+  });
+
+  it('still answers a run the phone started, whatever the delay', async () => {
+    const texts = await sentAfter(1_000, 300, { fromPhone: true });
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain('Codeep finished');
+    // And it is the phone's answer: a run it asked for carries its answer.
+    expect(texts[0]).toContain('The answer: 140 files.');
+  });
+
+  it('treats a stored value that is not one of the choices as a minute', async () => {
+    // 45 and "30" are what a hand edit leaves; without the check they would be
+    // taken at face value and these 50 and 31 second runs would be sent.
+    expect(await sentAfter(50_000, 45)).toEqual([]);
+    expect(await sentAfter(31_000, '30')).toEqual([]);
+    expect(await sentAfter(5_000, -1)).toEqual([]);
+    // And one that is not a number at all must not hold every notice back.
+    expect((await sentAfter(61_000, 'soon')).join('\n')).toContain('Codeep finished');
+  });
+
+  it('puts the setting back as it found it', async () => {
+    config.set('telegramNoticeAfter', 15);
+    await sentAfter(1_000, 300);
+    expect(config.get('telegramNoticeAfter')).toBe(15);
+    config.set('telegramNoticeAfter', 60);
   });
 });
 

@@ -139,6 +139,14 @@ export interface ConfigSchema {
    *  read, a command line or a secret inside an error, and the chat syncs to
    *  Telegram's servers. A run started from the phone always gets its answer. */
   telegramTerminalAnswers: boolean;
+  /** How long a run started at the terminal must take before it sends its
+   *  "Codeep finished" notice to Telegram, in seconds: one of 0 (every run,
+   *  right away), 15, 30, 60 or 300. Default 60, so a phone is not buzzed about
+   *  work you watched finish. It governs the notice itself — what ran, how
+   *  long, tokens and cost; whether the notice also carries the agent's answer
+   *  is `telegramTerminalAnswers`. A run started from the phone is always
+   *  answered, whatever this says. Anything else stored here is read as 60. */
+  telegramNoticeAfter: number;
   /** The single chat allowed to answer. Not a secret — it identifies a
    *  conversation, and it is useless without the token. */
   telegramChatId: string;
@@ -388,6 +396,7 @@ function createConfig(): Conf<ConfigSchema> {
     telegramApproval: false,
     telegramInbox: false,
     telegramTerminalAnswers: false,
+    telegramNoticeAfter: 60,
     telegramChatId: '',
     agentConfirmDeleteFile: true,
     agentConfirmExecuteCommand: true,
