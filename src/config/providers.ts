@@ -205,9 +205,10 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'MiniMax-M3', name: 'MiniMax M3', description: 'Latest MiniMax model' },
+      { id: 'MiniMax-M3.1-Flash', name: 'MiniMax M3.1 Flash', description: 'Latest MiniMax model — 1M context, thinking always on, tunable depth' },
+      { id: 'MiniMax-M3', name: 'MiniMax M3', description: 'Previous MiniMax flagship — 1M context' },
     ],
-    defaultModel: 'MiniMax-M3',
+    defaultModel: 'MiniMax-M3.1-Flash',
     defaultProtocol: 'anthropic',
     envKey: 'MINIMAX_API_KEY',
     subscribeUrl: 'https://platform.minimax.io/subscribe/coding-plan?code=2lWvoWUhrp&source=link',
@@ -226,9 +227,10 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'MiniMax-M3', name: 'MiniMax M3', description: 'Latest MiniMax model' },
+      { id: 'MiniMax-M3.1-Flash', name: 'MiniMax M3.1 Flash', description: 'Latest MiniMax model — 1M context, thinking always on, tunable depth' },
+      { id: 'MiniMax-M3', name: 'MiniMax M3', description: 'Previous MiniMax flagship — 1M context' },
     ],
-    defaultModel: 'MiniMax-M3',
+    defaultModel: 'MiniMax-M3.1-Flash',
     defaultProtocol: 'openai',
     envKey: 'MINIMAX_API_KEY',
     subscribeUrl: 'https://platform.minimax.io',
@@ -251,9 +253,10 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
       },
     },
     models: [
-      { id: 'MiniMax-M3', name: 'MiniMax M3', description: 'Latest MiniMax model' },
+      { id: 'MiniMax-M3.1-Flash', name: 'MiniMax M3.1 Flash', description: 'Latest MiniMax model — 1M context, thinking always on, tunable depth' },
+      { id: 'MiniMax-M3', name: 'MiniMax M3', description: 'Previous MiniMax flagship — 1M context' },
     ],
-    defaultModel: 'MiniMax-M3',
+    defaultModel: 'MiniMax-M3.1-Flash',
     defaultProtocol: 'anthropic',
     envKey: 'MINIMAX_CN_API_KEY',
     subscribeUrl: 'https://platform.minimaxi.com',
@@ -288,10 +291,14 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // The 09-10 news post still carries the old routing text; the changelog is
     // the newer source. So Pro is a separate, separately billed model again.
     //
+    // `deepseek-flash` became DeepSeek-V4.1-Flash-1017 on 2026-10-17: same id,
+    // same price, same limits ("simply use `deepseek-flash` to access the
+    // latest model"), so nothing here changes but the description.
+    //
     // The ids differ on OpenRouter: `deepseek/deepseek-v4.1-flash`, and
     // `deepseek/deepseek-v4-pro-0813` for this Pro (see the fallback list).
     models: [
-      { id: 'deepseek-flash', name: 'DeepSeek V4.1 Flash', description: 'Current DeepSeek model — thinking on by default, vision, 1M context, 384K output' },
+      { id: 'deepseek-flash', name: 'DeepSeek V4.1 Flash', description: 'Current DeepSeek model (V4.1-Flash-1017) — thinking on by default, vision, 1M context, 384K output' },
       { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', description: 'Larger V4 model (V4-Pro-0813) — thinking on, 1M context, no vision, about 4x Flash\'s price' },
     ],
     defaultModel: 'deepseek-flash',
@@ -1517,8 +1524,14 @@ export function modelSupportsReasoningEffort(providerId: string, model: string):
       // OpenRouter normalizes a unified `reasoning` field and silently ignores
       // it for non-reasoning models, so the control is always safe to expose.
       return true;
+    case 'minimax': case 'minimax-api': case 'minimax-cn':
+      // Only M3.1 Flash. Its docs list `effort` as low/medium/high/xhigh/max
+      // (default max) and M3's list nothing, so M3 stays without a control
+      // rather than being sent a field it may 400 on. Matched on the canonical
+      // id and by prefix, so a dated or `minimax/` namespaced form is covered.
+      return idMatches(id, 'minimax-m3-1-flash');
     default:
-      // minimax (toggle only), ollama, custom — no graded depth knob.
+      // ollama, custom — no graded depth knob.
       return false;
   }
 }
@@ -1537,7 +1550,7 @@ export function reasoningParamsFor(
    *  calling). `wire`: the endpoint it goes to — 'responses' returns the
    *  Responses shape `{ reasoning: { effort } }` from the same per-model
    *  ladder; omitted means Chat Completions, as before. */
-  opts: { tools?: boolean; wire?: OpenAIWire } = {},
+  opts: { tools?: boolean; wire?: OpenAIWire; protocol?: 'openai' | 'anthropic' } = {},
 ): Record<string, unknown> {
   const wire = opts.wire ?? 'chat';
   if (wire === 'responses') {
@@ -1581,6 +1594,19 @@ export function reasoningParamsFor(
       // every tier below maps to a value it accepts and Max sends high. None of
       // its levels switches thinking off, and no tier tries to.
       return { reasoning_effort: tier === 'max' ? 'high' : tier };
+    case 'minimax': case 'minimax-api': case 'minimax-cn':
+      // M3.1 Flash takes low/medium/high/xhigh/max and thinking cannot be
+      // switched off ("effort: none" is a 400, "requires adaptive thinking"),
+      // so there is no tier that sends none. Our four tiers map one to one;
+      // xhigh sits between High and Max and has no tier of its own. The field
+      // differs by protocol (text-generation, "Thinking depth"): the Anthropic
+      // endpoint reads `output_config.effort`, the OpenAI one
+      // `reasoning_effort`. The caller names the protocol; with none given the
+      // provider's own default decides, which is Anthropic for `minimax` and
+      // `minimax-cn` and OpenAI for `minimax-api` (the only one it has).
+      return (opts.protocol ?? PROVIDERS[providerId]?.defaultProtocol) === 'anthropic'
+        ? { output_config: { effort: tier } }
+        : { reasoning_effort: tier };
     case 'deepseek':
       // V4.1 Flash and V4 Pro both distinguish low / high / max — "The thinking
       // modes of V4-Pro and V4-Flash now support three thinking effort levels"
@@ -1639,6 +1665,10 @@ export function availableReasoningTiers(providerId: string, model: string): Reas
       // is 3.7 Flash's own default and the tier Google recommends for agentic
       // coding, so collapsing it hid the setting most users want.
       return ['auto', 'low', 'medium', 'high'];
+    case 'minimax': case 'minimax-api': case 'minimax-cn':
+      // M3.1 Flash's five levels are low/medium/high/xhigh/max; the four tiers
+      // are each a distinct level of it.
+      return ['auto', 'low', 'medium', 'high', 'max'];
     case 'deepseek':
       return ['auto', 'low', 'high', 'max'];
     case 'z.ai': case 'z.ai-api': case 'z.ai-cn': case 'z.ai-cn-api':

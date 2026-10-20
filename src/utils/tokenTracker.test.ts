@@ -86,6 +86,7 @@ describe('getModelContextWindow', () => {
     expect(getModelContextWindow('glm-5.2')).toBe(1_000_000);
     expect(getModelContextWindow('claude-opus-5')).toBe(1_000_000);
     expect(getModelContextWindow('MiniMax-M3')).toBe(1_000_000);
+    expect(getModelContextWindow('MiniMax-M3.1-Flash')).toBe(1_000_000);
     expect(getModelContextWindow('gemini-3.5-flash')).toBe(1_048_576);
     expect(getModelContextWindow('k3-256k')).toBe(262_144);
     expect(getModelContextWindow('qwen3.8-max-preview')).toBe(1_000_000);
@@ -374,6 +375,23 @@ describe('getCostBreakdown', () => {
     expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.00354, 8);
   });
 
+  // M3: $0.06 hit against $0.30 miss. M3.1 Flash: $0.015 against $0.15, which is
+  // the 0.1 default, so it needs no row of its own.
+  it('reads a MiniMax cache hit at 0.2× on M3 and 0.1× on M3.1 Flash', () => {
+    expect(cacheReadRateFor('MiniMax-M3', 'minimax-api')).toBe(0.2);
+    expect(cacheReadRateFor('MiniMax-M3.1-Flash', 'minimax-api')).toBe(0.1);
+  });
+
+  it('prices a MiniMax M3.1 Flash request at $0.15 / $0.60 with cache hits at $0.015', () => {
+    recordTokenUsage(
+      { promptTokens: 1_000_000, completionTokens: 1_000_000, totalTokens: 2_000_000, cacheReadTokens: 400_000 },
+      'MiniMax-M3.1-Flash',
+      'minimax-api',
+    );
+    // 600K uncached at $0.15 = 0.09; 400K cached at $0.015 = 0.006; 1M out at $0.60.
+    expect(getCostBreakdown()[0].estimatedCost).toBeCloseTo(0.09 + 0.006 + 0.60, 8);
+  });
+
   it('bills a DeepSeek V4 Pro cache read at its own 1/30 ratio', () => {
     expect(cacheReadRateFor('deepseek-v4-pro', 'deepseek')).toBeCloseTo(0.044 / 1.32, 10);
     expect(cacheReadRateFor('deepseek-flash', 'deepseek')).toBe(0.02);
@@ -577,6 +595,8 @@ describe('getPricingTable', () => {
     expect(byModel.get('gpt-5.6-sol')).toMatchObject({ inputPer1M: 4, outputPer1M: 20 });
     // M3 up to 512K prompt tokens — the 0.60/2.40 tier doubled nearly every estimate.
     expect(byModel.get('MiniMax-M3')).toMatchObject({ inputPer1M: 0.30, outputPer1M: 1.20 });
+    // M3.1 Flash: one tier, $0.15 / $0.60 (pricing-paygo, 2026-10-20).
+    expect(byModel.get('MiniMax-M3.1-Flash')).toMatchObject({ inputPer1M: 0.15, outputPer1M: 0.60 });
     expect(byModel.get('qwen3.8-max')).toMatchObject({ inputPer1M: 2, outputPer1M: 6 });
     expect(byModel.get('qwen3.8-flash')).toMatchObject({ inputPer1M: 0.15, outputPer1M: 0.47 });
     // Grok 4.6 inherits 4.5's base-tier rate, and 4.7 keeps it.

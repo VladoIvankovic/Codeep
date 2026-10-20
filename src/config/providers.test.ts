@@ -220,6 +220,84 @@ describe('providers', () => {
     });
   });
 
+  describe('MiniMax M3.1 Flash', () => {
+    // pricing-paygo and text-generation, read 2026-10-20: M3.1 Flash is the
+    // latest M-series model and M3 "also remains available".
+    it('is first and the default on all three MiniMax providers, with M3 kept beside it', () => {
+      for (const id of ['minimax', 'minimax-api', 'minimax-cn']) {
+        const provider = getProvider(id)!;
+        expect(provider.defaultModel, id).toBe('MiniMax-M3.1-Flash');
+        expect(provider.models.map(m => m.id), id).toEqual(['MiniMax-M3.1-Flash', 'MiniMax-M3']);
+      }
+    });
+
+    it('keeps each provider on the protocol it already used', () => {
+      expect(PROVIDERS['minimax'].defaultProtocol).toBe('anthropic');
+      expect(PROVIDERS['minimax-api'].defaultProtocol).toBe('openai');
+      expect(PROVIDERS['minimax-cn'].defaultProtocol).toBe('anthropic');
+    });
+
+    // Thinking cannot be turned off on M3.1 Flash, and its docs list a
+    // five-level `effort` (low/medium/high/xhigh/max, default max). The field
+    // is named differently on each protocol, so the tier maps to a different
+    // body depending on which one the request goes out on.
+    it('offers /thinking on M3.1 Flash, on every MiniMax provider, and not on M3', () => {
+      for (const id of ['minimax', 'minimax-api', 'minimax-cn']) {
+        expect(modelSupportsReasoningEffort(id, 'MiniMax-M3.1-Flash'), id).toBe(true);
+        expect(availableReasoningTiers(id, 'MiniMax-M3.1-Flash'), id).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+        expect(modelSupportsReasoningEffort(id, 'MiniMax-M3'), id).toBe(false);
+        expect(availableReasoningTiers(id, 'MiniMax-M3'), id).toEqual([]);
+      }
+    });
+
+    it('sends output_config.effort on the Anthropic protocol', () => {
+      for (const tier of ['low', 'medium', 'high', 'max'] as const) {
+        expect(reasoningParamsFor('minimax', 'MiniMax-M3.1-Flash', tier, { protocol: 'anthropic' }))
+          .toEqual({ output_config: { effort: tier } });
+        expect(reasoningParamsFor('minimax-cn', 'MiniMax-M3.1-Flash', tier, { protocol: 'anthropic' }))
+          .toEqual({ output_config: { effort: tier } });
+      }
+    });
+
+    it('sends reasoning_effort on the OpenAI protocol', () => {
+      for (const tier of ['low', 'medium', 'high', 'max'] as const) {
+        expect(reasoningParamsFor('minimax', 'MiniMax-M3.1-Flash', tier, { protocol: 'openai' }))
+          .toEqual({ reasoning_effort: tier });
+        expect(reasoningParamsFor('minimax-api', 'MiniMax-M3.1-Flash', tier, { protocol: 'openai' }))
+          .toEqual({ reasoning_effort: tier });
+      }
+    });
+
+    // With no protocol named, the provider's own default decides: Anthropic for
+    // the two subscriptions, OpenAI for pay-per-use (which has only that one).
+    it("falls back to the provider's default protocol when none is named", () => {
+      expect(reasoningParamsFor('minimax', 'MiniMax-M3.1-Flash', 'high')).toEqual({ output_config: { effort: 'high' } });
+      expect(reasoningParamsFor('minimax-cn', 'MiniMax-M3.1-Flash', 'high')).toEqual({ output_config: { effort: 'high' } });
+      expect(reasoningParamsFor('minimax-api', 'MiniMax-M3.1-Flash', 'high')).toEqual({ reasoning_effort: 'high' });
+    });
+
+    it('sends nothing on auto, on M3, and never "none" (thinking cannot be switched off)', () => {
+      expect(reasoningParamsFor('minimax', 'MiniMax-M3.1-Flash', 'auto')).toEqual({});
+      for (const tier of REASONING_TIERS) {
+        expect(reasoningParamsFor('minimax', 'MiniMax-M3', tier, { protocol: 'anthropic' }), `M3 ${tier}`).toEqual({});
+        expect(JSON.stringify(reasoningParamsFor('minimax', 'MiniMax-M3.1-Flash', tier, { protocol: 'anthropic' })))
+          .not.toContain('none');
+      }
+    });
+
+    it('matches a namespaced or dated M3.1 Flash id, and not a different model', () => {
+      expect(modelSupportsReasoningEffort('minimax', 'minimax/minimax-m3.1-flash')).toBe(true);
+      expect(modelSupportsReasoningEffort('minimax', 'MiniMax-M3.1-Flash-20261020')).toBe(true);
+      expect(modelSupportsReasoningEffort('minimax', 'MiniMax-M3.10')).toBe(false);
+    });
+
+    it('does not migrate M3, which is still offered', () => {
+      for (const id of ['minimax', 'minimax-api', 'minimax-cn']) {
+        expect(replacementModelFor(id, 'MiniMax-M3'), id).toBeUndefined();
+      }
+    });
+  });
+
   describe('minimax-cn provider', () => {
     it('should have correct name and endpoints', () => {
       expect(PROVIDERS['minimax-cn']).toBeDefined();
@@ -791,7 +869,7 @@ describe('providers', () => {
     it('treats OpenRouter as always supported (unified, silently ignored)', () => {
       expect(modelSupportsReasoningEffort('openrouter', 'anthropic/claude-opus-4')).toBe(true);
     });
-    it('returns false for minimax, ollama, custom', () => {
+    it('returns false for MiniMax M3, ollama, custom', () => {
       expect(modelSupportsReasoningEffort('minimax', 'MiniMax-M3')).toBe(false);
       expect(modelSupportsReasoningEffort('ollama', 'llama3.2')).toBe(false);
       expect(modelSupportsReasoningEffort('custom', 'anything')).toBe(false);
@@ -933,6 +1011,7 @@ describe('providers', () => {
         ['google', 'gemini-3.1-pro-preview'], ['google', 'gemini-4-argon'], ['z.ai-api', 'glm-5.2'], ['z.ai', 'glm-5.3'],
         ['kimi-api', 'kimi-k3'], ['kimi', 'kimi-for-coding'],
         ['deepseek', 'deepseek-flash'], ['deepseek', 'deepseek-v4-pro'],
+        ['minimax', 'MiniMax-M3.1-Flash'], ['minimax-api', 'MiniMax-M3.1-Flash'],
         ['openrouter', 'openai/gpt-5.5'], ['openrouter', 'openai/gpt-6.1-sol'], ['openrouter', 'openai/gpt-6-sol'], ['openrouter', 'x-ai/grok-4.7'],
         ['openrouter', 'google/gemini-3.8-flash'], ['openrouter', 'google/gemini-4-argon'],
         ['grok', 'grok-4.3'], ['grok', 'grok-4.5'], ['grok', 'grok-4.6'], ['grok', 'grok-4.7'],

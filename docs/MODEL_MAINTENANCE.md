@@ -1,6 +1,6 @@
 # Model catalogue and maintenance policy
 
-Last full review: **2026-10-14**
+Last full review: **2026-10-14** (DeepSeek and MiniMax rechecked 2026-10-20)
 
 ## Product scope
 
@@ -124,6 +124,16 @@ Last full review: **2026-10-14**
   wrong direction; re-read the table, don't trust the comment.
 - **DeepSeek V4.1 Flash is `deepseek-flash`** on DeepSeek's API but
   `deepseek/deepseek-v4.1-flash` on OpenRouter.
+- **`deepseek-flash` became V4.1-Flash-1017 on 2026-10-17** (changelog entry of
+  that date; pricing page "MODEL VERSION"). Same id, same price, 1M context,
+  384K output: "simply use `deepseek-flash` to access the latest model", so the
+  CLI needed no catalogue or price change, only the picker description. **On
+  OpenRouter the new snapshot is a separate id**, `deepseek/deepseek-v4.1-flash-1017`
+  (canonical slug `…-20261017`, $0.30/$1.20, cache read $0.006, read 2026-10-20),
+  while `deepseek/deepseek-v4.1-flash` stays the 2026-09-10 release. The
+  fallback list keeps the undated id. OpenRouter's current price for the older
+  one is far lower than DeepSeek's own ($0.056/$0.12), so do not copy that
+  number into `MODEL_PRICING`.
 - **DeepSeek V4 Pro was NOT phased out.** The 2026-09-10 news post announced
   routing `deepseek-v4-pro` to V4.1 Flash from 2026-09-14. DeepSeek reversed
   that on 2026-09-11, before the cutover: the changelog's 09-10 entry now says V4
@@ -501,7 +511,56 @@ Last full review: **2026-10-14**
   reasoning guide and the May-15 page do not), so those keep the high ceiling
   until a live request settles it.
 - **MiniMax-M3 is $0.30/$1.20 up to 512K prompt tokens** ("permanent 50% off"),
-  $0.60/$2.40 above. The table carries the lower tier.
+  $0.60/$2.40 above. The table carries the lower tier. Its cache read is $0.06
+  ($0.12 above 512K), 0.2× the input rate, which `MODEL_CACHE_READ_RATE` now
+  holds; before 2026-10-20 it fell to the 0.1 default and billed every cached
+  token at half its price.
+- **MiniMax-M3.1-Flash** (`MiniMax-M3.1-Flash`, read 2026-10-20 on
+  platform.minimax.io `guides/text-generation`, `guides/pricing-paygo` and
+  `token-plan/intro`) is **the default on `minimax`, `minimax-api` and
+  `minimax-cn`**, first in the picker, with M3 kept beside it ("MiniMax-M3 also
+  remains available"; no migration).
+  - $0.15/$0.60 with cache read $0.015 (0.1×), one tier, no long-prompt step.
+    Priority (`service_tier: priority`) is 1.5× and Codeep never sends it.
+  - 1,000,000 context. Multimodal input (text, image, video).
+  - **The retired `MiniMax-M3.1-Flash-Preview` is served by this model.** The
+    M Plan page says so; Codeep never offered the Preview id, so there is no
+    migration row.
+  - **Thinking cannot be turned off**: `thinking: {"type": "disabled"}` or
+    `effort: "none"` is a 400 (`requires adaptive thinking`). It takes a
+    five-level `effort` (low/medium/high/xhigh/max, default **max**) as
+    `output_config.effort` on the Anthropic protocol and `reasoning_effort` on
+    the OpenAI one, and `/thinking` drives it (2026-10-20). **`/thinking auto`
+    sends nothing, so the model runs at its own default, `max`**, the slowest
+    and most token-hungry level on a subscription's 5-hour window; picking
+    Low/Medium/High is how a user gets off it.
+    - **The field depends on the protocol**, so `reasoningParamsFor` takes
+      `opts.protocol` (agent turns, the text-tool fallback, plain chat and
+      `/thinking`'s own readout all pass it). Without one it uses the provider's
+      default: Anthropic for `minimax` and `minimax-cn`, OpenAI for
+      `minimax-api`. The macOS app reaches MiniMax over the OpenAI endpoint only.
+    - **Four tiers, five levels.** Low/Medium/High/Max map one to one; `xhigh`
+      has no tier of its own and is never sent. No tier sends `none`, which is
+      a 400 on this model.
+    - **M3 gets nothing.** Its docs list no effort, so it stays without a
+      control rather than being sent a field it may reject.
+    - **Not verified against the live API.** The two field names are from
+      MiniMax's text-generation page, which gives a working curl for each; no
+      request was made with a key. The Anthropic shape is the one to check
+      first, because Codeep's own comment says MiniMax's Anthropic endpoint
+      "doesn't support native tools properly", so `minimax` agent turns run
+      over the text-tool fallback, which is where its effort is sent. Record
+      the first real response here.
+  - **The coding-plan page now calls the subscription "M Plan"** (Go / Explore /
+    Build), with M3.1 Flash as its only text model. Codeep's `minimax` provider
+    is still labelled "Coding Plan", and its `subscribeUrl` still points at
+    `/subscribe/coding-plan`; not changed here, not verified as stale.
+  - **OpenRouter** lists `minimax/minimax-m3.1-flash:free` only (1M context,
+    free); no paid id was listed on 2026-10-20, so the fallback list is
+    unchanged.
+  - The China host in MiniMax's own China docs is `api.minimax.cn`; Codeep's
+    `minimax-cn` uses `api.minimaxi.com`. Unverified which is current, left as
+    is.
 - **Gemini 3.6 / 3.7 / 3.8 Flash run a promotional $0.75/$3.75 through
   2026-12-31**, scheduled to step back to $1.50/$7.50 on 2027-01-01. Revisit all
   three together on that date — not before: a scheduled rise entered early is how

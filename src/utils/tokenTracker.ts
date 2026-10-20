@@ -115,7 +115,9 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gemini-3.5-flash':              1_048_576,
   'gemini-3.5-flash-lite':         1_048_576,
   'gemini-3-flash-preview':        1_048_576,
-  // MiniMax
+  // MiniMax — "Supported Models" (platform.minimax.io/docs/guides/text-generation),
+  // read 2026-10-20: 1,000,000 for both.
+  'MiniMax-M3.1-Flash':   1_000_000,
   'MiniMax-M3':           1_000_000,
   // Kimi (Moonshot) — 1M on K3, 256K across K2.x
   'kimi-k3':                   1_048_576,
@@ -347,6 +349,13 @@ const MODEL_PRICING: Record<string, ModelPrice> = {
   // 0.60/2.40. The old 0.60/2.40 row was the long-context tier and doubled the
   // estimate for virtually every real request.
   'MiniMax-M3':             { inputPer1M: 0.30,  outputPer1M: 1.20 },
+  // M3.1 Flash: $0.15 / $0.60, cache read $0.015 (pricing-paygo, read
+  // 2026-10-20) — a single tier, with no long-prompt step like M3's. That is
+  // the Standard rate; Priority (`service_tier: priority`, 1.5x) is something
+  // Codeep never asks for. MiniMax retired `MiniMax-M3.1-Flash-Preview` and
+  // serves that name with this model (M Plan overview); Codeep never offered
+  // the Preview id, so it has no row.
+  'MiniMax-M3.1-Flash':     { inputPer1M: 0.15,  outputPer1M: 0.60 },
   // Kimi (Moonshot) — pay-per-use cache-miss rates. `kimi-for-coding` is the
   // subscription alias: flat-fee, so this figure is never shown as a cost. It
   // is now K2.8 Preview, which has no pay-per-use price at all; the row keeps
@@ -699,6 +708,11 @@ const MODEL_CACHE_READ_RATE: Record<string, number> = {
   // ($0.10 against $2 — models/gpt-6.1-sol). GPT-6 Sol, at the same $2, reads
   // at 10% ($0.20), the default, so it has no row: don't copy this one there.
   'gpt-6.1-sol': 0.05,
+  // M3's cache read is $0.06 against $0.30 input (≤512K tier; $0.12 against
+  // $0.60 above it), so 0.2 — the 0.1 default billed every cached token at
+  // half its price. M3.1 Flash reads at $0.015 against $0.15, which IS 0.1, so
+  // it has no row: don't copy this one there.
+  'MiniMax-M3': 0.2,
   // "Implicit caching discounts cached input by 95%, to $0.10 per 1M tokens"
   // against $2.00 ($0.20 against $4.00 from 2026-12-01 — the ratio holds). The
   // 0.1 default would bill every cache hit at twice its price. Implicit

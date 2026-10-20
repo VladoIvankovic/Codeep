@@ -365,3 +365,58 @@ describe('an Anthropic decline', () => {
     expect(res.toolCalls).toEqual([]);
   });
 });
+
+describe('MiniMax M3.1 Flash on the wire', () => {
+  // The same tier is a different field per protocol (text-generation, "Thinking
+  // depth"): `output_config.effort` on the Anthropic endpoint, `reasoning_effort`
+  // on the OpenAI one. `minimax` defaults to Anthropic, which has no native
+  // tools for it, so its agent turns go over the text-tool fallback; the OpenAI
+  // protocol takes the native path.
+  it('puts the tier in output_config.effort on the Anthropic protocol', async () => {
+    useModel('minimax', 'MiniMax-M3.1-Flash', 'anthropic', { reasoningEffort: 'high' });
+    await agentChat(messages, 'system');
+    expect(bodies[0].output_config).toEqual({ effort: 'high' });
+    expect(bodies[0].reasoning_effort).toBeUndefined();
+  });
+
+  it('puts it in reasoning_effort on the OpenAI protocol, with the tools', async () => {
+    useModel('minimax', 'MiniMax-M3.1-Flash', 'openai', { reasoningEffort: 'low' });
+    await agentChat(messages, 'system');
+    expect(Array.isArray(bodies[0].tools) && (bodies[0].tools as unknown[]).length).toBeTruthy();
+    expect(bodies[0].reasoning_effort).toBe('low');
+    expect(bodies[0].output_config).toBeUndefined();
+  });
+
+  it('follows the protocol on the pay-per-use provider as well', async () => {
+    useModel('minimax-api', 'MiniMax-M3.1-Flash', 'openai', { reasoningEffort: 'max' });
+    await agentChat(messages, 'system');
+    expect(bodies[0].reasoning_effort).toBe('max');
+  });
+
+  it('keeps the tier on the text-tool fallback, for both protocols', async () => {
+    useModel('minimax', 'MiniMax-M3.1-Flash', 'anthropic', { reasoningEffort: 'medium' });
+    await agentChatFallback(messages, 'system');
+    useModel('minimax', 'MiniMax-M3.1-Flash', 'openai', { reasoningEffort: 'medium' });
+    await agentChatFallback(messages, 'system');
+    expect(bodies[0].output_config).toEqual({ effort: 'medium' });
+    expect(bodies[1].reasoning_effort).toBe('medium');
+  });
+
+  it('sends no effort field on auto, so the model keeps its own default', async () => {
+    useModel('minimax', 'MiniMax-M3.1-Flash', 'anthropic', { reasoningEffort: 'auto' });
+    await agentChat(messages, 'system');
+    expect(bodies[0].output_config).toBeUndefined();
+    expect(bodies[0].reasoning_effort).toBeUndefined();
+  });
+
+  it('sends nothing to MiniMax M3, at any tier', async () => {
+    for (const tier of REASONING_TIERS) {
+      useModel('minimax', 'MiniMax-M3', 'anthropic', { reasoningEffort: tier });
+      await agentChat(messages, 'system');
+    }
+    for (const body of bodies) {
+      expect(body.output_config).toBeUndefined();
+      expect(body.reasoning_effort).toBeUndefined();
+    }
+  });
+});

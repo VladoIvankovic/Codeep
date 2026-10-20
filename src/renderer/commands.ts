@@ -84,7 +84,9 @@ export interface AppCommandContext extends AppExecutionContext {
  * the one Chat Completions object, as before.
  */
 function reasoningParamsShown(providerId: string, model: string, tier: ReasoningTier, agentWire: OpenAIWire): string {
-  const chat = JSON.stringify(reasoningParamsFor(providerId, model, tier));
+  // The active protocol decides the field name for providers that speak both
+  // (MiniMax: `output_config.effort` vs `reasoning_effort`).
+  const chat = JSON.stringify(reasoningParamsFor(providerId, model, tier, { protocol: config.get('protocol') }));
   if (agentWire !== 'responses') return chat;
   const responses = JSON.stringify(reasoningParamsFor(providerId, model, tier, { wire: 'responses' }));
   return `${responses} on agent turns (Responses API), ${chat} on plain chat`;
@@ -375,7 +377,7 @@ export async function handleCommand(
         if (sub === 'auto') {
           ctx.app.notify('Thinking effort: auto — each model uses its own default.');
         } else if (!supported) {
-          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 5.5, GPT-5.x or GPT-6, Gemini 3 or 4 Argon, DeepSeek V4, GLM-5.x, Kimi K3).`);
+          ctx.app.notify(`Thinking effort set to "${sub}", but ${model} has no graded thinking control — it will be ignored until you switch to a model that does (e.g. Opus 5.5, GPT-5.x or GPT-6, Gemini 3 or 4 Argon, DeepSeek V4, GLM-5.x, Kimi K3, MiniMax M3.1 Flash).`);
         } else {
           // Tell the user what THIS model will actually run (the tier may
           // collapse onto a level the model distinguishes, e.g. medium→high on Kimi K3).

@@ -11,6 +11,40 @@ For releases before v1.3.35, see [GitHub Releases](https://github.com/VladoIvank
 > as the social-share summary (IFTTT → X/Bluesky), capped at 220 chars.
 > If omitted, the feed falls back to the first paragraph.
 
+## [3.14.0] — 2026-10-20
+
+> TL;DR — MiniMax M3.1 Flash is the new MiniMax default ($0.15/$0.60, 1M context), and DeepSeek's `deepseek-flash` is now V4.1-Flash-1017 with no change to price or id.
+
+### Added
+
+- **MiniMax M3.1 Flash** (`MiniMax-M3.1-Flash`) on all three MiniMax providers
+  (`minimax`, `minimax-api`, `minimax-cn`), first in the picker and the new
+  default. 1M context; on the pay-per-use API it is $0.15 in / $0.60 out with
+  cache reads at $0.015. **MiniMax M3 stays in the picker**, and a config that
+  names it keeps it.
+  - **`/thinking` now works on it.** Low, Medium, High and Max map to the five
+    levels MiniMax documents (it also has `xhigh`, which no tier sends). Thinking
+    cannot be switched off on this model, so no tier does. **`/thinking auto`
+    sends nothing and the model runs at its own default, which is `max`**: the
+    heaviest level, and the one that spends a subscription's 5-hour window
+    fastest. Pick Low, Medium or High for everyday work. MiniMax M3 has no such
+    control and gets none. The Mac app has the same control.
+  - The retired `MiniMax-M3.1-Flash-Preview` name is served by this model.
+
+### Changed
+
+- **DeepSeek V4.1 Flash is now the 2026-10-17 release (V4.1-Flash-1017).**
+  DeepSeek kept the id (`deepseek-flash`) and the price, so nothing changes in
+  your config or your estimates; the picker description names the version.
+  OpenRouter lists this snapshot as its own id, `deepseek/deepseek-v4.1-flash-1017`.
+
+### Fixed
+
+- **MiniMax M3 cache hits were estimated at half their price.** A cached token
+  costs $0.06 against $0.30 for a miss (0.2×), and Codeep billed it at the 0.1×
+  default. `/cost` and `/stats` for M3 sessions with a lot of caching were
+  low by that difference. The Mac app had the same gap and is fixed alongside.
+
 ## [3.13.0] — 2026-10-16
 
 > TL;DR — A terminal run can now tell your phone right away, or after 15 s, 30 s, 1 or 5 min (Telegram run notices after, in /settings). 1 minute stays the default.

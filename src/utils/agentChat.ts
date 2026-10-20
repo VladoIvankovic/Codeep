@@ -565,7 +565,7 @@ export async function agentChat(
       // sends that for them whatever the tier. Astra and 6.1 Sol take no tools
       // here at any effort (and no "none"): they keep the tier, the 400 comes
       // back, and the fallback below takes over.
-      const openAIReasoning = reasoningParamsFor(providerId, model, tier, { tools: openAITools.length > 0 });
+      const openAIReasoning = reasoningParamsFor(providerId, model, tier, { tools: openAITools.length > 0, protocol });
       const maxTok = getEffectiveMaxTokens(providerId, responseBudget);
       const tokParam = usesMaxCompletionTokens(providerId) ? { max_completion_tokens: maxTok } : { max_tokens: maxTok };
       endpoint = `${baseUrl}/chat/completions`;
@@ -652,7 +652,7 @@ export async function agentChat(
         system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' as const } }],
         messages,
         tools: cachedTools, stream: useStreaming,
-        ...tempParam, ...reasoningParamsFor(providerId, model, tier),
+        ...tempParam, ...reasoningParamsFor(providerId, model, tier, { protocol }),
         max_tokens: getEffectiveMaxTokens(providerId, responseBudget),
       };
     }
@@ -894,7 +894,7 @@ export async function agentChatFallback(
     // Thinking-effort tier → provider-shaped param ({} for 'auto'/unsupported).
     // No `tools` array goes out on this path — the tools are text in the
     // prompt — so GPT-6 Sol/Luna keep the user's tier here.
-    const reasoningParam = reasoningParamsFor(providerId, model, tier);
+    const reasoningParam = reasoningParamsFor(providerId, model, tier, { protocol });
     const responseBudget = Math.max(config.get('maxTokens'), 16384, minResponseTokensFor(model, tier));
     if (protocol === 'openai') {
       const maxTok = getEffectiveMaxTokens(providerId, responseBudget);

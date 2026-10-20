@@ -499,7 +499,7 @@ async function chatOpenAI(
     ...(stream ? { stream_options: { include_usage: true } } : {}),
     ...(omitTemperature ? {} : { temperature }),
     ...(useCompletionTokens ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }),
-    ...reasoningParamsFor(providerId, model, config.get('reasoningEffort') as ReasoningTier),
+    ...reasoningParamsFor(providerId, model, config.get('reasoningEffort') as ReasoningTier, { protocol: 'openai' }),
     ...(providerId === 'openrouter' ? { usage: { include: true } } : {}),
     ...(openRouterProvider ? { provider: openRouterProvider } : {}),
   });
@@ -826,7 +826,7 @@ async function chatAnthropic(
         // Fable 5 / Opus 4.7+ reject temperature with a 400 — omit it there
         // (omission means API default on every Claude model).
         ...(modelRejectsSamplingParams(model) ? {} : { temperature }),
-        ...reasoningParamsFor(providerId, model, config.get('reasoningEffort') as ReasoningTier),
+        ...reasoningParamsFor(providerId, model, config.get('reasoningEffort') as ReasoningTier, { protocol: 'anthropic' }),
         stream,
         ...cachedSystem,
       }),
