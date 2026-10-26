@@ -76,20 +76,23 @@ curl -fsSL https://codeep.dev/install.sh | VERSION=3.1.1 bash
 
 ### Option 3: Manual Binary
 
-Download the latest binary for your platform from [GitHub Releases](https://github.com/VladoIvankovic/Codeep/releases):
+Download the archive for your platform from [GitHub Releases](https://github.com/VladoIvankovic/Codeep/releases). Each one holds a single executable named like the archive without `.tar.gz`:
 
-| Platform | Binary |
-|----------|--------|
-| macOS Apple Silicon (M1/M2/M3/M4) | `codeep-macos-arm64` |
-| macOS Intel | `codeep-macos-x64` |
-| Linux x86_64 | `codeep-linux-x64` |
+| Platform | Archive |
+|----------|---------|
+| macOS Apple Silicon (M1/M2/M3/M4) | `codeep-darwin-aarch64.tar.gz` |
+| macOS Intel | `codeep-darwin-x86_64.tar.gz` |
+| Linux x86_64 | `codeep-linux-x86_64.tar.gz` |
+| Linux ARM64 | `codeep-linux-aarch64.tar.gz` |
 
 ```bash
 # Example for macOS Apple Silicon:
-curl -fsSL https://github.com/VladoIvankovic/Codeep/releases/latest/download/codeep-macos-arm64 -o codeep
-chmod +x codeep
-sudo mv codeep /usr/local/bin/
+curl -fsSL https://github.com/VladoIvankovic/Codeep/releases/latest/download/codeep-darwin-aarch64.tar.gz | tar -xz
+chmod +x codeep-darwin-aarch64
+sudo mv codeep-darwin-aarch64 /usr/local/bin/codeep
 ```
+
+GitHub shows a SHA-256 digest next to each archive on the release page, for checking the download.
 
 ## Quick Start
 
