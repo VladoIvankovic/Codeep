@@ -1,12 +1,15 @@
 # The iOS app: paused, and what would unpause it
 
-**Status: paused, 8 September 2026.** No code exists — this is a decision not to
-start, recorded so it does not get re-argued from scratch every few weeks.
+**Status: archived, 22 October 2026.** The `Codeep-iOS` repo is archived and the
+phone stays Telegram. It was first paused on 8 September 2026; the text below is
+from then. No app shipped — this is a decision not to start, recorded so it does
+not get re-argued from scratch every few weeks.
 
 ## Why not now
 
-Codeep runs on four surfaces already: terminal, macOS, VS Code and Zed over ACP,
-plus the web dashboard. An iOS app is the most expensive thing on the list —
+Codeep runs on three surfaces already: terminal, macOS and the web dashboard
+(it also ran in VS Code and Zed over ACP until 4.0 removed that). An iOS app is
+the most expensive thing on the list —
 a new platform, a new store, a new review cycle, a new release process, and a UI
 that cannot reuse the Mac app's because a phone is not a small desktop.
 
@@ -73,5 +76,5 @@ documented and announced. That is not a failure to measure; it is an answer.
 ## Related
 
 - [`remote-codeep-design.md`](remote-codeep-design.md) — running a task away from
-  the machine that started it. Designed, also parked, and a prerequisite for a
-  phone client that does more than send instructions to a Mac that must be awake.
+  the machine that started it. Superseded: Remote Codeep was dropped on
+  22 October 2026.

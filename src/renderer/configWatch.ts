@@ -15,8 +15,8 @@
  * writes atomically, renaming a new file over the old one, and a watch on the
  * file itself (fs.watch) would be left on the inode the first write retired.
  * conf's own `watch: true` polls too, but for every Conf in the process —
- * ACP and `codeep review` included — and this runs only where main.ts starts
- * it, once the TUI is up.
+ * `codeep review` included — and this runs only where main.ts starts it, once
+ * the TUI is up.
  *
  * A change comes as a burst: setProvider writes the provider, the model and
  * the protocol one after another, and the poll sees the same write again a

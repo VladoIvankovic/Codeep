@@ -34,7 +34,7 @@ import { leadsOutsideProject } from './projectPaths';
 export interface CustomCommand {
   /** Slash name without the leading `/` */
   name: string;
-  /** One-line description for /help and ACP autocomplete */
+  /** One-line description for /help and autocomplete */
   description: string;
   /** Body text after frontmatter, with placeholders unresolved */
   body: string;

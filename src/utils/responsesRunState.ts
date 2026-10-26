@@ -3,7 +3,7 @@
  * wire (api/responses.ts).
  *
  * runAgent keeps its conversation as flat `{role, content}` messages — that is
- * what sessions, exports, ACP history and cloud sync store, and none of that
+ * what sessions, exports and cloud sync store, and none of that
  * changes. On the Responses API an assistant turn is more than its text: the
  * reasoning items (with encrypted_content), the commentary message's `phase`
  * and the function calls must be replayed as returned, and each call answered

@@ -1157,7 +1157,7 @@ function writePendingAutoSave(): boolean {
 // Auto-save a conversation (debounced - saves max every 5 seconds).
 // Pass the id of the conversation the history belongs to. The global
 // currentSessionId is only the fallback: it names one conversation, and
-// callers holding another (a loaded session, a second ACP thread) would
+// callers holding another (a loaded session, a second conversation) would
 // otherwise save over it.
 export function autoSaveSession(history: Message[], projectPath?: string, sessionId?: string): boolean {
   if (!config.get('autoSave') || history.length === 0) {

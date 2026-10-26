@@ -1,5 +1,5 @@
 // commands/core/keysync.ts
-// Core semantics of `/keysync` — shared by TUI and ACP dispatch.
+// Core semantics of `/keysync` — written to be shared with the ACP dispatch, removed in 4.0.
 //
 // Single source of truth for: env-forced-off check, config toggle, and the
 // status report facts (including the server-readable-keys disclosure that

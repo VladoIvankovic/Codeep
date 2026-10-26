@@ -21,7 +21,7 @@
  *   codeep … --version | -v     anywhere before `--`
  *   codeep … --help | -h        anywhere before `--`
  *   codeep account [sub]        args[0] only
- *   codeep acp                  args[0] only
+ *   codeep acp                  args[0] only — removed in 4.0; main.ts prints that and exits 2
  *   codeep [--yolo] [-p <text> | --prompt <text> | --prompt=<text>] [-- <words…>]
  *   codeep [--yolo] [--prompt-file <path> | --prompt-file=<path>]
  *

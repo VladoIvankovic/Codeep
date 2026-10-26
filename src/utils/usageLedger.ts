@@ -7,10 +7,10 @@
  *   {"t":…,"k":"p","s":"b523af5fb0bdffb2","src":"tui"}
  *
  * A `u` line for every model call recordTokenUsage sees — the one place they
- * all pass, from the TUI, ACP, `codeep review --ai`, MCP sampling and the
+ * all pass, from the TUI, `codeep review --ai`, MCP sampling and the
  * one-shot helpers alike, so the calls `/cost` counts — and a `p` line for
- * every user prompt that goes to a model (the TUI's chat and agent paths,
- * the ACP prompt and the ACP commands that run the agent). Counts, a model
+ * every user prompt that goes to a model (the TUI's chat and agent paths).
+ * Counts, a model
  * id, a provider id and a hash of the session id: never prompt text, file
  * paths or content. Omarchy's Agents panel is told what Codeep used from
  * these lines (renderer/omarchyAgents.ts). Counting starts with the release
@@ -38,7 +38,11 @@ const debug = (...args: unknown[]) => {
   }
 };
 
-/** Where a prompt came from: the terminal UI, or an editor over ACP. */
+/**
+ * Where a prompt came from: the terminal UI, or an editor over ACP. Nothing
+ * writes 'acp' any more (removed in 4.0), but lines written by 3.x are still
+ * read, so the value stays.
+ */
 export type PromptSource = 'tui' | 'acp';
 
 type UsageLine = { t: number; k: 'u'; p: string; m: string; in: number; out: number; cr: number; cw: number };
@@ -158,12 +162,12 @@ export function recordPromptInLedger(sessionId: string, src: PromptSource, t: nu
 /**
  * A session id as the ledger keeps it: the first 16 hex digits of its
  * SHA-256. Ids are not always opaque — /rename makes a TUI session's id the
- * name typed for it, and ACP's session/load registers a saved session's name
- * as the id — and the ledger keeps no names, here or in cache.json, which is
- * built from these lines. Hashed when the line is written, so the name never
- * reaches the disk. No salt, on purpose: one session has to hash alike in the
- * TUI and in an ACP server, and in every month, or it would count once per
- * process and per month. That keeps a name out of the file; it does not make
+ * name typed for it, and so was a saved session's name when 3.x's ACP loaded
+ * it — and the ledger keeps no names, here or in cache.json, which is built
+ * from these lines. Hashed when the line is written, so the name never
+ * reaches the disk. No salt, on purpose: one session has to hash alike in
+ * every process and in every month, or it would count once per process and
+ * per month. That keeps a name out of the file; it does not make
  * a name that can be guessed impossible to check against it.
  */
 function sessionKey(sessionId: string): string {

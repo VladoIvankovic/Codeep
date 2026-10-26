@@ -647,8 +647,8 @@ export function validateCommand(
  * both runners below turn that into a failed CommandResult, because a refusal
  * is this command's own failure and the user reads it as such.
  *
- * EXPORTED, and this signature is the contract, because the ACP terminal
- * path spawns its own children and has to harden the SAME repository this
+ * EXPORTED, and this signature is the contract, because any caller that
+ * spawns its own children (the ACP terminal path did) and has to harden the SAME repository this
  * does. Call it with the parsed command, its argv, the cwd the spawn will
  * get and the caller's own env in `options.env`, and hand the result to the
  * spawn as `env` — do not spread anything over it, or a later
@@ -680,8 +680,8 @@ const SHELL_LINE_MENTIONS_GIT = /(^|\W)git(\W|$)/;
  * can reach git from anywhere inside it — `cd sub && git status`, `make && git
  * commit`, `foo | git apply` — so it needs its own entry point. This is that
  * entry point for the callers that spawn with `shell: true`: the skill runner
- * in src/acp/commands.ts and the one in src/renderer/agentExecution.ts, both
- * of which used to reach git raw. A hostile `gpg.program` that createCommit
+ * in src/renderer/agentExecution.ts (and, until 4.0 removed it, the one in
+ * the ACP server), which used to reach git raw. A hostile `gpg.program` that createCommit
  * neutralises still executed through those two spawns (proven, git 2.54).
  *
  * This is the ONE helper for that job — an earlier cut of this hotfix also

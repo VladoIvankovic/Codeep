@@ -187,8 +187,8 @@ export interface OmarchyAgentsOptions {
  * it wrote. Never throws.
  *
  * Off is not only the /settings switch, which takes the record away itself:
- * the setting can be turned off in config.json by hand, or in the terminal
- * while an ACP server has a write waiting. Removing the record at the next
+ * the setting can be turned off in config.json by hand, or in another
+ * terminal while this process has a write waiting. Removing the record at the next
  * write keeps any of those from leaving the last one in the panel for good.
  *
  * A record that would differ from the one already there only in `updatedAt`

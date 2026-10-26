@@ -6,10 +6,9 @@
  * Usually those are the `agentConfirmation` and `agentInteractive` config.
  * `codeep --yolo` pins them to 'never' and off for this process, and the pins
  * are never written back: the config file is shared by every Codeep on the
- * machine — the next plain `codeep`, the ACP server an editor starts — and a
- * launch that saved its 'never' there would quietly switch the confirmations
- * off in all of them, the leak acp/serverHandlers.ts's handleSetMode refuses
- * to cause for the same reason. A reader that went to the config itself
+ * machine — the next plain `codeep`, a CI run — and a launch that saved its
+ * 'never' there would quietly switch the confirmations off in all of them.
+ * A reader that went to the config itself
  * would ask when --yolo said nothing would, which is a run sitting at a
  * prompt nobody is there to answer.
  *

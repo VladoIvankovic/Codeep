@@ -14,11 +14,10 @@ vi.mock('./gitHookInstaller', async (importOriginal) => {
   return { ...actual, resolveHooksDirResult: vi.fn(actual.resolveHooksDirResult) };
 });
 
-import { executeTool, trustBearingWrite, forgetHooksDirectory, FsCallbacks } from './toolExecution';
+import { executeTool, trustBearingWrite, forgetHooksDirectory } from './toolExecution';
 import { resolveHooksDirResult } from './gitHookInstaller';
 import { ToolCall } from './tools';
 import { trustWorkspaceHooks, untrustWorkspaceHooks } from './hooks';
-import { AcpRequestError, AcpRequestTimeoutError } from '../acp/transport';
 
 let tmpRoot: string;
 
@@ -66,56 +65,6 @@ describe('read_file — disk path', () => {
     const result = await executeTool(makeCall('read_file', { path: 'big.txt' }), tmpRoot);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/too large/i);
-  });
-});
-
-describe('read_file — client delegation', () => {
-  it('delegates to client when readTextFile is provided', async () => {
-    // File on disk says one thing, client says another — client should win
-    // (this is the whole point of delegation: respect dirty editor buffers).
-    writeFileSync(join(tmpRoot, 'foo.txt'), 'stale disk content');
-    const fs: FsCallbacks = {
-      readTextFile: vi.fn().mockResolvedValue('fresh editor buffer'),
-    };
-    const result = await executeTool(makeCall('read_file', { path: 'foo.txt' }), tmpRoot, fs);
-    expect(result.success).toBe(true);
-    expect(result.output).toBe('fresh editor buffer');
-    expect(fs.readTextFile).toHaveBeenCalledOnce();
-  });
-
-  it('falls back to disk when client throws', async () => {
-    writeFileSync(join(tmpRoot, 'foo.txt'), 'on disk');
-    const fs: FsCallbacks = {
-      readTextFile: vi.fn().mockRejectedValue(new Error('client offline')),
-    };
-    const result = await executeTool(makeCall('read_file', { path: 'foo.txt' }), tmpRoot, fs);
-    expect(result.success).toBe(true);
-    expect(result.output).toBe('on disk');
-  });
-
-  it('rejects oversized client responses (DoS guard)', async () => {
-    writeFileSync(join(tmpRoot, 'foo.txt'), 'tiny');
-    const big = 'x'.repeat(200 * 1024);
-    const fs: FsCallbacks = {
-      readTextFile: vi.fn().mockResolvedValue(big),
-    };
-    const result = await executeTool(makeCall('read_file', { path: 'foo.txt' }), tmpRoot, fs);
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/too large.*via client/i);
-  });
-
-  it('enforces path validation even with delegation', async () => {
-    const fs: FsCallbacks = {
-      readTextFile: vi.fn().mockResolvedValue('content'),
-    };
-    // Path escape attempt — should be blocked before the delegation runs.
-    const result = await executeTool(
-      makeCall('read_file', { path: '../../../etc/passwd' }),
-      tmpRoot,
-      fs,
-    );
-    expect(result.success).toBe(false);
-    expect(fs.readTextFile).not.toHaveBeenCalled();
   });
 });
 
@@ -193,79 +142,6 @@ describe('write_file — disk path', () => {
   });
 });
 
-describe('write_file — client delegation', () => {
-  it('writes via client when writeTextFile is provided', async () => {
-    const writes: Array<{ path: string; content: string }> = [];
-    const fs: FsCallbacks = {
-      writeTextFile: vi.fn(async (path: string, content: string) => {
-        writes.push({ path, content });
-      }),
-    };
-    const result = await executeTool(
-      makeCall('write_file', { path: 'a.txt', content: 'hello' }),
-      tmpRoot,
-      fs,
-    );
-    expect(result.success).toBe(true);
-    expect(writes).toHaveLength(1);
-    // Disk should NOT be touched when delegation succeeds.
-    expect(existsSync(join(tmpRoot, 'a.txt'))).toBe(false);
-  });
-
-  it('falls back to disk when client throws', async () => {
-    const fs: FsCallbacks = {
-      writeTextFile: vi.fn().mockRejectedValue(new Error('client offline')),
-    };
-    const result = await executeTool(
-      makeCall('write_file', { path: 'a.txt', content: 'hello' }),
-      tmpRoot,
-      fs,
-    );
-    expect(result.success).toBe(true);
-    expect(readFileSync(join(tmpRoot, 'a.txt'), 'utf-8')).toBe('hello');
-  });
-
-  it('fails without touching disk when the client refuses the write', async () => {
-    const fs: FsCallbacks = {
-      writeTextFile: vi.fn().mockRejectedValue(new AcpRequestError('fs/write_text_file', -32603, 'Buffer is read-only')),
-    };
-    const result = await executeTool(
-      makeCall('write_file', { path: 'a.txt', content: 'hello' }),
-      tmpRoot,
-      fs,
-    );
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Buffer is read-only');
-    expect(existsSync(join(tmpRoot, 'a.txt'))).toBe(false);
-  });
-
-  it('falls back to disk when the client does not implement the method', async () => {
-    const fs: FsCallbacks = {
-      writeTextFile: vi.fn().mockRejectedValue(new AcpRequestError('fs/write_text_file', -32601, 'Method not found')),
-    };
-    const result = await executeTool(
-      makeCall('write_file', { path: 'a.txt', content: 'hello' }),
-      tmpRoot,
-      fs,
-    );
-    expect(result.success).toBe(true);
-    expect(readFileSync(join(tmpRoot, 'a.txt'), 'utf-8')).toBe('hello');
-  });
-
-  it('falls back to disk when the client never answers', async () => {
-    const fs: FsCallbacks = {
-      writeTextFile: vi.fn().mockRejectedValue(new AcpRequestTimeoutError('fs/write_text_file', 30_000)),
-    };
-    const result = await executeTool(
-      makeCall('write_file', { path: 'a.txt', content: 'hello' }),
-      tmpRoot,
-      fs,
-    );
-    expect(result.success).toBe(true);
-    expect(readFileSync(join(tmpRoot, 'a.txt'), 'utf-8')).toBe('hello');
-  });
-});
-
 describe('list_files — symlink boundaries', () => {
   it('does not recurse through a symlinked directory outside the workspace', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'codeep-toolexec-outside-'));
@@ -335,60 +211,6 @@ describe('edit_file — disk path', () => {
   });
 });
 
-describe('edit_file — client delegation', () => {
-  it('reads via client and writes via client when both delegated', async () => {
-    let storedContent = 'hello editor';
-    const fs: FsCallbacks = {
-      readTextFile: vi.fn(async () => storedContent),
-      writeTextFile: vi.fn(async (_p: string, c: string) => { storedContent = c; }),
-    };
-    // File doesn't exist on disk — only "in editor"
-    const result = await executeTool(
-      makeCall('edit_file', { path: 'virtual.txt', old_text: 'hello', new_text: 'goodbye' }),
-      tmpRoot,
-      fs,
-    );
-    expect(result.success).toBe(true);
-    expect(storedContent).toBe('goodbye editor');
-    expect(fs.readTextFile).toHaveBeenCalled();
-    expect(fs.writeTextFile).toHaveBeenCalled();
-  });
-
-  it('uses client read even if disk has stale content', async () => {
-    writeFileSync(join(tmpRoot, 'f.txt'), 'disk version');
-    const fs: FsCallbacks = {
-      readTextFile: vi.fn().mockResolvedValue('editor version with marker'),
-      writeTextFile: vi.fn().mockResolvedValue(undefined),
-    };
-    const result = await executeTool(
-      makeCall('edit_file', { path: 'f.txt', old_text: 'marker', new_text: 'replaced' }),
-      tmpRoot,
-      fs,
-    );
-    expect(result.success).toBe(true);
-    expect(fs.writeTextFile).toHaveBeenCalledWith(
-      expect.stringContaining('f.txt'),
-      'editor version with replaced',
-    );
-  });
-
-  it('fails without touching disk when the client refuses the write', async () => {
-    writeFileSync(join(tmpRoot, 'f.txt'), 'hello editor');
-    const fs: FsCallbacks = {
-      readTextFile: vi.fn().mockResolvedValue('hello editor'),
-      writeTextFile: vi.fn().mockRejectedValue(new AcpRequestError('fs/write_text_file', -32603, 'Buffer is read-only')),
-    };
-    const result = await executeTool(
-      makeCall('edit_file', { path: 'f.txt', old_text: 'hello', new_text: 'goodbye' }),
-      tmpRoot,
-      fs,
-    );
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Buffer is read-only');
-    expect(readFileSync(join(tmpRoot, 'f.txt'), 'utf-8')).toBe('hello editor');
-  });
-});
-
 describe('execute_command — abort signal', () => {
   it('stops the running command when the signal fires', async () => {
     const ac = new AbortController();
@@ -397,7 +219,6 @@ describe('execute_command — abort signal', () => {
     const result = await executeTool(
       makeCall('execute_command', { command: 'sleep', args: ['10'] }),
       tmpRoot,
-      undefined,
       undefined,
       ac.signal,
     );
@@ -425,7 +246,6 @@ describe('hooks + MCP integration', () => {
     const result = await executeTool(
       makeCall('fs__read_file', { path: '/x' }),
       tmpRoot,
-      undefined,
       'fake-session',
     );
     expect(result.success).toBe(false);
@@ -444,7 +264,6 @@ describe('hooks + MCP integration', () => {
     const result = await executeTool(
       makeCall('my-fs__read_file', { path: '/x' }),
       tmpRoot,
-      undefined,
       'fake-session',
     );
     expect(result.success).toBe(false);
@@ -459,7 +278,6 @@ describe('hooks + MCP integration', () => {
     const result = await executeTool(
       makeCall('fs__read_file', { path: '/x' }),
       tmpRoot,
-      undefined,
       'unregistered-session',
     );
     expect(result.success).toBe(false);

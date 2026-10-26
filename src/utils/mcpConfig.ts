@@ -1,7 +1,6 @@
 /**
- * On-disk MCP server config — the `mcpServers` array that ACP clients
- * usually pass over the wire, but loaded straight from JSON so direct CLI
- * users (and our VS Code extension) don't have to roll their own config UI.
+ * On-disk MCP server config — the `mcpServers` list, loaded straight from
+ * JSON so users don't have to roll their own config UI.
  *
  * Lookup precedence:
  *   1. `~/.codeep/mcp_servers.json`           (global — user's machine)
@@ -23,8 +22,8 @@
  *     }
  *   }
  *
- * A flat array form (`{"mcpServers": [{...}, ...]}`) is also accepted because
- * that's the shape ACP passes over JSON-RPC.
+ * A flat array form (`{"mcpServers": [{...}, ...]}`) is also accepted; it is
+ * the shape ACP clients used to pass over JSON-RPC (kept so existing files still load).
  */
 
 import { existsSync, readFileSync } from 'fs';
@@ -33,14 +32,14 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { config } from '../config/index.js';
 import { showControlsInline } from './controlChars.js';
-import type { McpServer } from '../acp/protocol.js';
+import type { McpServer } from './mcpTypes.js';
 
 const PROJECT_CONFIG_PATH = '.codeep/mcp_servers.json';
 const PROJECT_DOTMCP_PATH = '.mcp.json';
 const GLOBAL_CONFIG_PATH = '.codeep/mcp_servers.json';
 
 export interface McpConfigFile {
-  /** Either the named-map form (Claude Code style) or a flat array (ACP style). */
+  /** Either the named-map form (Claude Code style) or a flat array. */
   mcpServers?: Record<string, Omit<McpServer, 'name'>> | McpServer[];
 }
 
@@ -206,19 +205,6 @@ export function untrustWorkspaceMcp(workspaceRoot: string): void {
 }
 
 /**
- * Merge two server lists: ACP-provided + on-disk. ACP wins on collisions
- * — the client knows its own config, so a Zed-passed server overrides a
- * project file entry of the same name (and we never have to teach Zed to
- * "skip" file-based ones).
- */
-export function mergeMcpServers(fromConfig: McpServer[], fromAcp: McpServer[] | undefined): McpServer[] {
-  const byName = new Map<string, McpServer>();
-  for (const s of fromConfig) byName.set(s.name, s);
-  for (const s of fromAcp ?? []) byName.set(s.name, s);
-  return [...byName.values()];
-}
-
-/**
  * The MCP servers a session runs. Every place that (re)starts a session's
  * servers goes through here, so they all apply the same rule:
  *
@@ -232,20 +218,17 @@ export function mergeMcpServers(fromConfig: McpServer[], fromAcp: McpServer[] | 
  *     take its place, so trusting a repo for ITS servers also let it swap
  *     out one of yours — same name, same tool names, the repo's command.
  *     It is returned in `shadowed` (when it would otherwise have run) so
- *     callers can name it in a one-line notice (`shadowedServerNotice`);
- *   - `fromClient` — the servers the editor passed for the session — run
- *     too and win on name collisions, as in `mergeMcpServers`: they are
- *     the user's own configuration as well, handed over for this session.
+ *     callers can name it in a one-line notice (`shadowedServerNotice`).
  *
  * `skipped` lists the workspace entries left out because the workspace is
  * not trusted, so callers can say why. A clashing entry is never in it:
  * trusting the workspace would not start it either.
- * Registering replaces a session's whole set of servers, which is why the
- * editor's servers have to be part of every selection.
+ * Registering replaces a session's whole set of servers, so every selection
+ * has to be the complete list.
  */
 export function selectSessionMcpServers(
   workspaceRoot: string | undefined,
-  opts: { fromClient?: McpServer[]; userAdded?: string[] } = {},
+  opts: { userAdded?: string[] } = {},
 ): { servers: McpServer[]; skipped: McpServer[]; shadowed: McpServer[] } {
   const { global, workspace } = loadMcpServerConfigSplit(workspaceRoot);
   const globalNames = new Set(global.map(s => s.name));
@@ -254,7 +237,7 @@ export function selectSessionMcpServers(
   const allowed = eligible.filter(s => !globalNames.has(s.name));
   const shadowed = eligible.filter(s => globalNames.has(s.name));
   const skipped = workspace.filter(s => !eligible.includes(s) && !globalNames.has(s.name));
-  return { servers: mergeMcpServers([...global, ...allowed], opts.fromClient), skipped, shadowed };
+  return { servers: [...global, ...allowed], skipped, shadowed };
 }
 
 /**

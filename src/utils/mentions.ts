@@ -562,8 +562,8 @@ interface UnresolvedPath {
  *
  * Rules:
  *   `/abs/...`   → used as-is, relativePath computed from root.
- *   `./rel/...`  → resolved against root too. In ACP the process cwd is not
- *                  the workspace, so `@dir .` walked the wrong directory.
+ *   `./rel/...`  → resolved against root too, not the process cwd, which is
+ *                  not always the workspace.
  *   `rel/...`    → resolved against root (project root).
  *   `~/...`      → expanded to the home directory.
  */

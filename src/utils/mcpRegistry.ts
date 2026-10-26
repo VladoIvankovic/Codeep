@@ -1,9 +1,8 @@
 /**
  * Per-session registry of MCP servers.
  *
- * `acp/server.ts handleSessionNew/Load/Resume` receives an optional
- * `mcpServers: McpServer[]` from the ACP client. We spawn each one via
- * `McpClient`, list its tools, and surface them under a flat namespace so
+ * A session is handed a list of `McpServer`s (the TUI's is `codeep-tui`).
+ * We spawn each one via `McpClient`, list its tools, and surface them under a flat namespace so
  * the agent can call them like any built-in tool.
  *
  * Naming: tools are surfaced as `<serverName>__<toolName>` to avoid
@@ -13,7 +12,7 @@
  */
 
 import { McpClient, McpTool, SamplingCreateMessageParams, SamplingCreateMessageResult } from './mcpClient.js';
-import type { McpServer } from '../acp/protocol.js';
+import type { McpServer } from './mcpTypes.js';
 
 const NAMESPACE_DELIM = '__';
 
@@ -29,7 +28,7 @@ export const VIRTUAL_TOOL_SUFFIXES = {
   promptGet:    'prompt_get',
 } as const;
 
-/** Map of ACP session id → list of clients started for that session. */
+/** Map of session id → list of clients started for that session. */
 const sessionClients = new Map<string, McpClient[]>();
 
 /**
@@ -461,8 +460,9 @@ export async function disposeSession(sessionId: string): Promise<void> {
 }
 
 /**
- * Tear down every active MCP session. Wired up as a SIGINT/SIGTERM handler
- * in `acp/server.ts` so killing the CLI doesn't leave orphan child processes.
+ * Tear down every active MCP session, so killing the process doesn't leave
+ * orphan child processes. Nothing calls it since 4.0 removed the ACP server,
+ * which was its only caller.
  */
 export async function disposeAllSessions(): Promise<void> {
   const ids = [...sessionClients.keys()];

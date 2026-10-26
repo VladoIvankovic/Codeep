@@ -1,5 +1,5 @@
 // commands/core/telemetry.ts
-// Core semantics of `/telemetry` — shared by TUI and ACP dispatch.
+// Core semantics of `/telemetry` — written to be shared with the ACP dispatch, removed in 4.0.
 //
 // Single source of truth for: env-forced-off check, config toggle,
 // and the status report facts. Presentation (markdown vs banner) is the

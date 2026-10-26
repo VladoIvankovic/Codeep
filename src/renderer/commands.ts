@@ -2464,8 +2464,7 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
     }
 
     case 'mcp': {
-      // Mirrors the ACP `/mcp` handler in src/acp/commands.ts. In TUI the
-      // session id is the constant `codeep-tui` (the same one main.ts uses
+      // In TUI the session id is the constant `codeep-tui` (the same one main.ts uses
       // when it spawns project MCP servers in the background) and the
       // workspace root is ctx.projectPath. Without a project we can still
       // browse the marketplace, but anything that mutates project config
@@ -2485,8 +2484,8 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       const { addProjectMcpServer, removeProjectMcpServer, loadMcpServerConfigSplit, selectSessionMcpServers, shadowedServerNotice, isWorkspaceMcpTrusted, trustWorkspaceMcp, untrustWorkspaceMcp } = await import('../utils/mcpConfig');
       const { registerSessionServers } = await import('../utils/mcpRegistry');
 
-      // The servers this session may run, chosen by the same rule startup and
-      // ACP use: workspace entries arrive with the repo and start only once the
+      // The servers this session may run, chosen by the same rule startup
+      // uses: workspace entries arrive with the repo and start only once the
       // workspace is trusted. `addedHere` is an entry the user just typed into
       // /mcp add or /mcp install; starting that one needs no further consent.
       // registerSessionServers replaces the whole session, so everything that

@@ -218,7 +218,7 @@ export async function chat(
   const providerId = config.get('provider');
 
   // Global API throttle — the single choke point every surface funnels
-  // through (TUI chat, agent loop, ACP sessions, sub-agents, session
+  // through (TUI chat, agent loop, sub-agents, session
   // titles). Without this, a runaway agent loop burns provider quota and
   // hits provider-side 429s with nothing on our side slowing it down.
   const rateCheck = checkApiRateLimit();

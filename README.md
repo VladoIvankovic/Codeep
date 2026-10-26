@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  Autonomous AI coding agent that reads your project, runs commands, and writes &amp; verifies code — deeper than autocomplete. Any model (Claude, Gemini, DeepSeek, GLM, OpenAI, or your own local/custom), in the terminal and your editor.
+  Autonomous AI coding agent that reads your project, runs commands, and writes &amp; verifies code — deeper than autocomplete. Any model (Claude, Gemini, DeepSeek, GLM, OpenAI, or your own local/custom), in the terminal and the native Mac app.
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 - [Install](#installation) · [Quick start](#quick-start) · [Upgrading](#upgrading)
 - [One agent, every surface](#one-agent-every-surface) · [Features](#features) · [Dashboard](#codeep-dashboard)
 - [Commands](#commands) · [Keyboard shortcuts](#keyboard-shortcuts) · [Configuration](#configuration)
-- [Zed (ACP)](#zed-editor-integration-acp) · [VS Code](#vs-code-extension) · [Contributing](#contributing)
+- [Contributing](#contributing)
 
 Full documentation: **[codeep.dev/docs](https://codeep.dev/docs)**
 
@@ -39,7 +39,6 @@ agent workflow wherever you work:
 
 - **[Terminal / TUI](https://codeep.dev/docs/installation)** — the primary CLI experience, with Plan → Read → Edit → Verify → Summary, live file changes, checks, token cost, and estimated energy and cooling-water impact.
 - **[macOS app](https://codeep.dev/docs/mac)** — a native SwiftUI workbench with project conversations and Run Inspector.
-- **[VS Code extension](https://github.com/VladoIvankovic/Codeep-vscode)** — the same agent over ACP, directly inside the editor. Also available on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=VladoIvankovic.codeep).
 - **[Web dashboard](https://codeep.dev/dashboard)** — synced sessions, usage, costs, tasks, and project activity.
 
 ## Installation
@@ -148,7 +147,7 @@ When started in a project directory, Codeep automatically:
 - **AI session titles** - Sessions auto-title themselves with an LLM one-liner ("OAuth2 migration for auth module") instead of a truncated first message. This makes one small background API call per session; turn it off with the `autoSessionTitle` setting (`/settings`) if you prefer zero unsolicited calls
 - **Search current session** - Find text in the open conversation with `/search`
 - **Cross-session recall** - `/recall <query>` searches across **all** saved sessions, ranked by relevance + recency. Add `--resume` to load the top match, or `--summarize` for an LLM recap of what you accomplished across matches
-- **Cross-device resume (`/cloud`)** - Sessions you run on one device (CLI, Mac app, VS Code) sync to `codeep.dev`. `/cloud` lists them and pulls the selected one back locally, so you can start a session on your desktop and continue on your laptop. Run `codeep account` once to link your devices; scoped to the current project when one is open.
+- **Cross-device resume (`/cloud`)** - Sessions you run on one device (CLI, Mac app) sync to `codeep.dev`. `/cloud` lists them and pulls the selected one back locally, so you can start a session on your desktop and continue on your laptop. Run `codeep account` once to link your devices; scoped to the current project when one is open.
 - **Export** - Save to Markdown, JSON, or plain text
 - `/cost` - Per-session token usage and estimated cost (per provider/model; a model priced by prompt length, like Claude Haiku 5.5 above 100K tokens, is priced request by request)
 - `/compact [keepN]` - AI-summarize older messages to free up context (keeps last N, default 4)
@@ -394,7 +393,7 @@ Agent learns your coding preferences:
 - Custom rules you define
 
 ### User Profile (`/me`)
-A durable, human-readable description of **you** that Codeep injects into the agent's context on every run — so it adapts to how you work (reply language, response style, default stack, "always / never" rules). It flows to every surface (terminal, VS Code, Zed) since they share the same files.
+A durable, human-readable description of **you** that Codeep injects into the agent's context on every run — so it adapts to how you work (reply language, response style, default stack, "always / never" rules). It flows to every surface since they share the same files.
 
 Two layers:
 - **`~/.codeep/profile.md`** — global: who you are across all projects
@@ -408,7 +407,7 @@ Commands:
 - `/me learn project` — one-off learn scoped to this repo
 - `/me forget` — clear the auto-learned profile(s)
 
-Sync your global profile across machines (and edit it on the web) from the [dashboard](https://codeep.dev/dashboard): `/me sync` (or `codeep account sync`, which now carries the profile too). In VS Code: **Codeep: Edit Profile**, **Codeep: Toggle Profile Auto-Learn**, **Codeep: Sync Profile to Dashboard**.
+Sync your global profile across machines (and edit it on the web) from the [dashboard](https://codeep.dev/dashboard): `/me sync` (or `codeep account sync`, which now carries the profile too).
 
 ### Sub-agents (delegation)
 The agent can delegate a self-contained sub-task to a specialist **sub-agent** that runs in its own fresh context window and returns only a summary — keeping the main context small and letting each sub-task run with a tuned persona and scoped tools.
@@ -550,12 +549,11 @@ Full spec coverage in 2.0.0 — stdio and Streamable HTTP transports,
 tools / resources / prompts / sampling, capability negotiation with
 `roots`, auto-restart on crash, mid-run catalog refresh.
 
-**Four ways to wire MCP servers** (all merge; on a name clash ACP wins, then global, then project, then `.mcp.json` — a repository's entry never replaces a server you configured globally; it is left out with a one-line notice):
+**Three ways to wire MCP servers** (all merge; on a name clash global wins, then project, then `.mcp.json` — a repository's entry never replaces a server you configured globally; it is left out with a one-line notice):
 
 1. **Project config** — `.codeep/mcp_servers.json` (committed with the repo)
 2. **`.mcp.json`** — cross-tool standard at the workspace root (works with Claude Code, Cursor, Kilo Code — point everyone at the same file)
 3. **Global config** — `~/.codeep/mcp_servers.json` (per machine)
-4. **ACP client config** — Zed / Claude Desktop pass `mcpServers` on `session/new`
 
 Two transports per entry, mutually exclusive:
 
@@ -593,22 +591,13 @@ If a server opts into the `sampling` capability, Codeep hosts LLM
 completions on its behalf — routes through your active provider. If it
 opts into `roots/list`, we expose the current workspace folder.
 
-In the VS Code extension, the same operations are available from the
-command palette (no JSON editing required):
-
-- **Codeep: Add MCP Server…** — wizard that writes to project or global config
-- **Codeep: Remove MCP Server…** — quick-pick from both scopes
-- **Codeep: Open MCP Servers Config** — opens the JSON file directly
-
 Each server is spawned as a child process; its tools are surfaced under
 `<server>__<tool>`. MCP tool definitions are automatically injected into
 the agent's tool catalog on each iteration, so the model picks them
 alongside built-ins without you having to mention them by name.
 
-Lifecycle is per-session: servers are torn down when the session is
-deleted or the CLI exits (SIGTERM/SIGINT). The VS Code extension and the
-direct `codeep` CLI both read the same config files, so a server you
-configure once is available everywhere.
+A server you configure once in the global config is available in every
+project.
 
 A server that crashes is auto-restarted (up to 3 times in a 60 s window,
 with exponential backoff). Persistent failures are reported in `/mcp` so
@@ -727,14 +716,12 @@ every iteration and can invoke any bundle via the `invoke_skill` tool:
 
 **Web marketplace:** publish skills to [codeep.dev/skills](https://codeep.dev/skills)
 as public (browseable by anyone) or private (only you). Manage your published
-skills at `/dashboard/skills`. From the VS Code extension, use the
-**Codeep: Browse Skill Bundles…** / **Codeep: Create Skill Bundle…** /
-**Codeep: Open Skills Folder** commands.
+skills at `/dashboard/skills`.
 
 ### Custom Slash Commands
 Drop a Markdown file in `.codeep/commands/<name>.md` (project-scoped) or
 `~/.codeep/commands/<name>.md` (global, all projects) and Codeep exposes it
-as `/<name>` — in the TUI, Zed, and the VS Code extension. The body becomes
+as `/<name>`. The body becomes
 the user prompt; the agent handles it normally.
 
 Example — `.codeep/commands/sec-review.md`:
@@ -820,7 +807,7 @@ that run, while `automatic` inherits the current selection.
 
 Portable v1 fails closed for unclassified capabilities: Skills, delegation,
 and vision are not exposed to structured bots yet. MCP is available only when
-the active ACP session has registered those exact tools.
+the session has registered those exact tools.
 
 Legacy prompt-only Markdown remains supported and unrestricted. The older
 section-only Agent Studio format is recognized when it contains
@@ -1463,8 +1450,7 @@ bidirectional marks removed.
 Nothing is shown when you are looking at it: on Hyprland, if the focused window
 is the terminal Codeep runs in, the notification is skipped. Where that cannot
 be told — another desktop, a `tmux` session, no `hyprctl` — you are notified. A notification that cannot be delivered is dropped quietly;
-it never stops or slows a run. The ACP server (Zed, VS Code) never sends one:
-the editor has its own way of asking.
+it never stops or slows a run.
 
 **Desktop notifications** in `/settings` (shown on Linux when `notify-send` is
 installed) sets `desktopNotifications` in the config. Not set, it is *auto*: On
@@ -1525,7 +1511,7 @@ to show what Codeep is doing:
 `state` is `idle`, `working`, `approval` (a dialog is waiting for you) or
 `question` (a clarifying question is); `task` is the same short label a
 notification carries — file names and paths left out — while the state is not
-`idle`, and `null` otherwise; `kind` is `tui` or `acp`. `cwd` and `project` are
+`idle`, and `null` otherwise; `kind` is `tui` (3.x also wrote `acp`). `cwd` and `project` are
 the directory Codeep works in. The file is readable by you only (0600, in a 0700
 directory), replaced whole through a temporary file so it is never half written,
 and written at most once a second.
@@ -1631,121 +1617,3 @@ PR against `main`. To report a security issue, see
 ## Support
 
 - **Issues**: [GitHub Issues](https://github.com/VladoIvankovic/Codeep/issues)
-
-## Zed Editor Integration (ACP)
-
-Codeep supports the [Agent Client Protocol (ACP)](https://agentclientprotocol.com), letting you use it as an AI coding agent directly inside [Zed](https://zed.dev).
-
-### Setup
-
-1. Install Codeep globally:
-
-```bash
-npm install -g codeep
-```
-
-2. Add to your Zed `settings.json`:
-
-```json
-"agent_servers": {
-  "Codeep": {
-    "type": "custom",
-    "command": "codeep",
-    "args": ["acp"]
-  }
-}
-```
-
-3. Make sure your API key is set in the environment Zed uses:
-
-```bash
-export DEEPSEEK_API_KEY=your_key   # or whichever provider
-```
-
-4. Open Zed's AI panel and select **Codeep** as the agent.
-
-### Configurable permissions (Zed & VS Code extension)
-
-Via the agent settings panel you can toggle which tools ask for approval before running — same controls available in the TUI via `/settings`:
-
-- **Confirm: delete_file** — ON by default
-- **Confirm: execute_command** — ON by default
-- **Confirm: write_file / edit_file** — OFF by default
-
-These apply in `Dangerous` confirmation mode (the default). Choose `Always` to confirm every action, or `Never` to skip all prompts.
-
-### ACP capabilities
-
-Codeep advertises the following [ACP](https://agentclientprotocol.com) capabilities so Zed (and other ACP clients) can use them:
-
-- **`promptCapabilities.image`** — paste/drag images into chat for vision analysis.
-- **`promptCapabilities.embeddedContext`** — drag a file or pin a code selection into the chat and the actual file content is injected into the prompt (resource & resource_link blocks, 200 KB cap per file).
-- **`sessionCapabilities.list`** — exposes saved CLI sessions to ACP clients.
-- **`sessionCapabilities.resume`** — instant reconnect on panel reload without replaying history.
-- **`loadSession`** — restore a previous session by id.
-
-Codeep also reads `clientCapabilities.terminal` from the client and routes shell commands through the editor's terminal when supported (so you see them in Zed's terminal panel), falling back to local execution otherwise.
-
-### Loading CLI sessions in Zed
-
-Zed's left sidebar shows only sessions Zed itself created (one per "New Thread") — it does **not** auto-list sessions you saved from the CLI or from a previous Zed window. Two ways to access those:
-
-**Inside the chat (recommended):**
-
-```
-/sessions                    # show all saved sessions for this workspace
-/session load <name>         # restore one
-```
-
-When you open a fresh chat in Zed, Codeep also shows you the most recent CLI sessions for that project right in the welcome message, so you can switch with one command.
-
-**Via Zed's import modal:**
-
-Open Zed's command palette (`Cmd+Shift+P`) and search for **"Import Threads"**. Codeep's saved sessions appear there as an importable list — once imported they show up in Zed's regular sidebar.
-
-## VS Code Extension
-
-Install **Codeep** from the VS Code marketplace. The extension is a thin UI around the CLI — all credentials and sessions live in the CLI's config (`~/.config/codeep/config.json`), so keys set anywhere are visible everywhere.
-
-### Set API keys without leaving VS Code
-
-Open the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`) and run:
-
-- **`Codeep: Set API Key`** — pick a provider, paste the key, done. Writes into the CLI config, so running `codeep` in a terminal immediately sees the new key.
-- **`Codeep: Open Chat`** — open the Codeep sidebar.
-- **`Codeep: Review Current File`** — run `/review <file>` on the active editor.
-- **`Codeep: New Session`** — start a fresh session in the chat.
-
-If you already set up keys in the CLI (or via the [codeep.dev](https://codeep.dev/dashboard) dashboard + `codeep account sync --keys`), the extension picks them up automatically on first launch — no welcome prompt.
-
-### Live plan & reasoning stream
-
-The chat sidebar now surfaces two extra ACP signals that previously only the TUI saw:
-
-- **Live plan** — for multi-step tasks the agent's plan appears as a small green card with status icons (`○` pending, `◐` in progress, `●` done) that update in place as work progresses.
-- **Reasoning stream** — when the model exposes a thinking trace (e.g. Claude extended thinking, GPT-5 reasoning), it shows up in a collapsible "Thinking" card above the answer. Closed by default; click to expand.
-- **Diff preview on permission prompts** — manual-mode permission cards now show a `-` / `+` diff for `edit_file`, a content preview for `write_file`, and the full `$ command` + `cwd` for `execute_command`, so users can verify before clicking *Allow*. Payload is truncated (~4 KB per field, 200 lines per file) with a visible marker. Other ACP clients (Zed, etc.) ignore the extra fields silently.
-- **`@file` mentions** — type `@` in the chat input to open a workspace-wide file picker. Pick with arrow keys + Enter; the file's content is inlined into the prompt as an `[Attached files]` preamble. Files over 200 KB are skipped with a marker. Multiple mentions in one message are deduplicated.
-- **Auto-reconnect** — if the CLI process exits unexpectedly (crash, OOM kill, parent restart), the extension reconnects on its own with exponential backoff (1s → 2s → 4s → 8s → 16s → 30s, capped at 6 attempts). The status bar shows the countdown. Configurable idle-watchdog timeout (`codeep.requestTimeoutMinutes`, default 5 min) replaces the old fixed cap so slow reasoning models don't get killed mid-thought.
-
-### Editor-native actions (new in 2.2)
-
-- **Code Actions (lightbulb)** — select code and press `Ctrl+.` for **Explain**, **Improve / refactor**, **Add tests**, and **Add doc comment**. On a line with an error/warning, a **Fix this problem** quick-fix sends the diagnostic plus the code to Codeep. Everything routes through the chat, so the full agent (file edits via the diff preview, MCP tools) is available.
-- **Model picker in the status bar** — click `Codeep · <model>` (or run **Codeep: Select Provider & Model**) to switch provider + model from a quick-pick. Providers with open-ended catalogs (OpenRouter, ModelScope, Ollama, custom endpoints) let you type a model id.
-- **Self-hosted endpoints from settings** — point the extension at vLLM / LiteLLM / LM Studio / text-generation-webui with `codeep.baseUrl` (e.g. `http://localhost:8000/v1`), plus `codeep.provider` (`custom` or `openai`) and `codeep.model`. The `codeep.provider` / `codeep.model` settings are applied on every connect, so they stay authoritative.
-- **Get Started walkthrough** — a native VS Code walkthrough (Help → Get Started) covering CLI install, opening the chat, editor actions, and choosing a model.
-
-> The 2.2 model picker and `custom`-provider settings need CLI **2.1.2+**; they degrade gracefully on older CLIs (free-text model input, and `codeep.baseUrl` still works for the `openai` provider via `OPENAI_BASE_URL`).
-
-### Native chat & agent integration (new in 2.3)
-
-- **`@codeep` chat participant** — invoke Codeep from VS Code's built-in Chat view: type `@codeep` and ask, or `@codeep /explain` / `@codeep /review` with a selection. Answers come from your configured Codeep provider/model via the CLI (not VS Code's model picker), on an independent session.
-- **`#codeepSkills` language-model tool** — exposes your workspace's Codeep skill bundles (`.codeep/skills/*/SKILL.md`) to VS Code agent mode and `#`-references, so the native agent can follow your project's own workflows.
-- Requires VS Code **1.95+** (for the stable Chat Participant + Language Model Tools APIs).
-
-### Source control & sidebar (new in 2.3)
-
-- **Generate Commit Message** — a sparkle button in the Source Control panel (and `Codeep: Generate Commit Message` in the palette) reads your staged diff and writes a Conventional Commits message into the commit box. Falls back to the working-tree diff if nothing is staged; asks before replacing a message you've already typed.
-- **Sessions tree view** — a native **Sessions** view in the Codeep sidebar lists saved conversations (title + age). Click to load into the chat, inline-delete, or start a New Session from the title bar.
-- **MCP config validation** — `.codeep/mcp_servers.json` (project and global) gets JSON schema validation + autocomplete, so a mistyped `command` / `args` / `env` is caught before a session starts.
-- **Workspace Trust** — declares limited support for untrusted workspaces, with a reminder to review permission prompts carefully (Codeep runs a local agent that can edit files and run commands).

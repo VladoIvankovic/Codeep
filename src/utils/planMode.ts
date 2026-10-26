@@ -5,15 +5,15 @@
  *   1. User runs `/plan <task>` — we ask the LLM for a numbered plan
  *      (no tool calls, no file changes) and surface it to the user.
  *   2. We hold the (task, plan) pair as the *pending* plan. Each
- *      conversation has its own: callers that serve several at once (ACP
- *      threads) pass a scope, and everything else shares the default one.
+ *      conversation has its own: callers that serve several at once
+ *      pass a scope, and everything else shares the default one.
  *   3. User runs `/go` to execute, or `/plan <revised task>` to refine.
  *      `/go` hands the original task + approved plan to the regular
  *      agent loop as a single prompt, so the existing tool execution,
  *      verification, and permission paths apply unchanged.
  *
  * Why this design (MVP):
- *   - Zero changes to the agent loop, MCP wiring, or ACP server.
+ *   - Zero changes to the agent loop or MCP wiring.
  *   - Plan rendering reuses the chat markdown renderer (no new TUI
  *     panel to maintain).
  *   - Edit flow is just "/plan <revised task>" — generates a new plan
@@ -73,8 +73,8 @@ export interface PendingPlan {
 /** The scope of callers that hold one conversation per process (the TUI). */
 export const DEFAULT_PLAN_SCOPE = 'default';
 
-// One pending plan per conversation. A process-wide slot let /go in one ACP
-// thread run the plan another thread had just made. Plans are returned as
+// One pending plan per conversation. A process-wide slot let /go in one
+// conversation run the plan another had just made. Plans are returned as
 // stored, not copied: callers tell plans apart by identity.
 const pendingByScope = new Map<string, PendingPlan>();
 

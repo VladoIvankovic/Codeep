@@ -1,115 +1,68 @@
 # Release Process
 
-Guide for publishing new versions of Codeep.
+How a release works **today**. This is the 3.x pipeline and it is going to be
+replaced in the 4.0 release week (trusted publishing instead of `NPM_TOKEN`,
+draft → publish, the move to the `CodeepDev` organisation). Rewrite this file
+then.
 
-## Prerequisites
+There are no 3.x releases before 4.0; fixes go into 4.0.
 
-- npm account with publish access to `codeep` package
-- 2FA enabled (you'll need OTP codes)
-- Git push access to all repos:
-  - `VladoIvankovic/Codeep`
-  - `VladoIvankovic/homebrew-codeep`
-  - `VladoIvankovic/codeep-zed`
+## What a release is
 
-## Release Steps
+Pushing a tag `v<version>` runs `.github/workflows/release-binaries.yml`, which
+runs three jobs in order. Each needs the one before, so a failure stops the
+chain:
 
-### 1. Update Version
+1. **build** — compiles binaries (`codeep-darwin-aarch64`, `codeep-darwin-x86_64`,
+   `codeep-linux-x86_64`, `codeep-linux-aarch64`), packs each as a `.tar.gz` and
+   attaches them to a GitHub Release. The release body is the matching
+   `## [version]` section of `CHANGELOG.md`, or GitHub's generated notes if
+   there is none.
+2. **publish-npm** — `npm publish` (uses the `NPM_TOKEN` secret).
+3. **update-homebrew** — waits for the tarball on the npm registry, then bumps
+   `Formula/codeep.rb` in `homebrew-codeep` (uses `HOMEBREW_TAP_TOKEN`).
 
-Edit `package.json`:
-```bash
-# Example: 1.0.18 → 1.0.19
-vim package.json  # Change version number
-```
+Nothing is published by hand.
 
-### 2. Build & Test
+## Steps
 
-```bash
-npm run build
-npm test
-```
+1. Add a `## [x.y.z] — YYYY-MM-DD` section to `CHANGELOG.md`, with a one-line
+   `> TL;DR` under the heading (the website's RSS feed reads it), and commit it.
+2. If commands changed, regenerate what the website shows and commit the JSON in
+   the web repo:
 
-If commands or models changed, regenerate what the website shows before you
-tag, and commit the JSON in the web repo:
+   ```bash
+   npm run export:commands   # → Codeep-web/src/data/commands.json
+   npm run export:catalogue  # → Codeep-web/src/data/catalogue.json
+   ```
 
-```bash
-npm run export:commands   # → Codeep-web/src/data/commands.json
-npm run export:catalogue  # → Codeep-web/src/data/catalogue.json
-```
+3. Run the release script from a clean working tree:
 
-Deploy the website **after** the npm publish, so it never documents a command or
-default the published CLI does not have yet.
+   ```bash
+   npm run release patch   # or minor | major | x.y.z
+   ```
 
-### 3. Commit & Push
+   It refuses a dirty tree or a missing CHANGELOG section, runs `npm test`, runs
+   `npm version` (which bumps `package.json`, regenerates `src/version.ts`,
+   commits and tags), checks the baked version, then pushes the commit and the tag.
 
-```bash
-git add -A
-git commit -m "v1.0.19 - Description of changes"
-git push
-```
+4. Watch the workflow: `gh run watch -R VladoIvankovic/Codeep`.
+5. Deploy the website **after** the npm publish, so it never documents a command
+   or default the published CLI does not have yet.
 
-### 4. Publish to npm
-
-```bash
-npm publish --otp=<6-digit-code>
-```
-
-Get the OTP code from your authenticator app.
-
-### 5. Update Homebrew Formula & Zed Extension
+## Users update
 
 ```bash
-./scripts/update-homebrew.sh 1.0.19
-```
-
-This script will:
-- Fetch SHA256 hash from npm
-- Update `homebrew-codeep/Formula/codeep.rb` and push
-- Bump version in `codeep-zed/extension.toml`, tag and push
-- GitHub Action in `codeep-zed` automatically builds binaries for all platforms
-
-**Manual alternative:**
-```bash
-# Get SHA256
-curl -sL https://registry.npmjs.org/codeep/-/codeep-1.0.19.tgz | shasum -a 256
-
-# Update homebrew-codeep/Formula/codeep.rb manually
-cd ~/GitHub/homebrew-codeep
-# Edit Formula/codeep.rb with new version and SHA256
-git add Formula/codeep.rb
-git commit -m "Update codeep to v1.0.19"
-git push
-```
-
-## Users Update
-
-### via npm
-```bash
-npm update -g codeep
-```
-
-### via Homebrew
-```bash
-brew update
-brew upgrade codeep
+npm update -g codeep      # npm
+brew update && brew upgrade codeep   # Homebrew
 ```
 
 ## Rollback
 
-If you need to unpublish (within 72 hours):
-```bash
-npm unpublish codeep@1.0.19
-```
+Unpublishing is discouraged; publish a patch version instead. If you must, npm
+allows it within 72 hours: `npm unpublish codeep@x.y.z`.
 
-**Note:** Unpublishing is discouraged. Consider publishing a patch version instead.
+## Version numbering
 
-## Version Numbering
-
-Follow [Semantic Versioning](https://semver.org/):
-
-- **Major (2.0.0)**: Breaking changes
-- **Minor (1.1.0)**: New features, backwards compatible
-- **Patch (1.0.1)**: Bug fixes, backwards compatible
-
-## Changelog
-
-Update `CHANGELOG.md` with notable changes for each release.
+[Semantic Versioning](https://semver.org/): major for breaking changes, minor for
+new features, patch for fixes.

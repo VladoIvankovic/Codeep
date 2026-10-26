@@ -146,7 +146,7 @@ export async function summarizeRecall(
   }
 }
 
-/** Render recall results as a Markdown block for TUI / ACP display. */
+/** Render recall results as a Markdown block for display. */
 export function formatRecall(query: string, matches: RecallMatch[]): string {
   if (matches.length === 0) {
     return `_No saved sessions match "${query}"._\n\nTip: \`/recall\` searches across all your sessions. For the current session only, use \`/search\`.`;

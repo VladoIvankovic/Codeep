@@ -57,7 +57,7 @@ beforeEach(() => {
 
 // Import AFTER the mock is set so McpClient picks up the fake spawn.
 import { McpClient, stderrSummary, exitReason, missingCommandReason, STDERR_DRAIN_GRACE_MS } from './mcpClient';
-import type { McpServer } from '../acp/protocol';
+import type { McpServer } from './mcpTypes';
 
 const SERVER: McpServer = { name: 'fs', command: 'npx', args: ['filesystem'] };
 

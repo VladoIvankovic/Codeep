@@ -388,7 +388,7 @@ export function responsesErrorStatus(code: unknown): number {
 function streamError(error: unknown, status: number): ApiError {
   const e = (error && typeof error === 'object') ? error as Record<string, unknown> : { message: String(error ?? 'unknown error') };
   // Shaped like an HTTP error body so everything that reads "API error:
-  // <status> - <json>" (runAgent, the ACP auth notice) reads this too.
+  // <status> - <json>" (runAgent, the auth notice) reads this too.
   return new ApiError(`API error: ${status} - ${JSON.stringify({ error: e })}`, status);
 }
 

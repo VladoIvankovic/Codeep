@@ -1,8 +1,7 @@
 /**
  * User Profile — a durable, human-readable description of the user that
  * personalises how the agent works. It is injected into the system prompt so
- * every surface (CLI, ACP, VS Code, Zed) adapts the same way, because they all
- * run through agent.ts.
+ * every surface adapts the same way, because they all run through agent.ts.
  *
  * Storage (both optional, both injected when present):
  *   - **Global**:  `~/.codeep/profile.md`           — who the user is across

@@ -57,14 +57,14 @@ import {
   isDangerousTask,
   PendingInteractiveContext,
 } from './agentExecution';
-import type { McpServer } from '../acp/protocol';
+import type { McpServer } from '../utils/mcpTypes';
 import { symlinkedCodeepNotice } from '../utils/projectPaths';
 import { parseLaunchArgs } from './cliArgs';
 import { readLaunchPromptFile } from './promptFile';
 import { agentConfirmationMode, pinAgentConfirmation, pinAgentInteractive, isAgentConfirmationPinned } from './agentConfirmation';
 import { followOmarchyTheme, type OmarchyThemeWatch } from './omarchyTheme';
 import { keepOmarchyAgentRecord } from './omarchyAgents';
-import { startOmarchyLiveStatus, trackLiveWork } from './omarchyStatus';
+import { startOmarchyLiveStatus } from './omarchyStatus';
 import * as desktopAttention from './desktopAttention';
 import { recordPromptInLedger } from '../utils/usageLedger';
 import { welcomeContent } from './welcome';
@@ -369,7 +369,7 @@ async function handleSubmit(message: string): Promise<void> {
 
   // API rate limiting now lives at the transport layer (api/index.ts chat()
   // + utils/agentChat.ts agentChat/agentChatFallback) — the single choke
-  // point shared by TUI, ACP and sub-agents. Checking here too would count
+  // point shared by the TUI and sub-agents. Checking here too would count
   // the same request against the window twice.
 
   // Auto agent mode
@@ -574,8 +574,8 @@ export async function main(): Promise<void> {
   const launch = parseLaunchArgs(process.argv.slice(2));
 
   // On Omarchy, keep Codeep's record in the bar's Agents panel current
-  // (omarchyAgents.ts). Before any mode returns: the TUI, acp and
-  // `review --ai` all spend tokens, and each refreshes the record from the
+  // (omarchyAgents.ts). Before any mode returns: the TUI and
+  // `review --ai` both spend tokens, and each refreshes the record from the
   // usage ledger it adds to. Anywhere else this does nothing.
   keepOmarchyAgentRecord({ enabled: () => config.get('omarchyAgentsPanel') !== false });
 
@@ -618,7 +618,6 @@ Usage:
   codeep account sync --keys  The same, turning cloud key sync on to pull your API keys too
   codeep account push   Push personalities + commands + profile (+ keys if cloud key sync is on)
   codeep account purge-keys  Delete all your API keys stored on codeep.dev (cloud only; local keychain untouched)
-  codeep acp          Start ACP server (for Zed editor integration)
   codeep review       Offline code review for CI (--json, --fail-on, --rules, --ai)
   codeep hook install   Install a git pre-commit hook running \`codeep review\`
   codeep hook uninstall Remove the Codeep git hook
@@ -690,20 +689,12 @@ Commands (in chat):
     process.exit(code);
   }
 
-  // ACP server mode — started by Zed via Agent Client Protocol
+  // `codeep acp` was how VS Code and Zed started Codeep. It is gone, but the
+  // command stays as a message: an editor still configured with it would
+  // otherwise get the terminal UI on its JSON-RPC pipe and hang there.
   if (launch.kind === 'acp') {
-    // On Omarchy, say what this server is doing for a bar plugin to read
-    // (omarchyStatus.ts). It writes its file and never toasts: the editor
-    // has its own way of telling you.
-    startOmarchyLiveStatus({
-      kind: 'acp',
-      enabled: () => config.get('omarchyLiveStatus') !== false,
-      info: () => ({ cwd: process.cwd(), provider: config.get('provider'), model: config.get('model') }),
-    });
-    await loadAllApiKeys();
-    const { startAcpServer } = await import('../acp/server.js');
-    await startAcpServer(undefined, { promptStarted: (task, cwd) => trackLiveWork(task, cwd) });
-    return;
+    process.stderr.write('codeep acp was removed in Codeep 4.0. VS Code and Zed need Codeep 3: npm install -g codeep@3\n');
+    process.exit(2);
   }
 
   if (launch.kind === 'error') {
@@ -739,7 +730,7 @@ Commands (in chat):
   }
 
   // On Omarchy, paint in the desktop theme's colours and follow it when it
-  // changes (omarchyTheme.ts). Only here, where the TUI starts: acp, review,
+  // changes (omarchyTheme.ts). Only here, where the TUI starts: review,
   // hook and account have all returned by now, and a server or a CI run has
   // no business holding a watch on the desktop's theme. Before the login
   // screen, so a first run is in the theme from its first frame.
@@ -757,11 +748,10 @@ Commands (in chat):
 
   // A SIGINT ends the TUI as /exit does: the terminal restored, the
   // conversation saved, "Goodbye!". Registered here, where the TUI starts, and
-  // not for the whole process: for account, review, hook and acp that cleanup
+  // not for the whole process: for account, review and hook that cleanup
   // was wrong — it wiped the screen and the scrollback and printed "Goodbye!"
-  // over a `codeep account` waiting for the browser, and into acp's JSON-RPC
-  // stream. They end on Ctrl+C as any program does now (130, nothing
-  // written). Not under Vitest, where main() runs once per launch test and
+  // over a `codeep account` waiting for the browser. They end on Ctrl+C as
+  // any program does now (130, nothing written). Not under Vitest, where main() runs once per launch test and
   // each handler would end the worker.
   if (!process.env.VITEST) {
     process.on('SIGINT', () => {
@@ -925,7 +915,7 @@ Commands (in chat):
   app.addMessage({ role: 'welcome', content: currentWelcome() });
   // Written again whenever what it describes changes: the startup questions
   // answered, /grant, and the config — changed here or by another process
-  // (configWatch.ts). The watch starts here, with the TUI: acp, review, hook
+  // (configWatch.ts). The watch starts here, with the TUI: review, hook
   // and account have all returned by now.
   refreshWelcome = () => app.updateWelcome(currentWelcome());
   welcomeWatch = watchConfig(config, () => refreshWelcome());
@@ -977,7 +967,7 @@ Commands (in chat):
   // Spawn MCP servers in the background. They register against the fixed
   // session id `codeep-tui` that runAgentTask passes into runAgent's
   // `mcpSessionId` — so the agent picks up `.codeep/mcp_servers.json`
-  // entries (project + global) the same way an ACP client would.
+  // entries (project + global) the same way a client-supplied list would.
   if (projectPath) {
     mcpStartup = (async () => {
       try {

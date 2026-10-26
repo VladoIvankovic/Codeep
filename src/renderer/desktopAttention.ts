@@ -4,8 +4,7 @@
  * plugin reads (omarchyStatus.ts). One place for the run to say "started",
  * "waiting" and "ended", so the two cannot drift apart.
  *
- * Only the TUI calls this. The ACP server has its own UI in the editor, so it
- * never toasts; it writes the status file through omarchyStatus.ts directly.
+ * Only the TUI calls this.
  * Every function here is safe to call from the run: none throws, none waits.
  */
 import { config } from '../config/index';

@@ -13,7 +13,7 @@
  *  - any other tool is allowed by its name, as before;
  *  - the answer is kept for the chat — until a new chat is started or Codeep
  *    ends — and not for one run. A chat is a Codeep session (the TUI's session
- *    id; an ACP session's current conversation), so `/new`, loading another
+ *    id), so `/new`, loading another
  *    session and `/session new` start with nothing allowed, and a chat that
  *    is renamed or deleted takes its answers with it.
  *
@@ -89,8 +89,8 @@ export function permissionMemoryIn(store: PermissionStore, chatId: string): Perm
   return { alwaysAllowed: allowed, alwaysRejected: new Set(), alwaysRejectedPaths: new Set() };
 }
 
-/** The TUI's: one per process, by session id. An ACP session keeps its own on
- *  the session object (`permissionStore`), which goes with it. */
+/** The TUI's: one per process, by session id. (3.x's ACP sessions kept their own
+ *  on the session object.) */
 const allowedBySession: PermissionStore = new Map();
 
 export function sessionPermissionMemory(sessionId: string): PermissionMemory {

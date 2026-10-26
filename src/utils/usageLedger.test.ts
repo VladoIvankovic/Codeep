@@ -702,8 +702,7 @@ describe('where prompts are counted', () => {
   }
 
   it('is where a user prompt goes to a model, once each, and nowhere else', () => {
-    // The terminal's chat message and agent run; ACP's image prompt, plain
-    // prompt, the commands that run the agent and a custom command's chat.
+    // The terminal's chat message and agent run, and a custom command's chat.
     // So no helper — titles, commit messages, summaries, recall, a fix after
     // a failed check, `codeep review` — can add a prompt by calling chat() or
     // runAgent(): neither records one.
@@ -716,8 +715,6 @@ describe('where prompts are counted', () => {
       'utils/usageLedger.ts': [expect.stringMatching(/^export function recordPromptInLedger\(/)],
       'renderer/main.ts': ["recordPromptInLedger(sessionId, 'tui');"],
       'renderer/agentExecution.ts': ["recordPromptInLedger(sessionId, 'tui');"],
-      'acp/server.ts': ["recordPromptInLedger(params.sessionId, 'acp');", "recordPromptInLedger(params.sessionId, 'acp');"],
-      'acp/commands.ts': ["recordPromptInLedger(session.sessionId, 'acp');", "recordPromptInLedger(session.sessionId, 'acp');"],
     });
   });
 });

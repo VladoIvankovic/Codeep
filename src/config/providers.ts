@@ -43,9 +43,9 @@ export interface ProviderConfig {
    *  cost is not. Cost surfaces must say "included in plan" instead of pricing
    *  these tokens at the provider's pay-per-use rates. */
   flatFee?: boolean;
-  // UI metadata exposed to ACP clients (Codeep VS Code extension, etc.) so
-  // they don't have to hardcode their own copy of the provider list. Keep these
-  // strings short and human-readable — they show up in dropdowns and hints.
+  // UI metadata for provider pickers, so a client does not have to hardcode
+  // its own copy of the provider list. Keep these strings short and
+  // human-readable — they show up in dropdowns and hints.
   groupLabel?: string; // Heading shown in grouped model selectors / settings
   hint?: string;       // One-line hint about pricing/auth model
   mcpEndpoints?: { // Z.AI MCP service endpoints
@@ -1312,8 +1312,7 @@ export function responsesDialectFor(providerId: string): 'openai' | 'xai' | null
  *
  * The catalogue check is there because an id can reach an agent turn without
  * being offered: an old config or saved profile with `gpt-4.1` or `gpt-4o`
- * (applyProfile keeps unknown ids), or the ACP set-model handler, which takes
- * any id. Those are not reasoning models — GPT-4o's output limit (16,384) is
+ * (applyProfile keeps unknown ids). Those are not reasoning models — GPT-4o's output limit (16,384) is
  * below responsesMaxOutputTokens()'s 32K floor, and non-reasoning models are
  * reported to reject the encrypted-reasoning `include` — and the Responses
  * path has no text-tool fallback, so their agent turns would stop on a 400.

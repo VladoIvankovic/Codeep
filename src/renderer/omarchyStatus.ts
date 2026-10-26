@@ -55,6 +55,7 @@ const debug = (...args: unknown[]) => {
 };
 
 export type LiveState = 'idle' | 'working' | 'approval' | 'question';
+/** 'acp' is no longer written (removed in 4.0); a status file left by 3.x may still say it. */
 export type LiveKind = 'tui' | 'acp';
 
 /**
@@ -406,11 +407,12 @@ export function applyOmarchyLiveStatus(on: boolean): void {
   active?.apply(on);
 }
 
-/** Prompts running at once in an ACP server, which can have several sessions. */
+/** Prompts running at once. Only the ACP server (removed in 4.0) had more than one. */
 let working = 0;
 
 /**
- * An ACP prompt is running: "working" until the last of them has ended.
+ * A prompt is running: "working" until the last of them has ended. Nothing
+ * calls this since 4.0 removed the ACP server, its only caller.
  * Returns what ends it; calling it again does nothing.
  */
 export function trackLiveWork(task: string | null, cwd?: string): () => void {

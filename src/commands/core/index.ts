@@ -1,14 +1,15 @@
 // commands/core/index.ts
-// Shared command core — single implementation of command semantics used by
-// BOTH dispatch surfaces (TUI renderer/commands.ts and ACP acp/commands.ts).
+// Shared command core — single implementation of command semantics. It was
+// written to serve BOTH dispatch surfaces (TUI renderer/commands.ts and ACP
+// acp/commands.ts); ACP was removed in 4.0, so the TUI is its only surface.
 //
-// Problem this solves: ~40 commands are implemented twice with different
+// Problem it solved: ~40 commands were implemented twice with different
 // presentation (TUI: app.notify / interactive pickers; ACP: response
 // strings). Every behavior change had to be made twice, and they drifted.
 //
 // Contract: a core command does validation + state mutation and returns a
 // CommandResult — plain data describing the outcome. The surface adapter
-// (TUI or ACP) renders that result in its own style. Side-effectful UI
+// renders that result in its own style. Side-effectful UI
 // (pickers, dialogs) stays in the surface layer; pure decisions live here.
 //
 // Migration is incremental: each command moves over one at a time, in its

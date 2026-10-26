@@ -27,7 +27,7 @@
  *     this entry runs the PyPI `mcp-server-fetch`, which is active.
  */
 
-import type { McpServer } from '../acp/protocol.js';
+import type { McpServer } from './mcpTypes.js';
 
 export interface MarketplaceEntry {
   /** Short id used by `/mcp install <id>` and shown in the catalog. */
@@ -157,7 +157,7 @@ export function formatInstallUsage(entry: MarketplaceEntry): string {
  * without it — Filesystem with no directory exits at once — yet both
  * install paths saved it anyway: the project config kept an entry that
  * failed on every start until the user found and hand-edited the file.
- * Both paths (TUI and ACP) ask this BEFORE writing anything. Blank
+ * Every install path asks this BEFORE writing anything. Blank
  * arguments do not count.
  */
 export function missingRequiredArgs(entry: MarketplaceEntry, extraArgs: string[]): string | null {

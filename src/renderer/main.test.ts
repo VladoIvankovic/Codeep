@@ -301,18 +301,12 @@ describe('what the terminal says to the desktop', () => {
     expect(main.slice(usage, main.indexOf('\n  }\n', usage))).toMatch(/process\.exit\(await runUsageCommand\(launch\.args\)\)/);
   });
 
-  it('starts the live status where the TUI starts, and an ACP server\'s where that starts', () => {
+  it('starts the live status where the TUI starts', () => {
     const main = body();
     const tui = main.indexOf("startOmarchyLiveStatus({\n    kind: 'tui',");
     expect(tui).toBeGreaterThan(main.indexOf("if (launch.kind === 'error')"));
     expect(tui).toBeLessThan(main.indexOf('await loadAllApiKeys();', tui - 1));
     expect(main).toContain("enabled: () => config.get('omarchyLiveStatus') !== false,");
-
-    const acpBranch = main.indexOf("if (launch.kind === 'acp')");
-    const acp = main.indexOf("startOmarchyLiveStatus({\n      kind: 'acp',", acpBranch);
-    expect(acp).toBeGreaterThan(acpBranch);
-    expect(acp).toBeLessThan(main.indexOf('await startAcpServer(', acpBranch));
-    expect(main).toContain('promptStarted: (task, cwd) => trackLiveWork(task, cwd)');
   });
 
   it('keeps the question the agent put before a run in one place, which tells the desktop', () => {
@@ -326,16 +320,27 @@ describe('what the terminal says to the desktop', () => {
   });
 });
 
-describe('an ACP server', () => {
-  it('has no way to toast: nothing under src/acp reaches the desktop notifier', () => {
-    // The editor has its own UI for "waiting for you". The status file is
-    // the one thing it writes, and it is handed in by main.ts.
-    const sources = readdirSync('src/acp').filter(name => name.endsWith('.ts') && !name.endsWith('.test.ts'));
-    expect(sources.length).toBeGreaterThan(3);
-    for (const name of sources) {
-      const code = readFileSync(join('src/acp', name), 'utf-8');
-      expect(code, name).not.toMatch(/desktopNotify|desktopAttention|notify-send/);
-    }
+describe('`codeep acp`', () => {
+  // VS Code and Zed used to start Codeep this way. An editor still set up to
+  // do so must get a message and a non-zero exit, not the terminal UI on a
+  // JSON-RPC pipe.
+  const body = () => sliceFrom('export async function main(');
+
+  it('says it was removed and exits 2, before anything is loaded or started', () => {
+    const main = body();
+    const branch = main.indexOf("if (launch.kind === 'acp')");
+    expect(branch).toBeGreaterThan(-1);
+    const end = main.indexOf('\n  }\n', branch);
+    const stub = main.slice(branch, end);
+    expect(stub).toContain("codeep acp was removed in Codeep 4.0. VS Code and Zed need Codeep 3: npm install -g codeep@3\\n");
+    expect(stub).toContain('process.exit(2)');
+    expect(stub).not.toMatch(/loadAllApiKeys|startOmarchyLiveStatus|startAcpServer|import\(/);
+    expect(branch).toBeLessThan(main.indexOf('await loadAllApiKeys()'));
+    expect(mainSource).not.toMatch(/acp\/server/);
+  });
+
+  it('is not offered in --help', () => {
+    expect(mainSource).not.toMatch(/codeep acp\s+Start/);
   });
 });
 

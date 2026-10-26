@@ -16,16 +16,12 @@
  * `/account` shipped broken), and one missing from `HELP_LAYOUT` is invisible
  * in `/help` and on the website.
  *
- * The ACP server (VS Code, Zed) is NOT derived from here: it keeps its own
- * `AVAILABLE_COMMANDS` list in `acp/server.ts` and resolves its own aliases,
- * so a command added here is not automatically offered to editors.
- *
  * ## What lives here vs. elsewhere
  *
  * - **`CommandDef`** is metadata only: name, aliases, description, category.
- *   The actual handler logic stays in `renderer/commands.ts` (CLI) and
- *   `acp/commands.ts` (ACP) — those files keep their per-command `case`
- *   blocks, but they now look up the canonical name/description/alias map here.
+ *   The actual handler logic stays in `renderer/commands.ts`, which keeps its
+ *   per-command `case` blocks but looks up the canonical name/description/alias
+ *   map here.
  * - **Argument syntax** (e.g. `/rename <name>`, `/mcp browse [id]`) is
  *   documented via the optional `usage` field — surfaced in `/help` only.
  *   The autocomplete list shows just the bare command name.
@@ -280,11 +276,6 @@ export const COMMANDS: CommandDef[] = [
   { name: 'context-save', description: 'Save conversation', category: 'cloud', hidden: true },
   { name: 'context-load', description: 'Load conversation', category: 'cloud', hidden: true },
   { name: 'context-clear', description: 'Clear saved context', category: 'cloud', hidden: true },
-  // ACP-only. acp/commands.ts handles /save (an editor has no autosave); the TUI
-  // saves sessions on its own and has no handler, so this stays hidden — offering
-  // it in the terminal would only answer "Unknown command". Registered because
-  // registry.test.ts requires every ACP case label to be.
-  { name: 'save', description: 'Save current session (VS Code / Zed only)', category: 'cloud', hidden: true },
 
   // ── code generation ────────────────────────────────────────────────────────
   { name: 'build', description: 'Build the project', category: 'codegen' },

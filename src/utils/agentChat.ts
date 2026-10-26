@@ -413,7 +413,7 @@ ${toolInstructions}
 - Don't ask permission for routine work; the user already launched the agent.
 
 ## About Codeep
-Codeep is an open-source, terminal-native AI coding agent — also a native macOS app and a VS Code / Zed extension (over ACP). Beyond the file/command tools above, the user can extend you through Codeep features:
+Codeep is an open-source, terminal-native AI coding agent — also a native macOS app. Beyond the file/command tools above, the user can extend you through Codeep features:
 - Skills — reusable workflow bundles (browse/add/run with \`/skills\`)
 - MCP — connect external tools & data, e.g. Postgres, GitHub, a browser, the iOS simulator (\`/mcp\`)
 - Sub-agents — delegate focused subtasks (\`/agents\`)

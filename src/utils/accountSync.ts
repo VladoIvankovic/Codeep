@@ -296,7 +296,7 @@ async function pullAndStoreKeys(keysFlag: boolean, io: SyncIO): Promise<boolean>
  * nothing had come down. Only then, though. A current provider with a key —
  * one from the environment counts — or one that needs none is a choice
  * already made, and is left alone. So is the provider of a sync nobody is
- * watching (no terminal, no --keys): the VS Code extension's sync runs with
+ * watching (no terminal, no --keys): a sync run from an editor's extension has
  * the editor's environment, which can lack a key the user's shell sets.
  *
  * The first in the order /provider and the first-run screen list them, so

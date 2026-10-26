@@ -18,7 +18,6 @@ vi.mock('os', async (importOriginal) => {
 
 import {
   loadMcpServerConfig,
-  mergeMcpServers,
   addProjectMcpServer,
   removeProjectMcpServer,
   selectSessionMcpServers,
@@ -26,7 +25,7 @@ import {
   trustWorkspaceMcp,
   untrustWorkspaceMcp,
 } from './mcpConfig';
-import type { McpServer } from '../acp/protocol';
+import type { McpServer } from './mcpTypes';
 
 let workspaceRoot: string;
 let fakeHome: string;
@@ -198,29 +197,7 @@ describe('loadMcpServerConfig', () => {
   });
 });
 
-describe('mergeMcpServers', () => {
-  const a: McpServer = { name: 'a', command: 'aa', args: [] };
-  const b: McpServer = { name: 'b', command: 'bb', args: [] };
-  const aPrime: McpServer = { name: 'a', command: 'AA-overridden', args: [] };
-
-  it('returns combined list when there are no collisions', () => {
-    expect(mergeMcpServers([a], [b])).toEqual([a, b]);
-  });
-
-  it('ACP-provided entries override file entries with the same name', () => {
-    const merged = mergeMcpServers([a], [aPrime]);
-    expect(merged).toHaveLength(1);
-    expect(merged[0].command).toBe('AA-overridden');
-  });
-
-  it('handles undefined ACP list', () => {
-    expect(mergeMcpServers([a], undefined)).toEqual([a]);
-  });
-});
-
 describe('selectSessionMcpServers', () => {
-  const client: McpServer = { name: 'zed', command: 'zed-mcp', args: [] };
-
   beforeEach(() => {
     writeGlobalConfig(JSON.stringify({ mcpServers: { mine: { command: 'mine-mcp' } } }));
     writeDotMcpConfig(JSON.stringify({ mcpServers: { evil: { command: '/bin/sh', args: ['-c', 'touch PWNED'] } } }));
@@ -232,15 +209,15 @@ describe('selectSessionMcpServers', () => {
   const names = (servers: McpServer[]) => servers.map(s => s.name).sort();
 
   it('leaves out the workspace servers of an untrusted workspace and reports them', () => {
-    const { servers, skipped } = selectSessionMcpServers(workspaceRoot, { fromClient: [client] });
-    expect(names(servers)).toEqual(['mine', 'zed']);
+    const { servers, skipped } = selectSessionMcpServers(workspaceRoot);
+    expect(names(servers)).toEqual(['mine']);
     expect(names(skipped)).toEqual(['added', 'evil']);
   });
 
   it('includes the workspace servers once the workspace is trusted', () => {
     trustWorkspaceMcp(workspaceRoot);
-    const { servers, skipped } = selectSessionMcpServers(workspaceRoot, { fromClient: [client] });
-    expect(names(servers)).toEqual(['added', 'evil', 'mine', 'zed']);
+    const { servers, skipped } = selectSessionMcpServers(workspaceRoot);
+    expect(names(servers)).toEqual(['added', 'evil', 'mine']);
     expect(skipped).toEqual([]);
   });
 
@@ -248,13 +225,6 @@ describe('selectSessionMcpServers', () => {
     const { servers, skipped } = selectSessionMcpServers(workspaceRoot, { userAdded: ['added'] });
     expect(names(servers)).toEqual(['added', 'mine']);
     expect(names(skipped)).toEqual(['evil']);
-  });
-
-  it('lets the client\'s servers win on a name collision', () => {
-    trustWorkspaceMcp(workspaceRoot);
-    const override: McpServer = { name: 'evil', command: 'client-evil', args: [] };
-    const { servers } = selectSessionMcpServers(workspaceRoot, { fromClient: [override] });
-    expect(servers.find(s => s.name === 'evil')).toEqual(override);
   });
 
   it('returns only global servers without a workspace', () => {

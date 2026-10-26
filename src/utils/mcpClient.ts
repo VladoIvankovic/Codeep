@@ -20,7 +20,7 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
-import type { McpServer } from '../acp/protocol.js';
+import type { McpServer } from './mcpTypes.js';
 import { StreamableHttpClient } from './mcpStreamableHttp.js';
 import { showControlsInline } from './controlChars.js';
 
@@ -92,7 +92,7 @@ export function stderrSummary(stderr: string, secrets: string[], maxLines = 3, m
  * The server's env values — what `stderrSummary` hides. Only strings: the
  * config loader passes a `null` or a number through as it is, and
  * `stderrSummary` reads `.length`, so one of those would throw inside the exit
- * handler and leave the pending requests hanging. An ACP client may also send
+ * handler and leave the pending requests hanging. A client may also send
  * the spec's `[{ name, value }]` list rather than a map; its values are
  * secrets just the same.
  */

@@ -4,12 +4,9 @@ Thanks for your interest in contributing to Codeep! This document covers the
 practical bits you need to get a change merged: setup, the build/test loop,
 code style, and how to propose a change.
 
-Codeep is an autonomous AI coding agent that runs in the terminal and
-integrates with editors via the [Agent Client Protocol][acp]. It's written in
-TypeScript, built with Node.js, and distributed as an npm package, standalone
-binaries, and a Homebrew formula.
-
-[acp]: https://github.com/ZedEditor/agent-client-protocol
+Codeep is an autonomous AI coding agent that runs in the terminal. It's
+written in TypeScript, built with Node.js, and distributed as an npm package,
+standalone binaries, and a Homebrew formula.
 
 ## Quick start
 
@@ -70,10 +67,6 @@ prompted the single-manager decision is exactly what we're avoiding.
   (see `vitest.setup.ts` + the pattern in `checkpoints.test.ts`).
 - Agent-loop integration (end-to-end prompt → tool call → response) → covered
   by `toolExecution.test.ts`; don't duplicate that in a new test.
-- ACP server request handlers (`session/new`, `session/prompt`, …) → currently
-  hard to unit-test because they live inside the `startAcpServer()` closure.
-  There's a tracked refactor to extract them into a testable class; until
-  then, prefer testing the helpers they delegate to.
 
 ## Code style
 
@@ -87,7 +80,7 @@ prompted the single-manager decision is exactly what we're avoiding.
   use the `node:` prefix inside dependencies but plain `'fs'` / `'path'` is
   fine in our own code (the `@types/node` resolution handles both).
 - **Comments:** explain *why*, not *what*. The codebase leans heavily on
-  inline rationale comments (see `acp/transport.ts` for the house style);
+  inline rationale comments (see `src/utils/toolExecution.ts` for the house style);
   when you add a non-obvious decision, leave a note for the next reader.
 - **Naming:** `camelCase` for variables/functions, `PascalCase` for types
   and interfaces, `UPPER_SNAKE_CASE` for constants.
@@ -102,14 +95,11 @@ If you're new to the codebase, read in this order:
    slash-command metadata and the `/help` layout; `App.ts`, `Help.ts` and the
    website's command reference all derive from it. Its header lists the four
    steps for adding a command, and `registry.test.ts` fails if one is missed.
-   The ACP server keeps its own list in `acp/server.ts`.
 4. **`src/config/index.ts`** — the on-disk config (`Conf<ConfigSchema>`) and
    every accessor/mutator. `ConfigSchema` is the exported type that other
    modules (e.g. `Settings.ts`) key off.
 5. **`src/utils/agent.ts`** — the agent loop: prompt → tool calls → response.
-6. **`src/acp/server.ts`** — the ACP adapter that editors (Zed, VS Code) talk
-   to over newline-delimited JSON-RPC on stdio.
-7. **`CHANGELOG.md`** — recent history; the `[Unreleased]` section lists
+6. **`CHANGELOG.md`** — recent history; the `[Unreleased]` section lists
    in-flight changes.
 
 ## Proposing a change

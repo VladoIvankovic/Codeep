@@ -241,9 +241,9 @@ export function classifyPermissionOutcome(outcome: string | undefined | null): P
 /**
  * Build the set of tools that require a permission prompt this run. Derived from
  * the global agentConfirm* settings, plus any `extra` tools forced in for this
- * run only (ACP manual mode passes ['write_file','edit_file'] this way instead
- * of mutating the global `agentConfirmWriteFile` config — which would leak the
- * session's mode into the TUI and race on restore). Exported for unit testing.
+ * run only (the TUI's "always ask" mode passes its tools this way instead of
+ * mutating the global `agentConfirm*` config — which would leak one run's mode
+ * into the next and race on restore). Exported for unit testing.
  */
 export function buildDangerousTools(extra: string[] = []): Set<string> {
   const tools = new Set<string>([
@@ -365,22 +365,14 @@ export interface AgentOptions {
    */
   onRequestPermission?: (toolCall: ToolCall, trustBearing?: TrustBearingWrite | null) => Promise<PermissionOutcome>;
   /** Tool names to force into the per-run dangerous set, on top of the global
-   *  agentConfirm* settings. ACP manual mode passes ['write_file','edit_file']
+   *  agentConfirm* settings. The TUI's "always ask" mode passes its tools
    *  here to gate them for THIS run only, instead of mutating global config. */
   extraDangerousTools?: string[];
   onExecuteCommand?: (command: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /**
-   * Optional filesystem callbacks. When the ACP client advertises `fs`
-   * capability, the server populates these so read_file/write_file/edit_file
-   * tools route through the client (preserving dirty buffers and undo
-   * history) instead of touching disk directly. Falls back to disk if not
-   * provided or if a delegated call throws.
-   */
-  fs?: import('./toolExecution').FsCallbacks;
-  /**
-   * Optional ACP session id used to route MCP-prefixed tool calls
-   * (`<server>__<tool>`) to the per-session `mcpRegistry`. Not set in TUI
-   * mode (no MCP support there yet); set by `runAgentSession` in ACP mode.
+   * Optional session id used to route MCP-prefixed tool calls
+   * (`<server>__<tool>`) to the per-session `mcpRegistry`. The TUI passes
+   * `codeep-tui`; without one, MCP tools are not offered.
    * When set, the agent loop also fetches the session's MCP tool list and
    * passes it into the provider's tool catalog so the model can invoke
    * those tools natively.
@@ -417,7 +409,7 @@ export interface AgentOptions {
    *  on nor runs one the user refused. `alwaysRejectedPaths` holds the same
    *  for a single file that decides what runs later, which is refused by name
    *  rather than by tool. A caller that keeps `alwaysAllowed` between runs
-   *  (the TUI and ACP do, per chat session — permissionScope.ts) makes an
+   *  (the TUI does, per chat session — permissionScope.ts) makes an
    *  "always allow" last that long; without one it lasts this run. */
   permissionMemory?: { alwaysAllowed: Set<string>; alwaysRejected: Set<string>; alwaysRejectedPaths?: Set<string> };
   /** Provider/model for this run only, used in place of the global selection.
@@ -769,7 +761,7 @@ export async function runAgent(
   // .codeep/profile.md) so the agent adapts to who it's working with —
   // reply language, style, stack, hard preferences. User-authored and gated
   // by config.userProfile. Lives here (not in the base prompt) so every
-  // surface — CLI, ACP, VS Code, Zed — inherits it via this single path.
+  // surface — the CLI and its sub-agents — inherits it via this single path.
   const userProfileBlock = loadUserProfilePrompt(projectContext.root);
   if (userProfileBlock) {
     systemPrompt += userProfileBlock;
@@ -883,7 +875,7 @@ export async function runAgent(
   const maxNoAnswerRetries = 2;
   // What allow_always covered: a tool by its name, a command by its program
   // (permissionScope.ts). It lasts as long as the set the caller hands in — a
-  // chat session's, in the TUI and ACP — and this run when there is none. A
+  // chat session's, in the TUI — and this run when there is none. A
   // delegated sub-agent shares its parent's sets, so an answer holds across
   // delegation.
   // A dry run runs nothing, so what it is told "always" must not outlive it:
@@ -969,7 +961,6 @@ export async function runAgent(
         permissionMemory: { alwaysAllowed: alwaysAllowedTools, alwaysRejected: alwaysRejectedTools, alwaysRejectedPaths },
         modelOverride,
         onExecuteCommand: opts.onExecuteCommand,
-        fs: opts.fs,
         mcpSessionId: opts.mcpSessionId,
         autoVerify: false,
         onIteration: (_i, msg) => opts.onIteration?.(iteration, tag(msg)),
@@ -1006,7 +997,7 @@ export async function runAgent(
     };
 
     // Structured custom-bot policy is a runtime security boundary, not a
-    // prompt suggestion. It runs before permission UI or external ACP
+    // prompt suggestion. It runs before permission UI or external
     // terminal delegation, so disallowed commands cannot escape via a
     // different execution surface.
     if (activePersonality && !isPersonalityToolCallAllowed(activePersonality, toolCall, registeredMcpToolNames)) {
@@ -1083,7 +1074,7 @@ export async function runAgent(
       }
     } else if (opts.onRequestPermission && requiresPermission(toolCall.tool, dangerousTools) && !alwaysAllowedTools.has(alwaysAllowScope(toolCall).key)) {
       // Every other tool: the run's dangerous set decides, and only when
-      // there is a callback to ask through (e.g. ACP/Zed).
+      // there is a callback to ask through.
 
       // Skip without asking if permanently rejected this session
       if (alwaysRejectedTools.has(toolCall.tool)) return denied();
@@ -1116,7 +1107,7 @@ export async function runAgent(
     } else if (toolCall.tool === 'delegate') {
       toolResult = await runDelegate(toolCall);
     } else if (opts.onExecuteCommand && toolCall.tool === 'execute_command') {
-      // Delegate to external terminal (e.g. Zed ACP terminal)
+      // Delegate to an external terminal, when the caller supplies one
       // Note: onExecuteCommand runs after the permission gate above
       const command = toolCall.parameters.command as string;
       const args = (toolCall.parameters.args as string[]) || [];
@@ -1161,7 +1152,7 @@ export async function runAgent(
         }
       }
     } else {
-      toolResult = await executeTool(toolCall, projectContext.root || process.cwd(), opts.fs, opts.mcpSessionId, opts.abortSignal);
+      toolResult = await executeTool(toolCall, projectContext.root || process.cwd(), opts.mcpSessionId, opts.abortSignal);
     }
 
     opts.onToolResult?.(toolResult, toolCall);

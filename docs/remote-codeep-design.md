@@ -1,3 +1,6 @@
+> **Superseded 2026-10-22: Remote Codeep dropped; the phone stays Telegram.**
+> Kept for the record. It describes the ACP server, which was removed in 4.0.
+
 # Remote Codeep — Architecture Design
 
 *Status: proposal for green-light. Grounds every claim in the current substrate (verified against `src/acp/*`, `Codeep-web/schema.sql`, `Codeep-web/src/app/api/*`, `src/utils/codeepCloud.ts`, both Apple apps). Synthesizes a four-architecture judge-panel spike (serverless-native, realtime-relay, e2e-zero-knowledge, p2p-signaling); does not blindly pick one.*

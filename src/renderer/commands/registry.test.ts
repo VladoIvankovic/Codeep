@@ -130,9 +130,9 @@ describe('command registry', () => {
 
   // ── Coverage of the existing dispatchers ─────────────────────────────────
   //
-  // These two checks pin the refactor's main guarantee: every case label in
-  // renderer/commands.ts and acp/commands.ts is a known registry token, so
-  // adding a `case 'foo':` without a registry entry is a build-time failure.
+  // This pins the refactor's main guarantee: every case label in
+  // renderer/commands.ts is a known registry token, so adding a `case 'foo':`
+  // without a registry entry is a build-time failure.
 
   it('every command name is unique by case-insensitive comparison (no /FOO vs /foo traps)', () => {
     const lower = new Set<string>();
@@ -146,9 +146,9 @@ describe('command registry', () => {
   // ── Dispatcher coverage ─────────────────────────────────────────────────
   //
   // The point of the registry is that a `case 'foo':` block can never be
-  // added to renderer/commands.ts or acp/commands.ts without a matching
-  // registry entry. These two tests parse the dispatcher source at runtime
-  // (cheap; files are tiny) and assert every case label is a known token.
+  // added to renderer/commands.ts without a matching registry entry. This test
+  // parses the dispatcher source at runtime (cheap) and asserts every case
+  // label is a known token.
 
   it('every case label in renderer/commands.ts exists in the registry', async () => {
     const fs = await import('fs');
@@ -169,23 +169,6 @@ describe('command registry', () => {
     expect(labels.size, 'expected to find at least one top-level case label').toBeGreaterThan(0);
     const unknown = [...labels].filter(l => !ALL_COMMAND_NAMES.has(l));
     expect(unknown, `renderer/commands.ts has cases with no registry entry: ${unknown.join(', ')}`).toEqual([]);
-  });
-
-  it('every case label in acp/commands.ts exists in the registry', async () => {
-    const fs = await import('fs');
-    const url = await import('url');
-    const src = fs.readFileSync(
-      url.fileURLToPath(new URL('../../acp/commands.ts', import.meta.url)),
-      'utf8',
-    );
-    const labels = new Set<string>();
-    for (const m of src.matchAll(/^    case '([a-z][a-z0-9-]*)':/gm)) {
-      labels.add(m[1]);
-    }
-    labels.delete('default');
-    expect(labels.size, 'expected to find at least one top-level case label').toBeGreaterThan(0);
-    const unknown = [...labels].filter(l => !ALL_COMMAND_NAMES.has(l));
-    expect(unknown, `acp/commands.ts has cases with no registry entry: ${unknown.join(', ')}`).toEqual([]);
   });
 
   /// The /account class of bug: offered in the autocomplete, answered "Unknown

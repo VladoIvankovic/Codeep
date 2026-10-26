@@ -96,7 +96,7 @@ Last full review: **2026-10-14** (DeepSeek and MiniMax rechecked 2026-10-20)
   be the default provider's own `defaultModel`, so moving one without the other
   fails the suite.
 - Mirror the catalogue, tuning, context, and pricing in
-  `Codeep-macOS/Packages/CodeepCore`.
+  `Codeep-MacOs/Packages/CodeepCore`.
 - Update the OpenRouter fallback in both clients.
 - Update the public provider matrix in
   `Codeep-web/src/app/docs/providers/page.tsx`.

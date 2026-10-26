@@ -129,8 +129,8 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'kimi-for-coding-highspeed': 262_144,
   // 1,048,576 on Pro/Allegretto and above, 262,144 on Plus/Moderato. Codeep
   // cannot see the plan, so this carries the plan-independent window of the id;
-  // a Plus user past 256K gets Kimi's 401, which the ACP server now words as a
-  // plan limit rather than a missing key.
+  // a Plus user past 256K gets Kimi's 401 (3.x's ACP server worded that as a
+  // plan limit rather than a missing key; the terminal does not).
   'k3':                        1_048_576,
   'k3-256k':                   262_144,
   // Grok (xAI)
@@ -450,13 +450,12 @@ function formatRate(rate: number): string {
 // has no session context, so we can't thread a scope id through every call
 // site. Instead we scope the record buffer per async execution flow with
 // AsyncLocalStorage: the single-session TUI (and anything that never enters a
-// scope) reads/writes `defaultRecords`, exactly as before; the ACP server —
-// which multiplexes many sessions on one process — runs each session's prompts
-// inside `runWithTokenScope` with that session's own buffer, so concurrent
-// sessions can't clobber each other's totals and each session's `/cost` stays
-// cumulative across its prompts.
+// scope) reads/writes `defaultRecords`, exactly as before. Its only
+// caller was the ACP server (removed in 4.0), which multiplexed many sessions
+// on one process and ran each session's prompts inside `runWithTokenScope`
+// with that session's own buffer. Nothing enters a scope now.
 
-/** An isolated token-record buffer for one scope (e.g. one ACP session). */
+/** An isolated token-record buffer for one scope (e.g. one session). */
 export type TokenScope = TokenRecord[];
 
 const defaultRecords: TokenScope = [];
@@ -468,7 +467,7 @@ function currentRecords(): TokenScope {
   return recordsStore.getStore() ?? defaultRecords;
 }
 
-/** Create a fresh, empty scope buffer (one per ACP session). */
+/** Create a fresh, empty scope buffer. */
 export function createTokenScope(): TokenScope {
   return [];
 }
@@ -477,8 +476,8 @@ export function createTokenScope(): TokenScope {
  * Run `fn` with `scope` as the active token-record buffer. Every
  * recordTokenUsage() call made within `fn`'s async flow (including across
  * awaits) accumulates into `scope`, and reads (getCostBreakdown/…) made in the
- * same flow see only `scope`. Used by the ACP server to isolate per-session
- * usage without threading a session id through the deep API layer.
+ * same flow see only `scope`. Isolates per-session usage without threading
+ * a session id through the deep API layer.
  */
 export function runWithTokenScope<T>(scope: TokenScope, fn: () => T): T {
   return recordsStore.run(scope, fn);
@@ -1063,8 +1062,7 @@ export function resetTokenTracking(): void {
 }
 
 /**
- * Format a session cost report as a Markdown block. Used by `/cost` in both
- * the TUI and ACP command handlers. Returns a "no usage yet" message if the
+ * Format a session cost report as a Markdown block. Used by `/cost`. Returns a "no usage yet" message if the
  * session hasn't made any API calls.
  */
 export function formatCostReport(): string {

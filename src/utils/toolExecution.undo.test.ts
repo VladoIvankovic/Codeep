@@ -17,12 +17,11 @@ vi.mock('os', async (importOriginal) => {
   return { ...actual, default: { ...actual, homedir: () => home }, homedir: () => home };
 });
 
-import { executeTool, FsCallbacks } from './toolExecution';
+import { executeTool } from './toolExecution';
 import { ToolCall } from './tools';
 import {
   startSession, endSession, clearHistory, getCurrentSession, undoLastAction, undoAllActions,
 } from './history';
-import { AcpRequestError, AcpRequestTimeoutError } from '../acp/transport';
 
 const fakeHome = homedir();
 let root: string;
@@ -54,26 +53,10 @@ const read = (name: string) => readFileSync(file(name), 'utf-8');
 const recordsFor = (name: string) =>
   (getCurrentSession(root)?.actions ?? []).filter(a => a.path === file(name));
 
-/** An editor that writes through to disk, as one that saves does. */
-const savingEditor = (): FsCallbacks => ({
-  readTextFile: vi.fn(async (p: string) => readFileSync(p, 'utf-8')),
-  writeTextFile: vi.fn(async (p: string, c: string) => { writeFileSync(p, c); }),
-});
-/** An editor that answers every write with an error. */
-const refusingEditor = (): FsCallbacks => ({
-  readTextFile: vi.fn(async (p: string) => readFileSync(p, 'utf-8')),
-  writeTextFile: vi.fn().mockRejectedValue(new AcpRequestError('fs/write_text_file', -32603, 'Buffer is read-only')),
-});
-
-const paths: Array<[string, () => FsCallbacks | undefined]> = [
-  ['disk', () => undefined],
-  ['editor', savingEditor],
-];
-
-describe.each(paths)('write_file then /undo (%s path)', (_label, editor) => {
+describe('write_file then /undo', () => {
   it('puts an overwritten file back', async () => {
     writeFileSync(file('old.txt'), 'original\n');
-    const result = await executeTool(call('write_file', { path: 'old.txt', content: 'agent\n' }), root, editor());
+    const result = await executeTool(call('write_file', { path: 'old.txt', content: 'agent\n' }), root);
     expect(result.success).toBe(true);
     expect(read('old.txt')).toBe('agent\n');
 
@@ -82,7 +65,7 @@ describe.each(paths)('write_file then /undo (%s path)', (_label, editor) => {
   });
 
   it('removes a file it created', async () => {
-    const result = await executeTool(call('write_file', { path: 'new.txt', content: 'agent\n' }), root, editor());
+    const result = await executeTool(call('write_file', { path: 'new.txt', content: 'agent\n' }), root);
     expect(result.success).toBe(true);
     expect(existsSync(file('new.txt'))).toBe(true);
 
@@ -92,10 +75,9 @@ describe.each(paths)('write_file then /undo (%s path)', (_label, editor) => {
 
   it('undoes every write of a finished run', async () => {
     writeFileSync(file('old.txt'), 'original\n');
-    const fs = editor();
-    await executeTool(call('write_file', { path: 'old.txt', content: 'first\n' }), root, fs);
-    await executeTool(call('write_file', { path: 'old.txt', content: 'second\n' }), root, fs);
-    await executeTool(call('write_file', { path: 'new.txt', content: 'agent\n' }), root, fs);
+    await executeTool(call('write_file', { path: 'old.txt', content: 'first\n' }), root);
+    await executeTool(call('write_file', { path: 'old.txt', content: 'second\n' }), root);
+    await executeTool(call('write_file', { path: 'new.txt', content: 'agent\n' }), root);
     endSession();
 
     const result = undoAllActions(root);
@@ -105,10 +87,10 @@ describe.each(paths)('write_file then /undo (%s path)', (_label, editor) => {
   });
 });
 
-describe.each(paths)('/undo after the user changed the file (%s path)', (_label, editor) => {
+describe('/undo after the user changed the file', () => {
   it('does not overwrite an edit made after the run', async () => {
     writeFileSync(file('app.ts'), 'original\n');
-    await executeTool(call('edit_file', { path: 'app.ts', old_text: 'original', new_text: 'agent' }), root, editor());
+    await executeTool(call('edit_file', { path: 'app.ts', old_text: 'original', new_text: 'agent' }), root);
     endSession();
     writeFileSync(file('app.ts'), 'agent\nplus the user\'s own work\n');
 
@@ -119,7 +101,7 @@ describe.each(paths)('/undo after the user changed the file (%s path)', (_label,
   });
 
   it('does not delete a created file the user has since written to', async () => {
-    await executeTool(call('write_file', { path: 'notes.md', content: 'agent draft\n' }), root, editor());
+    await executeTool(call('write_file', { path: 'notes.md', content: 'agent draft\n' }), root);
     endSession();
     writeFileSync(file('notes.md'), 'my own notes\n');
 
@@ -151,11 +133,11 @@ describe('/undo of a deleted file', () => {
   });
 });
 
-describe.each(paths)('edit_file then /undo (%s path)', (_label, editor) => {
+describe('edit_file then /undo', () => {
   it('puts the edited file back', async () => {
     writeFileSync(file('f.txt'), 'hello world\n');
     const result = await executeTool(
-      call('edit_file', { path: 'f.txt', old_text: 'world', new_text: 'agent' }), root, editor(),
+      call('edit_file', { path: 'f.txt', old_text: 'world', new_text: 'agent' }), root,
     );
     expect(result.success).toBe(true);
     expect(read('f.txt')).toBe('hello agent\n');
@@ -167,10 +149,8 @@ describe.each(paths)('edit_file then /undo (%s path)', (_label, editor) => {
   it('records nothing for a file that is not there', async () => {
     writeFileSync(file('g.txt'), 'g original\n');
     await executeTool(call('write_file', { path: 'g.txt', content: 'g agent\n' }), root);
-    const fs = editor();
-    if (fs) fs.readTextFile = vi.fn().mockRejectedValue(new Error('no such buffer'));
     const result = await executeTool(
-      call('edit_file', { path: 'missing.txt', old_text: 'a', new_text: 'b' }), root, fs,
+      call('edit_file', { path: 'missing.txt', old_text: 'a', new_text: 'b' }), root,
     );
     expect(result.success).toBe(false);
     expect(recordsFor('missing.txt')).toHaveLength(0);
@@ -178,86 +158,6 @@ describe.each(paths)('edit_file then /undo (%s path)', (_label, editor) => {
     // /undo reaches the write that did happen.
     expect(undoLastAction(root).message).toBe(`Restored: ${file('g.txt')}`);
     expect(read('g.txt')).toBe('g original\n');
-  });
-});
-
-describe('edit_file on a file only the editor has', () => {
-  // The editor holds an unsaved buffer the disk has never seen. There is no
-  // earlier version to put back, and deleting the file would throw the
-  // user's text away, so /undo must leave it alone.
-  it('does not destroy the file on /undo', async () => {
-    const fs: FsCallbacks = {
-      readTextFile: vi.fn(async () => 'unsaved buffer\n'),
-      writeTextFile: vi.fn(async (p: string, c: string) => { writeFileSync(p, c); }),
-    };
-    const result = await executeTool(
-      call('edit_file', { path: 'buffer.txt', old_text: 'unsaved', new_text: 'edited' }), root, fs,
-    );
-    expect(result.success).toBe(true);
-
-    expect(undoLastAction(root).success).toBe(false);
-    expect(read('buffer.txt')).toBe('edited buffer\n');
-  });
-});
-
-describe('a write the editor refused', () => {
-  // The run changed g.txt for real; the refused write to f.txt changed
-  // nothing. /undo must reach g.txt and leave what the user saved in f.txt.
-  const earlierRealWrite = async () => {
-    writeFileSync(file('g.txt'), 'g original\n');
-    const done = await executeTool(call('write_file', { path: 'g.txt', content: 'g agent\n' }), root);
-    expect(done.success).toBe(true);
-  };
-
-  it.each([
-    ['write_file', { path: 'f.txt', content: 'agent\n' }],
-    ['edit_file', { path: 'f.txt', old_text: 'disk', new_text: 'agent' }],
-  ])('%s leaves no undo record behind', async (tool, parameters) => {
-    await earlierRealWrite();
-    writeFileSync(file('f.txt'), 'hello disk\n');
-
-    const result = await executeTool(call(tool, parameters), root, refusingEditor());
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/refused/);
-    expect(read('f.txt')).toBe('hello disk\n');
-    expect(recordsFor('f.txt')).toHaveLength(0);
-
-    writeFileSync(file('f.txt'), 'user saved content\n');
-    expect(undoLastAction(root)).toEqual({ success: true, message: `Restored: ${file('g.txt')}` });
-    expect(read('g.txt')).toBe('g original\n');
-    expect(read('f.txt')).toBe('user saved content\n');
-  });
-
-  it('write_file of a new file leaves no record, so /undo deletes nothing the user makes later', async () => {
-    await earlierRealWrite();
-    const result = await executeTool(call('write_file', { path: 'f.txt', content: 'agent\n' }), root, refusingEditor());
-    expect(result.success).toBe(false);
-    expect(existsSync(file('f.txt'))).toBe(false);
-    expect(recordsFor('f.txt')).toHaveLength(0);
-
-    writeFileSync(file('f.txt'), 'user made this\n');
-    endSession();
-    undoAllActions(root);
-    expect(read('f.txt')).toBe('user made this\n');
-    expect(read('g.txt')).toBe('g original\n');
-  });
-});
-
-describe('an editor write that fails without an answer', () => {
-  // A timeout falls back to disk. The record taken before the editor was
-  // tried stays the only one, and still holds the original.
-  it('keeps one record, holding the original', async () => {
-    writeFileSync(file('old.txt'), 'original\n');
-    const fs: FsCallbacks = {
-      writeTextFile: vi.fn().mockRejectedValue(new AcpRequestTimeoutError('fs/write_text_file', 30_000)),
-    };
-    const result = await executeTool(call('write_file', { path: 'old.txt', content: 'agent\n' }), root, fs);
-    expect(result.success).toBe(true);
-    expect(read('old.txt')).toBe('agent\n');
-    expect(recordsFor('old.txt')).toHaveLength(1);
-
-    undoLastAction(root);
-    expect(read('old.txt')).toBe('original\n');
   });
 });
 

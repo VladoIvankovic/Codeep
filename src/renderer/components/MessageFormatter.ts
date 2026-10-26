@@ -7,8 +7,8 @@
  *
  *   - shrinks `App.ts` (the 3.2k-LoC render-loop host) by ~600 LoC,
  *   - makes the formatter unit-testable in isolation (no App state),
- *   - lets the quick-chat / ACP surfaces reuse the same rendering if
- *     they ever need to paint formatted assistant output.
+ *   - lets the quick-chat surface reuse the same rendering if it ever
+ *     needs to paint formatted assistant output.
  *
  * Convention: a `RenderedLine` carries the already-ANSI-styled `text`
  * plus a `raw` flag — when true, the screen writer must NOT apply the

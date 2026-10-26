@@ -68,9 +68,9 @@ discussion:
   `dangerous` default asks before destructive tools (`delete_file`,
   `execute_command`, optionally `write_file` / `edit_file`).
 - **Hook trust gate**: lifecycle hooks in `.codeep/hooks/` do **not** run
-  until the user runs `/hooks trust` for that workspace. The ACP welcome
-  banner flags any hooks or custom slash commands a workspace ships so the
-  user sees them before invoking the agent.
+  until the user runs `/hooks trust` for that workspace. The welcome
+  banner flags any hooks, custom slash commands or skill bundles a workspace
+  ships so the user sees them before invoking the agent.
 - **Network address guard**: `fetch_url`, curl/wget arguments in
   `execute_command`, and `@web` redirects refuse loopback, private, link-local
   (including cloud metadata), CGNAT and reserved addresses in any spelling
