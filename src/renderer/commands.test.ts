@@ -40,6 +40,9 @@ vi.mock('../utils/telegramCredentials', async (importOriginal) => ({
   hasTelegramToken: vi.fn(async () => false),
 }));
 
+// /docs opens the system browser; here it only says where it would.
+vi.mock('open', () => ({ default: vi.fn(async () => {}) }));
+
 vi.mock('./agentExecution', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./agentExecution')>()),
   runSkill: vi.fn(async () => false),
@@ -59,12 +62,10 @@ import { handleCommand, type AppCommandContext } from './commands';
 import { runSkill, runAgentTask } from './agentExecution';
 import { undoAllActions, undoLastAction } from '../utils/agent';
 import { setPendingPlan, getPendingPlan, clearPendingPlan } from '../utils/planMode';
-import { config, saveSession, loadSession, getSessionsDir, setApiKey, clearApiKey, saveProfile, deleteProfile } from '../config/index';
+import { config, saveSession, loadSession, getSessionsDir, setApiKey, clearApiKey, saveProfile, deleteProfile, getProjectPermission, hasWritePermission } from '../config/index';
 import { agentConfirmationMode, pinAgentConfirmation } from './agentConfirmation';
 import { PROVIDERS } from '../config/providers';
-import { App, type ConfirmOptions } from './App';
-import { handleInlineConfirmKey, confirmFooter } from './handlers';
-import { handleHunkPickerKey, type HunkPickerOptions, type HunkPickerState } from './components/HunkPicker';
+import { App } from './App';
 import { registerSessionServers } from '../utils/mcpRegistry';
 import { pushUserProfileResult, pullUserProfileResult, listCloudSessions, pullCloudSession, type SyncResult } from '../utils/codeepCloud';
 import { trustWorkspaceMcp } from '../utils/mcpConfig';
@@ -117,12 +118,10 @@ function makeCtx(projectPath: string) {
     projectPath,
     projectContext: { root: projectPath, name: 'proj' },
     hasWriteAccess: true,
-    addedFiles: new Map(),
     isAgentRunning: () => false,
     setAgentRunning: () => {},
     abortController: null,
     setAbortController: () => {},
-    formatAddedFilesContext: () => '',
     handleCommand: async () => {},
     sessionId: 'test-session',
     setSessionId: () => {},
@@ -194,7 +193,8 @@ describe('/usage', () => {
     const { ctx, messages, notices } = makeCtx(projectDir);
     await handleCommand('usage', [], ctx);
     expect(notices).toEqual([]);
-    expect(messages).toHaveLength(1);
+    // The ledger first, then this session (the short cost report of 3.x).
+    expect(messages).toHaveLength(2);
     expect(messages[0].role).toBe('system');
     expect(messages[0].content.startsWith('```\nCodeep usage — ')).toBe(true);
     expect(messages[0].content.endsWith('\n```')).toBe(true);
@@ -202,6 +202,65 @@ describe('/usage', () => {
     expect(messages[0].content).toContain('glm-5.3');
     // Without --days: the summary only, no list of days under a heading.
     expect(messages[0].content).not.toMatch(/^Last \d+ days$/m);
+  });
+
+  it('shows this session after the ledger — the short cost report of 3.x', async () => {
+    const { recordTokenUsage, resetTokenTracking } = await import('../utils/tokenTracker');
+    const { formatCostReport } = await import('../utils/tokenTracker');
+    resetTokenTracking();
+    try {
+      recordTokenUsage({ promptTokens: 2000, completionTokens: 300, totalTokens: 2300 }, 'glm-5.3', 'z.ai');
+      const { ctx, messages } = makeCtx(projectDir);
+      await handleCommand('usage', [], ctx);
+      expect(messages).toHaveLength(2);
+      expect(messages[0].content.startsWith('```\nCodeep usage — ')).toBe(true);
+      // Not a copy of the report: the very text that command printed.
+      expect(messages[1].content).toBe(formatCostReport());
+      expect(messages[1].content).toContain('## Session Cost');
+      expect(messages[1].content).toContain('**Requests:** 1');
+    } finally {
+      resetTokenTracking();
+    }
+  });
+
+  it('says so when this session has made no request yet', async () => {
+    const { resetTokenTracking } = await import('../utils/tokenTracker');
+    resetTokenTracking();
+    const { ctx, messages } = makeCtx(projectDir);
+    await handleCommand('usage', [], ctx);
+    expect(messages[1].content).toBe('_No API requests in this session yet._');
+  });
+
+  it('--detail adds the per-model breakdown and the pricing table — the detailed view of 3.x', async () => {
+    const { recordTokenUsage, resetTokenTracking } = await import('../utils/tokenTracker');
+    resetTokenTracking();
+    try {
+      recordTokenUsage({ promptTokens: 2000, completionTokens: 300, totalTokens: 2300 }, 'glm-5.3', 'z.ai');
+      const { ctx, messages, notices } = makeCtx(projectDir);
+      await handleCommand('usage', ['--detail'], ctx);
+      expect(notices).toEqual([]);
+      expect(messages).toHaveLength(3);
+      expect(messages[0].content.startsWith('```\nCodeep usage — ')).toBe(true);
+      expect(messages[1].content).toContain('## Session Cost');
+      expect(messages[2].content).toContain('## Session detail');
+      expect(messages[2].content).toContain('### By model');
+      expect(messages[2].content).toContain('**glm-5.3** (z.ai)');
+      expect(messages[2].content).toContain('### Pricing (per 1M tokens)');
+      // Without the flag the detailed view is not printed.
+      const plain = makeCtx(projectDir);
+      await handleCommand('usage', [], plain.ctx);
+      expect(plain.messages).toHaveLength(2);
+    } finally {
+      resetTokenTracking();
+    }
+  });
+
+  it('--detail goes with --days: both are read, the days are listed', async () => {
+    const { ctx, messages, notices } = makeCtx(projectDir);
+    await handleCommand('usage', ['--days', '2', '--detail'], ctx);
+    expect(notices).toEqual([]);
+    expect(messages[0].content).toContain('Last 2 days');
+    expect(messages).toHaveLength(3);
   });
 
   it('lists the days for --days N', async () => {
@@ -216,124 +275,6 @@ describe('/usage', () => {
     await handleCommand('usage', ['--days', '0'], ctx);
     expect(messages).toEqual([]);
     expect(notices).toEqual(['--days needs a whole number from 1 to 366']);
-  });
-});
-
-// ─── /apply ──────────────────────────────────────────────────────────────────
-
-// "Apply Changes" answers on one key: you asked for the changes and they are
-// listed above the question. Not when one of them is a file that decides what
-// runs later, or lies outside the project — those wait for Enter, as the
-// agent's own writes to them do.
-describe('/apply and the one-key answer', () => {
-  /** What "y" does to a confirmation built with these options. */
-  function pressY(options: ConfirmOptions): 'answers' | 'selects' {
-    let answered = false;
-    handleInlineConfirmKey({ key: 'y', ctrl: false, alt: false, shift: false, raw: 'y' }, {
-      options,
-      selection: 'no',
-      setSelection: () => {},
-      close: () => { answered = true; },
-      render: () => {},
-    });
-    expect(confirmFooter(options).includes('y/n quick')).toBe(answered);
-    return answered ? 'answers' : 'selects';
-  }
-
-  async function applyDialog(...paths: string[]): Promise<ConfirmOptions> {
-    const { ctx } = makeCtx(projectDir);
-    const reply = paths.map(p => '```ts\n// File: ' + p + '\nexport const a = 1;\n```').join('\n');
-    (ctx.app as unknown as { getMessages: () => unknown }).getMessages = () => [{ role: 'assistant', content: reply }];
-    await handleCommand('apply', [], ctx);
-    const showConfirm = vi.mocked(ctx.app.showConfirm);
-    await vi.waitFor(() => expect(showConfirm).toHaveBeenCalledTimes(1));
-    const options = showConfirm.mock.calls[0][0];
-    expect(options.title).toBe('📝 Apply Changes');
-    return options;
-  }
-
-  it('applies on one key changes inside the project', async () => {
-    expect(pressY(await applyDialog('src/a.ts', 'README.md'))).toBe('answers');
-  });
-
-  it('waits for Enter when a change is to a file that decides what runs later', async () => {
-    for (const path of ['.mcp.json', '.codeep/hooks/pre_tool_call.sh', '.git/hooks/pre-commit', '.agents/skills/x/SKILL.md']) {
-      expect(pressY(await applyDialog('src/a.ts', path)), path).toBe('selects');
-    }
-  });
-
-  it('waits for Enter when a change is outside the project', async () => {
-    expect(pressY(await applyDialog('../elsewhere.ts'))).toBe('selects');
-  });
-});
-
-// /apply -i (the hunk picker) wrote on a single y or a, also to a file that
-// decides what runs later or one outside the project. Those hunks take an
-// Enter after the key now, the rule /apply's own dialog follows.
-describe('/apply -i and the one-key answer', () => {
-  async function picker(...paths: string[]) {
-    return pickerIn(projectDir, ...paths);
-  }
-
-  async function pickerIn(project: string, ...paths: string[]) {
-    const { ctx } = makeCtx(project);
-    const showHunkPicker = vi.fn();
-    (ctx.app as unknown as Record<string, unknown>).showHunkPicker = showHunkPicker;
-    const reply = paths.map(p => '```ts\n// File: ' + p + '\nexport const a = 1;\n```').join('\n');
-    (ctx.app as unknown as { getMessages: () => unknown }).getMessages = () => [{ role: 'assistant', content: reply }];
-    await handleCommand('apply', ['-i'], ctx);
-    await vi.waitFor(() => expect(showHunkPicker).toHaveBeenCalledTimes(1));
-    const options = showHunkPicker.mock.calls[0][0] as HunkPickerOptions;
-    let state: HunkPickerState = { open: true, options, index: 0, accepted: [] };
-    const press = (k: string) => { state = handleHunkPickerKey(state, { key: k }); return state; };
-    return { options, press, written: (p: string) => existsSync(join(project, p)) };
-  }
-
-  it('writes a change inside the project on one y', async () => {
-    const { options, press, written } = await picker('src/a.ts');
-    expect(options.items[0].needsEnter).toBeUndefined();
-    press('y');
-    await vi.waitFor(() => expect(written('src/a.ts')).toBe(true));
-  });
-
-  it('waits for Enter before writing a file that decides what runs later', async () => {
-    for (const path of ['.mcp.json', '.codeep/hooks/pre_tool_call.sh', '.git/hooks/pre-commit', '.agents/skills/x/SKILL.md', '.codeep/config.json']) {
-      const { options, press, written } = await picker(path);
-      expect(options.items[0].needsEnter, path).toBe('decides what runs later');
-      expect(press('y').open, path).toBe(true);
-      await new Promise(resolve => setTimeout(resolve, 20));
-      expect(written(path), path).toBe(false);
-      press('enter');
-      await vi.waitFor(() => expect(written(path), path).toBe(true));
-    }
-  });
-
-  it('waits for Enter after "a" when one of the rest needs it', async () => {
-    const { press, written } = await picker('src/a.ts', '.git/hooks/pre-commit');
-    expect(press('a').open).toBe(true);
-    await new Promise(resolve => setTimeout(resolve, 20));
-    expect(written('src/a.ts')).toBe(false);
-    expect(written('.git/hooks/pre-commit')).toBe(false);
-    press('enter');
-    await vi.waitFor(() => expect(written('.git/hooks/pre-commit')).toBe(true));
-    expect(written('src/a.ts')).toBe(true);
-  });
-
-  it('marks a change outside the project as needing Enter', async () => {
-    // The project sits in a folder of this test's own, so a regression that
-    // writes "../elsewhere.ts" writes it there, not into the shared tmpdir.
-    const outer = mkdtempSync(join(tmpdir(), 'codeep-apply-outer-'));
-    try {
-      const project = join(outer, 'proj');
-      mkdirSync(project);
-      const { options, press, written } = await pickerIn(project, '../elsewhere.ts');
-      expect(options.items[0].needsEnter).toBe('outside the project');
-      expect(press('y').open).toBe(true);
-      await new Promise(resolve => setTimeout(resolve, 20));
-      expect(written('../elsewhere.ts')).toBe(false);
-    } finally {
-      rmSync(outer, { recursive: true, force: true });
-    }
   });
 });
 
@@ -606,6 +547,148 @@ describe('a command that falls through to the skill registry', () => {
     const { ctx, notices } = makeCtx(projectDir);
     await handleCommand('notacommand', [], ctx);
     await vi.waitFor(() => expect(notices).toContain('Unknown command: /notacommand'));
+  });
+
+  it('still reports a misspelled removed command as unknown, not as removed', async () => {
+    const { ctx, notices } = makeCtx(projectDir);
+    await handleCommand('psuh', [], ctx);
+    await vi.waitFor(() => expect(notices).toContain('Unknown command: /psuh'));
+    expect(notices.some(n => n.includes('removed in Codeep 4.0'))).toBe(false);
+  });
+});
+
+// ─── commands removed in 4.0 ─────────────────────────────────────────────────
+
+describe('a command Codeep 4.0 removed', () => {
+  it('says it was removed instead of "Unknown command"', async () => {
+    const { ctx, notices } = makeCtx(projectDir);
+    await handleCommand('push', [], ctx);
+    await vi.waitFor(() => expect(notices).toEqual(['/push was removed in Codeep 4.0. Ask the agent in plain words, or see /help.']));
+    expect(mockRunSkill).toHaveBeenCalledWith('push', [], ctx);
+  });
+
+  it('says so for the shortcut of a removed command too', async () => {
+    const { ctx, notices } = makeCtx(projectDir);
+    await handleCommand('t', ['src/a.ts'], ctx);
+    await vi.waitFor(() => expect(notices).toHaveLength(1));
+    expect(notices[0]).toBe('/t was removed in Codeep 4.0 (it was a shortcut for /test). Ask the agent in plain words, or see /help.');
+  });
+
+  it('points /cost at /usage and /search at /recall', async () => {
+    const cost = makeCtx(projectDir);
+    await handleCommand('cost', [], cost.ctx);
+    await vi.waitFor(() => expect(cost.notices).toHaveLength(1));
+    expect(cost.notices[0]).toContain('merged into /usage');
+    const search = makeCtx(projectDir);
+    await handleCommand('search', ['auth'], search.ctx);
+    await vi.waitFor(() => expect(search.notices).toHaveLength(1));
+    expect(search.notices[0]).toContain('/recall');
+  });
+
+  it('is answered by a command file of the same name in .codeep/commands, which wins', async () => {
+    mkdirSync(join(projectDir, '.codeep', 'commands'), { recursive: true });
+    writeFileSync(join(projectDir, '.codeep', 'commands', 'push.md'), '---\ndescription: my own push\n---\n\nPush with care: {{args}}\n');
+    const { ctx, notices, messages } = makeCtx(projectDir);
+    await handleCommand('push', ['origin'], ctx);
+    expect(notices).toEqual(['Running custom command /push (project)']);
+    expect(messages).toEqual([{ role: 'user', content: expect.stringContaining('Push with care: origin') }]);
+    expect(mockRunAgentTask).toHaveBeenCalledTimes(1);
+    expect(mockRunSkill).not.toHaveBeenCalled();
+  });
+
+  it('is answered by a skill of the same name, which wins', async () => {
+    mockRunSkill.mockResolvedValueOnce(true);
+    const { ctx, notices } = makeCtx(projectDir);
+    await handleCommand('test', [], ctx);
+    await vi.waitFor(() => expect(mockRunSkill).toHaveBeenCalledWith('test', [], ctx));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(notices).toEqual([]);
+  });
+});
+
+// ─── /commit and /grant stay ─────────────────────────────────────────────────
+
+describe('/commit, the one built-in skill', () => {
+  it('hands /commit and its shortcut /c to the skill runner, with the message', async () => {
+    const full = makeCtx(projectDir);
+    await handleCommand('commit', ['fix:', 'typo'], full.ctx);
+    expect(mockRunSkill).toHaveBeenCalledWith('commit', ['fix:', 'typo'], full.ctx);
+    const short = makeCtx(projectDir);
+    await handleCommand('c', [], short.ctx);
+    expect(mockRunSkill).toHaveBeenLastCalledWith('c', [], short.ctx);
+    expect(full.notices).toEqual([]);
+    expect(short.notices).toEqual([]);
+  });
+});
+
+describe('/docs', () => {
+  async function urlFor(...args: string[]): Promise<string> {
+    const { ctx, notices } = makeCtx(projectDir);
+    await handleCommand('docs', args, ctx);
+    expect(notices).toHaveLength(1);
+    return notices[0].replace(/^Opening /, '');
+  }
+
+  it('sends /docs usage to the dashboard page that holds the numbers', async () => {
+    expect(await urlFor('usage')).toBe('https://codeep.dev/docs/dashboard');
+    expect(await urlFor('/usage')).toBe('https://codeep.dev/docs/dashboard');
+  });
+
+  it('still sends the commands that have a page of their own there', async () => {
+    expect(await urlFor('mcp')).toBe('https://codeep.dev/docs/mcp');
+    expect(await urlFor('skills')).toBe('https://codeep.dev/docs/skills');
+    expect(await urlFor('plan')).toBe('https://codeep.dev/docs/agent#plan-mode');
+    expect(await urlFor()).toBe('https://codeep.dev/docs');
+  });
+
+  it('still sends /hooks to the page that explains them', async () => {
+    expect(await urlFor('hooks')).toBe('https://codeep.dev/docs/commands#hooks');
+  });
+
+  it.each(['insights', 'commands', 'profile', 'cost'])('does not send the removed /%s to a page of its own', async (name) => {
+    expect(await urlFor(name)).toBe(`https://codeep.dev/docs/commands?q=${name}`);
+  });
+});
+
+describe('/grant', () => {
+  it('gives this project write access, stores it, and says so', async () => {
+    expect(hasWritePermission(projectDir)).toBe(false);
+    const setHasWriteAccess = vi.fn();
+    const { ctx, notices } = makeCtx(projectDir);
+    (ctx as unknown as { setHasWriteAccess: unknown }).setHasWriteAccess = setHasWriteAccess;
+    await handleCommand('grant', [], ctx);
+    expect(setHasWriteAccess).toHaveBeenCalledWith(true);
+    expect(notices).toEqual(['Write access granted']);
+    expect(hasWritePermission(projectDir)).toBe(true);
+    expect(getProjectPermission(projectDir)).toMatchObject({ readPermission: true, writePermission: true });
+  });
+});
+
+describe('/hooks, /lang and /agent-dry stay (nothing replaces them)', () => {
+  it('/hooks trust and /hooks untrust are the only way to switch a workspace\'s hooks on and off', async () => {
+    const { isHooksTrusted } = await import('../utils/hooks');
+    expect(isHooksTrusted(projectDir)).toBe(false);
+    const trust = makeCtx(projectDir);
+    await handleCommand('hooks', ['trust'], trust.ctx);
+    expect(trust.notices).toEqual(['Hooks trusted for this workspace — they will now run.']);
+    expect(isHooksTrusted(projectDir)).toBe(true);
+    const untrust = makeCtx(projectDir);
+    await handleCommand('hooks', ['untrust'], untrust.ctx);
+    expect(untrust.notices).toEqual(['Hooks untrusted — they will be skipped until you trust again.']);
+    expect(isHooksTrusted(projectDir)).toBe(false);
+  });
+
+  it('/agent-dry needs a task and refuses to start while the agent runs', async () => {
+    const bare = makeCtx(projectDir);
+    await handleCommand('agent-dry', [], bare.ctx);
+    expect(bare.notices).toEqual(['Usage: /agent-dry <task>']);
+  });
+
+  it('/lang is a registered command with a handler, not a removed name', async () => {
+    const { removedCommandMessage } = await import('./commands/removed');
+    expect(removedCommandMessage('lang')).toBeNull();
+    expect(removedCommandMessage('hooks')).toBeNull();
+    expect(removedCommandMessage('agent-dry')).toBeNull();
   });
 });
 
@@ -1134,13 +1217,9 @@ describe('a profile loaded during a --yolo run', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it.each([
-    ['/profile load careful', 'profile', ['load', 'careful']],
-    ['/profile careful', 'profile', ['careful']],
-    ['/model careful', 'model', ['careful']],
-  ])('%s brings its confirmations back for this run', async (_label, command, args) => {
+  it('/model careful brings its confirmations back for this run', async () => {
     const { ctx } = makeCtx(dir);
-    await handleCommand(command, args, ctx);
+    await handleCommand('model', ['careful'], ctx);
     expect(config.get('agentConfirmation')).toBe('always');
     expect(agentConfirmationMode()).toBe('always');
   });

@@ -6,33 +6,6 @@ import { execSync } from 'child_process';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 
 /**
- * Copy text to clipboard
- */
-export function copyToClipboard(text: string): boolean {
-  try {
-    if (process.platform === 'darwin') {
-      // macOS
-      execSync('pbcopy', { input: text, encoding: 'utf-8' });
-    } else if (process.platform === 'linux') {
-      // Linux - try xclip first, then xsel
-      try {
-        execSync('xclip -selection clipboard', { input: text, encoding: 'utf-8' });
-      } catch {
-        execSync('xsel --clipboard --input', { input: text, encoding: 'utf-8' });
-      }
-    } else if (process.platform === 'win32') {
-      // Windows
-      execSync('clip', { input: text, encoding: 'utf-8' });
-    } else {
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Read text from clipboard
  */
 export function readFromClipboard(): string | null {

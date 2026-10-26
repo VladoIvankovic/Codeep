@@ -159,7 +159,7 @@ describe('expandMentions', () => {
       expect(dir.loaded.map((f) => f.relativePath), form).toEqual(['.gitignore', 'local.ts']);
       expect(dir.enrichedPrompt, form).not.toContain('tok_live_IGNORED');
       expect(dir.failures.map((f) => f.reason), form).toEqual([
-        'skipped 1 ignored file; use /add to attach one deliberately',
+        'skipped 1 ignored file',
       ]);
     }
   });
@@ -561,7 +561,7 @@ describe('mention expansion — regressions', () => {
     for (const name of ['.env', 'server.pem', 'id_rsa']) {
       const res = expandMentions(`check @${name}`, { root });
       expect(res.loaded).toHaveLength(0);
-      expect(res.failures[0]?.reason).toMatch(/secrets file/);
+      expect(res.failures[0]?.reason).toBe('looks like a secrets file — not attached');
       expect(res.enrichedPrompt).not.toContain('sk-secret-123');
       expect(res.enrichedPrompt).not.toContain('BEGIN PRIVATE KEY');
     }
@@ -642,7 +642,7 @@ describe('mention expansion — regressions', () => {
       ]);
       // The other rules still apply beneath it, and say so.
       expect(res.failures.map((f) => f.reason), form).toEqual([
-        'skipped 1 ignored file; use /add to attach one deliberately',
+        'skipped 1 ignored file',
       ]);
     }
   });
@@ -667,8 +667,8 @@ describe('mention expansion — regressions', () => {
       expect(res.loaded.map((f) => f.relativePath)).toEqual([join('src', 'index.ts')]);
       expect(res.failures).toEqual([
         // `target/` holds a file but is one folder.
-        { mention: '@dir app', reason: 'no source files found; skipped 1 ignored folder; use /add to attach one deliberately' },
-        { mention: '@dir src', reason: 'skipped 1 secret-looking file, 2 ignored files, 1 ignored folder; use /add to attach one deliberately' },
+        { mention: '@dir app', reason: 'no source files found; skipped 1 ignored folder' },
+        { mention: '@dir src', reason: 'skipped 1 secret-looking file, 2 ignored files, 1 ignored folder' },
       ]);
     }
   });
@@ -698,7 +698,7 @@ describe('mention expansion — regressions', () => {
     expect(res.enrichedPrompt).not.toContain('PRIVATE KEY');
     expect(res.enrichedPrompt).not.toMatch(/PGPSECRET|PUTTYSECRET|LATEKEYSECRET/);
     expect(res.failures.map((f) => f.reason)).toEqual([
-      'skipped 8 secret-looking files; use /add to attach one deliberately',
+      'skipped 8 secret-looking files',
     ]);
 
     for (const name of ['github', 'sa.json', 'deploy.txt', 'id_ed25519_work', 'backup.asc', 'session.txt', 'work.ppk', 'late.json']) {
@@ -830,11 +830,11 @@ describe('mention expansion — regressions', () => {
         expect(res.loaded.map((f) => f.relativePath)).toEqual([join('notes', 'a.md')]);
         expect(res.enrichedPrompt).not.toMatch(/HISTSECRET|GHTOKENSECRET|SIBLINGSECRET/);
         expect(res.failures).toEqual([
-          { mention: '@dir docs', reason: 'links outside the project — use /add to attach it deliberately' },
-          { mention: '@dir ./docs', reason: 'links outside the project — use /add to attach it deliberately' },
-          { mention: '@dir docs/.config', reason: 'links outside the project — use /add to attach it deliberately' },
-          { mention: '@dir sib', reason: 'links outside the project — use /add to attach it deliberately' },
-          { mention: '@dir notes', reason: 'skipped 1 file linked from outside the project; use /add to attach one deliberately' },
+          { mention: '@dir docs', reason: 'links outside the project — not attached' },
+          { mention: '@dir ./docs', reason: 'links outside the project — not attached' },
+          { mention: '@dir docs/.config', reason: 'links outside the project — not attached' },
+          { mention: '@dir sib', reason: 'links outside the project — not attached' },
+          { mention: '@dir notes', reason: 'skipped 1 file linked from outside the project' },
         ]);
       }
       const one = expandMentions('check @notes/sib.md', { root });
@@ -880,8 +880,8 @@ describe('mention expansion — regressions', () => {
       expect(res.enrichedPrompt).not.toContain('sk_live_SYMLINK');
       expect(res.enrichedPrompt).not.toContain('hunter2');
       expect(res.failures.map((f) => f.reason)).toEqual([
-        'skipped 1 secret-looking file; use /add to attach one deliberately',
-        'skipped 1 file linked from outside the project, 1 folder linked from outside the project; use /add to attach one deliberately',
+        'skipped 1 secret-looking file',
+        'skipped 1 file linked from outside the project, 1 folder linked from outside the project',
       ]);
 
       expect(expandMentions('check @notes.md', { root }).failures[0]?.reason).toMatch(/secrets file/);

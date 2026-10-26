@@ -403,7 +403,7 @@ const MODEL_PRICING: Record<string, ModelPrice> = {
 export type PricingTableRow = { model: string } & ModelPrice;
 
 /**
- * Every priced model, for `/stats` and `npm run export:catalogue`. `longPrompt`
+ * Every priced model, for `/usage --detail` and `npm run export:catalogue`. `longPrompt`
  * is present only on a model that has one, so a row without it is exactly what
  * this returned before the tier existed.
  */
@@ -858,7 +858,7 @@ export function formatCacheReadRates(rates: readonly number[]): string {
  * `startIndex` lets callers price only the records appended since a marker (see
  * getRecordCount) — used to report a single run/prompt's delta to cloud
  * telemetry WITHOUT wiping the session-cumulative store the status bar and
- * `/cost` read. Defaults to 0 (the whole current scope).
+ * `/usage` read. Defaults to 0 (the whole current scope).
  */
 export function getCostBreakdown(startIndex = 0): ProviderCostBreakdown[] {
   const grouped = new Map<string, ProviderCostBreakdown>();
@@ -1044,7 +1044,7 @@ export function formatTokenCount(tokens: number): string {
 /**
  * Number of records in the current scope. Capture before a run/prompt and pass
  * it to getCostBreakdown(startIndex) to price just that run's delta (for cloud
- * telemetry) without wiping the cumulative store the status bar and `/cost`
+ * telemetry) without wiping the cumulative store the status bar and `/usage`
  * read.
  */
 export function getRecordCount(): number {
@@ -1062,7 +1062,7 @@ export function resetTokenTracking(): void {
 }
 
 /**
- * Format a session cost report as a Markdown block. Used by `/cost`. Returns a "no usage yet" message if the
+ * Format a session cost report as a Markdown block. Used by `/usage`. Returns a "no usage yet" message if the
  * session hasn't made any API calls.
  */
 export function formatCostReport(): string {

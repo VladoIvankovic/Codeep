@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { COMMAND_INDEX, formatCommandIndex } from './commandIndex';
+import { resolveCommand } from '../renderer/commands/registry';
+import { REMOVED_COMMANDS } from '../renderer/commands/removed';
 
 describe('COMMAND_INDEX', () => {
   it('is a non-empty array of {cmd, desc} entries', () => {
@@ -15,8 +17,18 @@ describe('COMMAND_INDEX', () => {
 
   it('contains the core commands users need to discover', () => {
     const cmds = COMMAND_INDEX.map((c) => c.cmd);
-    for (const required of ['/scan', '/plan', '/skills', '/mcp', '/cost']) {
+    for (const required of ['/scan', '/plan', '/skills', '/mcp', '/usage']) {
       expect(cmds).toContain(required);
+    }
+  });
+
+  // The agent repeats this list to the user. A command that is gone answers
+  // "removed in Codeep 4.0" when the user follows the advice (two of them did).
+  it('names only commands that are registered, never a removed one', () => {
+    for (const { cmd } of COMMAND_INDEX) {
+      const name = cmd.slice(1);
+      expect(resolveCommand(name), `${cmd} is not a registered command`).toBeDefined();
+      expect(REMOVED_COMMANDS, `${cmd} was removed in 4.0`).not.toContain(name);
     }
   });
 

@@ -52,12 +52,10 @@ function makeCtx(): AppExecutionContext {
     projectPath: root,
     projectContext: { root, name: 'demo', type: 'node' } as unknown as ProjectContext,
     hasWriteAccess: true,
-    addedFiles: new Map(),
     isAgentRunning: () => running,
     setAgentRunning: (v) => { running = v; },
     abortController: null,
     setAbortController: () => {},
-    formatAddedFilesContext: () => '',
     handleCommand: async () => {},
   };
 }

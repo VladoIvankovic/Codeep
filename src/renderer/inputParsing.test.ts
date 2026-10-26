@@ -76,6 +76,6 @@ describe('parseCommandInput', () => {
   });
 
   it('handles a command name with hyphens', () => {
-    expect(parseCommandInput('/git-commit')).toEqual({ command: 'git-commit', args: [] });
+    expect(parseCommandInput('/undo-all')).toEqual({ command: 'undo-all', args: [] });
   });
 });

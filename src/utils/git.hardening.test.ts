@@ -45,7 +45,6 @@ import {
 import { resolveHooksDir, resolveHooksDirResult } from './gitHookInstaller';
 import { performCodeReview } from './codeReview';
 import type { ProjectContext } from './project';
-import { handleCommand, type AppCommandContext } from '../renderer/commands';
 
 const hasGit = (() => {
   try {
@@ -401,29 +400,6 @@ describe.skipIf(!hasGit || !posix)('git calls inside a repository with a hostile
     expect(fired()).toEqual(['post-checkout']);
     expect(result.success).toBe(true);
     expect(git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']).trim()).toBe('agent/hardening-test');
-  });
-
-  it('/git-commit hardens the repository it commits in, not the one Codeep was started in', async () => {
-    // The call site used to build the environment with no cwd at all, so the
-    // scan read process.cwd() while the commit ran in ctx.projectPath —
-    // "hardened" against whichever repository Codeep happened to be launched
-    // from. Here process.cwd() is the Codeep checkout, which carries none of
-    // this repository's traps: without the cwd, gpg.program below is never
-    // neutralised, the trap script runs, it exits 1 and the commit fails. The
-    // old version of this test chdir'd into the repo first, so it could not
-    // fail for that reason no matter what the call site did.
-    expect(process.cwd()).not.toBe(repo);
-    git(repo, ['config', 'commit.gpgsign', 'true']);
-    stageAll(repo);
-
-    const notified = new Promise<string>(resolve => {
-      const ctx = { projectPath: repo, app: { notify: resolve } } as unknown as AppCommandContext;
-      void handleCommand('git-commit', ['test: through the slash command'], ctx);
-    });
-
-    expect(await notified).toBe('Committed successfully');
-    expect(fired()).toEqual(['pre-commit']);
-    expect(git(repo, ['log', '-1', '--format=%s'])).toContain('test: through the slash command');
   });
 
   it('getGitStatus degrades to a message when the config cannot be scanned', () => {

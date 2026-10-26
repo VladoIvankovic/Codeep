@@ -60,7 +60,7 @@ Last full review: **2026-10-14** (DeepSeek and MiniMax rechecked 2026-10-20)
   snapshots such as `…-0813` match nothing and keep the 128K default.
   A model priced by prompt length gets a `longPrompt` tier on its own pricing
   row (Claude Haiku 5.5, below, is the first to have one); the cost maths, the cache
-  savings, `/cost`, `/stats` and the catalogue export all read it from there.
+  savings, `/usage` (and `/usage --detail`) and the catalogue export all read it from there.
 - Add an exact migration for removed stored ids to `RETIRED_MODEL_REPLACEMENTS`
   in `src/config/providers.ts`, and the same entry to macOS
   `AppState.retiredModelReplacements`. Both are one flat lookup that never
@@ -111,7 +111,7 @@ Last full review: **2026-10-14** (DeepSeek and MiniMax rechecked 2026-10-20)
   - `npm test`, `npm run typecheck`, `npm run typecheck:test`, and
     `npm run build` in `Codeep-web`.
 - Verify a migrated config, a new install, model selection, one real response,
-  `/cost`, `/stats`, Mac Usage, Mac Insights, and the web dashboard.
+  `/usage`, Mac Usage, Mac Insights, and the web dashboard.
 
 ## Known pricing quirks
 
@@ -415,9 +415,9 @@ Last full review: **2026-10-14** (DeepSeek and MiniMax rechecked 2026-10-20)
     `getCacheStats` nets the savings at the same tier. A cost the provider
     reports (OpenRouter's `usage.cost`, `actualCostUsd`) still beats the table;
     OpenRouter lists the same override itself (`min_prompt_tokens: 100000`,
-    $0.50 / $2.50, read 2026-10-09). `/cost` adds a note when a request was
+    $0.50 / $2.50, read 2026-10-09). `/usage` adds a note when a request was
     priced at the long rate, so a figure five times the listed price is not
-    mistaken for an error; `/stats` shows a second row in its pricing table;
+    mistaken for an error; `/usage --detail` shows a second row in its pricing table;
     `getPricingTable()` gives this one row a `longPrompt` key, and
     `npm run export:catalogue` puts the same key under `pricing`, so the site
     can show both tiers. The mechanism is generic, but this is its only row:
@@ -479,7 +479,7 @@ Last full review: **2026-10-14** (DeepSeek and MiniMax rechecked 2026-10-20)
   - **The same text is about 30% more tokens** (the tokenizer of Claude 4.7
     and later). Against Haiku 4.5's $1 / $5 the rates are a tenth up to 100,000
     prompt tokens and half above, so the bill for the same text still falls (to
-    about 13% and 65% of it), but the token counts `/cost` and the context
+    about 13% and 65% of it), but the token counts `/usage` and the context
     meter show rise by about 30%. Compaction is character-based, so no budget
     moves.
   - A reply can begin with a thinking block, so it is read by block type, as

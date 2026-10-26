@@ -34,7 +34,7 @@ describe('module shape', () => {
     // Names that are types, and would break a per-file transpiler if they were
     // ever re-exported as values again.
     const typeOnly = [
-      'HunkPickerItem', 'HunkPickerOptions', 'Cell', 'KeyEvent', 'KeyHandler',
+      'Cell', 'KeyEvent', 'KeyHandler',
       'AppOptions', 'Message', 'BoxStyle', 'BoxOptions', 'ModalOptions', 'StatusInfo',
     ];
     const offenders: string[] = [];

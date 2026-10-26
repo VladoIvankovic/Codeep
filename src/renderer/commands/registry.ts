@@ -43,12 +43,10 @@ export const CATEGORY_ORDER = [
   'checkpoints',
   'agent',
   'git',
-  'code',
   'skills',
   'settings',
   'extensions',
   'cloud',
-  'codegen',
   'thinking',
 ] as const;
 
@@ -61,12 +59,10 @@ export const CATEGORY_TITLES: Record<CommandCategory, string> = {
   checkpoints: 'Checkpoints (2.0)',
   agent: 'Agent Mode',
   git: 'Git & Project',
-  code: 'Code Operations',
-  skills: 'Skills (Shortcuts)',
+  skills: 'Skills',
   settings: 'Settings',
   extensions: 'Extensions & MCP (2.0)',
   cloud: 'Cloud & Account',
-  codegen: 'Code Generation',
   thinking: 'Reasoning',
 };
 
@@ -103,23 +99,20 @@ export const COMMANDS: CommandDef[] = [
   { name: 'settings', description: 'Open settings', category: 'general' },
   { name: 'version', description: 'Show version', category: 'general' },
   { name: 'update', description: 'Check for updates', category: 'general' },
-  { name: 'cost', description: 'Token usage & cost this session', category: 'general' },
-  // Its own command, not an alias of /cost. From 2026-06-24 it was
-  // `aliases: ['stats']` on /cost, and the dispatcher resolves aliases before
-  // the switch — so /stats printed the /cost report and its own handler (per-
-  // model breakdown, cache summary, pricing table) never ran.
-  { name: 'stats', description: 'Detailed session view — per-model breakdown, cache, and pricing table', category: 'general' },
-  // The ledger, not the session: /cost and /stats are this run's tokens, this
-  // is what Codeep has used across runs, on the days it was used.
-  { name: 'usage', description: 'What Codeep used — today, the last 7 days, all time, by model', category: 'general', usage: ['--days N'] },
+  // One command for every usage figure. Until 4.0 the session's own numbers
+  // were two commands of their own (a short cost report and a detailed view)
+  // next to this one for the ledger; they are now parts of /usage: the ledger,
+  // then this session, then with --detail the per-model breakdown and the
+  // pricing table.
+  { name: 'usage', description: 'What Codeep used — this session, today, the last 7 days, all time, by model', category: 'general', usage: ['--days N', '--detail'] },
   { name: 'clear', description: 'Clear chat', category: 'general', hidden: true },
   { name: 'exit', description: 'Quit application', category: 'general', hidden: true },
+  { name: 'multiline', description: 'Toggle multi-line input mode', category: 'general' },
 
   // ── sessions ───────────────────────────────────────────────────────────────
   { name: 'sessions', aliases: ['session'], description: 'List and load sessions', category: 'sessions' },
   { name: 'new', description: 'Start new session', category: 'sessions' },
   { name: 'rename', description: 'Rename current session', category: 'sessions', usage: ['<name>'] },
-  { name: 'search', description: 'Search the current session', category: 'sessions', usage: ['<term>'] },
   {
     name: 'recall',
     description: 'Search across ALL saved sessions (cross-session)',
@@ -159,15 +152,6 @@ export const COMMANDS: CommandDef[] = [
     category: 'git',
     aliasListed: true,
   },
-  { name: 'git-commit', description: 'Commit with message', category: 'git', usage: ['<msg>'] },
-  { name: 'push', aliases: ['p'], description: 'Git push', category: 'git', aliasListed: true },
-  { name: 'pull', description: 'Git pull', category: 'git' },
-  { name: 'amend', description: 'Amend last commit', category: 'git' },
-  { name: 'branch', description: 'Create/manage branches', category: 'git' },
-  { name: 'stash', description: 'Stash changes with a meaningful message', category: 'git' },
-  { name: 'unstash', description: 'Apply and drop the most recent stash', category: 'git' },
-  { name: 'pr', description: 'Create a pull request description', category: 'git' },
-  { name: 'changelog', description: 'Generate changelog from recent commits', category: 'git' },
   { name: 'init', description: 'Initialize project (.codeep/ folder)', category: 'git' },
   { name: 'scan', description: 'Scan project structure', category: 'git' },
   {
@@ -183,16 +167,7 @@ export const COMMANDS: CommandDef[] = [
     usage: ['--staged', '--static', '<file>'],
   },
 
-  // ── code operations ────────────────────────────────────────────────────────
-  { name: 'copy', description: 'Copy code block to clipboard', category: 'code', usage: ['[n]'] },
-  { name: 'paste', description: 'Paste from clipboard', category: 'code' },
-  { name: 'apply', description: 'Apply file changes from AI', category: 'code' },
-  { name: 'add', description: 'Add file to context (or type @path inline)', category: 'code', usage: ['<path>'] },
-  { name: 'drop', description: 'Remove file (or all) from context', category: 'code', usage: ['[path]'] },
-  { name: 'multiline', description: 'Toggle multi-line input mode', category: 'code' },
-
-  // ── skills (shortcuts) ─────────────────────────────────────────────────────
-  { name: 'test', aliases: ['t'], description: 'Generate/run tests', category: 'skills', aliasListed: true },
+  // ── skills ─────────────────────────────────────────────────────────────────
   {
     name: 'docs',
     aliases: ['d'],
@@ -200,26 +175,7 @@ export const COMMANDS: CommandDef[] = [
     category: 'skills',
     aliasListed: true,
   },
-  { name: 'refactor', aliases: ['r'], description: 'Improve code quality', category: 'skills', aliasListed: true },
-  { name: 'fix', aliases: ['f'], description: 'Debug and fix issues', category: 'skills', aliasListed: true },
-  { name: 'explain', aliases: ['e'], description: 'Explain code', category: 'skills', aliasListed: true },
-  { name: 'optimize', aliases: ['o'], description: 'Optimize performance', category: 'skills', aliasListed: true },
-  { name: 'debug', aliases: ['b'], description: 'Debug problems', category: 'skills', aliasListed: true },
-  { name: 'security', description: 'Security audit (SQLi, XSS, secrets, auth)', category: 'skills' },
-  { name: 'coverage', description: 'Analyze test coverage and suggest improvements', category: 'skills' },
-  { name: 'test-fix', description: 'Fix failing tests', category: 'skills' },
-  { name: 'e2e', description: 'Generate end-to-end tests', category: 'skills' },
-  { name: 'mock', description: 'Generate mock data for testing', category: 'skills' },
-  { name: 'readme', description: 'Generate or update README', category: 'skills' },
-  { name: 'api-docs', description: 'Generate API documentation', category: 'skills' },
-  { name: 'translate', description: 'Translate code comments to English', category: 'skills' },
-  { name: 'types', description: 'Add or improve TypeScript types', category: 'skills' },
-  { name: 'cleanup', description: 'Clean up code (remove unused, format)', category: 'skills' },
-  { name: 'modernize', description: 'Update code to use modern syntax', category: 'skills' },
-  { name: 'migrate', description: 'Migrate code to newer version', category: 'skills' },
-  { name: 'split', description: 'Split a large file into smaller modules', category: 'skills' },
-  { name: 'log', description: 'Add logging to code', category: 'skills' },
-  { name: 'skills', description: 'List all 50+ skills', category: 'skills', usage: ['<query>'] },
+  { name: 'skills', description: 'List your skills and the built-in /commit', category: 'skills', usage: ['<query>'] },
   {
     name: 'skill',
     description: 'Manage a single skill',
@@ -237,12 +193,6 @@ export const COMMANDS: CommandDef[] = [
   { name: 'login', aliases: ['apikey'], description: 'Login with API key', category: 'settings' },
   { name: 'telegram', description: 'Set up answering confirmations on your phone', category: 'settings' },
   { name: 'logout', description: 'Logout from provider', category: 'settings' },
-  {
-    name: 'profile',
-    description: 'Save/load settings profiles',
-    category: 'settings',
-    usage: ['save <name>', 'list', 'apply <name>', 'delete <name>'],
-  },
   { name: 'personality', description: 'List or switch a personality or structured custom bot', category: 'settings', usage: ['<name>', 'off'] },
   {
     name: 'me',
@@ -252,7 +202,6 @@ export const COMMANDS: CommandDef[] = [
   },
   { name: 'agents', description: 'List sub-agents the agent can delegate to (researcher / reviewer / tester / your own)', category: 'settings' },
   { name: 'audit', description: 'What agents did in this project — runs, tools used, and anything the boundary refused', category: 'settings', usage: ['on', 'off'] },
-  { name: 'insights', description: 'Activity summary — runs, files, tools, projects over the last N days (default 7)', category: 'settings', usage: ['--days N'] },
   { name: 'openrouter', description: 'OpenRouter routing prefs (prefer/ignore providers, fallbacks, privacy)', category: 'settings' },
 
   // ── extensions & mcp ───────────────────────────────────────────────────────
@@ -263,8 +212,6 @@ export const COMMANDS: CommandDef[] = [
     usage: ['browse [id]', 'install <id> [args]', 'add <name> <cmd>', 'remove <name>', 'resources', 'prompts'],
   },
   { name: 'hooks', description: 'List installed lifecycle hooks (.codeep/hooks/<event>.sh)', category: 'extensions' },
-  { name: 'commands', description: 'List custom slash commands in .codeep/commands/*.md', category: 'extensions' },
-  { name: 'web-cache', aliases: ['webcache'], description: 'Show @web fetch cache stats (alias: /web-cache clear)', category: 'extensions' },
 
   // ── cloud & account ────────────────────────────────────────────────────────
   { name: 'account', description: 'Show whether this machine is linked to codeep.dev, and how to link it', category: 'cloud' },
@@ -273,29 +220,6 @@ export const COMMANDS: CommandDef[] = [
   { name: 'telemetry', description: 'Show or toggle automatic cloud telemetry (on/off)', category: 'cloud' },
   { name: 'keysync', description: 'Show or toggle syncing API keys to codeep.dev (on/off)', category: 'cloud' },
   { name: 'learn', description: 'Learn code preferences', category: 'cloud' },
-  { name: 'context-save', description: 'Save conversation', category: 'cloud', hidden: true },
-  { name: 'context-load', description: 'Load conversation', category: 'cloud', hidden: true },
-  { name: 'context-clear', description: 'Clear saved context', category: 'cloud', hidden: true },
-
-  // ── code generation ────────────────────────────────────────────────────────
-  { name: 'build', description: 'Build the project', category: 'codegen' },
-  { name: 'deploy', description: 'Build and deploy', category: 'codegen' },
-  { name: 'release', description: 'Create a new release', category: 'codegen' },
-  { name: 'publish', description: 'Publish package to npm', category: 'codegen' },
-  { name: 'component', description: 'Generate UI component', category: 'codegen', usage: ['<name>'] },
-  { name: 'api', description: 'Generate API endpoint', category: 'codegen', usage: ['<name>'] },
-  { name: 'hook', description: 'Generate a React hook', category: 'codegen' },
-  { name: 'service', description: 'Generate a service/utility module', category: 'codegen' },
-  { name: 'page', description: 'Generate a new page/route', category: 'codegen' },
-  { name: 'form', description: 'Generate a form with validation', category: 'codegen' },
-  { name: 'crud', description: 'Generate full CRUD for an entity', category: 'codegen' },
-  { name: 'docker', description: 'Generate Dockerfile + compose', category: 'codegen' },
-  { name: 'ci', description: 'Generate CI/CD configuration', category: 'codegen' },
-  { name: 'env', description: 'Setup environment configuration', category: 'codegen' },
-  { name: 'k8s', description: 'Generate Kubernetes manifests', category: 'codegen' },
-  { name: 'terraform', description: 'Generate Terraform configuration', category: 'codegen' },
-  { name: 'nginx', description: 'Generate Nginx configuration', category: 'codegen' },
-  { name: 'monitor', description: 'Add monitoring and observability', category: 'codegen' },
 
   // ── reasoning ──────────────────────────────────────────────────────────────
   {
@@ -315,7 +239,7 @@ export const COMMANDS: CommandDef[] = [
  *  Single-letter aliases (the `c`/`t`/`d`/… shortcuts) are deliberately
  *  EXCLUDED from the dropdown — bare one-letter rows just clutter it (they
  *  stay fully routable via the dispatcher + show in `/help` as `(/c)` suffixes).
- *  Multi-letter listed aliases (`effort`, `stats`) are kept; they read as real
+ *  Multi-letter listed aliases (`effort`) are kept; they read as real
  *  commands, not noise. */
 export const COMMAND_DESCRIPTIONS: Record<string, string> = (() => {
   const out: Record<string, string> = {};
@@ -412,12 +336,11 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
       { key: '/settings', description: 'Open settings' },
       { key: '/version', description: 'Show version' },
       { key: '/update', description: 'Check for updates' },
-      { key: '/cost', description: 'Token usage & cost this session',
-        web: 'Token usage and estimated cost this session, per provider and model, with prompt-cache savings' },
-      { key: '/stats', description: 'Detailed view — per-model breakdown, cache, pricing table',
-        web: 'Detailed session view — per-model breakdown, plan-aware totals, prompt-cache reads and writes, and the per-1M pricing table' },
-      { key: '/usage [--days N]', description: 'What Codeep used — today, 7 days, all time, by model',
-        web: 'What Codeep has used across sessions, from its local usage ledger — today, the last 7 days, all time and tokens by model, with the days listed for --days N. The same figures as `codeep usage` in the shell, which also prints JSON with --json' },
+      { key: '/usage [--days N]', description: 'What Codeep used — this session, today, 7 days, all time, by model',
+        web: "This session's tokens and estimated cost with prompt-cache savings, then what Codeep has used across sessions from its local usage ledger — today, the last 7 days, all time and tokens by model, with the days listed for --days N. The ledger figures are the same as `codeep usage` in the shell, which also prints JSON with --json" },
+      { key: '/usage --detail', description: "This session's per-model breakdown, cache, and the pricing table",
+        web: "Adds this session's per-model breakdown, plan-aware totals, prompt-cache reads and writes, and the per-1M pricing table to /usage" },
+      { key: '/multiline', description: 'Toggle multi-line input mode' },
       { key: '/clear', description: 'Clear chat' },
       { key: '/exit', description: 'Quit application' },
     ],
@@ -428,7 +351,6 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
       { key: '/sessions', description: 'List and load sessions' },
       { key: '/new', description: 'Start new session' },
       { key: '/rename <name>', description: 'Rename current session' },
-      { key: '/search <term>', description: 'Search the current session' },
       { key: '/recall <query>', description: 'Search across ALL saved sessions (cross-session)',
         web: 'Search across all saved sessions, ranked by relevance and recency' },
       { key: '/recall … --resume', description: 'Load the top-matching session directly',
@@ -470,15 +392,6 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
       { key: '/diff', description: 'Review git diff with AI' },
       { key: '/diff --staged', description: 'Review staged changes' },
       { key: '/commit (/c)', description: 'Generate commit message' },
-      { key: '/git-commit <msg>', description: 'Commit with message' },
-      { key: '/push (/p)', description: 'Git push' },
-      { key: '/pull', description: 'Git pull' },
-      { key: '/amend', description: 'Amend last commit' },
-      { key: '/branch', description: 'Create/manage branches' },
-      { key: '/stash', description: 'Stash changes' },
-      { key: '/unstash', description: 'Apply and drop the most recent stash' },
-      { key: '/pr', description: 'Create a pull request description' },
-      { key: '/changelog', description: 'Generate changelog from recent commits' },
       { key: '/init', description: 'Initialize project (.codeep/ folder)' },
       { key: '/scan', description: 'Scan project structure' },
       { key: '/memory <note>', description: 'Add note to project intelligence' },
@@ -492,40 +405,9 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
     ],
   },
   {
-    title: 'Code Operations',
+    title: 'Skills',
     items: [
-      { key: '/copy [n]', description: 'Copy code block to clipboard' },
-      { key: '/paste', description: 'Paste from clipboard' },
-      { key: '/apply', description: 'Apply file changes from AI' },
-      { key: '/add <path>', description: 'Add file to context' },
-      { key: '/drop [path]', description: 'Remove file (or all) from context' },
-      { key: '/multiline', description: 'Toggle multi-line input mode' },
-    ],
-  },
-  {
-    title: 'Skills (Shortcuts)',
-    items: [
-      { key: '/test (/t)', description: 'Generate/run tests' },
-      { key: '/test-fix', description: 'Fix failing tests' },
-      { key: '/coverage', description: 'Run/analyze test coverage' },
-      { key: '/e2e', description: 'Generate end-to-end tests' },
-      { key: '/mock', description: 'Generate mock data for testing' },
       { key: '/docs (/d)', description: 'Open web docs for a command' },
-      { key: '/readme', description: 'Generate or update README' },
-      { key: '/api-docs', description: 'Generate API documentation' },
-      { key: '/refactor (/r)', description: 'Improve code quality' },
-      { key: '/fix (/f)', description: 'Debug and fix issues' },
-      { key: '/explain (/e)', description: 'Explain code' },
-      { key: '/optimize (/o)', description: 'Optimize performance' },
-      { key: '/debug (/b)', description: 'Debug problems' },
-      { key: '/security', description: 'Security audit (SQLi, XSS, secrets, auth)' },
-      { key: '/types', description: 'Add or improve TypeScript types' },
-      { key: '/cleanup', description: 'Clean up code (remove unused, format)' },
-      { key: '/modernize', description: 'Update code to use modern syntax' },
-      { key: '/migrate', description: 'Migrate code to newer version' },
-      { key: '/split', description: 'Split a large file into smaller modules' },
-      { key: '/log', description: 'Add logging to code' },
-      { key: '/translate', description: 'Translate code comments to English' },
       { key: '/skills', description: 'List all skills' },
       { key: '/skills <query>', description: 'Search skills by keyword' },
       { key: '/skills bundles', description: 'List skill bundles (project + global)' },
@@ -535,29 +417,6 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
       { key: '/skills install <owner>/<slug>', description: 'Install a marketplace bundle into the project' },
       { key: '/skills publish <name> [--public]', description: 'Share a bundle to codeep.dev' },
       { key: '/skills unpublish <owner>/<slug>', description: 'Remove a bundle you published' },
-    ],
-  },
-  {
-    title: 'Code Generation',
-    items: [
-      { key: '/component <name>', description: 'Generate UI component' },
-      { key: '/api <name>', description: 'Generate API endpoint' },
-      { key: '/hook', description: 'Generate a React hook' },
-      { key: '/service', description: 'Generate a service/utility module' },
-      { key: '/page', description: 'Generate a new page/route' },
-      { key: '/form', description: 'Generate a form with validation' },
-      { key: '/crud', description: 'Generate full CRUD for an entity' },
-      { key: '/docker', description: 'Generate Dockerfile + compose' },
-      { key: '/ci', description: 'Generate CI/CD configuration' },
-      { key: '/env', description: 'Setup environment configuration' },
-      { key: '/k8s', description: 'Generate Kubernetes manifests' },
-      { key: '/terraform', description: 'Generate Terraform configuration' },
-      { key: '/nginx', description: 'Generate Nginx configuration' },
-      { key: '/monitor', description: 'Add monitoring and observability' },
-      { key: '/build', description: 'Build the project' },
-      { key: '/deploy', description: 'Build and deploy' },
-      { key: '/release', description: 'Create a new release' },
-      { key: '/publish', description: 'Publish package to npm' },
     ],
   },
   {
@@ -571,10 +430,6 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
       { key: '/grant', description: 'Grant write permission' },
       { key: '/login', description: 'Login with API key' },
       { key: '/logout', description: 'Logout from provider' },
-      { key: '/profile save <name>', description: 'Save current provider+model as profile' },
-      { key: '/profile load <name>', description: 'Load a saved profile' },
-      { key: '/profile list', description: 'List saved profiles' },
-      { key: '/profile delete <name>', description: 'Delete a saved profile' },
       { key: '/openrouter', description: 'OpenRouter routing prefs (prefer/ignore providers, fallbacks, privacy)',
         web: 'OpenRouter routing preferences: show, prefer or ignore upstream providers, fallbacks on/off, privacy strict/allow, clear' },
       { key: '/personality', description: 'List personalities and custom bots with model, tools, and scope' },
@@ -586,7 +441,6 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
       { key: '/me sync', description: 'Push your profile to the codeep.dev dashboard (and pull on a fresh machine)' },
       { key: '/agents', description: 'List sub-agents the agent can delegate to (researcher / reviewer / tester / your own)',
         web: 'List the sub-agents the agent can delegate to — planner, researcher, reviewer, tester, or your own in .codeep/agents/' },
-      { key: '/insights [--days N]', description: 'Activity summary — runs, files, tools, projects over the last N days (default 7)' },
       { key: '/telegram', description: 'Set up answering confirmations on your phone' },
       { key: '/telegram on|off', description: 'Turn Telegram approvals on or off' },
       { key: '/audit', description: 'What agents did here — runs, tools, and what the boundary refused' },
@@ -615,9 +469,6 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
       { key: '/mcp prompts', description: 'List prompt templates exposed by servers' },
       { key: '/mcp prompt <server> <name>', description: 'Materialize a prompt with arguments (key=value)' },
       { key: '/hooks', description: 'List installed lifecycle hooks (.codeep/hooks/<event>.sh)' },
-      { key: '/commands', description: 'List custom slash commands (.codeep/commands/*.md)' },
-      { key: '/web-cache', description: 'Show @web fetch cache stats' },
-      { key: '/web-cache clear', description: 'Clear the @web fetch cache' },
     ],
   },
   {
@@ -638,11 +489,8 @@ export const HELP_LAYOUT: HelpCategorySpec[] = [
     ],
   },
   {
-    title: 'Context',
+    title: 'Learning',
     items: [
-      { key: '/context-save', description: 'Save conversation' },
-      { key: '/context-load', description: 'Load conversation' },
-      { key: '/context-clear', description: 'Clear saved context' },
       { key: '/learn', description: 'Learn code preferences' },
       { key: '/learn status', description: 'Show learned prefs' },
       { key: '/learn rule <text>', description: 'Add custom rule' },

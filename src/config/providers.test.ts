@@ -151,7 +151,7 @@ describe('providers', () => {
     });
 
     // The GLM Coding Plan accepts exactly these two; 5.2 is routed to 5.3 and
-    // Turbo is off the plan (billed outside the quota, invisible in /cost).
+    // Turbo is off the plan (billed outside the quota, invisible in /usage).
     it('offers exactly the two models the GLM Coding Plan accepts', () => {
       const ids = getProviderModels('z.ai').map(m => m.id);
       expect(ids).toEqual(['glm-5.3', 'glm-5.3-flash']);

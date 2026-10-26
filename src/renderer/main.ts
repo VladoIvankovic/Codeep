@@ -99,8 +99,6 @@ function setSessionId(id: string): void {
   config.set('currentSessionId', id);
 }
 
-const addedFiles: Map<string, { relativePath: string; content: string }> = new Map();
-
 /** Branch shown in the persistent header, re-read whenever the project moved
  *  or an agent run finished (an agent can check out a different branch). */
 function getHeaderBranch(): string | undefined {
@@ -242,7 +240,6 @@ function makeCtx(): AppCommandContext {
     projectPath,
     projectContext,
     hasWriteAccess,
-    addedFiles,
     sessionId,
     sessionDisplayName: sessionDisplayName ?? undefined,
     abortController: agentAbortController,
@@ -258,7 +255,6 @@ function makeCtx(): AppCommandContext {
       }
     },
     setAbortController: (ctrl) => { agentAbortController = ctrl; },
-    formatAddedFilesContext,
     handleCommand: (cmd, args) => dispatchCommand(cmd, args, makeCtx()),
     setSessionId,
     getSessionId: () => sessionId,
@@ -305,17 +301,6 @@ function getStatus(): StatusInfo {
       hasFlatFeeUsage: stats.hasFlatFeeUsage,
     },
   };
-}
-
-// ─── Added-files context ──────────────────────────────────────────────────────
-
-function formatAddedFilesContext(): string {
-  if (addedFiles.size === 0) return '';
-  const parts: string[] = ['[Attached files]'];
-  for (const [, file] of addedFiles) {
-    parts.push(`\nFile: ${file.relativePath}\n\`\`\`\n${file.content}\n\`\`\``);
-  }
-  return parts.join('\n') + '\n\n';
 }
 
 // ─── Message submission ───────────────────────────────────────────────────────
@@ -468,13 +453,11 @@ async function handleSubmit(message: string): Promise<void> {
     if (!sessionDisplayName && history.filter(m => m.role === 'user').length === 0) {
       sessionDisplayName = deriveSessionName(message);
     }
-    const fileContext = formatAddedFilesContext();
-    const enrichedMessage = fileContext ? fileContext + webExpanded : webExpanded;
     // The message goes to the model now: one prompt for the usage ledger. A
     // message for Agent Mode went to runAgentTask above instead, and counts
     // in executeAgentTask once its run starts.
     recordPromptInLedger(sessionId, 'tui');
-    await chat(enrichedMessage, history, (chunk) => app.addStreamChunk(chunk), undefined, projectContext, undefined);
+    await chat(webExpanded, history, (chunk) => app.addStreamChunk(chunk), undefined, projectContext, undefined);
     app.endStreaming();
     autoSaveSession(app.getMessages(), projectPath, sessionId);
 
@@ -841,8 +824,8 @@ Commands (in chat):
   // workspace defines project-scoped custom slash commands. They run as user
   // prompts — a hostile or unfamiliar repo could ship
   // `.codeep/commands/refactor.md` whose body silently sends something the
-  // user didn't intend. The banner is informed-consent; `/commands` shows the
-  // full bodies.
+  // user didn't intend. The banner is informed-consent; the files in
+  // `.codeep/commands/` hold the full bodies.
   const notices: string[][] = [];
   if (projectPath) {
     try {
@@ -853,7 +836,7 @@ Commands (in chat):
         const more = projectCustom.length > 6 ? ` (+${projectCustom.length - 6} more)` : '';
         notices.push([
           `  ⚠  This workspace defines ${projectCustom.length} custom slash command${projectCustom.length === 1 ? '' : 's'}: ${list}${more}`,
-          '     Type /commands to review before invoking',
+          '     Read .codeep/commands/*.md before invoking them',
         ]);
       }
     } catch {

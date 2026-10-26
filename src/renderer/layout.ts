@@ -25,8 +25,6 @@ export interface LayoutSnapshot {
   readonly confirmMessageCount: number;
   readonly statusOpen: boolean;
   readonly helpOpen: boolean;
-  readonly searchOpen: boolean;
-  readonly searchResultCount: number;
   readonly exportOpen: boolean;
   readonly logoutOpen: boolean;
   readonly logoutProviderCount: number;
@@ -39,7 +37,6 @@ export interface LayoutSnapshot {
   readonly settingsCount: number;
   readonly showAutocomplete: boolean;
   readonly autocompleteItemCount: number;
-  readonly hunkPickerOpen: boolean;
   readonly mentionPickerOpen: boolean;
   readonly mentionItemCount: number;
 }
@@ -69,19 +66,11 @@ export function bottomPanelHeight(s: LayoutSnapshot): number {
   if (s.confirmOpen) {
     return s.confirmMessageCount + 5; // title + messages + buttons + padding
   }
-  if (s.hunkPickerOpen) {
-    // Title + progress + path + header + up to 12 diff lines + more marker + legend.
-    // Kept in sync with components/HunkPicker.ts (hunkPickerPanelHeight).
-    return 18;
-  }
   if (s.statusOpen) {
     return 16; // Status info panel
   }
   if (s.helpOpen) {
     return Math.min(s.height - 6, 20); // Help takes more space
-  }
-  if (s.searchOpen) {
-    return Math.min(s.searchResultCount * 3 + 6, 18); // Search results
   }
   if (s.exportOpen) {
     return 10; // Export dialog
@@ -137,54 +126,6 @@ export function chatLayout(height: number, panelHeight: number): ChatLayout {
   const inputLine = Math.max(0, mainHeight - 2);
   const statusLine = Math.max(0, mainHeight - 1);
   return { messagesStart: 0, messagesEnd, separatorLine, inputLine, statusLine, mainHeight };
-}
-
-/**
- * Count how many terminal rows a single chat message will occupy once
- * word-wrapped to `maxWidth` columns. Used by `scrollToMessage` to find
- * the right scroll offset.
- *
- * Every message renders as: 1 header row + 1 blank row + one or more
- * wrapped content rows, followed by 1 blank spacing row.
- */
-export function messageLineCount(content: string, maxWidth: number): number {
-  const contentLines = content.split('\n');
-  let lines = 2; // Header + empty line after
-  for (const line of contentLines) {
-    lines += Math.ceil(Math.max(1, line.length) / maxWidth);
-  }
-  return lines + 1; // +1 for spacing between messages
-}
-
-/**
- * Sum `messageLineCount` across a list of messages and return both the
- * running total and the line offset where `targetIndex` begins. This is
- * the pure core of the old `scrollToMessage` method.
- */
-export function messageOffsets(
-  contents: string[],
-  maxWidth: number,
-  targetIndex: number,
-): { totalLines: number; targetStartLine: number } {
-  let totalLines = 0;
-  let targetStartLine = 0;
-  for (let i = 0; i < contents.length; i++) {
-    if (i === targetIndex) targetStartLine = totalLines;
-    totalLines += messageLineCount(contents[i], maxWidth);
-  }
-  return { totalLines, targetStartLine };
-}
-
-/**
- * Compute the scroll offset that places the target message roughly in
- * the middle of the visible window.
- */
-export function scrollOffsetForTarget(
-  totalLines: number,
-  targetStartLine: number,
-  visibleLines: number,
-): number {
-  return Math.max(0, totalLines - targetStartLine - Math.floor(visibleLines / 2));
 }
 
 /**
@@ -341,13 +282,11 @@ export type ActivePanel =
   | 'status'
   | 'help'
   | 'settings'
-  | 'search'
   | 'export'
   | 'logout'
   | 'login'
   | 'menu'
   | 'autocomplete'
-  | 'hunkPicker'
   | 'chat';
 
 export interface PanelState {
@@ -358,13 +297,11 @@ export interface PanelState {
   readonly statusOpen: boolean;
   readonly helpOpen: boolean;
   readonly settingsOpen: boolean;
-  readonly searchOpen: boolean;
   readonly exportOpen: boolean;
   readonly logoutOpen: boolean;
   readonly loginOpen: boolean;
   readonly menuOpen: boolean;
   readonly showAutocomplete: boolean;
-  readonly hunkPickerOpen: boolean;
 }
 
 /**
@@ -380,12 +317,10 @@ export function activePanel(s: PanelState): ActivePanel {
   if (s.statusOpen) return 'status';
   if (s.helpOpen) return 'help';
   if (s.settingsOpen) return 'settings';
-  if (s.searchOpen) return 'search';
   if (s.exportOpen) return 'export';
   if (s.logoutOpen) return 'logout';
   if (s.loginOpen) return 'login';
   if (s.menuOpen) return 'menu';
-  if (s.hunkPickerOpen) return 'hunkPicker';
   if (s.showAutocomplete) return 'autocomplete';
   return 'chat';
 }

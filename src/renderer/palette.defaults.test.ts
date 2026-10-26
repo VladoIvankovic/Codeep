@@ -22,7 +22,6 @@ import { formatMessage } from './components/MessageFormatter';
 import { highlightCode, SYNTAX } from './highlight';
 import { renderModal, renderHelpModal, renderConfirmModal, renderListModal } from './components/Modal';
 import { renderSelectScreen } from './components/SelectScreen';
-import { renderSearchPanel } from './components/Search';
 import { renderProviderSelect } from './components/Login';
 import { PRIMARY_COLOR } from './components/uiConstants';
 
@@ -98,16 +97,6 @@ function renderCorpus(): Record<string, unknown> {
     { key: 'b', label: 'Beta' },
     { key: 'c', label: 'Gamma' },
   ], { selectedIndex: 0 }, 'b'));
-  draw('search', s => renderSearchPanel(s, 0, 100, 20, {
-    searchOpen: true,
-    searchQuery: 'build',
-    searchResults: [
-      { role: 'user', messageIndex: 0, matchedText: 'fix the build' },
-      { role: 'assistant', messageIndex: 1, matchedText: 'the build is fixed' },
-    ],
-    searchIndex: 0,
-    searchCallback: null,
-  }));
   draw('providers', s => renderProviderSelect(s, [
     { id: 'z.ai', name: 'Z.AI', description: 'GLM' },
     { id: 'ollama', name: 'Ollama' },
@@ -192,9 +181,6 @@ const COLOURS_BEFORE_PALETTE: Record<string, string[]> = {
   confirmNo: ['33', '37', '90', '38;2;255;80;85', '90'],
   listModal: ['38;2;255;80;85', '38;2;240;42;48', '37', '38;2;255;80;85', '37', '90'],
   select: ['38;2;240;42;48', '38;2;255;80;85', '90', '32', '37', '90'],
-  search: [
-    '38;2;240;42;48', '37', '36', '90', '38;2;240;42;48', '32', '90', '37', '34', '90', '37', '90',
-  ],
   providers: ['38;2;240;42;48', '37', '38;2;240;42;48', '38;2;255;80;85', '37', '90'],
 };
 

@@ -21,15 +21,12 @@ import {
   startNewSession,
   loadSession,
   listSessionsWithInfo,
-  deleteSession,
   renameSession,
   sessionNameProblem,
   setProjectPermission,
-  saveProfile,
   loadProfile,
   applyProfile,
   listProfiles,
-  deleteProfile,
   initializeAsProject,
   isManuallyInitializedProject,
   agentOpenAIWire,
@@ -45,8 +42,9 @@ import { setProjectContext } from '../api/index';
 import { AppExecutionContext, runSkill, runCommandChain } from './agentExecution';
 import { loadProjectIntelligence, saveProjectIntelligence, INTELLIGENCE_NOT_SAVED } from '../utils/projectIntelligence';
 import { ollamaModelHint } from './ollamaHint';
-import { buildSearchSnippets, parseKeepRecent, joinSessionName, parseTaskAddArgs, formatTaskList, formatProfileList, formatMemoryList, formatStatsReport, extractCodeBlocks, resolveBlockIndex, extractFileChanges, formatApplyDiffLine, parsePromptArgs, formatMcpReloadReport, formatMcpResourcesList, formatMcpResourceRead, formatMcpPromptsList, formatMcpPromptResult, formatMcpServerList, parseInsightsDays, formatCloudSessionLabel, formatMeSyncReport, formatUndoAllReport, formatMeLearnResult, formatMeInitResult, formatSkillsShow, formatSkillsBrowseEmpty, formatSkillsPublishResult } from './commands/helpers';
+import { parseKeepRecent, joinSessionName, parseTaskAddArgs, formatTaskList, formatMemoryList, formatStatsReport, parsePromptArgs, formatMcpReloadReport, formatMcpResourcesList, formatMcpResourceRead, formatMcpPromptsList, formatMcpPromptResult, formatMcpServerList, formatCloudSessionLabel, formatMeSyncReport, formatUndoAllReport, formatMeLearnResult, formatMeInitResult, formatSkillsShow, formatSkillsBrowseEmpty, formatSkillsPublishResult } from './commands/helpers';
 import { resolveCommand } from './commands/registry';
+import { removedCommandMessage } from './commands/removed';
 import { telemetryCommand } from '../commands/core/telemetry';
 import { keysyncCommand } from '../commands/core/keysync';
 
@@ -103,11 +101,11 @@ export async function handleCommand(
   args: string[],
   ctx: AppCommandContext,
 ): Promise<void> {
-  // Resolve command aliases (e.g. `webcache` → `web-cache`) to their
+  // Resolve command aliases (e.g. `effort` → `thinking`) to their
   // canonical name before dispatching.
   const resolved = resolveCommand(command);
   const canonical = resolved?.name ?? command;
-  // Handle skill chaining (e.g., /commit+push)
+  // Handle skill chaining (e.g., /commit+my-skill)
   if (canonical.includes('+')) {
     const commands = canonical.split('+').filter(c => c.trim());
     runCommandChain(commands, 0, ctx);
@@ -331,9 +329,6 @@ export async function handleCommand(
       } else {
         lines.push(`**Project**    none  ·  chat only`);
       }
-      if (ctx.addedFiles.size > 0) {
-        lines.push(`**Context**    ${ctx.addedFiles.size} file${ctx.addedFiles.size !== 1 ? 's' : ''} added`);
-      }
       lines.push(`**Account**    ${linked ? (githubId ? `linked (${githubId})` : 'linked') : 'not linked — run: codeep account'}`);
       lines.push(`**Session**    ${ctx.sessionId}`);
       ctx.app.addMessage({ role: 'system', content: lines.join('\n') } as Message);
@@ -455,7 +450,6 @@ export async function handleCommand(
       const KNOWN: Record<string, string> = {
         personality: 'https://codeep.dev/docs/agent#personalities',
         personalities: 'https://codeep.dev/docs/agent#personalities',
-        insights: 'https://codeep.dev/docs/agent#insights',
         plan: 'https://codeep.dev/docs/agent#plan-mode',
         go: 'https://codeep.dev/docs/agent#plan-mode',
         mcp: 'https://codeep.dev/docs/mcp',
@@ -463,15 +457,13 @@ export async function handleCommand(
         checkpoint: 'https://codeep.dev/docs/commands#checkpoints',
         rewind: 'https://codeep.dev/docs/commands#checkpoints',
         hooks: 'https://codeep.dev/docs/commands#hooks',
-        commands: 'https://codeep.dev/docs/commands#custom-commands',
         openrouter: 'https://codeep.dev/docs/providers#openrouter',
         memory: 'https://codeep.dev/docs/commands#intelligence',
         me: 'https://codeep.dev/docs/agent#user-profile',
         agents: 'https://codeep.dev/docs/agent#sub-agents',
         delegate: 'https://codeep.dev/docs/agent#sub-agents',
-        profile: 'https://codeep.dev/docs/commands#settings',
         compact: 'https://codeep.dev/docs/commands#session',
-        cost: 'https://codeep.dev/docs/dashboard',
+        usage: 'https://codeep.dev/docs/dashboard',
       };
       const url = cmd ? (KNOWN[cmd] ?? `https://codeep.dev/docs/commands?q=${encodeURIComponent(cmd)}`) : 'https://codeep.dev/docs';
       try {
@@ -481,13 +473,6 @@ export async function handleCommand(
       } catch {
         ctx.app.notify(`Couldn't open browser. Visit: ${url}`);
       }
-      break;
-    }
-
-    case 'insights': {
-      const { formatInsights } = await import('../utils/insights');
-      const days = parseInsightsDays(args);
-      ctx.app.addMessage({ role: 'system', content: formatInsights({ days }) });
       break;
     }
 
@@ -545,8 +530,8 @@ export async function handleCommand(
 
     case 'me': {
       // User profile (global ~/.codeep/profile.md + project .codeep/profile.md)
-      // injected into the agent's context. NOT the provider-profile feature
-      // (that's `/profile`). See src/utils/userProfile.ts.
+      // injected into the agent's context. NOT the saved provider+model
+      // profiles (those are what `/model <name>` loads). See src/utils/userProfile.ts.
       const { formatProfileView, scaffoldProfile, updateLearnedProfile, clearLearnedProfile } = await import('../utils/userProfile');
       const sub = args[0]?.toLowerCase();
 
@@ -1059,21 +1044,8 @@ Format: use headers per category, only include categories where you found issues
       break;
     }
 
-    case 'search': {
-      if (!args.length) { ctx.app.notify('Usage: /search <term>'); return; }
-      const searchTerm = args.join(' ').toLowerCase();
-      const messages = ctx.app.getMessages();
-      const searchResults = buildSearchSnippets(messages, searchTerm);
-      if (searchResults.length === 0) {
-        ctx.app.notify(`No matches for "${searchTerm}"`);
-      } else {
-        ctx.app.showSearch(searchTerm, searchResults, (messageIndex) => ctx.app.scrollToMessage(messageIndex));
-      }
-      break;
-    }
-
     case 'recall': {
-      // Cross-session search (vs /search which is current-session only).
+      // Cross-session search.
       // Flags: --resume (load top match), --summarize (LLM recap).
       const wantResume = args.includes('--resume');
       const wantSummarize = args.includes('--summarize');
@@ -1272,314 +1244,6 @@ Format: use headers per category, only include categories where you found issues
       break;
     }
 
-    case 'git-commit': {
-      const message = args.join(' ');
-      if (!message) { ctx.app.notify('Usage: /git-commit <message>'); return; }
-      // Use execFile to avoid shell injection — pass commit message as a direct argument.
-      // hardenedGitEnv() on top of that: the repo's own .git/config can name programs
-      // git would run for this commit (core.fsmonitor, core.hooksPath, …).
-      Promise.all([import('child_process'), import('../utils/git')]).then(([{ execFile }, { hardenedGitEnv }]) => {
-        // The SAME cwd the commit runs in. Called with no argument, the scan
-        // read process.cwd() instead — so a project opened anywhere other
-        // than the directory Codeep was launched from was "hardened" against
-        // a different repository's config entirely.
-        let env: NodeJS.ProcessEnv;
-        try {
-          env = hardenedGitEnv({ cwd: ctx.projectPath });
-        } catch (error) {
-          // It refuses rather than hand git a half-scanned environment, and
-          // its message names the key and what to do about it.
-          ctx.app.notify(error instanceof Error ? error.message : 'Commit failed');
-          return;
-        }
-        execFile('git', ['commit', '-m', message], { cwd: ctx.projectPath, encoding: 'utf-8', env }, (err) => {
-          if (err) {
-            ctx.app.notify(`Commit failed: ${err.message}`);
-          } else {
-            ctx.app.notify('Committed successfully');
-          }
-        });
-      });
-      break;
-    }
-
-    case 'copy': {
-      const blockNum = args[0] ? parseInt(args[0], 10) : -1;
-      const messages = ctx.app.getMessages();
-      const codeBlocks = messages.flatMap(m => extractCodeBlocks(m.content));
-      if (codeBlocks.length === 0) { ctx.app.notify('No code blocks found'); return; }
-      const index = resolveBlockIndex(blockNum, codeBlocks.length);
-      if (index === null) {
-        ctx.app.notify(`Invalid block number. Available: 1-${codeBlocks.length}`);
-        return;
-      }
-      import('../utils/clipboard').then(({ copyToClipboard }) => {
-        if (copyToClipboard(codeBlocks[index])) {
-          ctx.app.notify(`Copied block ${index + 1} to clipboard`);
-        } else {
-          ctx.app.notify('Failed to copy to clipboard');
-        }
-      }).catch(() => ctx.app.notify('Clipboard not available'));
-      break;
-    }
-
-    case 'paste': {
-      import('clipboardy').then((clipboardy) => {
-        try {
-          const content = clipboardy.default.readSync();
-          if (content && content.trim()) {
-            ctx.app.handlePaste(content.trim());
-          } else {
-            ctx.app.notify('Clipboard is empty');
-          }
-        } catch { ctx.app.notify('Could not read clipboard'); }
-      }).catch(() => ctx.app.notify('Clipboard not available'));
-      break;
-    }
-
-    case 'apply': {
-      const messages = ctx.app.getMessages();
-      const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
-      if (!lastAssistant) { ctx.app.notify('No assistant response to apply'); return; }
-      const changes = extractFileChanges(lastAssistant.content);
-      if (changes.length === 0) { ctx.app.notify('No file changes found in response'); return; }
-      if (!ctx.hasWriteAccess) { ctx.app.notify('Write access required. Use /grant first.'); return; }
-      // Parse optional selective hunk spec: /apply --only file.ts:0,1 other.ts:2
-      // Without --only, all hunks are applied (existing behavior).
-      const selective = args.includes('--only') || args.includes('-o');
-      const interactive = args.includes('--interactive') || args.includes('-i');
-      const hunkSpecs = new Map<string, Set<number>>();
-      if (selective) {
-        for (const a of args) {
-          if (a === '--only' || a === '-o') continue;
-          const m = a.match(/^(.+):([\d,]+)$/);
-          if (m) {
-            const [, file, idxStr] = m;
-            const idxs = new Set(idxStr.split(',').map((n) => parseInt(n, 10)).filter((n) => !isNaN(n)));
-            hunkSpecs.set(file, idxs);
-          }
-        }
-        // A spec that parsed to nothing must NOT fall through to the
-        // apply-everything branch below — the user asked to restrict the
-        // apply, so writing every change is the opposite of the request.
-        if (hunkSpecs.size === 0) {
-          ctx.app.notify('Invalid --only spec. Expected `--only <file>:<hunk>[,<hunk>]` (e.g. --only src/a.ts:0,2). Nothing applied.');
-          return;
-        }
-      }
-      import('fs').then(async (fs) => {
-        import('path').then(async (pathModule) => {
-          const { createFileDiff, applyHunksToFiles, countChangeHunks } =
-            await import('../utils/diffPreview');
-          type FileDiff = import('../utils/diffPreview').FileDiff;
-          const diffLines: string[] = [];
-          const fileDiffs: FileDiff[] = [];
-          for (const change of changes) {
-            const fullPath = pathModule.isAbsolute(change.path)
-              ? change.path
-              : pathModule.join(ctx.projectPath, change.path);
-            let existingContent = '';
-            try { existingContent = await fs.promises.readFile(fullPath, 'utf-8'); } catch {}
-            const fd = createFileDiff(change.path, change.content, ctx.projectPath);
-            fileDiffs.push(fd);
-            const hunkCount = countChangeHunks(fd);
-            diffLines.push(...formatApplyDiffLine(change, existingContent));
-            if (hunkCount > 0) {
-              diffLines.push(`  ↳ ${hunkCount} hunk(s) — use /apply --only ${change.path}:0,1 to select`);
-            }
-          }
-          // One key applies the changes you asked for and see listed. Not a
-          // change to a file that decides what runs later (.git/config, a
-          // hook, an MCP server list, a skill), nor one outside the project:
-          // those wait for Enter, as the agent's own writes to them do. The
-          // hunk picker shows the reason beside the file; null: one key.
-          const { trustBearingWrite } = await import('../utils/toolExecution');
-          const needsEnter = (path: string): string | null => {
-            const fullPath = pathModule.isAbsolute(path)
-              ? path
-              : pathModule.join(ctx.projectPath, path);
-            const rel = pathModule.relative(ctx.projectPath, fullPath);
-            if (rel === '..' || rel.startsWith('..' + pathModule.sep) || pathModule.isAbsolute(rel)) return 'outside the project';
-            return trustBearingWrite({ tool: 'write_file', parameters: { path } }, ctx.projectPath)
-              ? 'decides what runs later'
-              : null;
-          };
-          // Interactive mode: open the hunk picker (`git add -p` style).
-          if (interactive) {
-            type HunkPickerItem = import('./App').HunkPickerItem;
-            const items: HunkPickerItem[] = [];
-            for (const fd of fileDiffs) {
-              for (let hi = 0; hi < fd.hunks.length; hi++) {
-                const hunk = fd.hunks[hi];
-                // Skip pure-context hunks (no add/remove).
-                if (!hunk.lines.some((l) => l.type === 'add' || l.type === 'remove')) continue;
-                const header = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`;
-                const lines = hunk.lines.map((l) => {
-                  if (l.type === 'add') return `+${l.content}`;
-                  if (l.type === 'remove') return `-${l.content}`;
-                  return ` ${l.content}`;
-                });
-                items.push({ path: fd.path, hunkIndex: hi, header, lines, needsEnter: needsEnter(fd.path) ?? undefined });
-              }
-            }
-            if (items.length === 0) {
-              ctx.app.notify('No change hunks to review');
-              return;
-            }
-            ctx.app.showHunkPicker({
-              title: '🎯 Review hunks',
-              items,
-              onComplete: (accepted) => {
-                if (accepted.length === 0) {
-                  ctx.app.notify('No hunks applied');
-                  return;
-                }
-                (async () => {
-                  // Group accepted hunk indices by file path.
-                  const byPath = new Map<string, Set<number>>();
-                  for (const a of accepted) {
-                    let set = byPath.get(a.path);
-                    if (!set) { set = new Set(); byPath.set(a.path, set); }
-                    set.add(a.hunkIndex);
-                  }
-                  const results = applyHunksToFiles(fileDiffs, byPath);
-                  let applied = 0;
-                  for (const r of results) {
-                    try {
-                      const fullPath = pathModule.isAbsolute(r.path)
-                        ? r.path
-                        : pathModule.join(ctx.projectPath, r.path);
-                      await fs.promises.mkdir(pathModule.dirname(fullPath), { recursive: true });
-                      await fs.promises.writeFile(fullPath, r.content);
-                      applied++;
-                    } catch {}
-                  }
-                  ctx.app.notify(`Applied ${accepted.length} hunk(s) across ${applied} file(s)`);
-                })().catch((e) => ctx.app.notify(`Apply failed: ${e instanceof Error ? e.message : String(e)}`));
-              },
-            });
-            return;
-          }
-
-          const summary = selective && hunkSpecs.size > 0
-            ? `Selective apply (${hunkSpecs.size} file(s) with chosen hunks)`
-            : `Found ${changes.length} file(s) to apply`;
-          const quickAnswer = changes.every((change) => needsEnter(change.path) === null);
-          ctx.app.showConfirm({
-            title: '📝 Apply Changes',
-            quickAnswer,
-            message: [
-              summary,
-              '',
-              ...diffLines.slice(0, 12),
-              ...(diffLines.length > 12 ? [`  ...and ${diffLines.length - 12} more`] : []),
-              '',
-              selective && hunkSpecs.size > 0 ? 'Apply selected hunks?' : 'Apply these changes?',
-            ],
-            confirmLabel: 'Apply',
-            cancelLabel: 'Cancel',
-            onConfirm: () => {
-              (async () => {
-                let applied = 0;
-                if (selective && hunkSpecs.size > 0) {
-                  // Per-hunk selective apply.
-                  const results = applyHunksToFiles(fileDiffs, hunkSpecs);
-                  for (const r of results) {
-                    try {
-                      const fullPath = pathModule.isAbsolute(r.path)
-                        ? r.path
-                        : pathModule.join(ctx.projectPath, r.path);
-                      await fs.promises.mkdir(pathModule.dirname(fullPath), { recursive: true });
-                      await fs.promises.writeFile(fullPath, r.content);
-                      applied++;
-                    } catch {}
-                  }
-                } else {
-                  // All-or-nothing apply (original behavior).
-                  for (const change of changes) {
-                    try {
-                      const fullPath = pathModule.isAbsolute(change.path)
-                        ? change.path
-                        : pathModule.join(ctx.projectPath, change.path);
-                      await fs.promises.mkdir(pathModule.dirname(fullPath), { recursive: true });
-                      await fs.promises.writeFile(fullPath, change.content);
-                      applied++;
-                    } catch {}
-                  }
-                }
-                ctx.app.notify(`Applied ${applied}/${selective ? hunkSpecs.size : changes.length} file(s)`);
-              })().catch((e) => ctx.app.notify(`Apply failed: ${e instanceof Error ? e.message : String(e)}`));
-            },
-            onCancel: () => ctx.app.notify('Apply cancelled'),
-          });
-        });
-      }).catch((e) => ctx.app.notify(`Apply failed: ${e instanceof Error ? e.message : String(e)}`));
-      break;
-    }
-
-    case 'add': {
-      if (!args.length) {
-        if (ctx.addedFiles.size === 0) {
-          ctx.app.notify('Usage: /add <file-path> [file2] ... | No files added');
-        } else {
-          const fileList = Array.from(ctx.addedFiles.values()).map(f => f.relativePath).join(', ');
-          ctx.app.notify(`Added files (${ctx.addedFiles.size}): ${fileList}`);
-        }
-        return;
-      }
-      const pathMod = await import('path');
-      const fsMod = await import('fs');
-      const root = ctx.projectContext?.root || ctx.projectPath;
-      let added = 0;
-      const errors: string[] = [];
-      for (const filePath of args) {
-        const fullPath = pathMod.isAbsolute(filePath) ? filePath : pathMod.join(root, filePath);
-        const relativePath = pathMod.isAbsolute(filePath) ? pathMod.relative(root, filePath) : filePath;
-        try {
-          const stat = await fsMod.promises.stat(fullPath);
-          if (!stat.isFile()) { errors.push(`${filePath}: not a file`); continue; }
-          if (stat.size > 100000) {
-            errors.push(`${filePath}: too large (${Math.round(stat.size / 1024)}KB, max 100KB)`);
-            continue;
-          }
-          const content = await fsMod.promises.readFile(fullPath, 'utf-8');
-          ctx.addedFiles.set(fullPath, { relativePath, content });
-          added++;
-        } catch {
-          errors.push(`${filePath}: file not found`);
-        }
-      }
-      if (added > 0) ctx.app.notify(`Added ${added} file(s) to context (${ctx.addedFiles.size} total)`);
-      if (errors.length > 0) ctx.app.notify(errors.join(', '));
-      break;
-    }
-
-    case 'drop': {
-      if (!args.length) {
-        if (ctx.addedFiles.size === 0) {
-          ctx.app.notify('No files in context');
-        } else {
-          const count = ctx.addedFiles.size;
-          ctx.addedFiles.clear();
-          ctx.app.notify(`Dropped all ${count} file(s) from context`);
-        }
-        return;
-      }
-      const pathMod = await import('path');
-      const root = ctx.projectContext?.root || ctx.projectPath;
-      let dropped = 0;
-      for (const filePath of args) {
-        const fullPath = pathMod.isAbsolute(filePath) ? filePath : pathMod.join(root, filePath);
-        if (ctx.addedFiles.delete(fullPath)) dropped++;
-      }
-      if (dropped > 0) {
-        ctx.app.notify(`Dropped ${dropped} file(s) (${ctx.addedFiles.size} remaining)`);
-      } else {
-        ctx.app.notify('File not found in context. Use /add to see added files.');
-      }
-      break;
-    }
-
     case 'history': {
       import('../utils/agent').then(({ getAgentHistory }) => {
         const history = getAgentHistory();
@@ -1609,18 +1273,19 @@ Format: use headers per category, only include categories where you found issues
       break;
     }
 
-    case 'cost': {
-      const { formatCostReport } = await import('../utils/tokenTracker');
-      ctx.app.addMessage({ role: 'system', content: formatCostReport() });
-      break;
-    }
-
+    // Everything Codeep counted, in one place. Until 4.0 this was three
+    // commands: the ledger here, this session's cost in a short report, and a
+    // detailed session view. Now the ledger comes first, then this session (the
+    // short report), and with --detail the per-model breakdown, cache and
+    // pricing table (the detailed view). `--detail` is the TUI's own flag: it
+    // is taken out before parseUsageArgs, which `codeep usage` shares.
     case 'usage': {
       const { buildUsageReport, formatUsageReport, parseUsageArgs } = await import('../utils/usageReport');
       const { readUsageReport } = await import('../utils/usageLedger');
-      const parsed = parseUsageArgs(args);
+      const detail = args.includes('--detail');
+      const parsed = parseUsageArgs(args.filter(a => a !== '--detail'));
       if (!parsed.ok) {
-        ctx.app.notify(parsed.help ? 'Usage: /usage [--days N]' : parsed.message.replace(/^codeep usage: /, ''));
+        ctx.app.notify(parsed.help ? 'Usage: /usage [--days N] [--detail]' : parsed.message.replace(/^codeep usage: /, ''));
         break;
       }
       const now = Date.now();
@@ -1630,6 +1295,24 @@ Format: use headers per category, only include categories where you found issues
         role: 'system',
         content: '```\n' + formatUsageReport(report, { daysListed: parsed.daysGiven }) + '\n```',
       });
+      const { formatCostReport, getCostBreakdown, getSessionStats, formatTokenCount, getPricingTable, getCacheStats } = await import('../utils/tokenTracker');
+      ctx.app.addMessage({ role: 'system', content: formatCostReport() });
+      if (detail) {
+        const { formatResourceImpactReport } = await import('../utils/resourceImpact');
+        const stats = getSessionStats();
+        ctx.app.addMessage({
+          role: 'system',
+          content: formatStatsReport({
+            totals: stats,
+            breakdown: getCostBreakdown(),
+            cache: getCacheStats(),
+            pricing: getPricingTable(),
+            currentProvider: config.get('provider'),
+            fmt: formatTokenCount,
+            impactLines: formatResourceImpactReport(stats.totalTokens),
+          }),
+        } as Message);
+      }
       break;
     }
 
@@ -1804,33 +1487,6 @@ Format: use headers per category, only include categories where you found issues
       break;
     }
 
-    case 'context-save': {
-      const messages = ctx.app.getMessages();
-      if (saveSession(`context-${ctx.sessionId}`, messages, ctx.projectPath)) {
-        ctx.app.notify('Context saved');
-      } else {
-        ctx.app.notify('Failed to save context');
-      }
-      break;
-    }
-
-    case 'context-load': {
-      const loaded = loadSession(`context-${ctx.sessionId}`, ctx.projectPath);
-      if (loaded) {
-        ctx.app.setMessages(loaded as Message[]);
-        ctx.app.notify('Context loaded');
-      } else {
-        ctx.app.notify('No saved context found');
-      }
-      break;
-    }
-
-    case 'context-clear': {
-      deleteSession(`context-${ctx.sessionId}`, ctx.projectPath);
-      ctx.app.notify('Context cleared');
-      break;
-    }
-
     case 'learn': {
       if (args[0] === 'status') {
         import('../utils/learning').then(({ getLearningStatus }) => {
@@ -1880,26 +1536,10 @@ Format: use headers per category, only include categories where you found issues
       break;
     }
 
-    // Built-in skill shortcuts
-    case 'commit':
-    case 'test':
-    case 'refactor':
-    case 'fix':
-    case 'explain':
-    case 'optimize':
-    case 'debug':
-    case 'push':
-    case 'pull':
-    case 'amend':
-    case 'pr':
-    case 'changelog':
-    case 'branch':
-    case 'stash':
-    case 'unstash':
-    case 'build':
-    case 'deploy':
-    case 'release':
-    case 'publish': {
+    // The one built-in skill. Anything else is a skill of the user's own
+    // (~/.codeep/skills), a .codeep/commands/*.md file, or a plain request to
+    // the agent.
+    case 'commit': {
       runSkill(command, args, ctx).catch((err: Error) => {
         ctx.app.notify(`Skill error: ${err.message}`);
       });
@@ -2221,56 +1861,6 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       break;
     }
 
-    case 'profile': {
-      const subCmd = args[0]?.toLowerCase();
-
-      if (!subCmd || subCmd === 'list') {
-        const profiles = listProfiles();
-        if (profiles.length === 0) {
-          ctx.app.notify('No profiles saved. Use /profile save <name>');
-        } else {
-        ctx.app.addMessage({ role: 'system', content: formatProfileList(profiles) } as Message);
-        }
-        break;
-      }
-
-      if (subCmd === 'save') {
-        const name = args[1];
-        if (!name) { ctx.app.notify('Usage: /profile save <name>'); break; }
-        if (saveProfile(name)) ctx.app.notify(`Profile saved: ${name}`);
-        else ctx.app.notify('Failed to save profile');
-        break;
-      }
-
-      if (subCmd === 'load') {
-        const name = args[1];
-        if (!name) { ctx.app.notify('Usage: /profile load <name>'); break; }
-        const profile = loadProfile(name);
-        if (!profile) { ctx.app.notify(`Profile not found: ${name}`); break; }
-        applyProfileForThisRun(profile);
-        ctx.app.notify(`Profile loaded: ${profile.name} (${profile.provider} / ${profile.model})`);
-        break;
-      }
-
-      if (subCmd === 'delete') {
-        const name = args[1];
-        if (!name) { ctx.app.notify('Usage: /profile delete <name>'); break; }
-        if (deleteProfile(name)) ctx.app.notify(`Profile deleted: ${name}`);
-        else ctx.app.notify(`Profile not found: ${name}`);
-        break;
-      }
-
-      // /profile <name> — shorthand for load
-      const profile = loadProfile(subCmd);
-      if (profile) {
-        applyProfileForThisRun(profile);
-        ctx.app.notify(`Profile loaded: ${profile.name} (${profile.provider} / ${profile.model})`);
-      } else {
-        ctx.app.notify(`Unknown profile subcommand: ${subCmd}. Use save / load / delete / list`);
-      }
-      break;
-    }
-
     case 'sync': {
       const subCmd = args[0]?.toLowerCase() || 'all';
       const { pushLearning, pushProfiles, pullProfiles } = await import('../utils/codeepCloud');
@@ -2357,27 +1947,6 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       break;
     }
 
-    // /stats — detailed session view: per-model breakdown, total, prompt-cache
-    // summary, and the per-1M pricing reference. `/cost` is the concise sibling
-    // (formatCostReport, above); the two are intentionally distinct, so this
-    // case no longer also claims 'cost' (which always hit the handler above).
-    case 'stats': {
-      const { getCostBreakdown, getSessionStats, formatTokenCount, getPricingTable, getCacheStats } = await import('../utils/tokenTracker');
-      const { formatResourceImpactReport } = await import('../utils/resourceImpact');
-      const stats = getSessionStats();
-      const content = formatStatsReport({
-        totals: stats,
-        breakdown: getCostBreakdown(),
-        cache: getCacheStats(),
-        pricing: getPricingTable(),
-        currentProvider: config.get('provider'),
-        fmt: formatTokenCount,
-        impactLines: formatResourceImpactReport(stats.totalTokens),
-      });
-      ctx.app.addMessage({ role: 'system', content } as Message);
-      break;
-    }
-
     case 'memory': {
       const sub = args[0]?.toLowerCase();
       const projectCtx = getProjectContext(ctx.projectPath);
@@ -2431,35 +2000,6 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
       if (!saveProjectIntelligence(projectRoot, intelligence)) { ctx.app.notify(INTELLIGENCE_NOT_SAVED); break; }
       import('../utils/codeepCloud.js').then(({ syncMemoryNotes }) => syncMemoryNotes(projectCtx?.name || '', intelligence.notes)).catch(() => {});
       ctx.app.notify(`Memory saved (${intelligence.notes.length} total): "${note}"`);
-      break;
-    }
-
-    case 'commands': {
-      const { loadCustomCommands, formatCommandList } = await import('../utils/customCommands');
-      ctx.app.addMessage({ role: 'system', content: formatCommandList(loadCustomCommands(ctx.projectPath)) });
-      break;
-    }
-
-    case 'web-cache': {
-      const sub = args[0]?.toLowerCase();
-      const { clearWebCache, webCacheStats } = await import('../utils/webFetch');
-      if (sub === 'clear' || sub === 'reset' || sub === 'flush') {
-        clearWebCache();
-        ctx.app.notify('Web cache cleared');
-      } else {
-        const stats = webCacheStats();
-        ctx.app.addMessage({
-          role: 'system',
-          content: [
-            '🌐 Web fetch cache',
-            '',
-            `  Entries: ${stats.entries}/${stats.maxEntries}`,
-            `  TTL:     ${stats.ttlMinutes} min`,
-            '',
-            'Usage: /web-cache clear',
-          ].join('\n'),
-        });
-      }
       break;
     }
 
@@ -2732,16 +2272,19 @@ Describe what this skill does. The agent reads this body verbatim when it invoke
         break;
       }
       // 2. Fall through to skill registry.
+      // 3. A name Codeep 4.0 removed says so, instead of looking like a typo.
+      //    After 1 and 2, so a user's own command or skill of that name wins.
       runSkill(command, args, ctx).then(async handled => {
         if (handled) return;
-        ctx.app.notify(`Unknown command: /${command}`);
+        const headline = removedCommandMessage(command) ?? `Unknown command: /${command}`;
+        ctx.app.notify(headline);
         // The command may be a custom skill whose file does not load. Scanned
         // afresh here rather than trusting whatever the lookup left behind.
         const { loadCustomSkills, getSkippedCustomSkills, formatSkippedCustomSkills } = await import('../utils/skills');
         loadCustomSkills();
         const skipped = getSkippedCustomSkills().filter(f => f.file.toLowerCase() === `${command.toLowerCase()}.json`);
         if (skipped.length > 0) {
-          ctx.app.addMessage({ role: 'system', content: `Unknown command: /${command}\n\n${formatSkippedCustomSkills(skipped)}` });
+          ctx.app.addMessage({ role: 'system', content: `${headline}\n\n${formatSkippedCustomSkills(skipped)}` });
         }
       }).catch(err => {
         ctx.app.notify(`Skill error: ${(err as Error).message}`);

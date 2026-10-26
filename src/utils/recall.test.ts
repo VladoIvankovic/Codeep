@@ -104,10 +104,11 @@ describe('recallSessions', () => {
 });
 
 describe('formatRecall', () => {
-  it('shows empty-state hint pointing at /search', () => {
+  it('shows an empty-state hint that points at no removed command', () => {
     const out = formatRecall('xyz', []);
     expect(out).toContain('No saved sessions match');
-    expect(out).toContain('/search');
+    expect(out).toContain('searches across all your saved sessions');
+    expect(out).not.toContain('/search');
   });
 
   it('renders matches with snippet and resume hint', () => {

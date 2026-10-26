@@ -2,7 +2,7 @@
 // `/command` autocomplete picker.
 //
 // Extracted from App.ts (P2 refactor) following the component convention
-// (HunkPicker/PasteDialog/MentionPicker). Appears when the input starts
+// (PasteDialog/MentionPicker). Appears when the input starts
 // with `/` and offers matching slash commands; ↑/↓ navigate, Tab or Enter
 // select (App rewrites the editor buffer with `/<command> `), Esc closes.
 // Descriptions come from the command registry via COMMAND_DESCRIPTIONS —

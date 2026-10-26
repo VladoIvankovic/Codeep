@@ -690,7 +690,7 @@ describe('per-run reporting delta (finding cli-6)', () => {
     expect(delta[0].promptTokens).toBe(200);
     expect(delta[0].completionTokens).toBe(100);
 
-    // Status bar + /cost still see BOTH turns — the cumulative store is not wiped.
+    // Status bar + /usage still see BOTH turns — the cumulative store is not wiped.
     const full = getCostBreakdown();
     expect(full[0].promptTokens).toBe(1200);
     expect(full[0].completionTokens).toBe(600);
@@ -1179,7 +1179,7 @@ describe('Claude Haiku 5.5 (priced by prompt length)', () => {
     expect(formatTokenThreshold(999)).toBe('999');
   });
 
-  describe('/cost', () => {
+  describe('the session cost report', () => {
     it('totals a session of one short and one long request, and says why the long one costs more', () => {
       record(60_000, 1_000);
       record(160_000, 1_000);

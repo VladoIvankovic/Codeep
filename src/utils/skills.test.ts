@@ -37,6 +37,26 @@ import type { Skill } from './skills';
 
 // ─── findSkill ───────────────────────────────────────────────────────────────
 
+describe('the built-in skills', () => {
+  // 4.0 cut 51 built-ins down to the one with a flow worth shipping. What the
+  // rest did is a request to the agent, or a skill the user writes.
+  it('are /commit and nothing else', () => {
+    expect(getBuiltInSkills().map(s => s.name)).toEqual(['commit']);
+  });
+
+  it('give /commit the shortcut /c and the git category', () => {
+    const [commit] = getBuiltInSkills();
+    expect(commit.shortcut).toBe('c');
+    expect(commit.category).toBe('git');
+  });
+
+  it('no longer answer to the names of the removed ones', () => {
+    for (const name of ['push', 'test', 'fix', 'refactor', 'amend', 'branch', 'stash', 'docker', 't', 'p']) {
+      expect(findSkill(name), name).toBeNull();
+    }
+  });
+});
+
 describe('findSkill', () => {
   it('finds a built-in skill by name', () => {
     const skill = findSkill('commit');
@@ -45,11 +65,7 @@ describe('findSkill', () => {
   });
 
   it('finds a built-in skill by shortcut', () => {
-    const commit = findSkill('commit');
-    if (commit?.shortcut) {
-      const byShortcut = findSkill(commit.shortcut);
-      expect(byShortcut?.name).toBe('commit');
-    }
+    expect(findSkill('c')?.name).toBe('commit');
   });
 
   it('is case-insensitive', () => {
@@ -77,28 +93,9 @@ describe('parseSkillChain', () => {
     expect(parseSkillChain('commit+nonexistent-xyz')).toBeNull();
   });
 
-  it('parses a valid two-skill chain', () => {
-    // Use two skills that are guaranteed to exist
-    const skills = getBuiltInSkills();
-    if (skills.length >= 2) {
-      const [a, b] = skills;
-      const chain = parseSkillChain(`${a.name}+${b.name}`);
-      expect(chain).not.toBeNull();
-      expect(chain!.skills).toEqual([a.name, b.name]);
-      expect(chain!.stopOnError).toBe(true);
-    }
-  });
-
-  it('trims whitespace around skill names', () => {
-    const skills = getBuiltInSkills();
-    if (skills.length >= 2) {
-      const [a, b] = skills;
-      const chain = parseSkillChain(` ${a.name} + ${b.name} `);
-      expect(chain).not.toBeNull();
-      expect(chain!.skills[0]).toBe(a.name);
-      expect(chain!.skills[1]).toBe(b.name);
-    }
-  });
+  // A chain of two needs two skills, and there is one built-in now: the
+  // positive cases are with a skill of the user's own, further down
+  // ("custom skills with a malformed file alongside").
 });
 
 // ─── parseSkillArgs ──────────────────────────────────────────────────────────
@@ -274,10 +271,7 @@ describe('searchSkills', () => {
 describe('getSkillsSummary', () => {
   it('returns a summary with all expected categories', () => {
     const summary = getSkillsSummary();
-    const expectedCategories = ['git', 'testing', 'documentation', 'refactoring', 'debugging', 'deployment', 'generation', 'devops', 'custom'];
-    for (const cat of expectedCategories) {
-      expect(summary).toHaveProperty(cat);
-    }
+    expect(Object.keys(summary).sort()).toEqual(['custom', 'git']);
   });
 
   it('has non-negative counts for all categories', () => {
@@ -330,17 +324,39 @@ describe('executeSkill — ${_prev} survives confirm and notify steps', () => {
     expect(commands[commands.length - 1]).toBe('git add -A && git commit -m "fix(api): retry on 429"');
   });
 
-  it('/branch creates the branch the model suggested', async () => {
-    const skill = findSkill('branch')!;
-    const { commands, callbacks } = recordingCallbacks('feature/add-login-page');
+  // The built-in branch and stash skills that these two used to run are gone; a user
+  // can still write the same shapes as skills of their own, so the shapes stay
+  // under test: a parameter read into a prompt step, a confirm between the
+  // model's answer and the command that uses it, a notify after it.
+  it('a skill with a required parameter, a prompt, a confirm and a command creates what the model suggested', async () => {
+    const skill: Skill = {
+      name: 'my-branch', description: 'd', category: 'custom',
+      parameters: [{ name: 'description', description: 'What the branch is for', required: true }],
+      steps: [
+        { type: 'prompt', content: 'Based on the description "${description}", suggest a branch name.' },
+        { type: 'confirm', content: 'Create this branch?' },
+        { type: 'command', content: 'git checkout -b "${_prev}"' },
+      ],
+    };
+    const onPrompt = vi.fn(async (_prompt: string) => 'feature/add-login-page');
+    const { commands, callbacks } = recordingCallbacks('unused', { onPrompt });
     const result = await executeSkill(skill, parseSkillArgs('add login page', skill), callbacks);
     expect(result.success).toBe(true);
+    expect(onPrompt).toHaveBeenCalledWith('Based on the description "add login page", suggest a branch name.');
     expect(commands).toEqual(['git checkout -b "feature/add-login-page"']);
   });
 
-  it('/stash stashes with the message the model suggested', async () => {
+  it('a skill with a prompt, a command and a notify runs the command with the model\'s answer', async () => {
+    const skill: Skill = {
+      name: 'my-stash', description: 'd', category: 'custom',
+      steps: [
+        { type: 'prompt', content: 'Suggest a stash message.' },
+        { type: 'command', content: 'git stash push -m "${_prev}"' },
+        { type: 'notify', content: 'Changes stashed!' },
+      ],
+    };
     const { commands, callbacks } = recordingCallbacks('wip: half-done login form');
-    const result = await executeSkill(findSkill('stash')!, {}, callbacks);
+    const result = await executeSkill(skill, {}, callbacks);
     expect(result.success).toBe(true);
     expect(commands).toEqual(['git stash push -m "wip: half-done login form"']);
   });
@@ -448,6 +464,19 @@ describe('custom skills with a malformed file alongside', () => {
 
   it('keeps skill chains that use a custom skill working', () => {
     expect(parseSkillChain('lint-all+commit')?.skills).toEqual(['lint-all', 'commit']);
+  });
+
+  it('parses a chain of a built-in and a custom skill, stopping on the first error', () => {
+    const chain = parseSkillChain('commit+lint-all');
+    expect(chain).toEqual({ skills: ['commit', 'lint-all'], stopOnError: true });
+  });
+
+  it('trims whitespace around the names of a chain', () => {
+    expect(parseSkillChain(' commit + lint-all ')?.skills).toEqual(['commit', 'lint-all']);
+  });
+
+  it('refuses a chain with a removed built-in in it, as it would any unknown name', () => {
+    expect(parseSkillChain('commit+push')).toBeNull();
   });
 });
 
@@ -646,6 +675,28 @@ describe('custom skill files that do not load', () => {
     mockExists.mockImplementation((p: string) => basename(p) in files);
     expect(customSkillFileExists('deploy-staging')).toBe(true);
     expect(customSkillFileExists('brand-new')).toBe(false);
+  });
+});
+
+describe('the skills list', () => {
+  const mine: Skill = {
+    name: 'lint-all', description: 'Lint every package', category: 'custom',
+    parameters: [{ name: 'scope', description: 's' }],
+    steps: [{ type: 'command', content: 'npm run lint --workspaces' }],
+  };
+
+  it('shows /commit with its shortcut and parameter under Built-in, and the skills of the user under Custom', () => {
+    const list = formatSkillsList([...getBuiltInSkills(), mine], []);
+    expect(list).toContain('## Built-in\n- **/commit** (/c) [message] - ');
+    expect(list.indexOf('## Built-in')).toBeLessThan(list.indexOf('## Custom'));
+    expect(list).toContain('- **/lint-all** [scope] - Lint every package');
+    for (const gone of ['## Testing', '## Documentation', '## DevOps', '## Code Generation']) expect(list).not.toContain(gone);
+  });
+
+  it('gives a chain example that names a command which still exists', () => {
+    const list = formatSkillsList(getBuiltInSkills(), []);
+    expect(list).toContain('`/commit+my-skill`');
+    expect(list).not.toMatch(/\/(push|test)\b/);
   });
 });
 

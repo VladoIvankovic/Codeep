@@ -124,12 +124,10 @@ function makeCtx(overrides: Partial<AppExecutionContext> = {}): AppExecutionCont
     projectPath: root,
     projectContext: { root, name: 'demo', type: 'node' } as unknown as ProjectContext,
     hasWriteAccess: true,
-    addedFiles: new Map(),
     isAgentRunning: () => running,
     setAgentRunning: (v) => { running = v; },
     abortController: null,
     setAbortController: () => {},
-    formatAddedFilesContext: () => '',
     handleCommand: async () => {},
     sessionDisplayName: 'demo run',
     ...overrides,
@@ -168,11 +166,15 @@ afterAll(() => {
 });
 
 /** A custom skill in the scratch home, as `~/.codeep/skills/<name>.json`. */
-function writeCustomSkill(name: string, steps: Array<{ type: string; content: string }>): void {
+function writeCustomSkill(
+  name: string,
+  steps: Array<{ type: string; content: string }>,
+  extra: Record<string, unknown> = {},
+): void {
   mkdirSync(join(fakeHome, '.codeep', 'skills'), { recursive: true });
   writeFileSync(
     join(fakeHome, '.codeep', 'skills', `${name}.json`),
-    JSON.stringify({ name, description: 'custom skill', steps }),
+    JSON.stringify({ name, description: 'custom skill', steps, ...extra }),
   );
 }
 
@@ -906,10 +908,125 @@ describe('a skill whose agent step does not succeed', () => {
   });
 });
 
+// Of the 51 built-in skills 3.x shipped only /commit is left, so the gates a
+// skill can ask for (git, write access) are exercised with skills of the user's
+// own — the engine is the same.
+describe('the gates of a skill', () => {
+  function noting(): { ctx: AppExecutionContext; notes: string[] } {
+    const notes: string[] = [];
+    const app = new Proxy(fakeApp(), {
+      get: (target, key) => (key === 'notify' ? (note: string) => { notes.push(note); } : target[key as keyof App]),
+    });
+    return { ctx: makeCtx({ app }), notes };
+  }
+
+  it('a skill that needs write access runs nothing, and says /grant, until it is granted', async () => {
+    const marker = join(root, 'wrote.txt');
+    writeCustomSkill('write-it', [{ type: 'command', content: `touch ${marker}` }], { requiresWriteAccess: true });
+
+    const denied = noting();
+    denied.ctx.hasWriteAccess = false;
+    await runSkill('write-it', [], denied.ctx);
+    expect(existsSync(marker)).toBe(false);
+    expect(denied.notes).toEqual(['This skill requires write access. Use /grant first.']);
+
+    await runSkill('write-it', [], makeCtx());
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it('a skill that needs git runs nothing outside a repository, and says so', async () => {
+    const marker = join(root, 'ran.txt');
+    writeCustomSkill('git-only', [{ type: 'command', content: `touch ${marker}` }], { requiresGit: true });
+
+    const outside = noting();
+    await runSkill('git-only', [], outside.ctx);
+    expect(existsSync(marker)).toBe(false);
+    expect(outside.notes).toEqual(['This skill requires a git repository']);
+  });
+});
+
+describe('/commit, the one built-in skill, end to end', () => {
+  async function repoWithAChange() {
+    const { execFileSync } = await import('node:child_process');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf-8' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@test.com');
+    git('config', 'user.name', 'Test User');
+    git('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(root, 'a.txt'), 'one\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'initial');
+    writeFileSync(join(root, 'a.txt'), 'one\ntwo\n');
+    // Staged: the skill's first step is `git diff --cached --stat || git diff
+    // --stat`, and `||` only runs the second when the first FAILS — an empty
+    // staged diff exits 0, so with the change left unstaged nothing is shown
+    // and the model gets an empty diff. Noted in the phase-2a report; not
+    // changed here.
+    git('add', 'a.txt');
+    return git;
+  }
+
+  /** A context whose confirmation dialogs are answered with `answer`. */
+  function answering(answer: boolean) {
+    const dialogs: ConfirmOptions[] = [];
+    const ctx = makeCtx();
+    (ctx.app as unknown as { showConfirm: unknown }).showConfirm = (o: ConfirmOptions) => {
+      dialogs.push(o);
+      if (answer) o.onConfirm(); else o.onCancel?.();
+    };
+    return { ctx, dialogs };
+  }
+
+  it('shows the diff, asks the model for a message, asks for confirmation, then commits', async () => {
+    const git = await repoWithAChange();
+    vi.mocked(chat).mockResolvedValueOnce('feat(a): add a second line');
+    const { ctx, dialogs } = answering(true);
+
+    await runSkill('commit', [], ctx);
+
+    expect(dialogs.map(d => d.message)).toEqual([['Commit with this message? feat(a): add a second line']]);
+    expect(git('log', '-1', '--format=%s').trim()).toBe('feat(a): add a second line');
+    expect(git('status', '--porcelain').trim()).toBe('');
+    // The first step's output, the diff stat, was shown.
+    expect(messages.map(m => m.content).join('\n')).toContain('a.txt');
+  });
+
+  it('commits a message typed after /commit without asking the model, but still asks first', async () => {
+    const git = await repoWithAChange();
+    vi.mocked(chat).mockClear();
+    const { ctx, dialogs } = answering(true);
+
+    await runSkill('commit', ['fix:', 'my', 'own', 'words'], ctx);
+
+    expect(vi.mocked(chat)).not.toHaveBeenCalled();
+    expect(dialogs).toHaveLength(1);
+    expect(git('log', '-1', '--format=%s').trim()).toBe('fix: my own words');
+  });
+
+  it('commits nothing when the confirmation is answered No', async () => {
+    const git = await repoWithAChange();
+    vi.mocked(chat).mockResolvedValueOnce('feat(a): add a second line');
+    const { ctx, dialogs } = answering(false);
+
+    await runSkill('commit', [], ctx);
+
+    expect(dialogs).toHaveLength(1);
+    expect(git('log', '-1', '--format=%s').trim()).toBe('initial');
+    expect(git('status', '--porcelain').trim()).toBe('M  a.txt');
+  });
+
+  it('answers to its shortcut /c', async () => {
+    const git = await repoWithAChange();
+    const { ctx } = answering(true);
+    await runSkill('c', ['chore: via the shortcut'], ctx);
+    expect(git('log', '-1', '--format=%s').trim()).toBe('chore: via the shortcut');
+  });
+});
+
 describe('a skill whose prompt step is declined', () => {
   // chat() returns the notice on a decline, after streaming it for the user.
   // As the step's output it would become the next step's ${_prev} — the
-  // built-in /stash runs `git stash push -m "${_prev}"` with no confirm between.
+  // a stash skill runs `git stash push -m "${_prev}"` with no confirm between.
   it('stops before the steps after it', async () => {
     const { existsSync } = await import('node:fs');
     const marker = join(root, 'named.txt');

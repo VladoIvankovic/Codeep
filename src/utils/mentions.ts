@@ -3,8 +3,8 @@
  *
  * When the user types `@path/to/file.ts` inline in their prompt, we
  * detect those mentions, read the file contents, and inject them as an
- * "[Attached files]" block prepended to the prompt — same format as the
- * explicit `/add` command, so the agent sees a single, consistent shape.
+ * "[Attached files]" block prepended to the prompt, so the agent sees a
+ * single, consistent shape.
  *
  * Supported mention forms (case-sensitive `@`):
  *   @src/index.ts          → relative-to-project-root file
@@ -19,8 +19,7 @@
  *
  * Mentions are resolved against the project root (or cwd when no
  * project is open). Files larger than `MAX_MENTION_BYTES` are skipped
- * with a warning rather than silently truncated — the user should
- * explicitly `/add` very large files if they really want them.
+ * with a warning rather than silently truncated.
  */
 
 import { statSync, readFileSync, readdirSync, realpathSync, type Dirent } from 'fs';
@@ -157,7 +156,7 @@ export function expandMentions(
     // Never auto-inline a secret file. Mentions can come from text the user
     // pasted (an issue body, a log, model output), so `@.env` or
     // `@~/.aws/credentials` would silently ship credentials to the provider.
-    // `/add` remains the explicit, deliberate path for these.
+    // No command attaches one on request any more, so the message names none.
     if (isRefusedMention(resolved.fullPath)) {
       failures.push({ mention: tok.raw, reason: SECRETS_REASON });
       continue;
@@ -224,8 +223,7 @@ export function expandMentions(
 /**
  * Max total bytes of file content we'll inline from a single `@folder`
  * mention (200 KB). Prevents a huge directory from blowing the context
- * window — the user can raise this via explicit `/add` if they really
- * want everything.
+ * window; past it the walk stops and says so.
  */
 export const MAX_FOLDER_BYTES = 200 * 1024;
 
@@ -531,7 +529,7 @@ function walkNotes(walked: WalkResult): string[] {
   if (outside) parts.push(`${count(outside, 'file')} linked from outside the project`);
   if (outsideDirs) parts.push(`${count(outsideDirs, 'folder')} linked from outside the project`);
   const skippedNote = parts.length
-    ? `skipped ${parts.join(', ')}; use /add to attach one deliberately`
+    ? `skipped ${parts.join(', ')}`
     : '';
   const capNote = `stopped at ${MAX_FOLDER_BYTES / 1024}KB cap`;
   if (walked.files.length === 0) {
@@ -764,7 +762,7 @@ const SENSITIVE_FILE_RE =
  */
 const SENSITIVE_PATH_RE = /(^|[\\/])(\.docker[\\/]config\.json|\.kube[\\/]config|gh[\\/]hosts\.ya?ml)$/i;
 
-const SECRETS_REASON = 'looks like a secrets file — use /add to attach it deliberately';
+const SECRETS_REASON = 'looks like a secrets file — not attached';
 
 /**
  * Committed `.env` templates. A walk and smart context include them, but a
@@ -876,7 +874,7 @@ function realPathOf(fullPath: string): string | null {
   }
 }
 
-const LINKS_OUTSIDE_REASON = 'links outside the project — use /add to attach it deliberately';
+const LINKS_OUTSIDE_REASON = 'links outside the project — not attached';
 
 /**
  * True if `fullPath` names a place inside `root` but, with symlinks resolved,

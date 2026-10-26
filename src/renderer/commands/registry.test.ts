@@ -70,7 +70,7 @@ describe('command registry', () => {
       for (const a of cmd.aliases ?? []) {
         // Single-letter aliases (the c/t/d/… shortcuts) are excluded from the
         // autocomplete map even when aliasListed — bare one-letter rows clutter
-        // the `/` dropdown. Only multi-letter listed aliases (effort, stats) show.
+        // the `/` dropdown. Only multi-letter listed aliases (effort) show.
         const shouldList = !cmd.hidden && cmd.aliasListed === true && a.length > 1;
         if (shouldList) {
           expect(COMMAND_DESCRIPTIONS, `/${a} (listed alias of /${cmd.name})`).toHaveProperty(a);
@@ -172,34 +172,45 @@ describe('command registry', () => {
   });
 
   /// The /account class of bug: offered in the autocomplete, answered "Unknown
-  /// command" because nothing handled it. A visible command needs a `case` in
-  /// the dispatcher, a `case` in App.ts (which intercepts /help, /clear…), or a
-  /// built-in skill of the same name.
-  it('every visible command has a handler', () => {
+  /// command" because nothing handled it. A command needs a `case` in the
+  /// dispatcher, a `case` in App.ts (which intercepts /help, /clear…), or a
+  /// built-in skill of the same name. Hidden commands too: a hidden entry with
+  /// no handler is a name that answers "removed in 4.0" or "Unknown command"
+  /// while the registry says it exists.
+  it('every registered command, hidden ones included, has a handler', () => {
     const dispatcher = topLevelCases(read('../commands.ts'));
     const appSrc = read('../App.ts');
     const appBody = appSrc.slice(appSrc.indexOf('private handleCommand(input: string)'));
     const app = new Set([...appBody.slice(0, appBody.indexOf('default:')).matchAll(/case '([^']+)':/g)].map(m => m[1]));
     const skills = new Set(getBuiltInSkills().flatMap(sk => [sk.name, ...(sk.shortcut ? [sk.shortcut] : [])]));
-    const unhandled = COMMANDS.filter(c => !c.hidden)
+    const unhandled = COMMANDS
       .map(c => c.name)
       .filter(n => !dispatcher.has(n) && !app.has(n) && !skills.has(n));
-    expect(unhandled, `offered in autocomplete but nothing handles them: ${unhandled.join(', ')}`).toEqual([]);
+    expect(unhandled, `registered but nothing handles them: ${unhandled.join(', ')}`).toEqual([]);
+  });
+
+  /// The reverse: a `case` for a name the registry no longer has is a handler
+  /// nobody can reach (the autocomplete does not offer it, and it would answer
+  /// the "removed" sentence in the one place it must not).
+  it('the App.ts intercepts are registered commands too', () => {
+    const appSrc = read('../App.ts');
+    const appBody = appSrc.slice(appSrc.indexOf('private handleCommand(input: string)'));
+    const app = [...appBody.slice(0, appBody.indexOf('default:')).matchAll(/case '([^']+)':/g)].map(m => m[1]);
+    // `quit` is the one intercept that was never registered; it is an alias
+    // of /exit in everything but name.
+    const orphans = app.filter(n => n !== 'quit' && !ALL_COMMAND_NAMES.has(n));
+    expect(orphans, `App.ts handles names that are not registered: ${orphans.join(', ')}`).toEqual([]);
   });
 
   /// The dispatcher resolves aliases to their canonical name BEFORE the switch,
-  /// so a `case` labelled with an alias can never run. That is how /stats
-  /// printed the /cost report for three months: `stats` was an alias of `cost`,
+  /// so a `case` labelled with an alias can never run. That is how the
+  /// detailed session view printed the short cost report for three months:
+  /// `stats` was an alias of `cost`,
   /// and its own handler below was dead.
   it('no dispatcher case is labelled with an alias', () => {
     const labels = topLevelCases(read('../commands.ts'));
     const dead = [...labels].filter(l => ALL_ALIASES.has(l));
     expect(dead, `unreachable alias cases in renderer/commands.ts: ${dead.join(', ')}`).toEqual([]);
-  });
-
-  it('/stats is its own command, not an alias of /cost', () => {
-    expect(resolveCommand('stats')?.name).toBe('stats');
-    expect(resolveCommand('cost')?.name).toBe('cost');
   });
 
   /// A command missing from HELP_LAYOUT is invisible in /help and on the
@@ -227,11 +238,10 @@ describe('command registry', () => {
   });
 
   /// A command and a built-in skill with the same name: the command wins and
-  /// the skill can never run, while /skills still lists it. These four predate
-  /// this test and are a naming decision still to be made; the test exists so
-  /// a fifth cannot appear silently.
-  it('no new built-in skill is shadowed by a command', () => {
-    const KNOWN_SHADOWED = new Set(['docs', 'model', 'rename', 'profile']);
+  /// the skill can never run, while /skills still lists it. Four such skills
+  /// (docs, model, rename, profile) existed until 4.0 cut the built-ins down to
+  /// /commit; this keeps the next one from appearing silently.
+  it('no built-in skill is shadowed by a command', () => {
     const dispatcher = topLevelCases(read('../commands.ts'));
     const dispatcherSrc = read('../commands.ts');
     const shadowed = getBuiltInSkills().map(sk => sk.name).filter(name => {
@@ -241,10 +251,7 @@ describe('command registry', () => {
       const body = dispatcherSrc.slice(at, dispatcherSrc.indexOf('\n    }\n', at));
       return !body.includes('runSkill(');
     });
-    const unexpected = shadowed.filter(n => !KNOWN_SHADOWED.has(n));
-    expect(unexpected, `skills made unreachable by a command of the same name: ${unexpected.join(', ')}`).toEqual([]);
-    // If one of the four is resolved, drop it from KNOWN_SHADOWED.
-    expect(shadowed.sort()).toEqual([...KNOWN_SHADOWED].sort());
+    expect(shadowed, `skills made unreachable by a command of the same name: ${shadowed.join(', ')}`).toEqual([]);
   });
 });
 

@@ -148,11 +148,10 @@ When started in a project directory, Codeep automatically:
 - **Per-project sessions** - Sessions stored in `.codeep/sessions/`
 - **Rename sessions** - Give meaningful names with `/rename`
 - **AI session titles** - Sessions auto-title themselves with an LLM one-liner ("OAuth2 migration for auth module") instead of a truncated first message. This makes one small background API call per session; turn it off with the `autoSessionTitle` setting (`/settings`) if you prefer zero unsolicited calls
-- **Search current session** - Find text in the open conversation with `/search`
 - **Cross-session recall** - `/recall <query>` searches across **all** saved sessions, ranked by relevance + recency. Add `--resume` to load the top match, or `--summarize` for an LLM recap of what you accomplished across matches
 - **Cross-device resume (`/cloud`)** - Sessions you run on one device (CLI, Mac app) sync to `codeep.dev`. `/cloud` lists them and pulls the selected one back locally, so you can start a session on your desktop and continue on your laptop. Run `codeep account` once to link your devices; scoped to the current project when one is open.
 - **Export** - Save to Markdown, JSON, or plain text
-- `/cost` - Per-session token usage and estimated cost (per provider/model; a model priced by prompt length, like Claude Haiku 5.5 above 100K tokens, is priced request by request)
+- `/usage` - This session's token usage and estimated cost (per provider/model; a model priced by prompt length, like Claude Haiku 5.5 above 100K tokens, is priced request by request), then what Codeep used across sessions. `/usage --detail` adds the per-model breakdown, prompt-cache figures and the pricing table
 - `/compact [keepN]` - AI-summarize older messages to free up context (keeps last N, default 4)
 - `/checkpoint [name]` - Snapshot the current session (conversation + provider/model + agent-touched files + git HEAD)
 - `/checkpoints` - List saved checkpoints for this workspace
@@ -165,43 +164,30 @@ When started in a project directory, Codeep automatically:
 
 ### Code Block Management
 - Automatic syntax highlighting for 12+ languages
-- Copy code blocks to clipboard with `/copy [n]`
-- Code blocks are numbered for easy reference
+- Code blocks are labelled with their language and a number
 
 ### Clipboard Paste
-- **`/paste` command** - Paste content from clipboard into chat
-- Type `/paste` and press Enter to read clipboard content
-- Shows preview with character/line count before sending
+- Paste with Ctrl+V or your terminal's paste shortcut
+- A block of lines shows a preview with its character/line count before it is added
 - Press Enter to send, Escape to cancel
-- Works reliably in all terminals (no Ctrl+V issues)
 
-### File Context (`/add`, `/drop`, `@mentions`)
-Explicitly add files to the conversation context:
+### File Context (`@mentions`)
+Attach files to a message by naming them in it:
 
-- **`/add <path>`** - Add one or more files to context
-- **`/add`** (no args) - Show currently added files
-- **`/drop <path>`** - Remove a specific file from context
-- **`/drop`** (no args) - Remove all files from context
 - **`@path/to/file`** - Inline mention: type `@` followed by a file path anywhere in your message and its contents are attached for that message only. Supports relative paths (`@src/index.ts`), absolute (`@/etc/hosts`), home (`@~/.codeep/profile.md`), and quoted paths with spaces (`@"my file.ts"`). In the CLI, typing `@` opens an autocomplete file picker — ↑↓ to navigate, Tab to insert.
 - **`@folder <path>`** (alias `@dir`) - Attach an entire directory: type `@folder src/components` and every source file under it is loaded recursively. Skips `node_modules`, `.git`, `dist`, binary extensions (images, archives, lockfiles), and files over the per-file size cap. Stops at a 200 KB total cap per mention (with a notification when it hits the limit). Quoted paths supported: `@folder "my components"`.
-- **`@web <url>`** - Inline web fetch: type `@web https://example.com/docs` (or `@web example.com/docs`) and the page is fetched, converted to readable text, and attached to the message. HTML is stripped; plain text and JSON pass through as-is. Capped at 32 KB, 12 s timeout. Successful fetches are cached for 30 min (per session, up to 50 entries) so repeated `@web` for the same URL is instant and free; use `/web-cache clear` to reset.
+- **`@web <url>`** - Inline web fetch: type `@web https://example.com/docs` (or `@web example.com/docs`) and the page is fetched, converted to readable text, and attached to the message. HTML is stripped; plain text and JSON pass through as-is. Capped at 32 KB, 12 s timeout. Successful fetches are cached for 30 min (per session, up to 50 entries) so repeated `@web` for the same URL is instant and free.
 - **`@git <ref>`** - Inline git context: type `@git diff`, `@git diff --staged`, `@git HEAD`, `@git <sha>`, `@git main:src/x.ts`, or `@git diff a..b` to inject that diff / commit / file-at-ref into the message as a `[Git ref]` block. Capped at 64 KB per mention (truncated with a marker). Unknown refs surface a friendly failure note.
 
-Added files (via `/add`) are automatically attached to every message (both chat and agent mode) until dropped. `@mentions` are per-message — handy for one-off references without polluting the persistent context.
+`@mentions` are per-message — handy for one-off references without polluting the conversation.
 
 ```
-> /add src/utils/api.ts src/types/index.ts
-Added 2 file(s) to context (2 total)
-
-> refactor the API client to use async/await
-# AI sees both files attached to your message
-
 > review @src/auth/login.ts for security issues
 Loaded 1 file(s) from @mentions
 # AI sees login.ts attached for this message only
 
-> /drop
-Dropped all 2 file(s) from context
+> compare @src/utils/api.ts with @src/types/index.ts
+# AI sees both files attached to this message
 ```
 
 ### Multi-line Input
@@ -474,52 +460,24 @@ The rules file content is automatically included in every system prompt — both
 Rules are loaded automatically when Codeep starts — no commands needed.
 
 ### Skills System
-Predefined workflows for common development tasks. Execute with a single command:
+Codeep ships one built-in skill, `/commit` (shortcut `/c`): it shows the diff, asks the model for a conventional commit message, asks you to confirm, then commits.
 
 ```
-/commit      - Generate commit message and commit
-/test        - Generate tests for current code
-/docs        - Add documentation to code
-/refactor    - Improve code quality
-/fix         - Debug and fix issues
-/component   - Generate React/Vue component
-/docker      - Generate Dockerfile
+/commit                       # generate the message, confirm, commit
+/commit fix: handle empty list # use your own message (skips the model), still asks first
 ```
 
-**50+ Built-in Skills:**
+Everything else the 3.x built-ins did — write tests, refactor, fix, explain, make a Dockerfile, push, branch, stash — is a plain request to the agent ("write tests for src/utils/api.ts"), or a skill, command or bundle of your own:
 
-| Category | Skills |
-|----------|--------|
-| **Git** | `/commit` (`/c`), `/amend`, `/push` (`/p`), `/pull`, `/pr`, `/changelog`, `/branch`, `/stash`, `/unstash` |
-| **Testing** | `/test` (`/t`), `/test-fix`, `/coverage`, `/e2e`, `/mock` |
-| **Documentation** | `/docs` (`/d`), `/readme`, `/explain` (`/e`), `/api-docs`, `/translate` |
-| **Refactoring** | `/refactor` (`/r`), `/types`, `/optimize` (`/o`), `/cleanup`, `/modernize`, `/migrate`, `/split`, `/rename` |
-| **Debugging** | `/debug` (`/b`), `/fix` (`/f`), `/security`, `/profile`, `/log` |
-| **Deployment** | `/build`, `/deploy`, `/release`, `/publish` |
-| **Code Generation** | `/component`, `/api`, `/model`, `/hook`, `/service`, `/page`, `/form`, `/crud` |
-| **DevOps** | `/docker`, `/ci`, `/env`, `/k8s`, `/terraform`, `/nginx`, `/monitor` |
+- **Skills** — JSON files in `~/.codeep/skills/` (below)
+- **Slash commands** — Markdown templates in `.codeep/commands/` ([Custom Slash Commands](#custom-slash-commands))
+- **Skill bundles** — `SKILL.md` packages the agent can invoke (`/skills bundles`, `/skills browse`)
 
-**Shortcuts:** Many skills have single-letter shortcuts (shown in parentheses).
-
-**Skill Parameters:** Many skills accept parameters:
-```
-/component UserCard              # Generate component named UserCard
-/api users method=POST           # Generate POST endpoint for users
-/migrate "React 18"              # Migrate to React 18
-/model User fields=name,email    # Generate User model with fields
-```
-
-**Skill Chaining:** Run multiple skills in sequence with `+`:
-```
-/commit+push          # Commit then push
-/test+commit+push     # Test, commit if pass, then push
-/build+deploy         # Build then deploy
-```
+**Skill Chaining:** Run skills in sequence with `+`, for example `/commit+my-skill` (a skill of yours).
 
 **Search Skills:**
 ```
-/skills docker        # Find skills related to docker
-/skills testing       # Find testing-related skills
+/skills lint          # Find skills related to lint
 ```
 
 **Custom Skills:** Create your own skills:
@@ -749,8 +707,9 @@ Then call it as `/sec-review src/api/login.ts` (or `/sec` via the alias).
 - `{{args}}` and `$ARGUMENTS` — full args string
 - `{{arg1}}`, `{{arg2}}` … — positional args
 
-**Discovery:** `/commands` lists all available templates. Project files shadow
-global files with the same name. Aliases also work for autocomplete.
+**Discovery:** the files in `.codeep/commands/` (project) and
+`~/.codeep/commands/` (global) are the list. Project files shadow global files
+with the same name. Aliases also work for autocomplete.
 
 ### Personalities and custom bots (`/personality`)
 
@@ -820,29 +779,6 @@ or scope metadata makes the bot unavailable rather than silently widening its
 runtime. An explicit unsupported `codeep` schema marker is also unavailable;
 it is never reinterpreted as legacy. Project files shadow global files, which
 shadow built-ins with the same name.
-
-### Activity Insights (`/insights`, new in 2.0.3)
-
-Summarise what the agent has actually done for you over a window — runs,
-tool actions, projects touched, most-edited files — sourced from
-`~/.codeep/history/<id>.json` (one file per agent run, automatic).
-
-```
-/insights                 # last 7 days (default)
-/insights --days 30       # last month
-/insights --days 1        # today only
-```
-
-Surfaces (markdown rendered in chat):
-
-- Headline tally: runs · actions · active time · active-days density · avg actions/run
-- **By project** sorted by active time
-- **Top tools** (read_file × 340, write_file × 80, …)
-- **Most-touched files** (with `~` prefix for readability)
-- **Recent runs** — 10 most recent with project, duration, and the user prompt that started them
-
-Cost / token usage isn't in `/insights` (it lives in `/cost` per-session
-since the token tracker is in-memory). Insights is history-only.
 
 ### Project Intelligence (`/init`, `/scan`)
 
@@ -1073,7 +1009,7 @@ Tasks are loaded into the agent context so the AI sees them automatically on the
 | `/status` | Show current configuration status |
 | `/version` | Show version and current provider/model |
 | `/update` | Check for updates |
-| `/usage [--days N]` | What Codeep used, from its local usage ledger: today, the last 7 days, all time and tokens by model; `--days N` lists the last N days. The same as `codeep usage` in the shell — see [`codeep usage`](#codeep-usage) |
+| `/usage [--days N] [--detail]` | This session's tokens and estimated cost, then what Codeep used across sessions, from its local usage ledger: today, the last 7 days, all time and tokens by model; `--days N` lists the last N days, `--detail` adds this session's per-model breakdown, prompt-cache figures and the pricing table. The ledger part is the same as `codeep usage` in the shell — see [`codeep usage`](#codeep-usage) |
 | `/clear` | Clear chat history and start new session |
 | `/exit` or `/quit` | Quit application |
 
@@ -1083,30 +1019,10 @@ Tasks are loaded into the agent context so the AI sees them automatically on the
 |---------|-------------|
 | `/provider` | Switch AI provider |
 | `/model` | Switch AI model |
-| `/model <name>` | Load a saved profile shortcut (e.g. `/model fast`) |
+| `/model <name>` | Load a saved provider+model profile (e.g. `/model fast`) |
 | `/protocol` | Switch API protocol (OpenAI/Anthropic) |
 | `/lang` | Set response language (12 languages supported) |
 | `/settings` | Adjust temperature, max tokens, timeout, rate limits |
-| `/profile save <name>` | Save current provider+model as a named profile |
-| `/profile load <name>` | Load a saved profile |
-| `/profile <name>` | Shorthand for `/profile load <name>` |
-| `/profile list` | List all saved profiles |
-| `/profile delete <name>` | Delete a saved profile |
-| `/cost` `/stats` | Show session token usage and estimated API cost per model |
-
-**Model favorites** — save provider+model combos and switch instantly:
-```
-> /provider      # switch to z.ai
-> /model glm-5.2
-> /profile save fast
-
-> /provider      # switch to openai
-> /model gpt-5.6-sol
-> /profile save work
-
-> /model fast    # instantly switch to z.ai / glm-5.2
-> /model work    # instantly switch to openai / gpt-5.6-sol
-```
 
 ### Session Management
 
@@ -1116,19 +1032,13 @@ Tasks are loaded into the agent context so the AI sees them automatically on the
 | `/sessions delete <name>` | Delete a specific session |
 | `/cloud` | List and resume sessions synced from other devices |
 | `/rename <name>` | Rename current session |
-| `/search <term>` | Search through chat history |
+| `/recall <query>` | Search across all saved sessions (`--resume` loads the top match, `--summarize` recaps) |
 | `/export` | Export chat to MD/JSON/TXT format |
 
-### Code & Files
+### Input
 
 | Command | Description |
 |---------|-------------|
-| `/apply` | Apply file changes from AI response (shows hunk counts; `--only file.ts:0,1` for selective apply, `--interactive`/`-i` for per-hunk review) |
-| `/web-cache` | Show `@web` fetch cache stats (alias `/web-cache clear` to reset) |
-| `/copy [n]` | Copy code block to clipboard (n = block number, -1 = last) |
-| `/paste` | Paste content from clipboard into chat |
-| `/add <path>` | Add file(s) to conversation context |
-| `/drop [path]` | Remove file (or all) from context |
 | `/multiline` | Toggle multi-line input mode |
 
 ### Agent Mode
@@ -1138,7 +1048,7 @@ Tasks are loaded into the agent context so the AI sees them automatically on the
 | `/grant` | Grant write permission for agent (opens permission dialog) |
 | `/agent <task>` | Run agent for a specific task (manual mode) |
 | `/agent-dry <task>` | Preview what agent would do without executing |
-| `/agent-stop` | Stop a running agent |
+| `/stop` | Stop a running agent |
 | `/undo` | Undo the last agent action |
 | `/undo-all` | Undo all actions from current session |
 | `/history` | Show recent agent sessions |
@@ -1167,17 +1077,8 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 | `/diff` | Review unstaged git changes |
 | `/diff --staged` | Review staged git changes |
 | `/commit` | Generate commit message for staged changes |
-| `/git-commit [msg]` | Commit current changes with message |
-| `/push` | Push to remote repository |
-| `/pull` | Pull from remote repository |
 
-### Context Persistence
-
-| Command | Description |
-|---------|-------------|
-| `/context-save` | Save current conversation for later |
-| `/context-load` | Load previously saved conversation |
-| `/context-clear` | Clear saved context for this project |
+Pushing, pulling, branching, stashing and amending are requests to the agent ("push this branch") or plain `git`.
 
 ### Code Review & Learning
 
@@ -1218,8 +1119,8 @@ In `dangerous` mode, configure which tools require confirmation via `/settings`:
 | `/skill help <name>` | Show skill details and steps |
 | `/skill create <name>` | Create a new custom skill |
 | `/skill delete <name>` | Delete a custom skill |
-| `/c`, `/t`, `/d`, etc. | Skill shortcuts |
-| `/commit+push` | Skill chaining (run multiple skills) |
+| `/c`, `/d` | Shortcuts (`/c` = `/commit`, `/d` = `/docs`) |
+| `/commit+my-skill` | Skill chaining (run several skills, built-in or your own) |
 
 ### Cloud Dashboard
 
@@ -1318,7 +1219,6 @@ When you run Codeep in a project directory for the first time:
 With write access enabled:
 - AI can suggest file changes using special code blocks
 - You'll be prompted to approve changes with `Y/n`
-- Use `/apply` to manually apply changes from the last response
 
 ## Configuration
 
@@ -1415,7 +1315,7 @@ After uninstalling Codeep, delete that `codeep.json` by hand to take Codeep
 out of the panel.
 
 The numbers come from Codeep's usage ledger in `~/.codeep/usage/`, kept on
-every platform: one line per model call `/cost` counts (time, provider, model,
+every platform: one line per model call `/usage` counts (time, provider, model,
 token counts) and one per prompt (time, a hash of the session id), with no
 prompt text, file contents or session names. Codeep sends it nowhere. It
 starts counting with 3.10.0; nothing earlier is in it.
@@ -1565,9 +1465,8 @@ With write access enabled, just describe what you want:
 ```
 > /agent add a dark mode toggle to settings
 # Explicitly runs agent for this task
-
 > /agent-dry reorganize the folder structure
-# Shows what agent would do without making changes
+
 ```
 
 ### Basic Chat (when agent mode is manual or read-only)
@@ -1581,8 +1480,8 @@ With write access enabled, just describe what you want:
 > /rename feature-auth-implementation
 Session renamed to: feature-auth-implementation
 
-> /search authentication
-# Find all messages mentioning "authentication"
+> /recall authentication
+# Find sessions mentioning "authentication"
 
 > /export
 # Export chat to markdown file

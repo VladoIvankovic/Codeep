@@ -2,7 +2,7 @@
 // Large-paste confirmation dialog ("Paste Detected").
 //
 // Extracted from App.ts (P2 refactor) following the component convention
-// (Settings/Export/Search/HunkPicker): a state object + key handler + render
+// (Settings/Export): a state object + key handler + render
 // function. When a large clipboard paste arrives, App stores the text here;
 // the user then picks one of three actions — add to the input buffer
 // (`y`/Enter), send directly as a message (`s`), or cancel (`n`/Esc).

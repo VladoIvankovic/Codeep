@@ -8,7 +8,7 @@
  *
  * A `u` line for every model call recordTokenUsage sees — the one place they
  * all pass, from the TUI, `codeep review --ai`, MCP sampling and the
- * one-shot helpers alike, so the calls `/cost` counts — and a `p` line for
+ * one-shot helpers alike, so the calls `/usage` counts — and a `p` line for
  * every user prompt that goes to a model (the TUI's chat and agent paths).
  * Counts, a model
  * id, a provider id and a hash of the session id: never prompt text, file

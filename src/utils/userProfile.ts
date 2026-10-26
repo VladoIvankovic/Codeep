@@ -20,7 +20,7 @@
  *
  * NOTE: This is distinct from the provider "profiles" feature (saved
  * provider+model combos in config.json, see config/index.ts). Different
- * concept, different storage, different command (`/me` vs `/profile`).
+ * concept, different storage, different command (`/me` vs the saved provider profiles).
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync, openSync, readSync, closeSync } from 'fs';

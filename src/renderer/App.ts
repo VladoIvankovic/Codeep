@@ -10,7 +10,7 @@ import { getActionColor, formatActionTarget, getActionLabel } from './components
 import { PRIMARY_COLOR, SPINNER_FRAMES, LOGO_LINES } from './components/uiConstants';
 import { onPaletteChange, palette } from './palette';
 import { MASCOT_FRAMES, layoutLogoWithMascot, introMascotFrame } from './components/mascot';
-import { bottomPanelHeight, chatLayout, messageOffsets, scrollOffsetForTarget, scrollWindow, formatTokenCount, statusBarRightHint, activePanel, computeInputDisplay, agentProgressBar, truncateNotification, shouldShowPasteDialog, buildPasteInfo, type LayoutSnapshot } from './layout';
+import { bottomPanelHeight, chatLayout, scrollWindow, formatTokenCount, statusBarRightHint, activePanel, computeInputDisplay, agentProgressBar, truncateNotification, shouldShowPasteDialog, buildPasteInfo, type LayoutSnapshot } from './layout';
 import {
   buildAgentTimelineModel,
   formatElapsed,
@@ -53,7 +53,6 @@ import { handleSettingsKey, SettingsState, SETTINGS } from './components/Setting
 import { SelectItem } from './components/SelectScreen';
 import { renderExportPanel, handleExportKey as handleExportKeyComponent, ExportState } from './components/Export';
 import { renderLogoutPanel, handleLogoutKey as handleLogoutKeyComponent, LogoutState } from './components/Logout';
-import { renderSearchPanel, handleSearchKey as handleSearchKeyComponent, SearchState } from './components/Search';
 import {
   createPasteDialogState,
   handlePasteDialogKey,
@@ -102,23 +101,6 @@ export interface ConfirmOptions {
   onConfirm: () => void;
   onCancel?: () => void;
 }
-
-// HunkPickerItem / HunkPickerOptions moved to ./components/HunkPicker.ts —
-// re-exported here so external importers (renderer/commands.ts) keep working.
-export type { HunkPickerItem, HunkPickerOptions } from './components/HunkPicker';
-import {
-  createHunkPickerState,
-  handleHunkPickerKey,
-  renderHunkPicker,
-  type HunkPickerOptions,
-  type HunkPickerState,
-} from './components/HunkPicker';
-
-/**
- * Options for the interactive hunk picker — see components/HunkPicker.ts.
- * (`onComplete` fires once with the accepted [path, hunkIndex] pairs so the
- * caller can apply them via `applyHunksToFiles`.)
- */
 
 export interface AppOptions {
   onSubmit: (message: string) => Promise<void>;
@@ -207,7 +189,7 @@ export class App {
   // Paste detection state — owned by the extracted components/PasteDialog.ts;
   // App performs the side effects (editor insert / message submit) itself.
   private pasteDialog = createPasteDialogState();
-  private codeBlockCounter: BlockCounter = { current: 0 }; // Global code block counter for /copy numbering
+  private codeBlockCounter: BlockCounter = { current: 0 }; // Global code block counter (numbers the labels)
 
   // Message render cache: index → { lines, width, startBlock, blockCount }
   private messageCache: Array<{ lines: Array<{ text: string; style: string; raw?: boolean }>; width: number; startBlock: number; blockCount: number } | null> = [];
@@ -244,10 +226,6 @@ export class App {
   private confirmOptions: ConfirmOptions | null = null;
   private confirmSelection: 'yes' | 'no' | 'extra' = 'no';
 
-  // Inline hunk-picker state (`/apply --interactive`) — owned by the
-  // extracted components/HunkPicker.ts module; App only wires it in.
-  private hunkPicker: HunkPickerState = createHunkPickerState();
-  
   // Inline menu state (renders below input/status)
   private menuOpen = false;
   private menuTitle = '';
@@ -277,13 +255,6 @@ export class App {
   private sessionPickerCallback: ((sessionName: string | null) => void) | null = null;
   private sessionPickerDeleteMode = false;
   private sessionPickerDeleteCallback: ((sessionName: string) => void) | null = null;
-  
-  // Search screen state
-  private searchOpen = false;
-  private searchQuery = '';
-  private searchResults: Array<{ role: string; messageIndex: number; matchedText: string }> = [];
-  private searchIndex = 0;
-  private searchCallback: ((messageIndex: number) => void) | null = null;
   
   // Export screen state
   private exportOpen = false;
@@ -438,27 +409,6 @@ export class App {
    */
   getMessages(): Array<{ role: 'user' | 'assistant' | 'system'; content: string }> {
     return this.messages.filter(m => m.role !== 'welcome') as Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
-  }
-  
-  /**
-   * Scroll to a specific message by index
-   */
-  scrollToMessage(messageIndex: number): void {
-    const { width, height } = this.screen.getSize();
-    const maxWidth = width - 4; // Account for margins
-
-    const { totalLines, targetStartLine } = messageOffsets(
-      this.messages.map((m) => m.content),
-      maxWidth,
-      messageIndex,
-    );
-
-    const visibleLines = height - 12; // Approximate visible area
-
-    // Set scroll offset to show the target message near the top
-    this.scrollOffset = scrollOffsetForTarget(totalLines, targetStartLine, visibleLines);
-    this.scheduleRender();
-    this.notify(`Jumped to message #${messageIndex + 1}`);
   }
   
   /**
@@ -822,15 +772,6 @@ export class App {
   }
 
   /**
-   * Show the interactive hunk picker (`/apply --interactive`).
-   * The caller passes pre-built items + an `onComplete` callback.
-   */
-  showHunkPicker(options: HunkPickerOptions): void {
-    this.hunkPicker = { open: true, options, index: 0, accepted: [] };
-    this.scheduleRender();
-  }
-  
-  /**
    * Show permission dialog (inline, below status bar)
    */
   showPermission(
@@ -867,22 +808,6 @@ export class App {
     this.screen.invalidate();
     this.sessionPickerOpen = true;
     this.questionShownAt = Date.now();
-    this.scheduleRender();
-  }
-  
-  /**
-   * Show search screen
-   */
-  showSearch(
-    query: string,
-    results: Array<{ role: string; messageIndex: number; matchedText: string }>,
-    callback: (messageIndex: number) => void
-  ): void {
-    this.searchQuery = query;
-    this.searchResults = results;
-    this.searchIndex = 0;
-    this.searchCallback = callback;
-    this.searchOpen = true;
     this.scheduleRender();
   }
   
@@ -1102,13 +1027,11 @@ export class App {
       statusOpen: this.statusOpen,
       helpOpen: this.helpOpen,
       settingsOpen: this.settingsOpen,
-      searchOpen: this.searchOpen,
       exportOpen: this.exportOpen,
       logoutOpen: this.logoutOpen,
       loginOpen: this.loginOpen,
       menuOpen: this.menuOpen,
       showAutocomplete: this.autocomplete.open,
-      hunkPickerOpen: this.hunkPicker.open,
     });
     // A key that arrives as a question appears is not its answer, nor is one
     // that follows it without a pause: the wait starts again with every key.
@@ -1125,12 +1048,10 @@ export class App {
       case 'status':         this.handleInlineStatusKey(event); return;
       case 'help':           this.handleInlineHelpKey(event); return;
       case 'settings':       this.handleInlineSettingsKey(event); return;
-      case 'search':         this.handleSearchKey(event); return;
       case 'export':         this.handleExportKey(event); return;
       case 'logout':         this.handleLogoutKey(event); return;
       case 'login':          this.handleLoginKey(event); return;
       case 'menu':           this.handleMenuKey(event); return;
-      case 'hunkPicker':     this.handleHunkPickerKey(event); return;
     }
 
     // If intro is playing, skip on any key.
@@ -1453,35 +1374,6 @@ export class App {
   }
   
   /**
-   * Handle search screen keys
-   */
-  private handleSearchKey(event: KeyEvent): void {
-    const state: SearchState = {
-      searchOpen: this.searchOpen,
-      searchQuery: this.searchQuery,
-      searchResults: this.searchResults,
-      searchIndex: this.searchIndex,
-      searchCallback: this.searchCallback,
-    };
-    const callback = this.searchCallback;
-    handleSearchKeyComponent(event, state, {
-      onClose: () => {
-        this.searchOpen = false;
-        this.searchCallback = null;
-      },
-      onRender: () => {
-        this.searchIndex = state.searchIndex;
-        this.scheduleRender();
-      },
-      onResult: (messageIndex: number) => {
-        if (callback) {
-          callback(messageIndex);
-        }
-      },
-    });
-  }
-  
-  /**
    * Handle export screen keys
    */
   private handleExportKey(event: KeyEvent): void {
@@ -1645,23 +1537,6 @@ export class App {
   }
 
   /**
-   * Handle keys in the interactive hunk picker.
-   *   y / Enter / →  accept this hunk, advance
-   *   n / ←         skip this hunk, advance
-   *   a             accept this + all remaining, finish
-   *   q / Esc       finish without accepting this hunk
-   *   ↑ / ↓         navigate (preview only — no decision)
-   * A hunk to a file that decides what runs later, or outside the project,
-   * needs an Enter after y/Enter/→ (and after a, when it is among the rest).
-   */
-  private handleHunkPickerKey(event: KeyEvent): void {
-    // Delegates to components/HunkPicker.ts — the pure handler returns the
-    // next state (and fires onComplete exactly once); App only stores it.
-    this.hunkPicker = handleHunkPickerKey(this.hunkPicker, event);
-    this.scheduleRender();
-  }
-  
-  /**
    * Submit the current input buffer (used by Enter and Escape-in-multiline)
    */
   private submitInput(): void {
@@ -1778,15 +1653,12 @@ export class App {
       pasteInfoPreviewLines: this.pasteDialog.info ? this.pasteDialog.info.preview.split('\n').length : 0,
       isAgentRunning: this.isAgentRunning,
       confirmOpen: this.confirmOpen && !!this.confirmOptions,
-      hunkPickerOpen: this.hunkPicker.open && !!this.hunkPicker.options,
       permissionOpen: this.permissionOpen,
       sessionPickerOpen: this.sessionPickerOpen,
       sessionPickerItemCount: this.sessionPickerItems.length,
       confirmMessageCount: this.confirmOptions?.message.length ?? 0,
       statusOpen: this.statusOpen,
       helpOpen: this.helpOpen,
-      searchOpen: this.searchOpen,
-      searchResultCount: this.searchResults.length,
       exportOpen: this.exportOpen,
       logoutOpen: this.logoutOpen,
       logoutProviderCount: this.logoutProviders.length,
@@ -1861,11 +1733,6 @@ export class App {
       this.renderInlineStatus(statusLine + 1, width);
     }
     
-    // Inline search renders BELOW status bar
-    if (this.searchOpen) {
-      this.renderInlineSearch(statusLine + 1, width, height - statusLine - 1);
-    }
-    
     // Inline export renders BELOW status bar
     if (this.exportOpen) {
       this.renderInlineExport(statusLine + 1, width);
@@ -1886,11 +1753,6 @@ export class App {
       this.renderInlineConfirm(statusLine + 1, width);
     }
 
-    // Inline hunk picker renders BELOW status bar
-    if (this.hunkPicker.open && this.hunkPicker.options) {
-      this.renderInlineHunkPicker(statusLine + 1, width);
-    }
-    
     // Inline autocomplete renders BELOW status bar
     if (this.autocomplete.open && this.autocomplete.items.length > 0 && !this.menuOpen && !this.settingsOpen && !this.helpOpen && !this.confirmOpen && !this.permissionOpen && !this.sessionPickerOpen) {
       this.renderInlineAutocomplete(statusLine + 1, width);
@@ -1928,11 +1790,9 @@ export class App {
       this.permissionOpen ||
       this.sessionPickerOpen ||
       this.confirmOpen ||
-      this.hunkPicker.open ||
       this.statusOpen ||
       this.helpOpen ||
       this.settingsOpen ||
-      this.searchOpen ||
       this.exportOpen ||
       this.logoutOpen ||
       this.loginOpen ||
@@ -2305,10 +2165,6 @@ export class App {
     this.screen.writeLine(y, confirmFooter(this.confirmOptions), fg.gray);
   }
 
-    private renderInlineHunkPicker(startY: number, width: number): void {
-    renderHunkPicker(this.screen, this.hunkPicker, startY, width);
-  }
-
   /**
    * Render input line
    */
@@ -2350,14 +2206,6 @@ export class App {
         ? 'Type to filter, ↑↓ to navigate, Enter to pick…'
         : 'Select an option below…';
       this.screen.write(2, y, hint, palette.attention);
-      this.screen.showCursor(false);
-      return;
-    }
-    
-    // Search open
-    if (this.searchOpen) {
-      this.screen.write(0, y, '> ', fg.gray);
-      this.screen.write(2, y, 'Navigate search results below...', palette.attention);
       this.screen.showCursor(false);
       return;
     }
@@ -3132,19 +2980,6 @@ export class App {
     this.scrollOffset = clampedScrollOffset;
 
     return allLines.slice(startIndex, endIndex);
-  }
-  
-  /**
-   * Render inline search screen
-   */
-  private renderInlineSearch(startY: number, width: number, availableHeight: number): void {
-    renderSearchPanel(this.screen, startY, width, availableHeight, {
-      searchOpen: this.searchOpen,
-      searchQuery: this.searchQuery,
-      searchResults: this.searchResults,
-      searchIndex: this.searchIndex,
-      searchCallback: this.searchCallback,
-    });
   }
   
   /**

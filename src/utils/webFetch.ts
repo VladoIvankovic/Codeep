@@ -223,15 +223,15 @@ function cacheSet(url: string, result: FetchSuccess): void {
 }
 
 /**
- * Reset the session web cache. Public so callers (e.g. `/web-cache clear`
- * command, or tests) can force a fresh fetch.
+ * Reset the session web cache. Public so callers (tests, mostly) can force a
+ * fresh fetch.
  */
 export function clearWebCache(): void {
   webCache.clear();
 }
 
 /**
- * Stats about the session web cache — for `/web-cache status`.
+ * Stats about the session web cache.
  */
 export function webCacheStats(): { entries: number; maxEntries: number; ttlMinutes: number } {
   return { entries: webCache.size, maxEntries: WEB_CACHE_MAX, ttlMinutes: WEB_CACHE_TTL_MS / 60000 };

@@ -50,12 +50,10 @@ export interface AppExecutionContext {
   projectPath: string;
   projectContext: ProjectContext | null;
   hasWriteAccess: boolean;
-  addedFiles: Map<string, { relativePath: string; content: string }>;
   isAgentRunning: () => boolean;
   setAgentRunning: (v: boolean) => void;
   abortController: AbortController | null;
   setAbortController: (ctrl: AbortController | null) => void;
-  formatAddedFilesContext: () => string;
   handleCommand: (command: string, args: string[]) => Promise<void>;
   /** The conversation this run belongs to. Saved under this id; the global
    *  currentSessionId is only a fallback and can name a different one. */
@@ -318,7 +316,7 @@ export async function executeAgentTask(
   // another conversation.
   const sessionId = ctx.sessionId || getCurrentSessionId();
   // Marker for cloud reporting: report only this run's tokens to the dashboard
-  // without wiping the session-cumulative store the status bar and `/cost` read.
+  // without wiping the session-cumulative store the status bar and `/usage` read.
   const tokenReportStart = getRecordCount();
 
   const prefix = dryRun ? '[DRY RUN] ' : '[AGENT] ';
@@ -348,9 +346,6 @@ export async function executeAgentTask(
   };
 
   try {
-    const fileContext = ctx.formatAddedFilesContext();
-    const enrichedTask = fileContext ? fileContext + task : task;
-
     // Show N/M progress in status bar
     const rawIterations = config.get('agentMaxIterations') || 50;
     app.setAgentMaxIterations(Math.max(5, rawIterations));
@@ -486,7 +481,7 @@ export async function executeAgentTask(
     // step. What the run asks the model on its own ("Continue.", a fix after
     // a failed check) is part of this prompt, not another one.
     recordPromptInLedger(sessionId, 'tui');
-    const result: AgentResult = await runAgent(enrichedTask, context, {
+    const result: AgentResult = await runAgent(task, context, {
       dryRun,
       onRequestPermission,
       // What "Always Allow" was answered to stays answered for this chat
@@ -913,7 +908,7 @@ export async function runSkill(
           }, undefined, ctx.projectContext, undefined);
           ctx.app.endStreaming();
           // The notice has streamed for the user to read; as this step's
-          // output it would become the next step's ${_prev} — /stash would
+          // output it would become the next step's ${_prev} — a stash skill would
           // stash under "Claude declined this request". Fail the step.
           if (isAnthropicRefusalNotice(response)) throw new Error(response.trim());
           const msgs = ctx.app.getMessages();

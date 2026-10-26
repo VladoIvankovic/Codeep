@@ -2,9 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   bottomPanelHeight,
   chatLayout,
-  messageLineCount,
-  messageOffsets,
-  scrollOffsetForTarget,
   formatTokenCount,
   statusBarRightHint,
   type LayoutSnapshot,
@@ -23,8 +20,6 @@ function snapshot(overrides: Partial<LayoutSnapshot> = {}): LayoutSnapshot {
     confirmMessageCount: 0,
     statusOpen: false,
     helpOpen: false,
-    searchOpen: false,
-    searchResultCount: 0,
     exportOpen: false,
     logoutOpen: false,
     logoutProviderCount: 0,
@@ -39,7 +34,6 @@ function snapshot(overrides: Partial<LayoutSnapshot> = {}): LayoutSnapshot {
     autocompleteItemCount: 0,
     mentionPickerOpen: false,
     mentionItemCount: 0,
-    hunkPickerOpen: false,
     ...overrides,
   };
 }
@@ -90,10 +84,6 @@ describe('bottomPanelHeight', () => {
     expect(bottomPanelHeight(snapshot({ height: 18, helpOpen: true }))).toBe(12);
   });
 
-  it('scales the search panel by result count, capped at 18', () => {
-    expect(bottomPanelHeight(snapshot({ searchOpen: true, searchResultCount: 2 }))).toBe(12);
-    expect(bottomPanelHeight(snapshot({ searchOpen: true, searchResultCount: 100 }))).toBe(18);
-  });
 
   it('returns 10 for the export dialog', () => {
     expect(bottomPanelHeight(snapshot({ exportOpen: true }))).toBe(10);
@@ -138,9 +128,6 @@ describe('bottomPanelHeight', () => {
     ).toBe(7);
   });
 
-  it('returns 18 for the hunk picker', () => {
-    expect(bottomPanelHeight(snapshot({ hunkPickerOpen: true }))).toBe(18);
-  });
 });
 
 // ─── chatLayout ────────────────────────────────────────────────────────────
@@ -178,75 +165,6 @@ describe('chatLayout', () => {
     expect(l.inputLine).toBe(0);
     // statusLine is max(0, mainHeight-1) = max(0, 1) = 1.
     expect(l.statusLine).toBe(1);
-  });
-});
-
-// ─── messageLineCount ───────────────────────────────────────────────────────
-describe('messageLineCount', () => {
-  it('counts a single short line as header + blank + content + spacing = 4', () => {
-    expect(messageLineCount('hi', 80)).toBe(4);
-  });
-
-  it('wraps a long line across multiple rows', () => {
-    // 10 chars at maxWidth 4 → 3 wrapped rows. Total: 2 + 3 + 1 = 6.
-    expect(messageLineCount('abcdefghij', 4)).toBe(6);
-  });
-
-  it('counts an empty content line as one row (Math.max(1, 0)/width)', () => {
-    expect(messageLineCount('', 80)).toBe(4);
-  });
-
-  it('handles multi-line content', () => {
-    // Two short lines → 2 + 1 + 1 + 1 = 5.
-    expect(messageLineCount('a\nb', 80)).toBe(5);
-  });
-
-  it('rounds up partial wraps', () => {
-    // 5 chars at width 4 → ceil(5/4) = 2 rows. Total: 2 + 2 + 1 = 5.
-    expect(messageLineCount('abcde', 4)).toBe(5);
-  });
-});
-
-// ─── messageOffsets ─────────────────────────────────────────────────────────
-describe('messageOffsets', () => {
-  it('returns 0 for the target start line when the list is empty', () => {
-    expect(messageOffsets([], 80, 0)).toEqual({ totalLines: 0, targetStartLine: 0 });
-  });
-
-  it('places the first message at offset 0', () => {
-    const { totalLines, targetStartLine } = messageOffsets(['hi'], 80, 0);
-    expect(targetStartLine).toBe(0);
-    expect(totalLines).toBe(4);
-  });
-
-  it('places the second message after the first message’s line count', () => {
-    const { targetStartLine } = messageOffsets(['hi', 'bye'], 80, 1);
-    expect(targetStartLine).toBe(4); // first message occupies 4 lines
-  });
-
-  it('sums the total across all messages', () => {
-    const { totalLines } = messageOffsets(['hi', 'bye', 'ok'], 80, 0);
-    expect(totalLines).toBe(12); // 3 messages × 4 lines
-  });
-});
-
-// ─── scrollOffsetForTarget ──────────────────────────────────────────────────
-describe('scrollOffsetForTarget', () => {
-  it('returns 0 when the target is already near the top', () => {
-    expect(scrollOffsetForTarget(100, 0, 20)).toBe(90);
-  });
-
-  it('centres the target in the visible window', () => {
-    // totalLines 100, target at line 50, visible 20 → 100 - 50 - 10 = 40.
-    expect(scrollOffsetForTarget(100, 50, 20)).toBe(40);
-  });
-
-  it('floors the visible/2 term', () => {
-    expect(scrollOffsetForTarget(100, 50, 21)).toBe(40); // floor(21/2) = 10
-  });
-
-  it('clamps to 0 when the result would be negative', () => {
-    expect(scrollOffsetForTarget(10, 50, 20)).toBe(0);
   });
 });
 
@@ -561,13 +479,11 @@ function panels(overrides: Partial<PanelState> = {}): PanelState {
     statusOpen: false,
     helpOpen: false,
     settingsOpen: false,
-    searchOpen: false,
     exportOpen: false,
     logoutOpen: false,
     loginOpen: false,
     menuOpen: false,
     showAutocomplete: false,
-    hunkPickerOpen: false,
     ...overrides,
   };
 }
@@ -585,12 +501,10 @@ describe('activePanel', () => {
     ['status', 'statusOpen'],
     ['help', 'helpOpen'],
     ['settings', 'settingsOpen'],
-    ['search', 'searchOpen'],
     ['export', 'exportOpen'],
     ['logout', 'logoutOpen'],
     ['login', 'loginOpen'],
     ['menu', 'menuOpen'],
-    ['hunkPicker', 'hunkPickerOpen'],
     ['autocomplete', 'showAutocomplete'],
   ] as const)('returns %s when only %s is open', (panel, flag) => {
     expect(activePanel(panels({ [flag]: true } as Partial<PanelState>))).toBe(panel);
@@ -605,7 +519,6 @@ describe('activePanel', () => {
       statusOpen: true,
       helpOpen: true,
       settingsOpen: true,
-      searchOpen: true,
       exportOpen: true,
       logoutOpen: true,
       loginOpen: true,

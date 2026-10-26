@@ -2,7 +2,7 @@
  * Pure helpers extracted from `renderer/commands.ts`.
  *
  * The dispatcher is one giant switch/case; many cases contain small but
- * tricky bits of pure logic (arg parsing, snippet extraction, message
+ * tricky bits of pure logic (arg parsing, message
  * formatting) that were previously untestable because they were inlined
  * alongside `ctx.app.*` calls. Pulling them here gives them direct unit
  * coverage.
@@ -11,53 +11,6 @@
 import { isFlatFeeProvider } from '../../config/providers';
 import { formatCacheReadRates, formatTokenThreshold, type LongPromptPrice } from '../../utils/tokenTracker';
 import type { SyncFailure, SyncResult } from '../../utils/codeepCloud';
-
-// ─── Search snippet extraction ────────────────────────────────────────────────
-//
-// `/search` builds a preview snippet around each match. The window is
-// asymmetric: 30 chars before, 50 after — tighter than the 50/50 used by
-// `utils/search.ts` because the inline search panel is narrower. Keeping
-// it separate (rather than reusing searchMessages) preserves that
-// intentional difference.
-
-export interface SearchSnippet {
-  role: string;
-  messageIndex: number;
-  matchedText: string;
-}
-
-/** Snippet window: chars of context before / after the match. */
-export const SEARCH_SNIPPET_BEFORE = 30;
-export const SEARCH_SNIPPET_AFTER = 50;
-
-/**
- * Build search-result snippets for messages matching `term`. Mirrors the
- * inline loop that used to live in the `/search` case. Case-insensitive.
- */
-export function buildSearchSnippets(
-  messages: Array<{ role: string; content: string }>,
-  term: string,
-): SearchSnippet[] {
-  const lowerTerm = term.toLowerCase();
-  const results: SearchSnippet[] = [];
-
-  messages.forEach((m, index) => {
-    const lowerContent = m.content.toLowerCase();
-    if (!lowerContent.includes(lowerTerm)) return;
-
-    const matchIdx = lowerContent.indexOf(lowerTerm);
-    const matchStart = Math.max(0, matchIdx - SEARCH_SNIPPET_BEFORE);
-    const matchEnd = Math.min(m.content.length, matchIdx + lowerTerm.length + SEARCH_SNIPPET_AFTER);
-    const matchedText =
-      (matchStart > 0 ? '...' : '') +
-      m.content.slice(matchStart, matchEnd).replace(/\n/g, ' ') +
-      (matchEnd < m.content.length ? '...' : '');
-
-    results.push({ role: m.role, messageIndex: index, matchedText });
-  });
-
-  return results;
-}
 
 // ─── Argument parsing ─────────────────────────────────────────────────────────
 
@@ -151,13 +104,6 @@ export function formatTaskList(
   return lines.join('\n');
 }
 
-// ─── /profile formatting ──────────────────────────────────────────────────────
-
-/** Render the `/profile list` Markdown message from saved profile names. */
-export function formatProfileList(profiles: string[]): string {
-  return `## Profiles\n\n${profiles.map((p) => `- ${p}`).join('\n')}\n\nUse /profile load <name> to apply.`;
-}
-
 // ─── /memory list formatting ──────────────────────────────────────────────────
 
 /** Render the `/memory list` Markdown message from saved notes. */
@@ -166,9 +112,9 @@ export function formatMemoryList(notes: string[]): string {
   return `**Project memory notes:**\n${lines}`;
 }
 
-// ─── /stats report ────────────────────────────────────────────────────────────
+// ─── /usage --detail report ───────────────────────────────────────────────────
 //
-// `/stats` builds a multi-section Markdown report: per-model breakdown,
+// `/usage --detail` adds a multi-section Markdown report: per-model breakdown,
 // totals, prompt-cache summary, and a per-1M pricing reference. The whole
 // thing is a pure transform of session stats + a pricing table — extracted
 // here so the formatting (number formatting, "free" sentinel for ollama,
@@ -224,7 +170,7 @@ export function formatModelCost(provider: string, estimatedCost: number): string
 }
 
 /**
- * Build the full `/stats` Markdown report. `currentProvider` controls
+ * Build the full `/usage --detail` Markdown report. `currentProvider` controls
  * whether the total shows "free" (ollama) or a dollar figure.
  */
 export function formatStatsReport(args: {
@@ -237,7 +183,7 @@ export function formatStatsReport(args: {
   impactLines?: string[];
 }): string {
   const { totals, breakdown, cache, pricing, currentProvider, fmt, impactLines = [] } = args;
-  const lines: string[] = ['## Session Cost', ''];
+  const lines: string[] = ['## Session detail', ''];
 
   if (totals.requestCount === 0) {
     lines.push('*No API calls made yet this session.*', '');
@@ -294,88 +240,6 @@ export function formatStatsReport(args: {
   }
 
   return lines.join('\n');
-}
-
-// ─── /copy and /apply code-block extraction ───────────────────────────────────
-
-/**
- * Extract every fenced code block body (the text inside ```…```) from a
- * string, mirroring the `/copy` loop. Language fences (```ts) are ignored —
- * only the body is captured.
- */
-export function extractCodeBlocks(text: string): string[] {
-  const blocks: string[] = [];
-  for (const match of text.matchAll(/```[\w]*\n([\s\S]*?)```/g)) {
-    blocks.push(match[1]);
-  }
-  return blocks;
-}
-
-/**
- * Validate a 1-based block index against the available block list, as used
- * by `/copy <n>`. Returns the 0-based index, or `null` when the index is
- * out of range (the caller shows an error).
- */
-export function resolveBlockIndex(blockNum: number, blockCount: number): number | null {
-  if (blockCount === 0) return null;
-  const index = blockNum === -1 ? blockCount - 1 : blockNum - 1;
-  if (Number.isNaN(index) || index < 0 || index >= blockCount) return null;
-  return index;
-}
-
-// ─── /apply file-change extraction ────────────────────────────────────────────
-
-export interface FileChange {
-  path: string;
-  content: string;
-}
-
-/**
- * Extract file-change pairs from an assistant message, mirroring `/apply`.
- * Two patterns are tried in order:
- *   1. fence with a filename header:  ```ts\nsrc/foo.ts\n<body>```
- *   2. fence with a `// File:` / `# Path:` comment header.
- * A path is only accepted when it contains a dot and no spaces.
- */
-export function extractFileChanges(text: string): FileChange[] {
-  const changes: FileChange[] = [];
-  const fenceFilePattern = /```\w*\s+([\w./\\-]+(?:\.\w+))\n([\s\S]*?)```/g;
-  let match: RegExpExecArray | null;
-  while ((match = fenceFilePattern.exec(text)) !== null) {
-    const p = match[1].trim();
-    if (p.includes('.') && !p.includes(' ')) changes.push({ path: p, content: match[2] });
-  }
-  if (changes.length > 0) return changes;
-
-  const commentPattern = /```(\w+)?\s*\n(?:\/\/|#|--|\/\*)\s*(?:File|Path|file|path):\s*([^\n*]+)\n([\s\S]*?)```/g;
-  while ((match = commentPattern.exec(text)) !== null) {
-    changes.push({ path: match[2].trim(), content: match[3] });
-  }
-  return changes;
-}
-
-/** Truncate a path for display: keep the last 37 chars, prefixed with “…”. */
-export function shortPathForDisplay(path: string, max = 40): string {
-  return path.length > max ? '...' + path.slice(-(max - 3)) : path;
-}
-
-/**
- * Build a single diff-line summary for a file change, mirroring `/apply`.
- * Returns `null` when `existingContent` is empty (a CREATE), otherwise a
- * MODIFY line with the line-count delta.
- */
-export function formatApplyDiffLine(
-  change: { path: string; content: string },
-  existingContent: string,
-): string[] {
-  const shortPath = shortPathForDisplay(change.path);
-  if (!existingContent) {
-    return [`+ CREATE: ${shortPath}`, `  (${change.content.split('\n').length} lines)`];
-  }
-  const oldLines = existingContent.split('\n').length;
-  const newLines = change.content.split('\n').length;
-  const lineDiff = newLines - oldLines;
-  return [`~ MODIFY: ${shortPath}`, `  ${oldLines} → ${newLines} lines (${lineDiff >= 0 ? '+' : ''}${lineDiff})`];
 }
 
 // ─── /mcp helpers ─────────────────────────────────────────────────────────────
@@ -544,27 +408,6 @@ export function formatMcpPromptResult(
     lines.push(`**${m.role}:** ${text}`, '');
   }
   return lines.join('\n').trim();
-}
-
-// ─── /insights --days parser ──────────────────────────────────────────────────
-
-/**
- * Parse the `--days N` / `--days=N` flag from `/insights` args. Returns the
- * default (7) when absent or unparseable; clamps negatives to 0.
- */
-export function parseInsightsDays(args: string[], fallback = 7): number {
-  let days = fallback;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === '--days' && args[i + 1]) {
-      const n = parseInt(args[i + 1], 10);
-      if (Number.isFinite(n)) days = n;
-    } else if (a.startsWith('--days=')) {
-      const n = parseInt(a.slice('--days='.length), 10);
-      if (Number.isFinite(n)) days = n;
-    }
-  }
-  return days;
 }
 
 // ─── /cloud session-row formatter ─────────────────────────────────────────────

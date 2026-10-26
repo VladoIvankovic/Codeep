@@ -1,8 +1,7 @@
 /**
  * `/recall` — cross-session search.
  *
- * Distinct from `/search`, which scans only the *current* session's
- * messages. `/recall` scans every saved session in the active scope
+ * Scans every saved session in the active scope
  * (project sessions under `<workspace>/.codeep/sessions/` when in a
  * project, else global `~/.codeep/sessions/`) and surfaces the ones
  * that match — ranked by how many query terms hit, boosted by recency.
@@ -149,7 +148,7 @@ export async function summarizeRecall(
 /** Render recall results as a Markdown block for display. */
 export function formatRecall(query: string, matches: RecallMatch[]): string {
   if (matches.length === 0) {
-    return `_No saved sessions match "${query}"._\n\nTip: \`/recall\` searches across all your sessions. For the current session only, use \`/search\`.`;
+    return `_No saved sessions match "${query}"._\n\nTip: \`/recall\` searches across all your saved sessions.`;
   }
 
   const lines: string[] = [

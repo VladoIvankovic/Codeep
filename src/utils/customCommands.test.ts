@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { loadCustomCommands, findCustomCommand, expandCommand, formatCommandList } from './customCommands';
+import { loadCustomCommands, findCustomCommand, expandCommand } from './customCommands';
 
 let tmpRoot: string;
 let cmdDir: string;
@@ -158,22 +158,5 @@ describe('expandCommand', () => {
   it('does not append args when placeholder already consumed them', () => {
     expect(expandCommand({ ...cmd, body: 'Review {{args}}' }, ['x.ts']))
       .toBe('Review x.ts');
-  });
-});
-
-describe('formatCommandList', () => {
-  it('shows guidance when there are no commands', () => {
-    const md = formatCommandList([]);
-    expect(md).toMatch(/No custom commands yet/);
-    expect(md).toMatch(/\.codeep\/commands/);
-  });
-
-  it('groups by scope and lists aliases', () => {
-    const md = formatCommandList([
-      { name: 'one', description: 'first', body: '', source: '', scope: 'project', aliases: ['1'] },
-      { name: 'two', description: 'second', body: '', source: '', scope: 'global', aliases: [] },
-    ]);
-    expect(md).toMatch(/\*\*Project\*\*[\s\S]*\/one[\s\S]*aliases.*\/1/);
-    expect(md).toMatch(/\*\*Global\*\*[\s\S]*\/two/);
   });
 });

@@ -33,7 +33,7 @@ export interface RenderedLine {
 /**
  * Mutable counter passed by reference into `formatMessage` so the caller
  * (App, during a render pass) can keep a running code-block index across
- * messages — that index is what `/copy [n]` refers to.
+ * messages — that index is the number shown in a code block's label.
  *
  * Modelled as an object (not a return value) because `formatMessage`
  * appends to an output array AND increments the counter; returning both
@@ -328,7 +328,7 @@ export function formatTextLines(
  * `highlightCode`. A trailing blank line separates the block from the
  * next paragraph.
  *
- * `blockNum` is the 1-based index used by `/copy [n]`; omitted when the
+ * `blockNum` is the 1-based number shown in the label; omitted when the
  * caller is rendering a non-chat context (e.g. a paste preview).
  */
 export function formatCodeBlock(
@@ -345,7 +345,7 @@ export function formatCodeBlock(
     codeLines.pop();
   }
 
-  // Language label with block number for /copy
+  // Language label with the block number
   const label = blockNum ? (lang ? `  ${lang} [${blockNum}]` : `  [${blockNum}]`) : (lang ? '  ' + lang : '');
   if (label) {
     lines.push({ text: label, style: SYNTAX.codeLang, raw: false });

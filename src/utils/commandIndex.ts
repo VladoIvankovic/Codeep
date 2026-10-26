@@ -3,9 +3,9 @@
  *
  * Injected into the agent's system prompt (see `getAgentSystemPrompt`) so the
  * model knows these exist and can point the user at the right one. Deliberately
- * a CURATED subset — not the full ~60-command registry in
- * `renderer/commands.ts` — to keep the prompt small; every entry here must be
- * a real command. Single source for this list so it doesn't drift across the
+ * a CURATED subset — not the full ~55-command registry in
+ * `renderer/commands/registry.ts` — to keep the prompt small; every entry here
+ * must be a registered command (commandIndex.test.ts holds it to that). Single source for this list so it doesn't drift across the
  * places that describe Codeep to the model.
  */
 export const COMMAND_INDEX: { cmd: string; desc: string }[] = [
@@ -17,10 +17,9 @@ export const COMMAND_INDEX: { cmd: string; desc: string }[] = [
   { cmd: '/personality', desc: 'switch the agent persona / working style' },
   { cmd: '/review', desc: 'code-review the current changes' },
   { cmd: '/commit', desc: 'write a commit message from the current diff' },
-  { cmd: '/pr', desc: 'open a pull request' },
   { cmd: '/checkpoint', desc: 'save a restore point (/rewind rolls back to it)' },
   { cmd: '/memory', desc: 'add or list project memory notes the agent remembers' },
-  { cmd: '/cost', desc: 'show token usage and estimated cost for the session' },
+  { cmd: '/usage', desc: 'show token usage and estimated cost, for this session and across sessions' },
   { cmd: '/settings', desc: 'change models, providers, confirmation policy, and limits' },
 ];
 

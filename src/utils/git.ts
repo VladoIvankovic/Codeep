@@ -1798,7 +1798,7 @@ export interface HardenedGitEnvOptions {
    * Disable the repository's hooks. Only for the commands Codeep runs BY
    * ITSELF — status, diff, rev-parse, show, ls-files, log — where the user
    * never asked for a hook to run. Commands the user triggered (`/commit`,
-   * `/git-commit`, the agent auto-commit, a branch switch) leave it false, so
+   * the agent auto-commit, a branch switch) leave it false, so
    * lint-staged, commit-signing hooks and Codeep's own review hook run
    * exactly as they would in the user's terminal.
    *
@@ -2251,7 +2251,7 @@ export function createCommit(
 
   try {
     // noHooks stays off: a commit is something the user asked for (/commit,
-    // /git-commit, the agent auto-commit they enabled), so the repository's
+    // the agent auto-commit they enabled), so the repository's
     // pre-commit, commit-msg and post-commit hooks run exactly as they would
     // in their terminal — lint-staged, their signing hook, Codeep's own review
     // hook. Only the programs a repo can name in its CONFIG are neutralised.

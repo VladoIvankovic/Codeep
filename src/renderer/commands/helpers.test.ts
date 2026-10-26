@@ -1,76 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildSearchSnippets,
   parseKeepRecent,
   joinSessionName,
   parseTaskAddArgs,
   formatTaskList,
   TASK_TYPES,
 } from './helpers';
-
-// ─── buildSearchSnippets ──────────────────────────────────────────────────────
-describe('buildSearchSnippets', () => {
-  const messages = [
-    { role: 'user', content: 'hello world' },
-    { role: 'assistant', content: 'The quick brown fox jumps' },
-    { role: 'user', content: 'HELLO again' },
-  ];
-
-  it('returns matches case-insensitively', () => {
-    const out = buildSearchSnippets(messages, 'hello');
-    expect(out).toHaveLength(2);
-    expect(out[0].messageIndex).toBe(0);
-    expect(out[1].messageIndex).toBe(2);
-  });
-
-  it('returns an empty array when nothing matches', () => {
-    expect(buildSearchSnippets(messages, 'nope')).toEqual([]);
-  });
-
-  it('includes the role and message index in each result', () => {
-    const out = buildSearchSnippets(messages, 'fox');
-    expect(out).toHaveLength(1);
-    expect(out[0].role).toBe('assistant');
-    expect(out[0].messageIndex).toBe(1);
-  });
-
-  it('collapses newlines in the snippet to spaces', () => {
-    const msgs = [{ role: 'user', content: 'line one\nCODE\nline three' }];
-    const out = buildSearchSnippets(msgs, 'code');
-    expect(out[0].matchedText.includes('\n')).toBe(false);
-  });
-
-  it('adds a leading ellipsis when the match is not at the start', () => {
-    const long = 'x'.repeat(60) + 'TARGET' + 'y'.repeat(60);
-    const out = buildSearchSnippets([{ role: 'user', content: long }], 'target');
-    expect(out[0].matchedText.startsWith('...')).toBe(true);
-  });
-
-  it('adds a trailing ellipsis when there is content after the window', () => {
-    const long = 'TARGET' + 'y'.repeat(60);
-    const out = buildSearchSnippets([{ role: 'user', content: long }], 'target');
-    expect(out[0].matchedText.endsWith('...')).toBe(true);
-  });
-
-  it('omits the leading ellipsis when the match starts at index 0', () => {
-    const out = buildSearchSnippets([{ role: 'user', content: 'target here' }], 'target');
-    expect(out[0].matchedText.startsWith('...')).toBe(false);
-  });
-
-  it('matches only the first occurrence in a message', () => {
-    const out = buildSearchSnippets([{ role: 'user', content: 'a a a' }], 'a');
-    expect(out).toHaveLength(1);
-  });
-
-  it('handles an empty message list', () => {
-    expect(buildSearchSnippets([], 'x')).toEqual([]);
-  });
-
-  it('handles an empty search term (matches everything at index 0)', () => {
-    const out = buildSearchSnippets([{ role: 'user', content: 'hi' }], '');
-    expect(out).toHaveLength(1);
-  });
-});
 
 // ─── parseKeepRecent ──────────────────────────────────────────────────────────
 describe('parseKeepRecent', () => {
@@ -278,33 +213,6 @@ describe('formatTaskList', () => {
   });
 });
 
-// ─── formatProfileList ────────────────────────────────────────────────────────
-import { formatProfileList } from './helpers';
-
-describe('formatProfileList', () => {
-  it('renders the header and usage hint', () => {
-    const out = formatProfileList(['work', 'personal']);
-    expect(out.startsWith('## Profiles\n\n')).toBe(true);
-    expect(out).toContain('Use /profile load <name> to apply.');
-  });
-
-  it('lists each profile as a bullet', () => {
-    const out = formatProfileList(['a', 'b']);
-    expect(out).toContain('- a');
-    expect(out).toContain('- b');
-  });
-
-  it('handles a single profile', () => {
-    expect(formatProfileList(['only'])).toContain('- only');
-  });
-
-  it('handles an empty list (renders the header with no bullets)', () => {
-    const out = formatProfileList([]);
-    expect(out).toContain('## Profiles');
-    expect(out).not.toContain('- ');
-  });
-});
-
 // ─── formatMemoryList ─────────────────────────────────────────────────────────
 import { formatMemoryList } from './helpers';
 
@@ -394,6 +302,19 @@ const samplePricing: PricingRow[] = [
 ];
 
 describe('formatStatsReport', () => {
+  it('is headed as the detail section: /usage prints the short "Session Cost" report right above it', () => {
+    const out = formatStatsReport({
+      totals: emptyTotals,
+      breakdown: [],
+      cache: emptyCache,
+      pricing: samplePricing,
+      currentProvider: 'openai',
+      fmt: idFmt,
+    });
+    expect(out.startsWith('## Session detail\n')).toBe(true);
+    expect(out).not.toContain('## Session Cost');
+  });
+
   it('shows the "no calls" message when requestCount is 0', () => {
     const out = formatStatsReport({
       totals: emptyTotals,
@@ -524,9 +445,9 @@ describe('formatStatsReport', () => {
     expect(out).toContain('Estimated savings vs no caching: $0.0100');
   });
 
-  /// /stats said "billed at 0.1× input rate" for every provider — wrong for
+  /// The detailed session view (/usage --detail) said "billed at 0.1× input rate" for every provider — wrong for
   /// DeepSeek (0.02), Kimi and Qwen (0.2), and Fable 5.1 (0.025).
-  it('/stats quotes the cache rate that applied, never a hardcoded 0.1×', () => {
+  it('the detailed view quotes the cache rate that applied, never a hardcoded 0.1×', () => {
     const base = {
       totals: { requestCount: 1, totalTokens: 700, totalPromptTokens: 500, totalCompletionTokens: 200, estimatedCost: 0.01 },
       breakdown: [], pricing: [], currentProvider: 'deepseek', fmt: idFmt,
@@ -625,189 +546,6 @@ describe('formatStatsReport', () => {
     // No data rows beyond the header.
     const tableRows = out.split('\n').filter((l) => l.startsWith('| ') && l !== '| Model | Input | Output |' && l !== '|---|---|---|');
     expect(tableRows).toHaveLength(0);
-  });
-});
-
-// ─── extractCodeBlocks ────────────────────────────────────────────────────────
-import { extractCodeBlocks } from './helpers';
-
-describe('extractCodeBlocks', () => {
-  it('extracts a single fenced block body', () => {
-    expect(extractCodeBlocks('```\ncode\n```')).toEqual(['code\n']);
-  });
-
-  it('ignores the language fence', () => {
-    expect(extractCodeBlocks('```ts\nconst x = 1\n```')).toEqual(['const x = 1\n']);
-  });
-
-  it('extracts multiple blocks in order', () => {
-    const text = '```js\na\n```\n---\n```py\nb\n```';
-    expect(extractCodeBlocks(text)).toEqual(['a\n', 'b\n']);
-  });
-
-  it('returns an empty array when there are no fences', () => {
-    expect(extractCodeBlocks('no code here')).toEqual([]);
-  });
-
-  it('returns an empty array for an empty string', () => {
-    expect(extractCodeBlocks('')).toEqual([]);
-  });
-
-  it('captures multiline block bodies', () => {
-    const text = '```\nline1\nline2\nline3\n```';
-    expect(extractCodeBlocks(text)).toEqual(['line1\nline2\nline3\n']);
-  });
-
-  it('does not capture fences without a trailing newline', () => {
-    expect(extractCodeBlocks('```inline code```')).toEqual([]);
-  });
-});
-
-// ─── resolveBlockIndex ────────────────────────────────────────────────────────
-import { resolveBlockIndex } from './helpers';
-
-describe('resolveBlockIndex', () => {
-  it('returns null when there are no blocks', () => {
-    expect(resolveBlockIndex(1, 0)).toBeNull();
-  });
-
-  it('resolves -1 to the last block', () => {
-    expect(resolveBlockIndex(-1, 3)).toBe(2);
-  });
-
-  it('converts a 1-based index to 0-based', () => {
-    expect(resolveBlockIndex(1, 3)).toBe(0);
-    expect(resolveBlockIndex(2, 3)).toBe(1);
-    expect(resolveBlockIndex(3, 3)).toBe(2);
-  });
-
-  it('returns null for an index below 1', () => {
-    expect(resolveBlockIndex(0, 3)).toBeNull();
-  });
-
-  it('returns null for an index above the block count', () => {
-    expect(resolveBlockIndex(4, 3)).toBeNull();
-  });
-
-  it('returns null for NaN', () => {
-    expect(resolveBlockIndex(NaN, 3)).toBeNull();
-  });
-});
-
-// ─── extractFileChanges ───────────────────────────────────────────────────────
-import { extractFileChanges } from './helpers';
-
-describe('extractFileChanges', () => {
-  it('extracts a fence with a filename header', () => {
-    const text = '```ts\nsrc/foo.ts\nconst x = 1;\n```';
-    expect(extractFileChanges(text)).toEqual([{ path: 'src/foo.ts', content: 'const x = 1;\n' }]);
-  });
-
-  it('extracts multiple fences', () => {
-    const text = '```js\na.js\nA\n```\n```py\nb.py\nB\n```';
-    expect(extractFileChanges(text)).toEqual([
-      { path: 'a.js', content: 'A\n' },
-      { path: 'b.py', content: 'B\n' },
-    ]);
-  });
-
-  it('skips paths without a dot', () => {
-    const text = '```\nREADME\ncontent\n```';
-    expect(extractFileChanges(text)).toEqual([]);
-  });
-
-  it('skips paths with spaces', () => {
-    const text = '```\nmy file.ts\ncontent\n```';
-    expect(extractFileChanges(text)).toEqual([]);
-  });
-
-  it('falls back to the // File: comment pattern when no fence headers match', () => {
-    const text = '```ts\n// File: src/bar.ts\nconst y = 2;\n```';
-    expect(extractFileChanges(text)).toEqual([{ path: 'src/bar.ts', content: 'const y = 2;\n' }]);
-  });
-
-  it('falls back to the # Path: comment pattern', () => {
-    const text = '```py\n# Path: scripts/run.py\nprint(1)\n```';
-    expect(extractFileChanges(text)).toEqual([{ path: 'scripts/run.py', content: 'print(1)\n' }]);
-  });
-
-  it('does not fall back when fence headers already matched', () => {
-    const text = '```ts\nreal.ts\nA\n```\n```ts\n// File: ignored.ts\nB\n```';
-    const out = extractFileChanges(text);
-    expect(out).toHaveLength(1);
-    expect(out[0].path).toBe('real.ts');
-  });
-
-  it('returns an empty array when nothing matches', () => {
-    expect(extractFileChanges('no code')).toEqual([]);
-  });
-
-  it('returns an empty array for an empty string', () => {
-    expect(extractFileChanges('')).toEqual([]);
-  });
-});
-
-// ─── shortPathForDisplay ──────────────────────────────────────────────────────
-import { shortPathForDisplay } from './helpers';
-
-describe('shortPathForDisplay', () => {
-  it('returns the path unchanged when it fits', () => {
-    expect(shortPathForDisplay('src/foo.ts')).toBe('src/foo.ts');
-  });
-
-  it('truncates to the last 37 chars with a leading ellipsis when too long', () => {
-    const long = 'a'.repeat(50);
-    const out = shortPathForDisplay(long);
-    expect(out.length).toBe(40);
-    expect(out.startsWith('...')).toBe(true);
-    expect(out.slice(3)).toBe(long.slice(-37));
-  });
-
-  it('uses a custom max length', () => {
-    expect(shortPathForDisplay('abcdef', 4)).toBe('...f');
-  });
-
-  it('does not truncate a path exactly at max length', () => {
-    expect(shortPathForDisplay('abcd', 4)).toBe('abcd');
-  });
-});
-
-// ─── formatApplyDiffLine ──────────────────────────────────────────────────────
-import { formatApplyDiffLine } from './helpers';
-
-describe('formatApplyDiffLine', () => {
-  it('renders a CREATE line when the file does not exist', () => {
-    const out = formatApplyDiffLine({ path: 'new.ts', content: 'a\nb\nc' }, '');
-    expect(out[0]).toBe('+ CREATE: new.ts');
-    expect(out[1]).toBe('  (3 lines)');
-  });
-
-  it('renders a MODIFY line with the line delta when the file exists', () => {
-    const out = formatApplyDiffLine({ path: 'mod.ts', content: 'a\nb\nc\nd' }, 'x\ny');
-    expect(out[0]).toBe('~ MODIFY: mod.ts');
-    expect(out[1]).toBe('  2 → 4 lines (+2)');
-  });
-
-  it('shows a negative delta with no leading +', () => {
-    const out = formatApplyDiffLine({ path: 'mod.ts', content: 'a' }, 'x\ny\nz\nw');
-    expect(out[1]).toBe('  4 → 1 lines (-3)');
-  });
-
-  it('shows +0 when the line count is unchanged', () => {
-    const out = formatApplyDiffLine({ path: 'mod.ts', content: 'a\nb' }, 'x\ny');
-    expect(out[1]).toContain('+0');
-  });
-
-  it('truncates long paths in the output', () => {
-    const long = 'a'.repeat(50);
-    const out = formatApplyDiffLine({ path: long, content: 'x' }, '');
-    expect(out[0]).toContain('...');
-  });
-
-  it('counts a trailing newline as an extra line in the new content', () => {
-    // "a\nb\n".split('\n') === ['a','b',''] → length 3.
-    const out = formatApplyDiffLine({ path: 'p.ts', content: 'a\nb\n' }, '');
-    expect(out[1]).toBe('  (3 lines)');
   });
 });
 
@@ -1117,49 +855,6 @@ describe('formatMcpPromptResult', () => {
   it('trims trailing blank lines', () => {
     const out = formatMcpPromptResult('s', 'n', undefined, [{ role: 'user', content: { text: 'x' } }]);
     expect(out.endsWith('x')).toBe(true);
-  });
-});
-
-// ─── parseInsightsDays ────────────────────────────────────────────────────────
-import { parseInsightsDays } from './helpers';
-
-describe('parseInsightsDays', () => {
-  it('returns the default (7) when no flag is present', () => {
-    expect(parseInsightsDays([])).toBe(7);
-    expect(parseInsightsDays(['foo'])).toBe(7);
-  });
-
-  it('parses --days N (space-separated)', () => {
-    expect(parseInsightsDays(['--days', '30'])).toBe(30);
-  });
-
-  it('parses --days=N (equals form)', () => {
-    expect(parseInsightsDays(['--days=14'])).toBe(14);
-  });
-
-  it('keeps the last --days when multiple are given', () => {
-    expect(parseInsightsDays(['--days', '5', '--days=10'])).toBe(10);
-  });
-
-  it('ignores --days with no following value', () => {
-    expect(parseInsightsDays(['--days'])).toBe(7);
-  });
-
-  it('ignores a non-numeric value', () => {
-    expect(parseInsightsDays(['--days', 'abc'])).toBe(7);
-    expect(parseInsightsDays(['--days=xyz'])).toBe(7);
-  });
-
-  it('accepts 0', () => {
-    expect(parseInsightsDays(['--days', '0'])).toBe(0);
-  });
-
-  it('accepts negative values (no clamping)', () => {
-    expect(parseInsightsDays(['--days', '-3'])).toBe(-3);
-  });
-
-  it('respects a custom fallback', () => {
-    expect(parseInsightsDays([], 30)).toBe(30);
   });
 });
 
