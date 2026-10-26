@@ -90,7 +90,9 @@ function isPlainWord(word: string): boolean {
 }
 
 /**
- * A task as the toast names it: "" when nothing of it may be said. The same
+ * A task as the status file names it (renderer/omarchyStatus.ts): "" when
+ * nothing of it may be said. Not used for a notification: those carry no word
+ * of a prompt (see `runEndNotice`). The same
  * five words the phone's head names a run by (shortLabel — which also makes
  * it at most 48 characters), taken after the words that may not be said are
  * gone and not before. Cleaned once more at the end, because that cut counts
@@ -121,12 +123,15 @@ export interface Notice {
   body?: string;
 }
 
-/** `Codeep finished — <label>` / `Codeep stopped — <label>`, and how long it took. */
-export function runEndNotice(task: string, finished: boolean, elapsedMs: number): Notice {
-  const label = noticeLabel(task);
-  const head = finished ? 'Codeep finished' : 'Codeep stopped';
+/**
+ * `Codeep finished` / `Codeep stopped`, and how long it took. Never a word of
+ * the prompt: `notify-send` takes its text as command-line arguments, which any
+ * other user of the machine can read from `/proc` for as long as it runs, and a
+ * prompt is private. So the notice is not even given the task.
+ */
+export function runEndNotice(finished: boolean, elapsedMs: number): Notice {
   return {
-    summary: label ? `${head} — ${label}` : head,
+    summary: finished ? 'Codeep finished' : 'Codeep stopped',
     body: `took ${formatDuration(elapsedMs)}`,
   };
 }
@@ -135,9 +140,9 @@ export function approvalNotice(tool: string): Notice {
   return { summary: 'Codeep is waiting for your approval', body: noticeToolName(tool) };
 }
 
-export function questionNotice(task: string): Notice {
-  const label = noticeLabel(task);
-  return { summary: 'Codeep has a question', ...(label ? { body: label } : {}) };
+/** Nothing of the question or the prompt either: see `runEndNotice`. */
+export function questionNotice(): Notice {
+  return { summary: 'Codeep has a question' };
 }
 
 /**
@@ -256,13 +261,13 @@ export interface DesktopNotifierDeps {
 export interface DesktopNotifier {
   /** A run has ended. A toast if it took 30 seconds or more; either way the
    *  waits still open are over. Never throws. */
-  runEnded(run: { task: string; finished: boolean; elapsedMs: number }): void;
+  runEnded(run: { finished: boolean; elapsedMs: number }): void;
   /**
    * An approval or a question is open. A toast if it is still open after 10
    * seconds. Returns what ends the wait — call it when the dialog is answered
    * or closed; calling it again does nothing. Never throws.
    */
-  waiting(kind: 'approval' | 'question', what: { task: string; tool?: string }): () => void;
+  waiting(kind: 'approval' | 'question', what: { tool?: string }): () => void;
 }
 
 /**
@@ -331,7 +336,7 @@ export function createDesktopNotifier(deps: DesktopNotifierDeps): DesktopNotifie
       try {
         cancelWaits();
         if (run.elapsedMs < DESKTOP_NOTIFY_AFTER_MS || !wanted()) return;
-        void show(runEndNotice(run.task, run.finished, run.elapsedMs));
+        void show(runEndNotice(run.finished, run.elapsedMs));
       } catch (error) {
         debug('Desktop notice: run end:', error);
       }
@@ -343,7 +348,7 @@ export function createDesktopNotifier(deps: DesktopNotifierDeps): DesktopNotifie
         const timer = setTimeout(() => {
           open.delete(end);
           if (!wanted()) return;
-          void show(kind === 'approval' ? approvalNotice(what.tool ?? '') : questionNotice(what.task));
+          void show(kind === 'approval' ? approvalNotice(what.tool ?? '') : questionNotice());
         }, DESKTOP_WAIT_AFTER_MS);
         // A toast never keeps Codeep from ending.
         timer.unref?.();

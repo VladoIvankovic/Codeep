@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { config } from '../config/index';
-import type { DesktopNotifier } from '../utils/desktopNotify';
+import { createDesktopNotifier, type DesktopNotifier } from '../utils/desktopNotify';
 import {
   desktopNotificationsEnabled,
   desktopNotificationsOffered,
@@ -149,15 +149,25 @@ describe('what the run tells the desktop', () => {
   it('hands the end of a run to the notifier, and is idle', () => {
     runStarted('fix bug');
     runEnded({ task: 'fix bug', finished: true, elapsedMs: 45_000 });
-    expect(notifier.runEnded).toHaveBeenCalledWith({ task: 'fix bug', finished: true, elapsedMs: 45_000 });
+    expect(notifier.runEnded).toHaveBeenCalledWith({ finished: true, elapsedMs: 45_000 });
     vi.advanceTimersByTime(1000);
     expect(state()).toEqual({ state: 'idle', task: null });
+  });
+
+  it('hands the notifier no word of the prompt: only the status file gets the label', () => {
+    runStarted('rotate the production database password');
+    runEnded({ task: 'rotate the production database password', finished: true, elapsedMs: 45_000 });
+    const answered = waiting('question', { task: 'rotate the production database password' });
+    answered();
+    for (const call of [...notifier.runEnded.mock.calls, ...notifier.waiting.mock.calls]) {
+      expect(JSON.stringify(call)).not.toMatch(/rotate|production|database|password/);
+    }
   });
 
   it('is waiting for an approval until it is answered, and then working again', () => {
     runStarted('fix bug');
     const answered = waiting('approval', { task: 'fix bug', tool: 'write_file' });
-    expect(notifier.waiting).toHaveBeenCalledWith('approval', { task: 'fix bug', tool: 'write_file' });
+    expect(notifier.waiting).toHaveBeenCalledWith('approval', { tool: 'write_file' });
     vi.advanceTimersByTime(1000);
     expect(state()).toEqual({ state: 'approval', task: 'fix bug' });
     answered();
@@ -198,5 +208,29 @@ describe('what the run tells the desktop', () => {
     expect(() => runEnded({ task: 'a', finished: true, elapsedMs: 1 })).not.toThrow();
     vi.advanceTimersByTime(1000);
     expect(state().state).toBe('idle');
+  });
+});
+
+describe('what notify-send is run with', () => {
+  it('has no word of the prompt in any argument, for a run that ends and for a question', async () => {
+    vi.useFakeTimers();
+    const calls: string[][] = [];
+    const exec = vi.fn(async (file: string, args: string[]) => { calls.push([file, ...args]); return '{}'; });
+    setDesktopNotifier(createDesktopNotifier({ enabled: () => true, exec, readProc: () => null }));
+    const prompt = 'rotate the production database password for the billing service';
+
+    runEnded({ task: prompt, finished: true, elapsedMs: 61_000 });
+    const answered = waiting('question', { task: prompt });
+    await vi.advanceTimersByTimeAsync(10_000);
+    answered();
+
+    const shown = calls.filter(call => call[0] === 'notify-send');
+    expect(shown).toHaveLength(2);
+    const everything = JSON.stringify(calls);
+    for (const word of ['rotate', 'production', 'database', 'password', 'billing', 'service']) {
+      expect(everything, word).not.toContain(word);
+    }
+    // After `--`: the summary, and the body when there is one.
+    expect(shown.map(call => call.slice(call.indexOf('--') + 1))).toEqual([['Codeep finished', 'took 61s'], ['Codeep has a question']]);
   });
 });

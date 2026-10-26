@@ -67,7 +67,10 @@ export function runStarted(task: string): void {
  *  declined by the model or failed. */
 export function runEnded(run: { task: string; finished: boolean; elapsedMs: number }): void {
   try {
-    theNotifier().runEnded(run);
+    // The notifier is not handed the task: a toast's text goes to `notify-send`
+    // as arguments, readable by other users of the machine, and a prompt is
+    // private. `task` is for the status file below, which is not a command line.
+    theNotifier().runEnded({ finished: run.finished, elapsedMs: run.elapsedMs });
   } catch {
     // Never into the run.
   }
@@ -86,7 +89,7 @@ export function runEnded(run: { task: string; finished: boolean; elapsedMs: numb
 export function waiting(kind: 'approval' | 'question', what: { task: string; tool?: string }): () => void {
   let end = () => {};
   try {
-    end = theNotifier().waiting(kind, what);
+    end = theNotifier().waiting(kind, { tool: what.tool });
     setLiveState(kind, what.task);
   } catch {
     // Never into the run.

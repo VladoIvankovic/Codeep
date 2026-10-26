@@ -1334,21 +1334,21 @@ notification lands wherever your desktop shows them — on
 
 | When | The notification says |
 |------|-----------------------|
-| A run you started in the terminal ends after 30 seconds or more — including one started with `codeep --yolo -- "<prompt>"`, with Agent Mode on | `Codeep finished — <task>` or `Codeep stopped — <task>`, and `took 4m 12s`. *Stopped* is a run you stopped, one that paused at a safety limit, one that failed, and one the model declined. |
+| A run you started in the terminal ends after 30 seconds or more — including one started with `codeep --yolo -- "<prompt>"`, with Agent Mode on | `Codeep finished` or `Codeep stopped`, and `took 4m 12s`. *Stopped* is a run you stopped, one that paused at a safety limit, one that failed, and one the model declined. |
 | An approval dialog has waited 10 seconds | `Codeep is waiting for your approval`, and the tool's name (`execute_command`) |
-| A clarifying question has waited 10 seconds | `Codeep has a question`, and the task |
+| A clarifying question has waited 10 seconds | `Codeep has a question` |
 
 What a notification holds, and why that is all. A desktop keeps what it shows:
 Omarchy writes every notification to files under
-`~/.local/state/omarchy/notifications/`, and a toast is read over a shoulder. So
-a notification is made of a fixed phrase, the first five words of what you typed
-(at most 48 characters, with paths, URLs, names that have an extension and the
-characters `<`, `>` and `&` left out), how long it took, and the *name* of a
-tool — and never the answer, a command line or a path. A skill's agent step is
-named by the skill (`commit skill`), because its text carries the step before
-it. Nothing you or the model wrote reaches the command line of `notify-send`
-except as one argument after `--`, with control characters, escape sequences and
-bidirectional marks removed.
+`~/.local/state/omarchy/notifications/`, and a toast is read over a shoulder.
+And `notify-send` takes its text as command-line arguments, which every other
+user of the machine can read from `/proc` for as long as it runs. So a
+notification is made of a fixed phrase, how long it took, and the *name* of a
+tool — and **never a word of what you typed**, the answer, a command line or a
+path. (Before 4.0 the first five words of your prompt were in it.) A skill's
+agent step is named by the skill (`commit skill`), because its text carries the
+step before it. What is passed to `notify-send` is one argument after `--`, with
+control characters, escape sequences and bidirectional marks removed.
 
 Nothing is shown when you are looking at it: on Hyprland, if the focused window
 is the terminal Codeep runs in, the notification is skipped. Where that cannot
